@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# python / django
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+env/
+venv/
+*.log
+*.pot
+*.py[cod]
+*.egg-info/
+db.sqlite3
+media/
+staticfiles/
+
+# node / react
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.eslintcache
+frontend/.parcel-cache
+*.tsbuildinfo
+
+# docker
+*.pid
+*.log
+*.tmp
+.env
+.env.*
+.dockerignore
+
+# IDE
+.vscode/
+.idea/

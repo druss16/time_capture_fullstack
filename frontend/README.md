@@ -1,0 +1,1 @@
+Run `npm install`, copy `.env.example` to `.env`, then `npm run dev`.

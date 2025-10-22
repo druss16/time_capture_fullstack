@@ -1,0 +1,1 @@
+Run `pip install -r requirements.txt`, migrate, runserver. Endpoints: /tracker/ping/, /tracker/raw-events/, /tracker/blocks/today/.

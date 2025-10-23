@@ -1,6 +1,7 @@
 import axios, { AxiosError } from "axios";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL as string;
+const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
 
 export const API_ROUTES = {
   login: "/api/auth/jwt/create/",
@@ -16,9 +17,7 @@ export interface JwtPair {
   refresh: string;
 }
 
-const api = axios.create({
-  baseURL: API_BASE,
-});
+const api = axios.create({ baseURL: API_BASE });
 
 const ACCESS_KEY = "jwt_access";
 const REFRESH_KEY = "jwt_refresh";
@@ -38,15 +37,22 @@ export function clearTokens() {
   localStorage.removeItem(REFRESH_KEY);
 }
 
+/** expose flag for UI/route logic */
+export const isAuthDisabled = AUTH_DISABLED;
+
+// ----- REQUEST INTERCEPTOR -----
 api.interceptors.request.use((config) => {
-  const token = getAccessToken();
-  if (token) {
-    config.headers = config.headers ?? {};
-    config.headers.Authorization = `Bearer ${token}`;
+  if (!AUTH_DISABLED) {
+    const token = getAccessToken();
+    if (token) {
+      config.headers = config.headers ?? {};
+      config.headers.Authorization = `Bearer ${token}`;
+    }
   }
   return config;
 });
 
+// ----- REFRESH LOGIC (only if auth enabled) -----
 let isRefreshing = false;
 let pendingRequests: Array<() => void> = [];
 
@@ -67,14 +73,18 @@ async function refreshAccessToken() {
 api.interceptors.response.use(
   (resp) => resp,
   async (error: AxiosError) => {
+    if (AUTH_DISABLED) {
+      // don’t try to refresh in dev/no-auth mode
+      return Promise.reject(error);
+    }
     const original = error.config!;
     const status = error.response?.status;
 
-    if (status === 401 && !original._retry) {
+    if (status === 401 && !(original as any)._retry) {
       if (isRefreshing) {
         await new Promise<void>((resolve) => pendingRequests.push(resolve));
       } else {
-        original._retry = true;
+        (original as any)._retry = true;
         try {
           await refreshAccessToken();
         } catch {

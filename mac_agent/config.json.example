@@ -1,0 +1,13 @@
+{
+  "api_url": "https://api.yourdomain.com/api/raw-events/",
+  "api_key": "your-secret-api-key-here",
+  "min_dwell_seconds": 15,
+  "poll_seconds": 5,
+  "verbose": true,
+  "print_every": false,
+  "disable_ax": false,
+  "exclude_bundles": [
+    "com.apple.systempreferences",
+    "com.apple.ActivityMonitor"
+  ]
+}

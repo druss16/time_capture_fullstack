@@ -14,6 +14,13 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-secret-key-change-me")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") not in ("0", "false", "False")
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",")]
 
+AGENT_KEY = os.getenv("AGENT_API_KEY", "")
+
+USE_AUTH = False  # so the frontend can hit the API without JWT
+
+TIME_ZONE = 'America/New_York'  # or your actual timezone
+USE_TZ = True
+
 # -----------------------------------------------------
 # Applications
 # -----------------------------------------------------

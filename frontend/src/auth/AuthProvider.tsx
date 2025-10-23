@@ -1,44 +1,57 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import api, { API_ROUTES, JwtPair, setTokens, clearTokens, getAccessToken, getRefreshToken } from "../api/client";
+import React, { createContext, useContext, useEffect, useState } from "react";
 
 type AuthContextType = {
-  isAuthed: boolean;
-  loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  isAuthenticated: boolean;
+  login: (u: string, p: string) => Promise<void>;
   logout: () => void;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [loading, setLoading] = useState(true);
-  const [isAuthed, setIsAuthed] = useState(false);
+const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
+
+export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
   useEffect(() => {
-    const has = !!getAccessToken() && !!getRefreshToken();
-    setIsAuthed(has);
-    setLoading(false);
+    if (AUTH_DISABLED) {
+      // Dev mode: pretend we’re logged in
+      setIsAuthenticated(true);
+      return;
+    }
+    // JWT mode: check localStorage
+    setIsAuthenticated(!!localStorage.getItem("access"));
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const { data } = await api.post<JwtPair>(API_ROUTES.login, { email, password });
-    setTokens(data);
-    setIsAuthed(true);
+  const login = async (username: string, password: string) => {
+    if (AUTH_DISABLED) {
+      setIsAuthenticated(true);
+      return;
+    }
+    // normal JWT flow (uncomment when backend ready)
+    // const { data } = await api.post("/api/token/", { username, password });
+    // localStorage.setItem("access", data.access);
+    // localStorage.setItem("refresh", data.refresh);
+    setIsAuthenticated(true);
   };
 
   const logout = () => {
-    clearTokens();
-    setIsAuthed(false);
-    window.location.href = "/login";
+    if (!AUTH_DISABLED) {
+      localStorage.removeItem("access");
+      localStorage.removeItem("refresh");
+    }
+    setIsAuthenticated(false);
   };
 
-  const value = useMemo(() => ({ isAuthed, loading, login, logout }), [isAuthed, loading]);
+  return (
+    <AuthContext.Provider value={{ isAuthenticated, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth() {
+export const useAuth = () => {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
-}
+};

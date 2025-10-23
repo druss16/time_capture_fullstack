@@ -4,6 +4,8 @@ import ProtectedRoute from "../routes/ProtectedRoute";
 import DailyReview from "./DailyReview";
 import Login from "./Login";
 
+const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
+
 export default function App() {
   return (
     <AuthProvider>
@@ -17,7 +19,7 @@ export default function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="/login" element={<Login />} />
+          {!AUTH_DISABLED && <Route path="/login" element={<Login />} />}
         </Routes>
       </BrowserRouter>
     </AuthProvider>

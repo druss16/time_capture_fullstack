@@ -1,64 +1,64 @@
-# views.py
+# tracker/views.py
 from __future__ import annotations
 
 import csv
 import io
 import urllib.parse
-from dataclasses import asdict, dataclass
-from typing import Iterable, List, Optional, Tuple
+from datetime import timedelta
+from typing import Optional, List, Dict, Any
 
+from django.conf import settings
 from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.timezone import localtime
+
 from rest_framework import status
 from rest_framework.authentication import BaseAuthentication
-from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
+from rest_framework.decorators import (
+    api_view, authentication_classes, permission_classes, throttle_classes
+)
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
-from .models import (
-    RawEvent,
-    Block,
-    Rule,
-    Suggestion,
-    Client,
-    Project,
-    Task,
-)
+from .models import RawEvent, Block, Rule, Suggestion, Client, Project, Task
 from .permissions import AgentKeyPermission
 from .rules import apply_rules
 from .serializers import RawEventSerializer
 
-# -------------------------------------------------------------------
-# Constants / Settings
-# -------------------------------------------------------------------
+from datetime import timezone as dt_timezone
 
-BLOCK_PAD_MINUTES = 10          # gap threshold to merge events
+
+# ------------------------------------------------------------------------------------
+# Config / constants
+# ------------------------------------------------------------------------------------
+BLOCK_PAD_MINUTES = 10
 MIN_BLOCK_DURATION = 6          # minutes
-BLOCK_GRANULARITY = 6           # round up to 6-minute increments
+BLOCK_GRANULARITY = 6           # round to 6-min increments
 
-# -------------------------------------------------------------------
-# Utilities
-# -------------------------------------------------------------------
+DEFAULT_USER = "unknown-user"
+DEFAULT_HOST = "unknown-host"
 
-def _start_of_local_day_utc(dt: timezone.datetime | None = None) -> timezone.datetime:
-    """
-    Return today's start-of-day in *local* time, converted to UTC (aware).
-    This lets us query UTC timestamps correctly for "today" in the user's TZ.
-    """
+
+# Toggle UI auth with a Django setting (default False for dev)
+USE_AUTH = bool(getattr(settings, "USE_AUTH", False))
+PermUI = IsAuthenticated if USE_AUTH else AllowAny
+
+# ------------------------------------------------------------------------------------
+# Utils
+# ------------------------------------------------------------------------------------
+def _start_of_local_day_utc(dt: Optional[timezone.datetime] = None) -> timezone.datetime:
     dt = dt or timezone.now()
     local = localtime(dt)
     sod_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
-    return sod_local.astimezone(timezone.utc)
+    return sod_local.astimezone(dt_timezone.utc)
+
 
 def _label_from_event(e: RawEvent) -> str:
-    """
-    Human-ish label preference: URL host → file name → window title → app name
-    """
+    # url host -> file basename -> window title -> app name
     if e.url:
         try:
             host = urllib.parse.urlparse(e.url).hostname or ""
@@ -67,7 +67,6 @@ def _label_from_event(e: RawEvent) -> str:
         except Exception:
             pass
     if e.file_path:
-        # use os.path.basename without importing full os as _os
         return e.file_path.rstrip("/").split("/")[-1]
     if e.window_title:
         return e.window_title[:80]
@@ -76,39 +75,25 @@ def _label_from_event(e: RawEvent) -> str:
 def _round_up_minutes(n: int, granularity: int) -> int:
     return n if n % granularity == 0 else n + (granularity - (n % granularity))
 
-@dataclass
-class BlockOut:
-    start: timezone.datetime
-    end: timezone.datetime
-    duration_minutes: int
-    label: str
-    source_ids: List[int]
-    user: Optional[str]
-    hostname: Optional[str]
-
-# -------------------------------------------------------------------
+# ------------------------------------------------------------------------------------
 # Health
-# -------------------------------------------------------------------
-
+# ------------------------------------------------------------------------------------
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def ping(_request):
     return Response({"ok": True})
 
-# -------------------------------------------------------------------
-# Agent → RawEvent ingestion (two forms)
-# 1) /api/raw-events (preferred): AgentKeyPermission, no cookies
-# 2) /api/ingest-raw-event (legacy/dev): open POST for quick testing
-# -------------------------------------------------------------------
-
+# ------------------------------------------------------------------------------------
+# Agent ingestion
+# ------------------------------------------------------------------------------------
 class NoAuth(BaseAuthentication):
-    """Explicitly disables session/csrf for this endpoint."""
+    """Disable session/csrf for token/agent endpoints."""
     def authenticate(self, request):
         return None
 
 @api_view(["POST"])
-@authentication_classes([NoAuth])          # don't require cookies
-@permission_classes([AgentKeyPermission])  # enforce Agent-Key header
+@authentication_classes([NoAuth])          # no cookies/csrf
+@permission_classes([AgentKeyPermission])  # require Agent key header
 @throttle_classes([AnonRateThrottle])
 def raw_events(request):
     """
@@ -118,11 +103,8 @@ def raw_events(request):
     payload = request.data
     if isinstance(payload, dict):
         payload = [payload]
-
     if not isinstance(payload, list):
         raise ValidationError("Payload must be an object or an array of objects.")
-
-    # Let DRF parse datetime strings for us; still normalize ts_utc if needed
     for item in payload:
         ts = item.get("ts_utc")
         if isinstance(ts, str):
@@ -130,26 +112,20 @@ def raw_events(request):
             if dt is None:
                 raise ValidationError({"ts_utc": f"Invalid ts_utc: {ts}"})
             item["ts_utc"] = dt
-
     ser = RawEventSerializer(data=payload, many=True)
     ser.is_valid(raise_exception=True)
     ser.save()
     return Response({"created": len(payload)}, status=status.HTTP_201_CREATED)
 
 @api_view(["POST"])
-@permission_classes([AllowAny])            # dev convenience; lock down in prod
+@permission_classes([AllowAny])            # dev/legacy open endpoint (lock down later)
 @throttle_classes([AnonRateThrottle])
 def ingest_raw_event(request):
-    """
-    Dev/legacy endpoint mirroring `raw_events` but without AgentKeyPermission.
-    Keep enabled only while you’re iterating locally.
-    """
     payload = request.data
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list):
         raise ValidationError("Payload must be an object or an array of objects.")
-
     for item in payload:
         ts = item.get("ts_utc")
         if isinstance(ts, str):
@@ -157,104 +133,144 @@ def ingest_raw_event(request):
             if dt is None:
                 raise ValidationError({"ts_utc": f"Invalid ts_utc: {ts}"})
             item["ts_utc"] = dt
-
     ser = RawEventSerializer(data=payload, many=True)
     ser.is_valid(raise_exception=True)
     ser.save()
     return Response({"created": len(payload)}, status=status.HTTP_201_CREATED)
 
-# -------------------------------------------------------------------
-# RawEvent → ad-hoc merged blocks for Today (useful for debugging)
-# NOTE: This is *not* the canonical Block model; it's a quick merge view.
-# -------------------------------------------------------------------
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-@throttle_classes([UserRateThrottle])
-def raw_blocks_today(request):
-    """
-    Merge RawEvents into coarse 'blocks' for today using:
-      - same label (url host / file basename / window title / app name)
-      - gap <= BLOCK_PAD_MINUTES
-    Rounds duration to BLOCK_GRANULARITY with MIN_BLOCK_DURATION floor.
-    Filters: ?user=...&hostname=...
-    """
-    user = request.GET.get("user")
-    hostname = request.GET.get("hostname")
-
+# ------------------------------------------------------------------------------------
+# Compactor: RawEvent -> Block (for TODAY only; compaction-on-read)
+# ------------------------------------------------------------------------------------
+@transaction.atomic
+def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional[str] = None, org=None) -> int:
     start_utc = _start_of_local_day_utc()
-    qs = RawEvent.objects.filter(ts_utc__gte=start_utc).order_by("ts_utc")
+    ev_qs = RawEvent.objects.filter(ts_utc__gte=start_utc).order_by("ts_utc")
     if user:
-        qs = qs.filter(user=user)
+        ev_qs = ev_qs.filter(user=user)
     if hostname:
-        qs = qs.filter(hostname=hostname)
+        ev_qs = ev_qs.filter(hostname=hostname)
+    events: List[RawEvent] = list(ev_qs)
 
-    events: List[RawEvent] = list(qs)
-    blocks: List[BlockOut] = []
-    current: Optional[BlockOut] = None
-    pad = timezone.timedelta(minutes=BLOCK_PAD_MINUTES)
+    # wipe today's blocks (scoped)
+    blk_qs = Block.objects.filter(start__gte=start_utc)
+    if hasattr(Block, "user") and user:
+        blk_qs = blk_qs.filter(user=user)
+    if hasattr(Block, "hostname") and hostname:
+        blk_qs = blk_qs.filter(hostname=hostname)
+    blk_qs.delete()
+
+    created = 0
+    pad = timedelta(minutes=BLOCK_PAD_MINUTES)
+    current: Optional[Dict[str, Any]] = None
+
+    def finalize_and_create(cur: Dict[str, Any]) -> int:
+        dur = int((cur["end"] - cur["start"]).total_seconds() // 60)
+        dur = max(MIN_BLOCK_DURATION, _round_up_minutes(dur, BLOCK_GRANULARITY))
+
+        kwargs: Dict[str, Any] = dict(
+            start=cur["start"],
+            end=cur["end"],
+            title=cur["title"],
+            url=cur.get("url") or "",
+            file_path=cur.get("file_path") or "",
+        )
+
+        # Always provide defaults if your Block has NOT NULL constraints
+        if hasattr(Block, "user"):
+            kwargs["user"] = (cur.get("user") or DEFAULT_USER)
+        if hasattr(Block, "hostname"):
+            kwargs["hostname"] = (cur.get("hostname") or DEFAULT_HOST)
+        if hasattr(Block, "minutes"):
+            kwargs["minutes"] = dur
+
+        # Set org field if it exists on the Block model
+        if any(f.name == "org" for f in Block._meta.fields):
+            field = Block._meta.get_field("org")
+            # If org is required but not provided, we need a default
+            if not field.null:
+                if org is None:
+                    from django.contrib.auth.models import Group
+                    # Try to get or create a default org
+                    default_org, created = Group.objects.get_or_create(
+                        name="default-org",
+                        defaults={}
+                    )
+                    kwargs["org"] = default_org
+                else:
+                    kwargs["org"] = org
+            else:
+                # org is nullable, so None is fine
+                kwargs["org"] = org
+
+        Block.objects.create(**kwargs)
+        return 1
+
 
     for e in events:
         lbl = _label_from_event(e)
         if current is None:
-            current = BlockOut(
+            u = user or getattr(e, "user", None) or DEFAULT_USER
+            h = hostname or getattr(e, "hostname", None) or DEFAULT_HOST
+            current = dict(
                 start=e.ts_utc,
                 end=e.ts_utc,
-                duration_minutes=0,
-                label=lbl,
-                source_ids=[e.id],
-                user=e.user,
-                hostname=e.hostname,
+                title=lbl,
+                url=e.url or "",
+                file_path=e.file_path or "",
+                user=u,
+                hostname=h,
             )
-            continue
 
-        gap = e.ts_utc - current.end
-        if gap <= pad and lbl == current.label:
-            current.end = e.ts_utc
-            current.source_ids.append(e.id)
+
+        gap = e.ts_utc - current["end"]
+        if gap <= pad and lbl == current["title"]:
+            current["end"] = e.ts_utc
         else:
-            # finalize previous
-            dur = max(
-                MIN_BLOCK_DURATION,
-                _round_up_minutes(int((current.end - current.start).total_seconds() // 60), BLOCK_GRANULARITY),
-            )
-            current.duration_minutes = dur
-            blocks.append(current)
-            # new current
-            current = BlockOut(
+            created += finalize_and_create(current)
+            u = user or getattr(e, "user", None) or DEFAULT_USER
+            h = hostname or getattr(e, "hostname", None) or DEFAULT_HOST
+            current = dict(
                 start=e.ts_utc,
                 end=e.ts_utc,
-                duration_minutes=0,
-                label=lbl,
-                source_ids=[e.id],
-                user=e.user,
-                hostname=e.hostname,
+                title=lbl,
+                url=e.url or "",
+                file_path=e.file_path or "",
+                user=u,
+                hostname=h,
             )
 
     if current:
-        dur = max(
-            MIN_BLOCK_DURATION,
-            _round_up_minutes(int((current.end - current.start).total_seconds() // 60), BLOCK_GRANULARITY),
-        )
-        current.duration_minutes = dur
-        blocks.append(current)
+        created += finalize_and_create(current)
 
-    return Response([asdict(b) for b in blocks])
+    return created
 
-# -------------------------------------------------------------------
-# Canonical Block model views (UI uses these)
-# -------------------------------------------------------------------
 
+# ------------------------------------------------------------------------------------
+# UI endpoints (compaction-on-read)
+# ------------------------------------------------------------------------------------
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([PermUI])
 @throttle_classes([UserRateThrottle])
 def blocks_today(request):
     """
-    Return saved Block rows for *today* (already merged by your pipeline).
+    Compact RawEvents -> Blocks for today (scoped by ?user=&hostname=) and return Blocks.
     """
-    today = timezone.localdate()
-    qs = Block.objects.filter(start__date=today).order_by("start")
-    def _minutes(b: Block) -> int:
+    user = request.GET.get("user") or None
+    hostname = request.GET.get("hostname") or None
+    org = request.user.groups.first() if (USE_AUTH and request.user.is_authenticated) else None
+
+    compact_rawevents_into_blocks(user=user, hostname=hostname, org=org)
+
+    start_utc = _start_of_local_day_utc()
+    qs = Block.objects.filter(start__gte=start_utc).order_by("start")
+    if hasattr(Block, "user") and user:
+        qs = qs.filter(user=user)
+    if hasattr(Block, "hostname") and hostname:
+        qs = qs.filter(hostname=hostname)
+
+    def minutes(b: Block) -> int:
+        if hasattr(b, "minutes") and b.minutes is not None:
+            return int(b.minutes)
         return int((b.end - b.start).total_seconds() / 60)
 
     data = [
@@ -262,164 +278,109 @@ def blocks_today(request):
             "id": b.id,
             "start": b.start,
             "end": b.end,
-            "minutes": _minutes(b),
+            "minutes": minutes(b),
             "title": b.title,
             "url": b.url,
             "file_path": b.file_path,
             "client": getattr(b.client, "name", None),
             "project": getattr(b.project, "name", None),
             "task": getattr(b.task, "name", None),
-            "notes": b.notes or "",
+            "notes": getattr(b, "notes", "") or "",
         }
         for b in qs
     ]
     return Response(data)
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([PermUI])
 @throttle_classes([UserRateThrottle])
 def suggestions_today(request):
     """
-    Compute (or refresh) up to 3 rule-based suggestions for each Block today.
-    For now this re-computes on each call; you can cron this if needed later.
+    Recompute up to 3 rule-based suggestions per Block for today, after compaction.
     """
-    org = request.user.groups.first() if request.user.is_authenticated else None
-    today = timezone.localdate()
-    blocks = list(Block.objects.filter(start__date=today).order_by("start"))
+    user = request.GET.get("user") or None
+    hostname = request.GET.get("hostname") or None
+    org = request.user.groups.first() if (USE_AUTH and request.user.is_authenticated) else None
+
+    compact_rawevents_into_blocks(user=user, hostname=hostname, org=org)
+
+    start_utc = _start_of_local_day_utc()
+    qs = Block.objects.filter(start__gte=start_utc).order_by("start")
+    if hasattr(Block, "user") and user:
+        qs = qs.filter(user=user)
+    if hasattr(Block, "hostname") and hostname:
+        qs = qs.filter(hostname=hostname)
 
     rules = list(Rule.objects.filter(active=True, org=org)) if org else list(Rule.objects.filter(active=True))
-    data = []
 
-    # recompute suggestions in a single transaction per request
+    out = []
     with transaction.atomic():
-        for b in blocks:
+        for b in qs:
             Suggestion.objects.filter(block=b).delete()
-            computed = list(apply_rules(b, rules))[:3]
-            for field, value_text, conf in computed:
+            for field, value_text, conf in list(apply_rules(b, rules))[:3]:
                 Suggestion.objects.create(
-                    block=b,
-                    label_type=field,
-                    value_text=value_text,
-                    confidence=conf,
-                    source="rule",
+                    block=b, label_type=field, value_text=value_text,
+                    confidence=conf, source="rule"
                 )
-            data.append(
-                {
-                    "id": b.id,
-                    "start": b.start,
-                    "end": b.end,
-                    "minutes": int((b.end - b.start).total_seconds() / 60),
-                    "title": b.title,
-                    "url": b.url,
-                    "file_path": b.file_path,
-                    "client": getattr(b.client, "name", None),
-                    "project": getattr(b.project, "name", None),
-                    "task": getattr(b.task, "name", None),
-                    "suggestions": [
-                        {
-                            "label_type": s.label_type,
-                            "value_text": s.value_text,
-                            "confidence": s.confidence,
-                        }
-                        for s in b.suggestions.all().order_by("-confidence")[:3]
-                    ],
-                }
-            )
-
-    return Response(data)
+            out.append({
+                "id": b.id,
+                "start": b.start,
+                "end": b.end,
+                "minutes": int((b.end - b.start).total_seconds() / 60),
+                "title": b.title,
+                "url": b.url,
+                "file_path": b.file_path,
+                "client": getattr(b.client, "name", None),
+                "project": getattr(b.project, "name", None),
+                "task": getattr(b.task, "name", None),
+                "suggestions": [
+                    {"label_type": s.label_type, "value_text": s.value_text, "confidence": s.confidence}
+                    for s in b.suggestions.all().order_by("-confidence")[:3]
+                ],
+            })
+    return Response(out)
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([PermUI])
 def label_block(request):
     """
-    Apply labels to a Block and (optionally) create a rule from the confirmation.
-    Body:
-      - block_id (required)
-      - client/project/task (names; optional)
-      - notes (optional)
-      - create_rule (bool; optional)
-      - create_rule_field ('client'|'project'|'task'; required if create_rule)
-      - create_rule_value (str; required if create_rule)
-      - pattern (optional; defaults to b.url or b.file_path or b.title[:200])
-      - kind (optional; default 'contains')
+    Apply labels to a Block; optionally create a rule from this confirmation.
     """
     block_id = request.data.get("block_id")
     if not block_id:
         raise ValidationError({"block_id": "Required."})
-
     try:
-        b = Block.objects.select_related("org").get(id=block_id)
+        b = Block.objects.select_related("org").get(id=block_id) if hasattr(Block, "org") \
+            else Block.objects.get(id=block_id)
     except Block.DoesNotExist:
         raise NotFound("Block not found.")
 
     # Mutations
-    name = request.data.get
-
-    if (v := name("client")):
-        b.client = Client.objects.get(org=b.org, name=v)
-    if (v := name("project")):
-        b.project = Project.objects.get(org=b.org, name=v)
-    if (v := name("task")):
-        b.task = Task.objects.get(org=b.org, name=v)
-    if (v := name("notes")) is not None:
+    get = request.data.get
+    if (v := get("client")):
+        b.client = Client.objects.get(org=b.org, name=v) if hasattr(b, "org") else Client.objects.get(name=v)
+    if (v := get("project")):
+        b.project = Project.objects.get(org=b.org, name=v) if hasattr(b, "org") else Project.objects.get(name=v)
+    if (v := get("task")):
+        b.task = Task.objects.get(org=b.org, name=v) if hasattr(b, "org") else Task.objects.get(name=v)
+    if (v := get("notes")) is not None:
         b.notes = v
-
     b.save()
 
     if request.data.get("create_rule"):
-        field = name("create_rule_field")
-        value_text = name("create_rule_value")
+        field = get("create_rule_field")
+        value_text = get("create_rule_value")
         if field not in {"client", "project", "task"}:
             raise ValidationError({"create_rule_field": "Must be 'client'|'project'|'task'."})
         if not value_text:
             raise ValidationError({"create_rule_value": "Required when create_rule is true."})
-
+        pattern = get("pattern") or (b.url or b.file_path or (b.title or ""))[:200]
         Rule.objects.create(
-            org=b.org,
-            pattern=name("pattern") or (b.url or b.file_path or (b.title or ""))[:200],
+            org=b.org if hasattr(b, "org") else None,
+            pattern=pattern,
             field=field,
             value_text=value_text,
-            kind=name("kind") or "contains",
+            kind=get("kind") or "contains",
             active=True,
         )
-
     return Response({"ok": True})
-
-# -------------------------------------------------------------------
-# CSV export for today's Blocks (useful for Daily Review / export button)
-# -------------------------------------------------------------------
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def export_blocks_today_csv(_request):
-    """
-    CSV export of today's Block rows.
-    Columns: start,end,minutes,title,url,file_path,client,project,task,notes
-    """
-    today = timezone.localdate()
-    qs = Block.objects.filter(start__date=today).order_by("start")
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["start", "end", "minutes", "title", "url", "file_path", "client", "project", "task", "notes"])
-
-    for b in qs:
-        minutes = int((b.end - b.start).total_seconds() / 60)
-        writer.writerow(
-            [
-                b.start.isoformat(),
-                b.end.isoformat(),
-                minutes,
-                (b.title or "").replace("\n", " ").strip(),
-                b.url or "",
-                b.file_path or "",
-                getattr(b.client, "name", "") or "",
-                getattr(b.project, "name", "") or "",
-                getattr(b.task, "name", "") or "",
-                (b.notes or "").replace("\n", " ").strip(),
-            ]
-        )
-
-    resp = HttpResponse(buf.getvalue(), content_type="text/csv")
-    resp["Content-Disposition"] = 'attachment; filename="blocks_today.csv"'
-    return resp

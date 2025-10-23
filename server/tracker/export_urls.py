@@ -1,6 +1,6 @@
 from django.urls import path
-from . import export_views
+from .export_views import export_blocks_today_csv
 
 urlpatterns = [
-    path("csv", export_views.export_csv, name="export-csv"),  # /export/csv?from=YYYY-MM-DD&to=YYYY-MM-DD
+    path("blocks-today.csv", export_blocks_today_csv),
 ]

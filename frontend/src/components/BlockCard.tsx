@@ -18,21 +18,26 @@ export default function BlockCard({ block, onLabeled }: Props) {
   const apply = async () => {
     setBusy(true);
     try {
-      await labelBlock({
-        block_id: block.id,
-        client: client || undefined,
-        project: project || undefined,
-        task: task || undefined,
-        notes: notes || undefined,
-        create_rule: createRule || undefined,
-        create_rule_field: createRule ? ruleField : undefined,
-        create_rule_value: createRule ? ruleValue : undefined,
-      });
+      const payload: any = { block_id: block.id };
+
+      if (client) payload.client = client;
+      if (project) payload.project = project;
+      if (task) payload.task = task;
+      if (notes) payload.notes = notes;
+
+      if (createRule) {
+        payload.create_rule = true;
+        payload.create_rule_field = ruleField;
+        payload.create_rule_value = ruleValue;
+      }
+
+      await labelBlock(payload);
       onLabeled();
     } finally {
       setBusy(false);
     }
   };
+
 
   const meta = [
     block.title || "",

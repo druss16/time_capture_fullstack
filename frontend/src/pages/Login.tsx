@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
+import { isAuthDisabled } from "../api/client";
 
 export default function Login() {
   const { login } = useAuth();
@@ -8,12 +9,19 @@ export default function Login() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    if (isAuthDisabled) {
+      // skip login entirely in dev/no-auth mode
+      window.location.href = "/";
+    }
+  }, []);
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setErr(null);
     try {
-      await login(email, password);
+      await login(email, password); // when backend auth exists
       window.location.href = "/";
     } catch (e: any) {
       setErr(e?.response?.data?.detail || "Login failed");
@@ -38,6 +46,11 @@ export default function Login() {
         <button disabled={busy} className="w-full rounded-lg px-4 py-2 border">
           {busy ? "Signing in…" : "Sign in"}
         </button>
+        <p className="text-xs opacity-70">
+          {isAuthDisabled
+            ? "Auth disabled (dev mode). Redirecting to app…"
+            : "JWT login will call your API when enabled."}
+        </p>
       </form>
     </div>
   );

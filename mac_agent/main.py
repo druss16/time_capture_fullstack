@@ -7,16 +7,27 @@ Mac Activity Agent (frontmost: System Events → Quartz → NSWorkspace)
 - Uses AppleScript to fetch URL/file path for common apps (with retry)
 - Dwell-based posting to reduce noise; optional excludes by bundle id
 
-ENV (all optional):
-  AGENT_POST_URL=http://localhost:7123/tracker/raw-events/
-  AGENT_API_KEY=...
-  AGENT_POLL_SECONDS=5
-  AGENT_VERBOSE=1
-  AGENT_PRINT_EVERY=0
-  AGENT_DISABLE_AX=0
-  AGENT_MIN_DWELL_SECONDS=15
-  AGENT_EXCLUDE_BUNDLES=com.apple.Terminal,com.apple.systempreferences
-  MAC_AGENT_DB=~/Library/ActivityAgent/agent.sqlite3
+CONFIGURATION:
+  Option 1: Config file at ~/.timetracker/config.json (recommended):
+    {
+      "api_url": "https://api.yourdomain.com/api/raw-events/",
+      "api_key": "your-secret-key",
+      "min_dwell_seconds": 15,
+      "poll_seconds": 5,
+      "verbose": true,
+      "exclude_bundles": ["com.apple.Terminal"]
+    }
+  
+  Option 2: Environment variables (legacy):
+    AGENT_POST_URL=http://localhost:7123/api/raw-events/
+    AGENT_API_KEY=...
+    AGENT_POLL_SECONDS=5
+    AGENT_VERBOSE=1
+    AGENT_PRINT_EVERY=0
+    AGENT_DISABLE_AX=0
+    AGENT_MIN_DWELL_SECONDS=15
+    AGENT_EXCLUDE_BUNDLES=com.apple.Terminal,com.apple.systempreferences
+    MAC_AGENT_DB=~/Library/ActivityAgent/agent.sqlite3
 
 Notes:
 - Accessibility permission is required for AX titles (you enabled it).
@@ -36,16 +47,31 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 
-# ---------- Tunables via ENV ----------
-POLL_SECONDS       = int(os.getenv("AGENT_POLL_SECONDS", "5"))
-VERBOSE            = os.getenv("AGENT_VERBOSE", "1") == "1"
-PRINT_EVERY_POLL   = os.getenv("AGENT_PRINT_EVERY", "0") == "1"
-DISABLE_AX         = os.getenv("AGENT_DISABLE_AX", "0") == "1"
-MIN_DWELL_SECONDS  = int(os.getenv("AGENT_MIN_DWELL_SECONDS", "15"))
-DB_PATH            = os.getenv("MAC_AGENT_DB", os.path.expanduser("~/Library/ActivityAgent/agent.sqlite3"))
-POST_URL           = os.getenv("AGENT_POST_URL")
-API_KEY            = os.getenv("AGENT_API_KEY")
-EXCLUDE_BUNDLES    = set(b.strip() for b in os.getenv("AGENT_EXCLUDE_BUNDLES", "").split(",") if b.strip())
+# ---------- Config file support (with ENV fallback) ----------
+CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
+
+def load_config():
+    """Load config from ~/.timetracker/config.json if it exists."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[WARN] Failed to load config file {CONFIG_FILE}: {e}")
+    return {}
+
+config = load_config()
+
+# ---------- Tunables via CONFIG or ENV ----------
+POLL_SECONDS       = config.get("poll_seconds") or int(os.getenv("AGENT_POLL_SECONDS", "5"))
+VERBOSE            = config.get("verbose", True) if "verbose" in config else (os.getenv("AGENT_VERBOSE", "1") == "1")
+PRINT_EVERY_POLL   = config.get("print_every", False) if "print_every" in config else (os.getenv("AGENT_PRINT_EVERY", "0") == "1")
+DISABLE_AX         = config.get("disable_ax", False) if "disable_ax" in config else (os.getenv("AGENT_DISABLE_AX", "0") == "1")
+MIN_DWELL_SECONDS  = config.get("min_dwell_seconds") or int(os.getenv("AGENT_MIN_DWELL_SECONDS", "15"))
+DB_PATH            = config.get("db_path") or os.getenv("MAC_AGENT_DB", os.path.expanduser("~/Library/ActivityAgent/agent.sqlite3"))
+POST_URL           = config.get("api_url") or os.getenv("AGENT_POST_URL")
+API_KEY            = config.get("api_key") or os.getenv("AGENT_API_KEY")
+EXCLUDE_BUNDLES    = set(config.get("exclude_bundles", [])) if "exclude_bundles" in config else set(b.strip() for b in os.getenv("AGENT_EXCLUDE_BUNDLES", "").split(",") if b.strip())
 
 def log(msg: str):
     if VERBOSE:
@@ -348,6 +374,10 @@ def main():
         pass
 
     log("=== Mac Activity Agent starting… (Ctrl+C to stop) ===")
+    if os.path.exists(CONFIG_FILE):
+        log(f"CONFIG={CONFIG_FILE} (loaded)")
+    else:
+        log(f"CONFIG={CONFIG_FILE} (not found, using ENV vars)")
     log(f"DB_PATH={DB_PATH}")
     log(f"POST_URL={POST_URL or '(disabled)'}")
     log(f"AX_AVAILABLE={AX_AVAILABLE} (set AGENT_DISABLE_AX=1 to skip)")

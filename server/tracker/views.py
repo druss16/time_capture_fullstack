@@ -235,13 +235,23 @@ def ingest_raw_event(request):
 # -------------------------------------------------------------------
 # Compactor: RawEvent -> Block (for TODAY only; compaction-on-read)
 # -------------------------------------------------------------------
+from django.db import transaction
+from django.utils.timezone import localtime
+from datetime import timedelta
+from typing import Optional, List, Dict, Any
+
 @transaction.atomic
-def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional[str] = None, org=None) -> int:
+def compact_rawevents_into_blocks(
+    user: Optional[str] = None,
+    hostname: Optional[str] = None,
+    org=None,
+) -> int:
     """
     Compacts today's RawEvents into Block rows with:
       - host-aware, fuzzy title merging
       - sticky idle attribution
       - min duration + 6-min rounding
+      - merged context → Block.hints (browser/vscode/shell, etc.)
     """
     # 1) Scope to start-of-today (local -> UTC)
     start_utc = _start_of_local_day_utc()
@@ -252,8 +262,10 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         ev_qs = ev_qs.filter(hostname=hostname)
     events: List[RawEvent] = list(ev_qs)
 
-    # 2) Wipe today's blocks for this scope
+    # 2) Wipe today's blocks for this scope (also guard by org if present)
     blk_qs = Block.objects.filter(start__gte=start_utc)
+    if any(f.name == "org" for f in Block._meta.fields) and org:
+        blk_qs = blk_qs.filter(org=org)
     if hasattr(Block, "user") and user:
         blk_qs = blk_qs.filter(user=user)
     if hasattr(Block, "hostname") and hostname:
@@ -264,7 +276,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
     pad = timedelta(minutes=BLOCK_PAD_MINUTES)
     sticky_delta = timedelta(minutes=IDLE_STICKY_MINUTES)
 
-    current: Optional[Dict[str, Any]] = None  # rolling block
+    current: Optional[Dict[str, Any]] = None  # rolling block dict
 
     def _duration_minutes(cur: Dict[str, Any]) -> int:
         return int((cur["end"] - cur["start"]).total_seconds() // 60)
@@ -289,8 +301,18 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
             kwargs["user"] = cur.get("user") or DEFAULT_USER
         if hasattr(Block, "hostname"):
             kwargs["hostname"] = cur.get("hostname") or DEFAULT_HOST
+
+        # minutes always reflects final (possibly extended/rounded) duration
         if hasattr(Block, "minutes"):
             kwargs["minutes"] = int((kwargs["end"] - kwargs["start"]).total_seconds() // 60)
+
+        # persist merged context hints if present
+        if hasattr(Block, "hints") and isinstance(cur.get("hints"), dict):
+            kwargs["hints"] = cur["hints"]
+
+        # populate local 'day' for grouping if field exists
+        if any(f.name == "day" for f in Block._meta.fields):
+            kwargs["day"] = localtime(kwargs["start"]).date()
 
         # org handling
         if any(f.name == "org" for f in Block._meta.fields):
@@ -306,15 +328,15 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         Block.objects.create(**kwargs)
         return 1
 
-    def _same_activity(prev: Dict[str, Any], lbl: str, url: str) -> bool:
+    def _same_activity(prev: Dict[str, Any], new_title: str, new_url: str) -> bool:
         """Same block if identical title or (same host & fuzzy-similar title)."""
-        if lbl == prev["title"]:
+        if new_title == prev["title"]:
             return True
         if FUZZY_HOST_MATCH:
             prev_host = _host(prev.get("url", "")) if prev.get("url") else ""
-            new_host = _host(url or "")
+            new_host = _host(new_url or "")
             if prev_host and (prev_host == new_host):
-                if _similar(prev["title"], lbl) >= FUZZY_TITLE_THRESHOLD:
+                if _similar(prev["title"], new_title) >= FUZZY_TITLE_THRESHOLD:
                     return True
         return False
 
@@ -340,21 +362,22 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
                 user=u,
                 hostname=h,
             )
+            # merge context from this RawEvent
+            _merge_ctx(current, e)
             continue
 
         gap = et - current["end"]
 
         if gap <= pad and _same_activity(current, lbl, url):
-            # Same activity → extend through any tiny idle (sticky) then to event time
-            if timedelta(0) < gap <= sticky_delta:
-                current["end"] += gap  # attribute idle to current block
+            # same activity → extend to event time; attribute tiny idle ("sticky")
+            # (setting end to 'et' already attributes the gap)
             current["end"] = et
+            _merge_ctx(current, e)   # keep enriching while we extend
         else:
-            # Different activity or big gap → finalize current
+            # different activity or big gap → finalize current
             created += _finalize_and_create(current)
 
-            # If there is a tiny idle before the new event, we DO NOT create a separate idle block.
-            # We start a fresh block at event time.
+            # start a fresh block at event time
             current = dict(
                 start=et,
                 end=et,
@@ -365,11 +388,14 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
                 user=u,
                 hostname=h,
             )
+            _merge_ctx(current, e)
 
     if current:
         created += _finalize_and_create(current)
 
     return created
+
+
 
 
 

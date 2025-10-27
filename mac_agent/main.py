@@ -62,6 +62,37 @@ def load_config():
 
 config = load_config()
 
+
+# ---- add near top of main.py ----
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+_CONTEXT = {}          # last context per source, e.g. {'browser': {...}, 'vscode': {...}}
+_CONTEXT_LAST_TS = {}  # optional, track when each source updated
+
+class _CtxHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args, **kwargs):  # quiet server
+        return
+    def do_POST(self):
+        if self.path != "/context":
+            self.send_response(404); self.end_headers(); return
+        try:
+            length = int(self.headers.get('Content-Length','0'))
+            data = json.loads(self.rfile.read(length) or b"{}")
+            src = (data.get("source") or "unknown").lower()
+            _CONTEXT[src] = data
+            _CONTEXT_LAST_TS[src] = time.time()
+            self.send_response(200); self.end_headers()
+        except Exception as e:
+            self.send_response(400); self.end_headers()
+
+def start_context_bus(port=7124):
+    srv = HTTPServer(("127.0.0.1", port), _CtxHandler)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    log(f"[CTX] Context bus listening on http://127.0.0.1:{port}/context")
+    return srv
+
+
 # ---------- Tunables via CONFIG or ENV ----------
 POLL_SECONDS       = config.get("poll_seconds") or int(os.getenv("AGENT_POLL_SECONDS", "5"))
 VERBOSE            = config.get("verbose", True) if "verbose" in config else (os.getenv("AGENT_VERBOSE", "1") == "1")
@@ -358,12 +389,21 @@ def write_event(conn, cur, user: str, hostname: str, sig):
         (ts, app_name, bundle_id, title or "", url, fpath, user, hostname),
     )
     conn.commit()
-    post_event_async({
-        "ts_utc": ts, "app_name": app_name, "bundle_id": bundle_id,
-        "window_title": title or "", "url": url, "file_path": fpath,
-        "user": user, "hostname": hostname,
-    })
-    log(f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
+
+    payload = {
+        "ts_utc": ts,
+        "app_name": app_name,
+        "bundle_id": bundle_id,
+        "window_title": title or "",
+        "url": url,
+        "file_path": fpath,
+        "user": user,
+        "hostname": hostname,
+        "ctx": _CONTEXT,   # <<—— include latest context snapshot
+    }
+    post_event_async(payload)
+    log(f"[POSTED] {POST_URL}")
+
 
 # ---------- Main ----------
 def main():
@@ -372,6 +412,8 @@ def main():
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
         pass
+
+    start_context_bus(7124)
 
     log("=== Mac Activity Agent starting… (Ctrl+C to stop) ===")
     if os.path.exists(CONFIG_FILE):

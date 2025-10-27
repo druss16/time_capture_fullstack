@@ -3,16 +3,22 @@ from django.utils import timezone  # ADD THIS LINE if not there
 
 
 class RawEvent(models.Model):
-    ts_utc=models.DateTimeField()
-    app_name=models.CharField(max_length=255, blank=True, null=True)
-    bundle_id=models.CharField(max_length=255, blank=True, null=True)
-    window_title=models.TextField(blank=True, null=True)
-    url=models.TextField(blank=True, null=True)
-    file_path=models.TextField(blank=True, null=True)
-    user=models.CharField(max_length=255, blank=True, null=True)
-    hostname=models.CharField(max_length=255, blank=True, null=True)
+    ts_utc = models.DateTimeField()
+    app_name = models.CharField(max_length=255, blank=True, null=True)
+    bundle_id = models.CharField(max_length=255, blank=True, null=True)
+    window_title = models.TextField(blank=True, null=True)
+    url = models.TextField(blank=True, null=True)
+    file_path = models.TextField(blank=True, null=True)
+    user = models.CharField(max_length=255, blank=True, null=True)
+    hostname = models.CharField(max_length=255, blank=True, null=True)
+    ctx = models.JSONField(default=dict, blank=True)   # <<— NEW
+
     class Meta:
-        indexes=[models.Index(fields=['ts_utc']), models.Index(fields=['user','hostname'])]
+        indexes = [
+            models.Index(fields=['ts_utc']),
+            models.Index(fields=['user', 'hostname']),
+        ]
+
         
 class SuggestedBlock(models.Model):
     start=models.DateTimeField()
@@ -56,6 +62,7 @@ class Block(models.Model):
     window_title = models.TextField(blank=True, null=True)
     url = models.TextField(blank=True, default="")
     file_path = models.TextField(blank=True, default="")
+    hints = models.JSONField(default=dict, blank=True)   # stores merged context (browser/vscode/shell etc.)
 
     # denormalized fields for filtering + UI
     day = models.DateField(db_index=True, null=True, blank=True)

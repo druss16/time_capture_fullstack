@@ -37,3 +37,4 @@ class TimecardEntrySerializer(serializers.ModelSerializer):
 
     def get_client_name(self, obj): return getattr(obj.client, 'name', 'Unknown')
     def get_project_name(self, obj): return getattr(obj.project, 'name', None)
+

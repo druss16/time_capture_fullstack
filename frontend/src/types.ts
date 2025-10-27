@@ -1,20 +1,23 @@
-export type Suggestion = {
-  label_type: "client" | "project" | "task";
-  value_text: string;
-  confidence: number;
-};
+// types.ts - Update your BlockDto type
 
-export type BlockDto = {
+export interface BlockDto {
   id: number;
-  start: string;  // ISO
-  end: string;    // ISO
+  start: string;
+  end: string;
   minutes: number;
-  title: string | null;
-  url: string | null;
-  file_path: string | null;
-  client: string | null;
-  project: string | null;
-  task: string | null;
+  title: string;
+  window_title?: string;  // ADD THIS LINE
+  url?: string;
+  file_path?: string;
+  client?: string;
+  project?: string;
+  task?: string;
   notes?: string;
   suggestions?: Suggestion[];
-};
+}
+
+export interface Suggestion {
+  label_type: string;
+  value_text: string;
+  confidence: number;
+}

@@ -32,3 +32,22 @@ export async function downloadTodayCsv(): Promise<Blob> {
   const { data } = await api.get(API_ROUTES.exportBlocksCsv, { responseType: "blob" });
   return data as Blob;
 }
+
+// Add this function to your api/blocks.ts file
+
+export async function aiSuggestLabels(blockId: number) {
+  const response = await fetch(`http://localhost:7123/api/ai-suggest/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    credentials: "include",
+    body: JSON.stringify({ block_id: blockId }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to get AI suggestions");
+  }
+
+  return response.json();
+}

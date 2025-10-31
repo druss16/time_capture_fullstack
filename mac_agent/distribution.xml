@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <pkg-ref id="com.mavops.timetracker"/>
+    <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="com.mavops.timetracker"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="com.mavops.timetracker" visible="false">
+        <pkg-ref id="com.mavops.timetracker"/>
+    </choice>
+    <pkg-ref id="com.mavops.timetracker" version="1.0.0" onConclusion="none">TimeTrackerAgent.component.pkg</pkg-ref>
+</installer-gui-script>

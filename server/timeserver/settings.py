@@ -14,7 +14,10 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-secret-key-change-me")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") not in ("0", "false", "False")
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",")]
 
-AGENT_KEY = os.getenv("AGENT_API_KEY", "")
+AGENT_KEY = os.getenv("AGENT_KEY") or os.getenv("AGENT_API_KEY", "")
+AGENT_POST_URL = os.getenv("AGENT_POST_URL", "")
+
+AGENT_AUTO_PROVISION = True
 
 USE_AUTH = False  # so the frontend can hit the API without JWT
 
@@ -33,7 +36,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "corsheaders",
-    "tracker",
+    "tracker.apps.TrackerConfig",
 ]
 
 # -----------------------------------------------------
@@ -143,10 +146,18 @@ CSRF_EXEMPT_URLS = ["/tracker/raw-events/"]  # you can append API endpoints here
 # -----------------------------------------------------
 # CORS
 # -----------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "1") in ("1", "true", "True")
-CORS_ALLOW_CREDENTIALS = True
-CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
+# settings.py
+from corsheaders.defaults import default_headers
 
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:5174", "http://127.0.0.1:5174",
+]
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-agent-key", "agent-key", "authorization",
+    "x-agent-user", "x-agent-host",
+]
 # -----------------------------------------------------
 # Django REST Framework
 # -----------------------------------------------------

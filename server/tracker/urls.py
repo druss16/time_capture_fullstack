@@ -7,14 +7,15 @@ urlpatterns = [
     # -------------------------------
     path("ping/", views.ping),
     path("raw-events/", views.raw_events),              # For authenticated agent posts
-    path("ingest-raw-event/", views.ingest_raw_event),  # Dev/open ingestion
+    path("ingest-raw-event/", views.raw_events),  # Dev/open ingestion
     path("blocks-today/", views.blocks_today),
 
     # -------------------------------
     # Suggestions (Rule-based + AI)
     # -------------------------------
     path("suggestions-today/", views.suggestions_today),        # old rule-based
-    path("ai-suggestions-today/", views.ai_suggestions_today),  # new LLM-based
+    path("ai-suggestions-today/", views.ai_suggestions_today, name="ai_suggestions_today"),
+    path("label-block/", views.label_block, name="label_block"),
     path("blocks/suggestions/", views.ai_suggestions_today, name="ai_suggestions_today"),  # main unified route
     path("blocks/suggestions/rule-based/", views.suggestions_today, name="suggestions_today"),
     path("blocks/<int:block_id>/classify/", views.save_block_classification, name="save_block_classification"),
@@ -27,6 +28,8 @@ urlpatterns = [
     path("timecards/summary/", views.timecard_summary, name="timecard_summary"),
     path("timecards/<int:timecard_id>/approve/", views.approve_timecard, name="approve_timecard"),
     path("timecards/<int:timecard_id>/reject/", views.reject_timecard, name="reject_timecard"),
+    path("timecards/summary/day/", views.timecards_summary_day, name="timecard-summary-day"),
+
 
     # -------------------------------
     # Organization Settings
@@ -35,4 +38,15 @@ urlpatterns = [
     path("settings/entities/", views.known_entities, name="known_entities"),
     path("settings/entities/<int:entity_id>/", views.known_entity_detail, name="known_entity_detail"),
     path("settings/training/", views.save_training_example, name="save_training_example"),
+
+    # -------------------------------
+    # Auto Provision User (Agent Handshake)
+    # -------------------------------
+    path("agents/hello/", views.agents_hello, name="agents_hello"),
+
+    # -------------------------------
+    # Agent Control (Admin Kill-Switch)
+    # -------------------------------
+    path("agent/control/", views.agent_control, name="agent_control"),
+    path("whoami/", views.whoami, name="whoami"),
 ]

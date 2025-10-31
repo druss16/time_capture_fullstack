@@ -5,13 +5,19 @@ import csv
 import io
 import json
 import os
+import re
 import urllib.parse
 import asyncio
-from datetime import timedelta, date as date_type, timezone as dt_timezone
+from datetime import timedelta, date as date_type, timezone as dt_timezone, datetime, time as dt_time
 from typing import Optional, List, Dict, Any
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Sum
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.timezone import localtime
@@ -26,14 +32,60 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
+from openai import OpenAI
+
 from .models import (
     RawEvent, Block, Rule, Suggestion, Client, Project, Task,
-    OrganizationSettings, KnownEntity, AITrainingExample, TimecardEntry
+    OrganizationSettings, KnownEntity, AITrainingExample, TimecardEntry,
+    AgentControl, AgentSession
 )
-from .permissions import AgentKeyPermission
+# tracker/views.py
+from .permissions import PermUI, AgentKeyPermission, NoAuth
 from .rules import apply_rules
 from .serializers import RawEventSerializer
-from .ai_timecard_service_adapted import TimecardGenerator
+
+from .utils import resolve_agent_user  # <— add this import
+
+# views.py
+from datetime import datetime, time as dt_time, timedelta, date as date_type
+from django.utils import timezone
+from django.utils.dateparse import parse_date
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from .permissions import PermUI
+from .models import Block
+from .utils import get_org_or_default, resolve_client_from_known, infer_task_for_block, compact_rawevents_into_blocks
+from django.contrib.auth import get_user_model
+
+from datetime import datetime, timedelta, time as dt_time, timezone as dt_timezone
+from django.utils import timezone
+from datetime import date, datetime, timedelta, time as dt_time, timezone as dt_timezone
+from django.utils import timezone
+from django.db.models.functions import TruncHour
+
+from .utils import (
+    get_org_or_default,
+    resolve_client_from_known,
+    infer_task_for_block,
+    compact_rawevents_into_blocks,
+)
+
+# tracker/views.py
+import datetime
+from datetime import timedelta, time as dt_time
+from django.utils import timezone
+from django.db.models import Sum
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from .models import Block
+from .services.classify_block import classify_block
+
+# --- helper: resolve which user to show in the day summary ---
+from django.contrib.auth import get_user_model
+User = get_user_model()
+
+
 
 # -------------------------------------------------------------------
 # Config / constants
@@ -42,31 +94,18 @@ BLOCK_PAD_MINUTES = 10
 MIN_BLOCK_DURATION = 6          # minutes
 BLOCK_GRANULARITY = 6           # round to 6-min increments
 
-DEFAULT_USER = "unknown-user"
-DEFAULT_HOST = "unknown-host"
-
 USE_AUTH = bool(getattr(settings, "USE_AUTH", False))
 PermUI = IsAuthenticated if USE_AUTH else AllowAny
 
-IDLE_STICKY_MINUTES = int(getattr(settings, "IDLE_STICKY_MINUTES", 4))   # configurable
+IDLE_STICKY_MINUTES = int(getattr(settings, "IDLE_STICKY_MINUTES", 4))
 FUZZY_HOST_MATCH = True
 FUZZY_TITLE_THRESHOLD = float(getattr(settings, "FUZZY_TITLE_THRESHOLD", 0.72))
 
-def _host(url: str) -> str:
-    try:
-        return urllib.parse.urlparse(url or "").hostname or ""
-    except Exception:
-        return ""
-
-def _similar(a: str, b: str) -> float:
-    from difflib import SequenceMatcher
-    a = (a or "").strip().lower()
-    b = (b or "").strip().lower()
-    return SequenceMatcher(None, a, b).ratio()
+MAX_NAME_LEN = 120
 
 
 # -------------------------------------------------------------------
-# Helpers
+# Utility helpers
 # -------------------------------------------------------------------
 def get_org_or_default(request):
     """Get org from user or a default dev org."""
@@ -75,9 +114,31 @@ def get_org_or_default(request):
     else:
         org = None
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     return org
+
+
+def _get_user_obj(username: Optional[str]):
+    if not username:
+        return None
+    try:
+        return User.objects.get(username=username)
+    except User.DoesNotExist:
+        return None
+
+
+def _host(url: str) -> str:
+    try:
+        return urllib.parse.urlparse(url or "").hostname or ""
+    except Exception:
+        return ""
+
+
+def _similar(a: str, b: str) -> float:
+    from difflib import SequenceMatcher
+    a = (a or "").strip().lower()
+    b = (b or "").strip().lower()
+    return SequenceMatcher(None, a, b).ratio()
 
 
 def _start_of_local_day_utc(dt: Optional[timezone.datetime] = None) -> timezone.datetime:
@@ -103,13 +164,19 @@ def _label_from_event(e: RawEvent) -> str:
     return e.app_name or "Unknown"
 
 
+def _client_ip(request) -> str:
+    fwd = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    return (fwd.split(",")[0].strip() if fwd else "") or request.META.get("REMOTE_ADDR", "")
+
+
 def _round_up_minutes(n: int, granularity: int) -> int:
     return n if n % granularity == 0 else n + (granularity - (n % granularity))
 
 
 def build_classification_prompt(text_blocks: list, org_context: str) -> str:
     """Context-aware AI prompt for block classification."""
-    prompt = f"""You are a time-tracking AI assistant. Your job is to classify computer activity blocks into client work, projects, and time categories.
+    return f"""You are a time-tracking AI assistant. Your job is to classify computer activity blocks into client work, projects, and time categories.
+
 
 {org_context if org_context else ""}
 
@@ -135,7 +202,6 @@ NOW CLASSIFY THESE BLOCKS:
 
 Return ONLY a JSON array. No markdown.
 """
-    return prompt
 
 
 def build_ai_context(org) -> str:
@@ -145,11 +211,11 @@ def build_ai_context(org) -> str:
     except OrganizationSettings.DoesNotExist:
         settings_obj = None
 
-    context_parts = []
+    parts = []
     if settings_obj and settings_obj.company_name:
-        context_parts.append(f"COMPANY: {settings_obj.company_name}")
+        parts.append(f"COMPANY: {settings_obj.company_name}")
         if settings_obj.description:
-            context_parts.append(f"DESCRIPTION: {settings_obj.description}")
+            parts.append(f"DESCRIPTION: {settings_obj.description}")
 
     clients = KnownEntity.objects.filter(org=org, entity_type='client')
     if clients.exists():
@@ -158,15 +224,15 @@ def build_ai_context(org) -> str:
             aliases = f" (aka: {', '.join(c.aliases)})" if c.aliases else ""
             internal = " [INTERNAL]" if c.is_internal else ""
             rows.append(f"  - {c.name}{aliases}{internal}")
-        context_parts.append("KNOWN CLIENTS:\n" + "\n".join(rows))
+        parts.append("KNOWN CLIENTS:\n" + "\n".join(rows))
 
     if settings_obj and settings_obj.internal_keywords:
-        context_parts.append(f"INTERNAL WORK INDICATORS: {', '.join(settings_obj.internal_keywords)}")
+        parts.append(f"INTERNAL WORK INDICATORS: {', '.join(settings_obj.internal_keywords)}")
         if settings_obj.default_internal_project:
-            context_parts.append(f"DEFAULT INTERNAL PROJECT: {settings_obj.default_internal_project}")
+            parts.append(f"DEFAULT INTERNAL PROJECT: {settings_obj.default_internal_project}")
 
     if settings_obj and settings_obj.custom_instructions:
-        context_parts.append(f"SPECIAL INSTRUCTIONS:\n{settings_obj.custom_instructions}")
+        parts.append(f"SPECIAL INSTRUCTIONS:\n{settings_obj.custom_instructions}")
 
     recent = AITrainingExample.objects.filter(org=org).order_by('-created_at')[:5]
     if recent.exists():
@@ -174,9 +240,9 @@ def build_ai_context(org) -> str:
         for ex in recent:
             cname = ex.correct_client.name if ex.correct_client else "N/A"
             rows.append(f'  - "{ex.text_content[:60]}..." → {cname}')
-        context_parts.append("RECENT CORRECTIONS:\n" + "\n".join(rows))
+        parts.append("RECENT CORRECTIONS:\n" + "\n".join(rows))
 
-    return "\n\n".join(context_parts)
+    return "\n\n".join(parts)
 
 
 # -------------------------------------------------------------------
@@ -189,7 +255,7 @@ def ping(_request):
 
 
 # -------------------------------------------------------------------
-# Agent ingestion
+# Agent handshake, control, and ingest
 # -------------------------------------------------------------------
 class NoAuth(BaseAuthentication):
     """Disable session/csrf for token/agent endpoints."""
@@ -197,78 +263,260 @@ class NoAuth(BaseAuthentication):
         return None
 
 
+# views.py (DRF)
+from django.utils import timezone
+from django.contrib.auth.models import User, Group
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+import json
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def agents_hello(request):
+    """
+    Auto-provision user and upsert AgentSession.
+    Tolerates partial schemas by only touching fields that exist on AgentSession.
+    Also sets cookies so the SPA can show the username without login.
+    """
+    # ---- Gather inputs (headers first, JSON fallback) ----
+    username = (request.headers.get("X-Agent-User") or "").strip()
+    host     = (request.headers.get("X-Agent-Host") or "").strip()
+    plat     = (request.headers.get("X-Agent-Platform") or "").strip()
+    ver      = (request.headers.get("X-Agent-Version") or "").strip()
+
+    if not (username and host):
+        body = {}
+        try:
+            body = request.data if isinstance(request.data, dict) else json.loads(request.body.decode("utf-8"))
+        except Exception:
+            body = {}
+        username = username or (body.get("user") or body.get("os_username") or "").strip()
+        host     = host or (body.get("hostname") or body.get("machine") or "").strip()
+        plat     = plat or (body.get("platform") or "").strip()
+        ver      = ver or (body.get("app_version") or body.get("version") or "").strip()
+
+    username = username or "unknown"
+    host     = host or "unknown"
+    cip      = _client_ip(request)
+
+    # ---- Ensure group & user ----
+    grp, _ = Group.objects.get_or_create(name="Time Agents")
+    user, created = User.objects.get_or_create(username=username, defaults={"is_active": True, "email": ""})
+    if created:
+        user.set_unusable_password()
+        user.save()
+    if not user.groups.filter(id=grp.id).exists():
+        user.groups.add(grp)
+
+    # ---- Build safe filter/defaults for AgentSession ----
+    sess_fields = {f.name for f in AgentSession._meta.get_fields()}
+
+    filter_kwargs = {"user": user}
+    if "hostname" in sess_fields:
+        filter_kwargs["hostname"] = host
+
+    defaults = {}
+    if "last_seen" in sess_fields:
+        defaults["last_seen"] = timezone.now()
+    if "platform" in sess_fields and plat:
+        defaults["platform"] = plat
+    if "version" in sess_fields and ver:
+        defaults["version"] = ver
+    if "last_ip" in sess_fields and cip:
+        defaults["last_ip"] = cip
+    # If hostname is a field but not in filter (in case your unique key is just user),
+    # add to defaults so we keep it current:
+    if "hostname" in sess_fields and "hostname" not in filter_kwargs:
+        defaults["hostname"] = host
+
+    AgentSession.objects.update_or_create(**filter_kwargs, defaults=defaults)
+
+    # ---- Ensure AgentControl row (schema tolerant) ----
+    try:
+        AgentControl.objects.get_or_create(user=user, host=host)
+    except Exception:
+        # If your AgentControl uses different field names, ignore gently.
+        pass
+
+    # ---- Response + cookies for SPA ----
+    resp = Response({
+        "ok": True,
+        "user_id": user.id,
+        "username": user.username,
+        "host": host,
+        # If AgentControl exists with (user, host), return flags if available:
+        "stop": False,
+        "stop_until": None,
+    })
+    # Cookies used by /api/whoami/ (so your frontend can show the username)
+    resp.set_cookie("mavops_username", user.username, samesite="Lax")
+    resp.set_cookie("mavops_host", host, samesite="Lax")
+    return resp
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def agent_control(request):
+    """
+    GET ?user=<username>&host=<host>
+    Returns { stop, reason, stop_until }
+    """
+    username = (request.GET.get("user") or "").strip()
+    host = (request.GET.get("host") or "").strip()
+
+    stop, reason, stop_until = False, "", None
+    if username and host:
+        try:
+            u = User.objects.get(username=username)
+            ac = AgentControl.objects.filter(user=u, host=host).first()
+            if ac:
+                if ac.stop_until and ac.stop_until <= timezone.now():
+                    stop = False
+                else:
+                    stop = ac.stop
+                reason = ac.reason
+                stop_until = ac.stop_until
+        except User.DoesNotExist:
+            pass
+
+    return Response({
+        "stop": stop,
+        "reason": reason,
+        "stop_until": stop_until.isoformat() if stop_until else None
+    })
+
+
+
 @api_view(["POST"])
 @authentication_classes([NoAuth])          # no cookies/csrf
-@permission_classes([AgentKeyPermission])  # require Agent key header
+@permission_classes([AgentKeyPermission])  # require X-Agent-Key
 @throttle_classes([AnonRateThrottle])
 def raw_events(request):
+
+    # DEBUG: comment out after you confirm
+    # if settings.DEBUG:
+    #     print("----- /api/raw-events/ DEBUG -----")
+    #     print("Headers seen by server:")
+    #     for k, v in request.headers.items():
+    #         if "agent" in k.lower() or k.lower() == "authorization":
+    #             print(f"  {k}: {v!r}")
+    #     print("Query key:", request.query_params.get("key"))
+    #     print("----------------------------------")
     """
-    Ingest one or many RawEvent objects. Accepts dict or list[dict].
-    ts_utc may be ISO string or datetime; other fields per RawEventSerializer.
+    Ingest one or many RawEvent objects.
+    - Accepts dict or list[dict].
+    - ts_utc may be ISO string or datetime.
+    - user is derived from headers via resolve_agent_user() -> FK.
+    - hostname comes from header (X-Agent-Host) or item['hostname'] or 'unknown'.
     """
+    # Resolve the authenticated Django user for attribution
+    agent_user = resolve_agent_user(request)
+
     payload = request.data
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list):
         raise ValidationError("Payload must be an object or an array of objects.")
+
+    header_host = (request.headers.get("X-Agent-Host") or "").strip() or "unknown"
+
+    created, errors = 0, []
     for item in payload:
+        # Parse timestamp
         ts = item.get("ts_utc")
         if isinstance(ts, str):
             dt = parse_datetime(ts)
             if dt is None:
-                raise ValidationError({"ts_utc": f"Invalid ts_utc: {ts}"})
+                errors.append({"item": item, "error": "Invalid ts_utc"})
+                continue
             item["ts_utc"] = dt
-    ser = RawEventSerializer(data=payload, many=True)
-    ser.is_valid(raise_exception=True)
-    ser.save()
-    return Response({"created": len(payload)}, status=status.HTTP_201_CREATED)
+        elif not ts:
+            errors.append({"item": item, "error": "Missing ts_utc"})
+            continue
 
+        # Hostname preference: header > item > 'unknown'
+        hostname = (header_host or item.get("hostname") or "unknown").strip() or "unknown"
 
-# Optional: keep a dev/legacy open endpoint
-@api_view(["POST"])
-@permission_classes([AllowAny])
-@throttle_classes([AnonRateThrottle])
-def ingest_raw_event(request):
-    return raw_events(request)
+        try:
+            RawEvent.objects.create(
+                ts_utc=item["ts_utc"],
+                app_name=item.get("app_name"),
+                bundle_id=item.get("bundle_id"),
+                window_title=item.get("window_title") or "",
+                url=item.get("url"),
+                file_path=item.get("file_path"),
+                user=agent_user,                 # FK from resolve_agent_user
+                hostname=hostname,
+                ctx=item.get("ctx", {}) or {},
+            )
+            created += 1
+        except Exception as e:
+            errors.append({"item": item, "error": str(e)})
+
+    status_code = status.HTTP_201_CREATED if created and not errors else (
+        status.HTTP_207_MULTI_STATUS if created and errors else status.HTTP_400_BAD_REQUEST
+    )
+    return Response({"created": created, "errors": errors}, status=status_code)
 
 
 # -------------------------------------------------------------------
 # Compactor: RawEvent -> Block (for TODAY only; compaction-on-read)
 # -------------------------------------------------------------------
-from django.db import transaction
-from django.utils.timezone import localtime
-from datetime import timedelta
-from typing import Optional, List, Dict, Any
+def _merge_ctx(cur: dict, e: RawEvent):
+    """Fold RawEvent.ctx into rolling block dict."""
+    ctx = getattr(e, "ctx", None) or {}
+    if not isinstance(ctx, dict):
+        return
+
+    cur.setdefault("hints", {})
+
+    # Browser context
+    b = ctx.get("browser") or {}
+    if isinstance(b, dict):
+        if b.get("origin"):      cur["hints"]["browser_origin"]   = b["origin"]
+        if b.get("pathname"):    cur["hints"]["browser_pathname"] = b["pathname"]
+        if b.get("jira_key"):    cur["hints"]["jira_key"]         = b["jira_key"]
+        if b.get("github_repo"): cur["hints"]["github_repo"]      = b["github_repo"]
+        if b.get("github_pr"):   cur["hints"]["github_pr"]        = b["github_pr"]
+
+    # VS Code context
+    v = ctx.get("vscode") or {}
+    if isinstance(v, dict):
+        if v.get("repo_root"):  cur["hints"]["repo_root"]  = v["repo_root"]
+        if v.get("workspace"):  cur["hints"]["workspace"]  = v["workspace"]
+        if v.get("rel_file"):   cur["hints"]["rel_file"]   = v["rel_file"]
+        if v.get("branch"):     cur["hints"]["branch"]     = v["branch"]
+        if v.get("remote"):     cur["hints"]["remote"]     = v["remote"]
+
+    # Shell context
+    s = ctx.get("shell") or {}
+    if isinstance(s, dict):
+        if s.get("pwd"):        cur["hints"]["pwd"]        = s["pwd"]
+        if s.get("branch"):     cur["hints"]["branch"]     = s["branch"]
+
 
 @transaction.atomic
-def compact_rawevents_into_blocks(
-    user: Optional[str] = None,
-    hostname: Optional[str] = None,
-    org=None,
-) -> int:
+def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional[str] = None, org=None) -> int:
     """
-    Compacts today's RawEvents into Block rows with:
-      - host-aware, fuzzy title merging
-      - sticky idle attribution
-      - min duration + 6-min rounding
-      - merged context → Block.hints (browser/vscode/shell, etc.)
+    Compacts today's RawEvents into Block rows with merging & rounding.
+    `user` may be a username or a User instance; we normalize to FK.
     """
-    # 1) Scope to start-of-today (local -> UTC)
     start_utc = _start_of_local_day_utc()
+
+    user_obj = user if isinstance(user, User) else _get_user_obj(user)
+
     ev_qs = RawEvent.objects.filter(ts_utc__gte=start_utc).order_by("ts_utc")
-    if user:
-        ev_qs = ev_qs.filter(user=user)
+    if user_obj:
+        ev_qs = ev_qs.filter(user=user_obj)
     if hostname:
         ev_qs = ev_qs.filter(hostname=hostname)
     events: List[RawEvent] = list(ev_qs)
 
-    # 2) Wipe today's blocks for this scope (also guard by org if present)
+    # wipe today's scope
     blk_qs = Block.objects.filter(start__gte=start_utc)
-    if any(f.name == "org" for f in Block._meta.fields) and org:
-        blk_qs = blk_qs.filter(org=org)
-    if hasattr(Block, "user") and user:
-        blk_qs = blk_qs.filter(user=user)
-    if hasattr(Block, "hostname") and hostname:
+    if user_obj:
+        blk_qs = blk_qs.filter(user=user_obj)
+    if hostname:
         blk_qs = blk_qs.filter(hostname=hostname)
     blk_qs.delete()
 
@@ -276,13 +524,12 @@ def compact_rawevents_into_blocks(
     pad = timedelta(minutes=BLOCK_PAD_MINUTES)
     sticky_delta = timedelta(minutes=IDLE_STICKY_MINUTES)
 
-    current: Optional[Dict[str, Any]] = None  # rolling block dict
+    current: Optional[Dict[str, Any]] = None
 
     def _duration_minutes(cur: Dict[str, Any]) -> int:
         return int((cur["end"] - cur["start"]).total_seconds() // 60)
 
-    def _finalize_and_create(cur: Dict[str, Any]) -> int:
-        # duration with min + rounding
+    def _finalize_and_create(cur: Dict[str, Any], org_val) -> int:
         actual = _duration_minutes(cur)
         target = max(MIN_BLOCK_DURATION, _round_up_minutes(actual, BLOCK_GRANULARITY))
         if actual < target:
@@ -298,38 +545,29 @@ def compact_rawevents_into_blocks(
         if hasattr(Block, "window_title"):
             kwargs["window_title"] = cur.get("window_title") or ""
         if hasattr(Block, "user"):
-            kwargs["user"] = cur.get("user") or DEFAULT_USER
+            kwargs["user"] = cur.get("user") or user_obj
         if hasattr(Block, "hostname"):
-            kwargs["hostname"] = cur.get("hostname") or DEFAULT_HOST
-
-        # minutes always reflects final (possibly extended/rounded) duration
+            kwargs["hostname"] = cur.get("hostname") or ""
         if hasattr(Block, "minutes"):
             kwargs["minutes"] = int((kwargs["end"] - kwargs["start"]).total_seconds() // 60)
 
-        # persist merged context hints if present
         if hasattr(Block, "hints") and isinstance(cur.get("hints"), dict):
-            kwargs["hints"] = cur["hints"]
-
-        # populate local 'day' for grouping if field exists
-        if any(f.name == "day" for f in Block._meta.fields):
-            kwargs["day"] = localtime(kwargs["start"]).date()
+            kwargs["hints"] = cur.get("hints")
 
         # org handling
         if any(f.name == "org" for f in Block._meta.fields):
             field = Block._meta.get_field("org")
             if not field.null:
-                if org is None:
-                    from django.contrib.auth.models import Group
-                    org, _ = Group.objects.get_or_create(name="default-org")
-                kwargs["org"] = org
+                if org_val is None:
+                    org_val, _ = Group.objects.get_or_create(name="default-org")
+                kwargs["org"] = org_val
             else:
-                kwargs["org"] = org
+                kwargs["org"] = org_val
 
         Block.objects.create(**kwargs)
         return 1
 
     def _same_activity(prev: Dict[str, Any], new_title: str, new_url: str) -> bool:
-        """Same block if identical title or (same host & fuzzy-similar title)."""
         if new_title == prev["title"]:
             return True
         if FUZZY_HOST_MATCH:
@@ -340,63 +578,42 @@ def compact_rawevents_into_blocks(
                     return True
         return False
 
-    # 3) Stream & merge
     for e in events:
-        lbl = _label_from_event(e)  # host -> filename -> window_title -> app_name
-        u = user or getattr(e, "user", None) or DEFAULT_USER
-        h = hostname or getattr(e, "hostname", None) or DEFAULT_HOST
+        lbl = _label_from_event(e)
+        u_fk = e.user  # FK
+        h = hostname or getattr(e, "hostname", None) or ""
         et = e.ts_utc
         url = e.url or ""
         fpath = e.file_path or ""
         wtitle = getattr(e, "window_title", "") or ""
 
         if current is None:
-            # start first block
             current = dict(
-                start=et,
-                end=et,
-                title=lbl,
-                window_title=wtitle,
-                url=url,
-                file_path=fpath,
-                user=u,
-                hostname=h,
+                start=et, end=et, title=lbl, window_title=wtitle,
+                url=url, file_path=fpath, user=u_fk, hostname=h,
             )
-            # merge context from this RawEvent
             _merge_ctx(current, e)
             continue
 
         gap = et - current["end"]
 
         if gap <= pad and _same_activity(current, lbl, url):
-            # same activity → extend to event time; attribute tiny idle ("sticky")
-            # (setting end to 'et' already attributes the gap)
+            if timedelta(0) < gap <= sticky_delta:
+                current["end"] += gap  # attribute idle to current
             current["end"] = et
-            _merge_ctx(current, e)   # keep enriching while we extend
+            _merge_ctx(current, e)
         else:
-            # different activity or big gap → finalize current
-            created += _finalize_and_create(current)
-
-            # start a fresh block at event time
+            created += _finalize_and_create(current, org)
             current = dict(
-                start=et,
-                end=et,
-                title=lbl,
-                window_title=wtitle,
-                url=url,
-                file_path=fpath,
-                user=u,
-                hostname=h,
+                start=et, end=et, title=lbl, window_title=wtitle,
+                url=url, file_path=fpath, user=u_fk, hostname=h,
             )
             _merge_ctx(current, e)
 
     if current:
-        created += _finalize_and_create(current)
+        created += _finalize_and_create(current, org)
 
     return created
-
-
-
 
 
 # -------------------------------------------------------------------
@@ -406,17 +623,17 @@ def compact_rawevents_into_blocks(
 @permission_classes([PermUI])
 @throttle_classes([UserRateThrottle])
 def blocks_today(request):
-    """Compact RawEvents -> Blocks for today (scoped by ?user=&hostname=) and return Blocks."""
-    user = request.GET.get("user") or None
+    """Compact RawEvents -> Blocks for today and return display-ready blocks."""
+    username = request.GET.get("user") or None
     hostname = request.GET.get("hostname") or None
     org = get_org_or_default(request)
 
-    compact_rawevents_into_blocks(user=user, hostname=hostname, org=org)
+    compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
 
     start_utc = _start_of_local_day_utc()
     qs = Block.objects.filter(start__gte=start_utc).order_by("start")
-    if user:
-        qs = qs.filter(user=user)
+    if username:
+        qs = qs.filter(user__username=username)  # FK filter
     if hostname:
         qs = qs.filter(hostname=hostname)
     if org:
@@ -427,23 +644,27 @@ def blocks_today(request):
             return int(b.minutes)
         return int((b.end - b.start).total_seconds() / 60)
 
-    data = [
-        {
+    data = []
+    for b in qs.select_related("client", "project", "task", "user"):
+        data.append({
             "id": b.id,
             "start": b.start,
             "end": b.end,
             "minutes": minutes(b),
             "title": b.title,
             "window_title": getattr(b, "window_title", "") or "",
-            "url": b.url,
-            "file_path": b.file_path,
-            "client": getattr(b.client, "name", None),
-            "project": getattr(b.project, "name", None),
-            "task": getattr(b.task, "name", None),
+            "url": b.url or "",
+            "file_path": b.file_path or "",
+            "description": getattr(b, "description", "") or "",
+            "attendees": getattr(b, "attendees", []) or [],
+            "hints": getattr(b, "hints", {}) or {},
+            "client_name": getattr(b.client, "name", None),
+            "project_name": getattr(b.project, "name", None),
+            "task_name": getattr(b.task, "name", None),
             "notes": getattr(b, "notes", "") or "",
-        }
-        for b in qs
-    ]
+            "user": b.user.username if b.user_id else None,
+            "hostname": b.hostname,
+        })
     return Response(data)
 
 
@@ -452,16 +673,16 @@ def blocks_today(request):
 @throttle_classes([UserRateThrottle])
 def suggestions_today(request):
     """Recompute up to 3 rule-based suggestions per Block for today, after compaction."""
-    user = request.GET.get("user") or None
+    username = request.GET.get("user") or None
     hostname = request.GET.get("hostname") or None
     org = get_org_or_default(request)
 
-    compact_rawevents_into_blocks(user=user, hostname=hostname, org=org)
+    compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
 
     start_utc = _start_of_local_day_utc()
     qs = Block.objects.filter(start__gte=start_utc).order_by("start")
-    if user:
-        qs = qs.filter(user=user)
+    if username:
+        qs = qs.filter(user__username=username)
     if hostname:
         qs = qs.filter(hostname=hostname)
     if org:
@@ -485,8 +706,8 @@ def suggestions_today(request):
                 "minutes": int((b.end - b.start).total_seconds() / 60),
                 "title": b.title,
                 "window_title": getattr(b, "window_title", "") or "",
-                "url": b.url,
-                "file_path": b.file_path,
+                "url": b.url or "",
+                "file_path": b.file_path or "",
                 "client": getattr(b.client, "name", None),
                 "project": getattr(b.project, "name", None),
                 "task": getattr(b.task, "name", None),
@@ -500,49 +721,82 @@ def suggestions_today(request):
 
 @api_view(["POST"])
 @permission_classes([PermUI])
+@transaction.atomic
 def label_block(request):
     """
-    Apply labels to a Block; optionally create a rule from this confirmation.
-    Body:
-      { block_id, client?, project?, task?, notes?, create_rule?, create_rule_field?, create_rule_value?, pattern?, kind? }
+    Save labels directly by block_id (in body).
     """
-    block_id = request.data.get("block_id")
+    body = request.data or {}
+    block_id = body.get("block_id")
     if not block_id:
         raise ValidationError({"block_id": "Required."})
-    try:
-        b = Block.objects.get(id=block_id)
-    except Block.DoesNotExist:
-        raise NotFound("Block not found.")
 
-    # Mutations
-    get = request.data.get
-    if (v := get("client")):
-        b.client = Client.objects.get(org=b.org, name=v)
-    if (v := get("project")):
-        b.project = Project.objects.get(org=b.org, name=v)
-    if (v := get("task")):
-        b.task = Task.objects.get(org=b.org, name=v)
-    if (v := get("notes")) is not None:
-        b.notes = v
+    b = get_object_or_404(Block, id=block_id)
+    org = getattr(b, "org", None) or get_org_or_default(request)
+
+    client_name  = (body.get("client")  or "").strip() or None
+    project_name = (body.get("project") or "").strip() or None
+    task_name    = (body.get("task")    or "").strip() or None
+    notes        = body.get("notes", None)
+    categories   = _sanitize_categories(body.get("categories"))
+
+    # upsert client/project/task
+    client_obj = None
+    if client_name:
+        client_obj, _ = Client.objects.get_or_create(org=org, name=client_name)
+        b.client = client_obj
+
+    proj_obj = getattr(b, "project", None)
+    if project_name:
+        if client_obj is None:
+            client_obj, _ = Client.objects.get_or_create(org=org, name="(General)")
+            b.client = client_obj
+        proj_obj, _ = Project.objects.get_or_create(org=org, client=client_obj, name=project_name)
+        b.project = proj_obj
+
+    if task_name:
+        if proj_obj is None:
+            if client_obj is None:
+                client_obj, _ = Client.objects.get_or_create(org=org, name="(General)")
+                b.client = client_obj
+            proj_obj, _ = Project.objects.get_or_create(org=org, client=client_obj, name="(General)")
+            b.project = proj_obj
+        task_obj, _ = Task.objects.get_or_create(org=org, project=proj_obj, name=task_name)
+        b.task = task_obj
+
+    if categories:
+        b.category_hours = categories
+    if notes is not None:
+        b.notes = str(notes)
+
     b.save()
 
-    if request.data.get("create_rule"):
-        field = get("create_rule_field")
-        value_text = get("create_rule_value")
+    # optional rule creation
+    if body.get("create_rule"):
+        field = body.get("create_rule_field")
+        value_text = body.get("create_rule_value")
         if field not in {"client", "project", "task"}:
             raise ValidationError({"create_rule_field": "Must be 'client'|'project'|'task'."})
         if not value_text:
             raise ValidationError({"create_rule_value": "Required when create_rule is true."})
-        pattern = get("pattern") or (b.url or b.file_path or (b.title or ""))[:200]
+        pattern = body.get("pattern") or (b.url or b.file_path or (b.title or ""))[:200]
         Rule.objects.create(
-            org=b.org,
+            org=org,
             pattern=pattern,
             field=field,
             value_text=value_text,
-            kind=get("kind") or "contains",
+            kind=body.get("kind") or "contains",
             active=True,
         )
-    return Response({"ok": True})
+
+    return Response({
+        "ok": True,
+        "block_id": b.id,
+        "client": getattr(b.client, "name", None),
+        "project": getattr(b.project, "name", None),
+        "task": getattr(b.task, "name", None),
+        "categories": getattr(b, "category_hours", {}),
+    })
 
 
 # -------------------------------------------------------------------
@@ -554,21 +808,26 @@ def label_block(request):
 def ai_suggestions_today(request):
     """
     Generate AI-powered suggestions for today's blocks.
-    Query params: user, hostname
     """
-    import re, time
-    from difflib import SequenceMatcher
-
-    user = request.GET.get("user") or None
+    # toggles
+    username = request.GET.get("user") or None
     hostname = request.GET.get("hostname") or None
+    limit = int(request.GET.get("limit") or 120)
+    limit = max(1, min(limit, 200))
+    timeout_ms = int(request.GET.get("timeout_ms") or 12000)
+    noai = request.GET.get("noai") in ("1", "true", "yes")
+    fallback_mode = request.GET.get("fallback") or ""  # "", "rule"
+    debug = request.GET.get("debug") in ("1", "true", "yes")
+
     org = get_org_or_default(request)
 
-    compact_rawevents_into_blocks(user=user, hostname=hostname, org=org)
+    # Build/refresh today's blocks
+    compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
 
     start_utc = _start_of_local_day_utc()
     qs = Block.objects.filter(start__gte=start_utc).order_by("start")
-    if user:
-        qs = qs.filter(user=user)
+    if username:
+        qs = qs.filter(user__username=username)
     if hostname:
         qs = qs.filter(hostname=hostname)
     if org:
@@ -578,15 +837,16 @@ def ai_suggestions_today(request):
     if not blocks:
         return Response([])
 
-    # --------- Trim input size to keep prompts predictable ----------
-    MAX_BLOCKS = 120  # plenty for a workday
+    # trim payload
     def _shorten(s: str, n: int = 180) -> str:
         s = (s or "").strip()
         return s[:n] + ("…" if len(s) > n else "")
 
+    MAX_BLOCKS = limit
     trimmed = []
     for b in blocks[:MAX_BLOCKS]:
         minutes = int((b.end - b.start).total_seconds() / 60) if b.end else 0
+        hints = getattr(b, "hints", {}) or {}
         trimmed.append({
             "id": str(b.id),
             "title": _shorten(b.title, 160),
@@ -596,93 +856,134 @@ def ai_suggestions_today(request):
             "minutes": minutes,
             "attendees": getattr(b, 'attendees', []) or [],
             "description": _shorten(getattr(b, 'description', ''), 220),
+            "hints": hints,
         })
 
-    org_context = build_ai_context(org)
-    prompt = build_classification_prompt(trimmed, org_context)
+    org_context = build_ai_context(org) or ""
 
-    # --------- OpenAI call with backoff + robust JSON parsing ----------
-    api_key = os.getenv('OPENAI_API_KEY')
+    if debug:
+        return Response({
+            "debug": True,
+            "count": len(trimmed),
+            "sample": trimmed[:5],
+            "org_context": org_context[:1200] if org_context else "",
+        })
+
+    if noai:
+        out = []
+        for b in blocks[:len(trimmed)]:
+            out.append({
+                "block_id": b.id,
+                "start": b.start,
+                "end": b.end,
+                "title": b.title,
+                "ai_suggestion": {
+                    "client": None,
+                    "project": None,
+                    "categories": {},
+                    "confidence": 0.0,
+                    "needs_review": True,
+                    "reasoning": "NOAI mode",
+                    "source": "noai",
+                },
+                "current_client": getattr(b.client, "name", None),
+                "current_project": getattr(b.project, "name", None),
+            })
+        return Response(out)
+
+    # OpenAI call
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return Response({"error": "OPENAI_API_KEY not configured"}, status=500)
 
+    prompt = build_classification_prompt(trimmed, org_context)
+
     def _extract_json(s: str) -> str:
-        """Strip fences and isolate JSON array/object best-effort."""
         s = s.strip()
-        # ```json ... ``` or ``` ... ```
         if s.startswith("```"):
             parts = s.split("```")
-            # take content between first and second fence if present
             if len(parts) >= 3:
                 s = parts[1]
                 if s.lower().startswith("json"):
                     s = s[4:].lstrip()
-        # grab first JSON array if present
         m = re.search(r'\[\s*{', s)
         if m:
             start = m.start()
-            # naive bracket matching to end of array
             depth, i = 0, start
             while i < len(s):
-                if s[i] == '[':
-                    depth += 1
+                if s[i] == '[': depth += 1
                 elif s[i] == ']':
                     depth -= 1
                     if depth == 0:
                         return s[start:i+1]
                 i += 1
-        # fallback: attempt to parse whole
         return s
 
     def _json_loads_loose(raw: str):
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            # remove trailing commas in objects/arrays (loose fix)
             raw2 = re.sub(r',\s*([}\]])', r'\1', raw)
             return json.loads(raw2)
 
-    # Backoff on rate limits/transients
-    import openai
-    openai.api_key = api_key
+    client = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
+
     system_msg = (
         "You are a time-tracking classifier. "
-        "Use the organization context to map blocks to {client, project, categories(hours)} "
-        "and set needs_review when unsure. Respond with ONLY JSON."
-        "\n\n--- ORG CONTEXT ---\n" + (org_context or "None")
+        "Use the organization context and each block's hints "
+        "(browser_origin, pathname, repo_root, jira_key, github_repo, etc.) "
+        "to map blocks to {client, project, categories(hours)}. "
+        "If unsure, set needs_review=true. "
+        "Return ONLY a JSON array matching the order of provided blocks. "
+        "Include fields: client, project, categories, confidence, needs_review, reasoning."
+        "\n\n--- ORG CONTEXT ---\n" + org_context
     )
+
     last_text = None
-    for attempt, delay in [(1, 0.0), (2, 1.0), (3, 3.0)]:
-        try:
-            if delay:
-                time.sleep(delay)
-            resp = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.2,
-                max_tokens=3800,
-            )
-            last_text = resp.choices[0].message.content.strip()
-            raw_json = _extract_json(last_text)
-            ai_suggestions = _json_loads_loose(raw_json)
-            if not isinstance(ai_suggestions, list):
-                raise ValueError("Model did not return a JSON array.")
-            break
-        except Exception as e:
-            err = str(e)
-            if attempt == 3:
-                return Response({
-                    "error": "AI extraction failed",
-                    "details": err[:300],
-                    "raw_response_head": (last_text or "")[:600],
-                }, status=500)
-    # --------- Shape output aligned with blocks order ----------
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=3500,
+        )
+        last_text = (resp.choices[0].message.content or "").strip()
+        raw_json = _extract_json(last_text)
+        ai_suggestions = _json_loads_loose(raw_json)
+        if not isinstance(ai_suggestions, list):
+            raise ValueError("Model did not return a JSON array.")
+    except Exception as e:
+        if fallback_mode == "rule":
+            return suggestions_today(request)
+        out = []
+        for b in blocks[:len(trimmed)]:
+            out.append({
+                "block_id": b.id,
+                "start": b.start,
+                "end": b.end,
+                "title": b.title,
+                "ai_suggestion": {
+                    "client": None,
+                    "project": None,
+                    "categories": {},
+                    "confidence": 0.0,
+                    "needs_review": True,
+                    "reasoning": f"AI fallback: {str(e)[:120]}",
+                    "source": "fallback",
+                },
+                "current_client": getattr(b.client, "name", None),
+                "current_project": getattr(b.project, "name", None),
+            })
+        return Response(out, status=200)
+
     out = []
-    for i, b in enumerate(blocks[:len(ai_suggestions)]):
-        sug = ai_suggestions[i] if i < len(ai_suggestions) else {}
+    N = min(len(blocks), len(ai_suggestions))
+    for i in range(N):
+        b = blocks[i]
+        sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
         out.append({
             "block_id": b.id,
             "start": b.start,
@@ -700,6 +1001,7 @@ def ai_suggestions_today(request):
             "current_client": getattr(b.client, "name", None),
             "current_project": getattr(b.project, "name", None),
         })
+
     return Response(out)
 
 
@@ -720,20 +1022,20 @@ def generate_timecard(request):
     else:
         target_date = timezone.now().date()
 
-    user = request.data.get('user') or request.GET.get('user') or 'unknown'
-    hostname = request.data.get('hostname') or request.GET.get('hostname') or 'unknown'
+    username = request.data.get('user') or request.GET.get('user') or None
+    hostname = request.data.get('hostname') or request.GET.get('hostname') or None
     org = get_org_or_default(request)
 
-    # Get day window
-    import datetime
-    target_dt = timezone.make_aware(datetime.datetime.combine(target_date, datetime.time.min))
+    user_obj = _get_user_obj(username)
+
+    target_dt = timezone.make_aware(datetime.combine(target_date, dt_time.min))
     start_utc = _start_of_local_day_utc(target_dt)
-    end_utc = start_utc + datetime.timedelta(days=1)
+    end_utc = start_utc + timedelta(days=1)
 
     qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
-    if user and user != 'unknown':
-        qs = qs.filter(user=user)
-    if hostname and hostname != 'unknown':
+    if user_obj:
+        qs = qs.filter(user=user_obj)
+    if hostname:
         qs = qs.filter(hostname=hostname)
     if org:
         qs = qs.filter(org=org)
@@ -748,7 +1050,6 @@ def generate_timecard(request):
             'message': 'No blocks found for this date'
         })
 
-    # To AI
     blocks_data = []
     existing_assignments = {}
     for b in blocks:
@@ -774,6 +1075,7 @@ def generate_timecard(request):
     if not api_key:
         return Response({"error": "OPENAI_API_KEY not configured"}, status=500)
 
+    from .ai_timecard_service_adapted import TimecardGenerator
     generator = TimecardGenerator(api_key)
     try:
         timecard_entries = asyncio.run(
@@ -790,9 +1092,9 @@ def generate_timecard(request):
     saved_entries = []
     needs_review_count = 0
     with transaction.atomic():
-        # Remove only draft/pending for this user/date/org
+        # remove drafts/pending for same day/user
         TimecardEntry.objects.filter(
-            org=org, user=user, date=target_date, status__in=['draft', 'pending']
+            org=org, user=user_obj, date=target_date, status__in=['draft', 'pending']
         ).delete()
 
         for entry in timecard_entries:
@@ -803,9 +1105,10 @@ def generate_timecard(request):
                 )
             t = TimecardEntry.objects.create(
                 org=org,
-                user=user,
+                user=user_obj,
                 date=target_date,
                 client=client_obj,
+                project=None,  # optional: wire if you later include it in generator
                 total_hours=entry.total_hours,
                 category_breakdown=entry.category_breakdown,
                 activities_summary=entry.activities_summary,
@@ -842,7 +1145,7 @@ def generate_timecard(request):
 def list_timecards(request):
     """List timecard entries with optional filtering."""
     org = get_org_or_default(request)
-    qs = TimecardEntry.objects.filter(org=org)
+    qs = TimecardEntry.objects.filter(org=org).select_related("client", "project", "user")
 
     if date_str := request.GET.get('date'):
         try:
@@ -866,12 +1169,12 @@ def list_timecards(request):
         qs = qs.filter(status=status_filter)
 
     if user_filter := request.GET.get('user'):
-        qs = qs.filter(user=user_filter)
+        qs = qs.filter(user__username=user_filter)
 
     entries = [{
         'id': e.id,
         'date': e.date.isoformat(),
-        'user': e.user,
+        'user': e.user.username if e.user_id else None,
         'client_name': e.client.name if e.client else 'Unknown',
         'project_name': e.project.name if e.project else None,
         'total_hours': float(e.total_hours),
@@ -928,34 +1231,305 @@ def reject_timecard(request, timecard_id: int):
 @api_view(["GET"])
 @permission_classes([PermUI])
 def timecard_summary(request):
-    """Summary statistics for timecards."""
-    from django.db.models import Sum
+    """
+    CPA-style rollup:
+    Client → total_hours + merged category_breakdown across entries.
+    Query: ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&user=<username>
+    """
     org = get_org_or_default(request)
-    qs = TimecardEntry.objects.filter(org=org)
+    qs = TimecardEntry.objects.filter(org=org).select_related("client")
 
     if start_str := request.GET.get('start_date'):
         qs = qs.filter(date__gte=date_type.fromisoformat(start_str))
     if end_str := request.GET.get('end_date'):
         qs = qs.filter(date__lte=date_type.fromisoformat(end_str))
     if user_filter := request.GET.get('user'):
-        qs = qs.filter(user=user_filter)
+        qs = qs.filter(user__username=user_filter)
 
-    by_client = qs.values('client__name').annotate(total=Sum('total_hours')).order_by('-total')
+    total_hours = float(qs.aggregate(total=Sum('total_hours'))['total'] or 0.0)
+
+    def _sum(q, st):
+        return float(q.filter(status=st).aggregate(total=Sum('total_hours'))['total'] or 0.0)
+
     by_status = {
-        'approved': qs.filter(status='approved').aggregate(Sum('total_hours'))['total_hours__sum'] or 0,
-        'pending': qs.filter(status='pending').aggregate(Sum('total_hours'))['total_hours__sum'] or 0,
-        'draft': qs.filter(status='draft').aggregate(Sum('total_hours'))['total_hours__sum'] or 0,
-        'rejected': qs.filter(status='rejected').aggregate(Sum('total_hours'))['total_hours__sum'] or 0,
+        'approved': _sum(qs, 'approved'),
+        'pending': _sum(qs, 'pending'),
+        'draft': _sum(qs, 'draft'),
+        'rejected': _sum(qs, 'rejected'),
     }
 
+    rollups: Dict[str, Dict[str, Any]] = {}
+    for e in qs.select_related('client'):
+        cname = e.client.name if e.client else "Unknown"
+        r = rollups.setdefault(cname, {"total_hours": 0.0, "categories": {}, "entries": []})
+        r["total_hours"] += float(e.total_hours or 0.0)
+        if isinstance(e.category_breakdown, dict):
+            for k, v in e.category_breakdown.items():
+                if not k:
+                    continue
+                r["categories"][k] = float(r["categories"].get(k, 0.0)) + float(v or 0.0)
+        r["entries"].append({
+            "id": e.id,
+            "date": e.date.isoformat(),
+            "hours": float(e.total_hours or 0.0),
+            "status": e.status,
+        })
+
+    by_client = [
+        {
+            "client": cname,
+            "total_hours": round(v["total_hours"], 2),
+            "categories": { k: round(float(h), 2) for k, h in sorted(v["categories"].items()) },
+            "entries": v["entries"],
+        }
+        for cname, v in rollups.items()
+    ]
+    by_client.sort(key=lambda x: x["total_hours"], reverse=True)
+
     return Response({
-        'total_hours': qs.aggregate(Sum('total_hours'))['total_hours__sum'] or 0,
-        'by_client': list(by_client),
-        'by_status': by_status,
-        'entries_count': qs.count(),
-        'needs_review_count': qs.filter(needs_review=True, status='draft').count(),
+        "total_hours": round(total_hours, 2),
+        "by_client": by_client,
+        "by_status": by_status,
+        "entries_count": qs.count(),
+        "needs_review_count": qs.filter(needs_review=True, status='draft').count(),
     })
 
+
+# -------------------------------------------------------------------
+# Daily roll-up from Blocks
+# -------------------------------------------------------------------
+def _host_from_url(u: str) -> str:
+    try:
+        return urllib.parse.urlparse(u or "").hostname or ""
+    except Exception:
+        return ""
+
+
+def resolve_client_from_known(org, b) -> str | None:
+    """
+    Try to infer a client name using KnownEntity(entity_type='client') and block context.
+    Checks: hostname, pathname, window_title.
+    """
+    host = _host_from_url(getattr(b, "url", "") or "")
+    try:
+        path = urllib.parse.urlparse(getattr(b, "url", "") or "").path or ""
+    except Exception:
+        path = ""
+    title = (getattr(b, "window_title", "") or getattr(b, "title", "") or "").lower()
+
+    known = list(KnownEntity.objects.filter(org=org, entity_type="client"))
+
+    def _match(candidate: KnownEntity) -> bool:
+        name = (candidate.name or "").lower()
+        aliases = [(a or "").lower() for a in (candidate.aliases or [])]
+        needles = [name] + aliases
+        for n in needles:
+            if not n:
+                continue
+            if n in (host or "").lower():
+                return True
+            if n in (path or "").lower():
+                return True
+            if n in title:
+                return True
+        return False
+
+    for c in known:
+        if _match(c):
+            return c.name
+    return None
+
+
+def infer_task_for_block(b) -> str:
+    """
+    Heuristic task bucketer for CPAs.
+    """
+    title = (getattr(b, "window_title", "") or getattr(b, "title", "") or "").lower()
+    url = getattr(b, "url", "") or ""
+    host = _host_from_url(url)
+    try:
+        path = urllib.parse.urlparse(url).path or ""
+    except Exception:
+        path = ""
+
+    # Meetings
+    if "meet.google.com" in host or "zoom.us" in host or "teams.microsoft.com" in host:
+        return "Meeting"
+
+    # Email/Communication
+    if "mail.google.com" in host or "outlook.office.com" in host or "gmail" in title or "outlook" in title:
+        return "Email/Communication"
+    if "slack.com" in host or "slack" in title:
+        return "Communication"
+
+    # Tax Prep (common CPA apps/terms)
+    tax_terms = ["ultratax", "drake", "proseries", "lacerte", "tax", "1040", "1120", "1065", "w-2", "1099"]
+    if any(t in title for t in tax_terms) or any(t in (path or "").lower() for t in tax_terms):
+        return "Tax Prep"
+
+    # Research
+    if "irs.gov" in host or "taxfoundation.org" in host or "cch" in title or "checkpoint" in title or "research" in title:
+        return "Research"
+
+    # Admin / Docs
+    if "docs.google.com" in host or "drive.google.com" in host or "onedrive" in host or "sharepoint" in host:
+        return "Administration"
+
+    # Default
+    return "Uncategorized"
+
+
+def _resolve_summary_user(request):
+    """
+    Decide which user to filter by:
+      - If ?user=<username> is provided, use that (404 if not found).
+      - Else if X-Agent-User header is present, use that (auto-provision if AGENT_AUTO_PROVISION=True).
+      - Else return (None, ""), meaning "All Users".
+
+    Returns: (User|None, display_name:str)
+    """
+    from django.conf import settings
+
+    q_user = (request.GET.get("user") or "").strip()
+    if q_user:
+        try:
+            u = User.objects.get(username=q_user)
+            return (u, q_user)
+        except User.DoesNotExist:
+            # "Hard" fail with 404-ish behavior is okay; or return (None,"") if you prefer.
+            from rest_framework.exceptions import NotFound
+            raise NotFound(f"user '{q_user}' not found")
+
+    hdr_user = (request.headers.get("X-Agent-User") or "").strip()
+    if hdr_user:
+        try:
+            u = User.objects.get(username=hdr_user)
+            return (u, hdr_user)
+        except User.DoesNotExist:
+            if getattr(settings, "AGENT_AUTO_PROVISION", False):
+                u = User.objects.create_user(username=hdr_user)
+                u.set_unusable_password()
+                u.save()
+                return (u, hdr_user)
+            # fall through to All Users
+
+    return (None, "")  # All Users
+
+
+date_type = datetime.date  # if you already have this, keep your version
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def timecards_summary_day(request):
+    """
+    Summarize Blocks for a single day:
+    Groups by client → tasks → category breakdowns.
+    """
+    date_str = (request.GET.get("date") or "").strip()
+    if not date_str:
+        return Response({"error": "date is required (YYYY-MM-DD)"}, status=400)
+
+    try:
+        day = datetime.date.fromisoformat(date_str)
+    except ValueError:
+        return Response({"error": "Invalid date format (use YYYY-MM-DD)"}, status=400)
+
+    user_param = (request.GET.get("user") or "").strip()
+
+    # Time window for that day (UTC)
+    start_local = timezone.make_aware(datetime.datetime.combine(day, dt_time.min))
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(datetime.timezone.utc)
+    end_utc = end_local.astimezone(datetime.timezone.utc)
+
+    qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc)
+    if user_param:
+        qs = qs.filter(user__username=user_param)
+
+    blocks = list(qs)
+
+    clients = {}
+    total_minutes = 0
+
+    for b in blocks:
+        mins = int(b.minutes or ((b.end - b.start).total_seconds() // 60))
+        if mins <= 0:
+            continue
+        total_minutes += mins
+
+        # ✅ Prefer FK client, else AI-inferred
+        client_name = (
+            getattr(b.client, "name", None)
+            or getattr(b, "ai_extracted_client", None)
+            or "Unknown"
+        )
+        task_name = (
+            getattr(b.task, "name", None)
+            or getattr(b, "ai_category", None)
+            or "Uncategorized"
+        )
+
+        c_row = clients.setdefault(
+            client_name,
+            {
+                "client_name": client_name,
+                "total_hours": 0.0,
+                "categories": {},
+                "tasks": {},
+                "block_ids": [],
+            },
+        )
+        c_row["total_hours"] += mins / 60.0
+        c_row["block_ids"].append(b.id)
+
+        t_row = c_row["tasks"].setdefault(
+            task_name,
+            {"task_name": task_name, "total_hours": 0.0, "categories": {}, "block_ids": []},
+        )
+        t_row["total_hours"] += mins / 60.0
+        t_row["block_ids"].append(b.id)
+
+        cats = getattr(b, "category_hours", {}) or {}
+        if isinstance(cats, dict) and cats:
+            for k, v in cats.items():
+                kk = str(k)[:120]
+                hh = max(0.0, float(v))
+                t_row["categories"][kk] = t_row["categories"].get(kk, 0.0) + hh
+                c_row["categories"][kk] = c_row["categories"].get(kk, 0.0) + hh
+        else:
+            unc = "Uncategorized"
+            hours = mins / 60.0
+            t_row["categories"][unc] = t_row["categories"].get(unc, 0.0) + hours
+            c_row["categories"][unc] = c_row["categories"].get(unc, 0.0) + hours
+
+    client_rows = []
+    for c in clients.values():
+        tasks_list = sorted(c["tasks"].values(), key=lambda r: r["total_hours"], reverse=True)
+        client_rows.append({
+            "client_name": c["client_name"],
+            "total_hours": round(c["total_hours"], 2),
+            "categories": {k: round(v, 2) for k, v in c["categories"].items()},
+            "tasks": [
+                {
+                    "task_name": t["task_name"],
+                    "total_hours": round(t["total_hours"], 2),
+                    "categories": {k: round(v, 2) for k, v in (t["categories"] or {}).items()},
+                    "block_ids": t["block_ids"],
+                }
+                for t in tasks_list
+            ],
+            "block_ids": c["block_ids"],
+        })
+
+    client_rows.sort(key=lambda r: r["total_hours"], reverse=True)
+
+    return Response({
+        "date": day.isoformat(),
+        "user": user_param or "",
+        "total_hours": round(total_minutes / 60.0, 2),
+        "clients": client_rows,
+    })
 
 # -------------------------------------------------------------------
 # Org Settings & Knowledge
@@ -1011,7 +1585,7 @@ def organization_settings(request):
 @api_view(["GET", "POST"])
 @permission_classes([PermUI])
 def known_entities(request):
-    """List or create known entities (clients, projects, categories)."""
+    """List or create known entities (clients, projects, categories, people)."""
     org = get_org_or_default(request)
     if request.method == "GET":
         entity_type = request.GET.get('entity_type')
@@ -1028,6 +1602,7 @@ def known_entities(request):
             'confidence_boost': e.confidence_boost,
         } for e in qs])
 
+    # POST
     entity_type = request.data.get('entity_type')
     name = request.data.get('name')
     if not entity_type or not name:
@@ -1087,41 +1662,121 @@ def save_training_example(request):
     return Response({'id': ex.id, 'message': 'Training example saved'})
 
 
+# -------------------------------------------------------------------
+# Save classification via path param: /api/blocks/<id>/classify/
+# -------------------------------------------------------------------
+def _clean_name(v):
+    if not v:
+        return None
+    v = str(v).strip()
+    if not v:
+        return None
+    if v.lower() in {"none", "unassigned", "—", "-", "(none)"}:
+        return None
+    return v[:MAX_NAME_LEN]
+
+
+def _to_float(v):
+    try:
+        s = str(v).lower().replace("hrs", "").replace("hr", "").replace("h", "").strip()
+        f = float(s)
+        if f < 0 or f != f:  # NaN
+            return None
+        return f
+    except Exception:
+        return None
+
+
+def _sanitize_categories(obj):
+    clean = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kk = str(k).strip()[:MAX_NAME_LEN]
+            fv = _to_float(v)
+            if kk and fv is not None:
+                clean[kk] = fv
+    return clean
+
+
+_clean_categories = _sanitize_categories  # alias
+
+
+def _pick_or_create_client(org, name):
+    qs = Client.objects.filter(org=org, name=name).order_by("id")
+    obj = qs.first()
+    if obj:
+        return obj
+    return Client.objects.create(org=org, name=name)
+
+
+def _pick_or_create_project(org, client, name):
+    qs = Project.objects.filter(org=org, client=client, name=name).order_by("id")
+    obj = qs.first()
+    if obj:
+        return obj
+    return Project.objects.create(org=org, client=client, name=name)
+
+
 @api_view(["POST"])
 @permission_classes([PermUI])
+@transaction.atomic
 def save_block_classification(request, block_id: int):
     """
-    When user saves/corrects a classification, persist it & learn.
-    Body:
-      { client_id?, project_id?, category_hours{}, original_prediction{} , notes? }
+    POST /api/blocks/<id>/classify/
+    Body: { client?: str, project?: str, categories?: {name: hours} }
+    - Ignores 'None' / '—' / 'Unassigned'
+    - Picks oldest duplicate Client/Project instead of 400s
     """
-    org = get_org_or_default(request)
-    try:
-        block = Block.objects.get(id=block_id, org=org)
-    except Block.DoesNotExist:
-        raise NotFound("Block not found")
+    b = get_object_or_404(Block, id=block_id)
+    org = getattr(b, "org", None) or get_org_or_default(request)
 
-    block.client_id = request.data.get('client_id')
-    block.project_id = request.data.get('project_id')
-    block.category_hours = request.data.get('category_hours', {})
-    if 'notes' in request.data:
-        block.notes = request.data['notes']
-    block.save()
+    data = request.data or {}
+    client_name  = _clean_name(data.get("client"))
+    project_name = _clean_name(data.get("project"))
+    categories   = _sanitize_categories(data.get("categories") or {})
 
-    AITrainingExample.objects.create(
-        org=org,
-        text_content=f"{block.title} - {getattr(block, 'description', '') or ''}",
-        correct_client_id=block.client_id,
-        correct_project_id=block.project_id,
-        correct_categories=block.category_hours,
-        original_prediction=request.data.get('original_prediction', {}),
-    )
-    return Response({'message': 'Classification saved and learned!'})
+    if not client_name and not project_name and not categories:
+        return Response({"ok": True, "block_id": b.id, "noop": True})
+
+    client_obj = getattr(b, "client", None)
+
+    if client_name:
+        client_obj = _pick_or_create_client(org, client_name)
+        b.client = client_obj
+
+    if project_name:
+        if client_obj is None:
+            client_obj = _pick_or_create_client(org, "(General)")
+            b.client = client_obj
+        proj_obj = _pick_or_create_project(org, client_obj, project_name)
+        b.project = proj_obj
+
+    if categories:
+        b.category_hours = categories
+
+    b.full_clean()
+    b.save()
+
+    return Response({
+        "ok": True,
+        "block_id": b.id,
+        "client": getattr(b.client, "name", None),
+        "project": getattr(b.project, "name", None),
+        "categories": getattr(b, "category_hours", {}),
+    })
 
 
 # -------------------------------------------------------------------
 # Bulk import (clients/projects) for onboarding
 # -------------------------------------------------------------------
+@api_view(["GET"])
+@permission_classes([PermUI])
+def clients_list(request):
+    org = get_org_or_default(request)
+    qs = Client.objects.filter(org=org).order_by("name")
+    return Response([{"id": c.id, "name": c.name} for c in qs])
+
+
 @api_view(["POST"])
 @permission_classes([PermUI])
 def import_clients_csv(request):
@@ -1151,8 +1806,58 @@ def import_clients_csv(request):
             created['clients'] += 1
         pname = (row.get('project') or '').strip()
         if pname:
-            _, p_created = Project.objects.get_or_create(org=org, client=client, name=pname, defaults={'is_active': True})
+            _, p_created = Project.objects.get_or_create(org=org, g=client, name=pname, defaults={'is_active': True})
             if p_created:
                 created['projects'] += 1
 
     return Response({"message": "Import complete", **created})
+
+
+# -------------------------------------------------------------------
+# Agent sessions (admin glance)
+# -------------------------------------------------------------------
+@api_view(['GET'])
+@permission_classes([AllowAny])  # tighten as needed
+def agent_sessions(request):
+    rows = AgentSession.objects.order_by('-last_seen')[:100]
+    data = [
+        {
+            'user': r.user.username if getattr(r, "user_id", None) else None,
+            'hostname': r.hostname,
+            'last_seen': r.last_seen.isoformat(),
+            'last_app': r.last_app,
+            'last_window_title': r.last_window_title,
+        }
+        for r in rows
+    ]
+    return Response({'sessions': data})
+
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+
+# views.py
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def whoami(request):
+    # (a) logged-in user
+    if getattr(request.user, "is_authenticated", False):
+        return Response({"username": request.user.username, "host": None, "source": "session"})
+
+    # (b) cookies from agents_hello
+    u = request.COOKIES.get("mavops_username", "").strip()
+    h = request.COOKIES.get("mavops_host", "").strip()
+    if u:
+        return Response({"username": u, "host": h or None, "source": "cookie"})
+
+    client_ip = (request.META.get("HTTP_X_FORWARDED_FOR","").split(",")[0].strip()
+                 or request.META.get("REMOTE_ADDR",""))
+    sess = AgentSession.objects.filter(last_ip=client_ip).select_related("user").order_by("-last_seen").first()
+    if sess:
+        return Response({"username": sess.user.username, "host": sess.hostname, "source": "ip"})
+    # (c) nothing found
+    return Response({"username": "", "host": None, "source": "unknown"})

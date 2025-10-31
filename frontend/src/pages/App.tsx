@@ -3,6 +3,7 @@ import { AuthProvider } from "../auth/AuthProvider";
 import ProtectedRoute from "../routes/ProtectedRoute";
 import DailyReview from "./DailyReview";
 import TimecardReview from "./TimecardReview";
+import TimecardSummary from "./TimecardSummary"; // ✅ NEW
 import OrganizationSettings from "./OrganizationSettings";
 import Login from "./Login";
 
@@ -13,6 +14,7 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
+          {/* Default route → Daily Review */}
           <Route
             path="/"
             element={
@@ -21,6 +23,8 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+
+          {/* Timecard Review (existing) */}
           <Route
             path="/timecards"
             element={
@@ -29,6 +33,18 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+
+          {/* ✅ NEW: Timecard Summary */}
+          <Route
+            path="/summary"
+            element={
+              <ProtectedRoute>
+                <TimecardSummary />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Organization Settings */}
           <Route
             path="/settings"
             element={
@@ -37,6 +53,8 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+
+          {/* Login (only if auth is enabled) */}
           {!AUTH_DISABLED && <Route path="/login" element={<Login />} />}
         </Routes>
       </BrowserRouter>

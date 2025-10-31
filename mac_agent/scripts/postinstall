@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="/var/tmp/mavops-postinstall.log"
+exec >>"$LOG" 2>&1
+echo "== postinstall $(date)"
+
+LABEL="com.mavops.activityagent"
+PLIST="/Library/LaunchAgents/$LABEL.plist"
+AGENT_DIR="/usr/local/mavops"
+AGENT="$AGENT_DIR/TimeTrackerAgent"
+PPPC_DIR="/Library/Application Support/MavOps"
+PPPC_FILE="$PPPC_DIR/mavops-pppc-timetrackeragent.mobileconfig"
+
+# Permissions (existence-guarded)
+[[ -f "$PLIST"     ]] && { chown root:wheel "$PLIST" || true; chmod 644 "$PLIST" || true; }
+[[ -d "$AGENT_DIR" ]] && { chown -R root:wheel "$AGENT_DIR" || true; chmod 755 "$AGENT_DIR" || true; }
+[[ -f "$AGENT"     ]] && { chown root:wheel "$AGENT" || true; chmod 755 "$AGENT" || true; }
+
+# De-quarantine the agent to avoid first-run prompts
+[[ -f "$AGENT" ]] && /usr/bin/xattr -dr com.apple.quarantine "$AGENT" 2>/dev/null || true
+
+# Identify console user
+CONSOLE_USER="$(stat -f%Su /dev/console || true)"
+if [[ -z "${CONSOLE_USER:-}" || "$CONSOLE_USER" == "root" ]]; then
+  echo "No console user; leaving LaunchAgent installed. It will load on next login."
+  # Still attempt PPPC install on macOS ≤ 12 even without a console user
+  :
+else
+  GUI_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")"
+  if [[ -n "$GUI_UID" ]]; then
+    # Ensure user log dir exists
+    USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+    if [[ -n "${USER_HOME:-}" ]]; then
+      LOGDIR="$USER_HOME/Library/Logs/ActivityAgent"
+      mkdir -p "$LOGDIR" || true
+      chown -R "$CONSOLE_USER" "$LOGDIR" || true
+    fi
+
+    # Reload the agent cleanly (with one retry if GUI domain races)
+    attempt_bootstrap() {
+      /bin/launchctl bootout  "gui/$GUI_UID" "$PLIST" 2>/dev/null || true
+      /bin/launchctl bootstrap "gui/$GUI_UID" "$PLIST"
+      /bin/launchctl enable    "gui/$GUI_UID/$LABEL" 2>/dev/null || true
+      /bin/launchctl kickstart -k "gui/$GUI_UID/$LABEL" 2>/dev/null || true
+    }
+    if ! attempt_bootstrap 2>>"$LOG"; then
+      echo "First bootstrap attempt failed; sleeping 2s and retrying…"
+      sleep 2
+      attempt_bootstrap
+    fi
+
+    /bin/launchctl print "gui/$GUI_UID/$LABEL" 2>/dev/null | \
+      /usr/bin/grep -E 'program = |state = ' || true
+  else
+    echo "Could not resolve UID for $CONSOLE_USER; leaving LaunchAgent for next login."
+  fi
+fi
+
+# ✅ Install PPPC Accessibility profile automatically for macOS ≤ 12 (Monterey and older).
+# On macOS 13+ Apple requires MDM for PPPC. We only log a note there.
+if [[ "$(sw_vers -productVersion | awk -F. '{print $1}')" -le 12 ]]; then
+  mkdir -p "$PPPC_DIR" || true   # ensure directory exists
+  if [[ -f "$PPPC_FILE" ]]; then
+    echo "Installing PPPC Accessibility profile (legacy)…"
+    /usr/bin/profiles install -type configuration -path "$PPPC_FILE" || true
+  else
+    echo "PPPC profile not found at $PPPC_FILE — skipping."
+  fi
+else
+  echo "macOS 13+ detected — PPPC (Accessibility) must be deployed via MDM (System Profile)."
+fi
+
+echo "postinstall ok"
+exit 0

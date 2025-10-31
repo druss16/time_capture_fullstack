@@ -1,0 +1,1157 @@
+{
+  "logFormatVersion": 1,
+  "jobId": "ae4cf757-ab11-43a4-bbfc-5efc49ea255d",
+  "status": "Invalid",
+  "statusSummary": "Archive contains critical validation errors",
+  "statusCode": 4000,
+  "archiveFilename": "TimeTracker.app.zip",
+  "uploadDate": "2025-10-30T17:15:03.063Z",
+  "sha256": "aad4bc1eb4b78624c17d1e62f3eed9686e8fe4ac6eaa76eca83a6c1d2fa2269a",
+  "ticketContents": null,
+  "issues": [
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/MacOS/TimeTracker",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/MacOS/TimeTracker",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/MacOS/TimeTracker",
+      "message": "The executable does not have the hardened runtime enabled.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087724",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/libsqlite3.0.dylib",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/libsqlite3.0.dylib",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/libssl.3.dylib",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/libssl.3.dylib",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/libcrypto.3.dylib",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/libcrypto.3.dylib",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/liblzma.5.dylib",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/liblzma.5.dylib",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/libmpdec.4.dylib",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/libmpdec.4.dylib",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Foundation/_inlines.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Foundation/_inlines.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Foundation/_Foundation.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Foundation/_Foundation.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sqlite3.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sqlite3.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_scproxy.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_scproxy.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_md5.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_md5.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_heapq.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_heapq.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_kr.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_kr.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_opcode.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_opcode.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_tw.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_tw.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_elementtree.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_elementtree.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/resource.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/resource.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_hk.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_hk.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_contextvars.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_contextvars.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_random.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_random.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_json.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_json.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/binascii.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/binascii.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_datetime.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_datetime.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_bz2.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_bz2.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_jp.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_jp.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_ctypes.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_ctypes.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/math.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/math.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_iso2022.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_iso2022.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/unicodedata.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/unicodedata.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/termios.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/termios.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/zlib.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/zlib.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sha256.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sha256.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_bisect.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_bisect.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_cn.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_codecs_cn.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_multibytecodec.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_multibytecodec.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sha512.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sha512.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_posixsubprocess.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_posixsubprocess.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_pickle.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_pickle.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/pyexpat.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/pyexpat.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/select.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/select.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_lzma.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_lzma.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_typing.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_typing.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_blake2.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_blake2.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/array.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/array.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_struct.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_struct.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sha1.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sha1.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_decimal.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_decimal.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_socket.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_socket.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_hashlib.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_hashlib.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/grp.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/grp.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_ssl.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_ssl.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sha3.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_sha3.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/fcntl.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/fcntl.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_statistics.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_statistics.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_csv.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/python3__dot__11/lib-dynload/_csv.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Python.framework/Versions/3.11/Python",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Python.framework/Versions/3.11/Python",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/AppKit/_inlines.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/AppKit/_inlines.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/AppKit/_AppKit.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/AppKit/_AppKit.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/QuickLookUI/_QuickLookUI.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/QuickLookUI/_QuickLookUI.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_coregraphics.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_coregraphics.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_doubleindirect.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_doubleindirect.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_inlines.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_inlines.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_sortandmap.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_sortandmap.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_callbacks.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreGraphics/_callbacks.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/PDFKit/_PDFKit.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/PDFKit/_PDFKit.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreVideo/_CVPixelBuffer.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/CoreVideo/_CVPixelBuffer.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/QuartzCore/_quartzcore.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/QuartzCore/_quartzcore.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/ImageKit/_imagekit.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/Quartz/ImageKit/_imagekit.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/objc/_objc.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/objc/_objc.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/CoreFoundation/_inlines.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/CoreFoundation/_inlines.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/CoreFoundation/_CoreFoundation.cpython-311-darwin.so",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087721",
+      "architecture": "arm64"
+    },
+    {
+      "severity": "error",
+      "code": null,
+      "path": "TimeTracker.app.zip/TimeTracker.app/Contents/Frameworks/CoreFoundation/_CoreFoundation.cpython-311-darwin.so",
+      "message": "The signature does not include a secure timestamp.",
+      "docUrl": "https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/resolving_common_notarization_issues#3087733",
+      "architecture": "arm64"
+    }
+  ]
+}

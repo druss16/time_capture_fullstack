@@ -41,6 +41,8 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='TimeTracker',
+    distpath='dist',
+    workpath='build',
 )
 app = BUNDLE(
     coll,

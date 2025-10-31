@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="/var/tmp/mavops-preinstall.log"
+exec >>"$LOG" 2>&1
+echo "== preinstall $(date)"
+
+LABEL="com.mavops.activityagent"
+PLIST="/Library/LaunchAgents/$LABEL.plist"
+AGENT_DIR="/usr/local/mavops"
+AGENT_BIN="$AGENT_DIR/TimeTrackerAgent"
+
+# Ensure target dirs exist & perms are sane
+mkdir -p "$AGENT_DIR" /Library/LaunchAgents || true
+chmod 755 "$AGENT_DIR" || true
+
+# Try to unload any existing LaunchAgent for the console user (if present)
+CONSOLE_USER="$(stat -f%Su /dev/console || true)"
+if [[ -n "${CONSOLE_USER:-}" && "$CONSOLE_USER" != "root" ]]; then
+  GUI_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")"
+  if [[ -n "$GUI_UID" ]]; then
+    /bin/launchctl bootout "gui/$GUI_UID" "$PLIST" 2>/dev/null || true
+    # Also kill any stray process by label (defensive)
+    /bin/launchctl kill TERM "gui/$GUI_UID/$LABEL" 2>/dev/null || true
+  fi
+fi
+
+# If an older agent binary exists, clear quarantine (harmless if not present)
+if [[ -f "$AGENT_BIN" ]]; then
+  /usr/bin/xattr -dr com.apple.quarantine "$AGENT_BIN" 2>/dev/null || true
+fi
+
+echo "preinstall ok"
+exit 0

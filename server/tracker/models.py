@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from django.contrib.auth.models import Group
+import hashlib
 
 
 # ===========================
@@ -140,6 +141,29 @@ class Block(models.Model):
     ai_confidence = models.FloatField(default=0.0)
     ai_category = models.CharField(max_length=100, blank=True, default="")
     ai_processed_at = models.DateTimeField(null=True, blank=True)
+    ai_hash = models.CharField(max_length=64, blank=True, null=True)  # NEW
+    updated_at = models.DateTimeField(auto_now=True)  # NEW
+
+    def compute_ai_hash(self):
+        """
+        Hash title/url/path for quick change detection.
+        """
+        raw = f"{self.window_title or ''}|{self.url or ''}|{self.file_path or ''}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def has_ai_inputs_changed(self):
+        """
+        Returns True if the hash changed since last save.
+        """
+        new_hash = self.compute_ai_hash()
+        return self.ai_hash != new_hash
+
+    def save(self, *args, **kwargs):
+        # compute and store hash before save
+        new_hash = self.compute_ai_hash()
+        if not self.ai_hash or self.ai_hash != new_hash:
+            self.ai_hash = new_hash
+        super().save(*args, **kwargs)
 
     class Meta:
         indexes = [
@@ -148,6 +172,8 @@ class Block(models.Model):
             models.Index(fields=["org", "client"]),
             models.Index(fields=["org", "project"]),
             models.Index(fields=["org", "task"]),
+            models.Index(fields=["updated_at"]),  # optional
+
         ]
 
     def __str__(self):

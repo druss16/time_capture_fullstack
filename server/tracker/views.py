@@ -1005,6 +1005,29 @@ def ai_suggestions_today(request):
     return Response(out)
 
 
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def reclassify_day(request):
+    """
+    Manually trigger AI reclassification for all blocks in a given date.
+    """
+    from tracker.tasks import classify_block_task
+
+    date_str = (request.data.get("date") or "").strip()
+    if not date_str:
+        return Response({"error": "date is required"}, status=400)
+    try:
+        day = datetime.date.fromisoformat(date_str)
+    except ValueError:
+        return Response({"error": "invalid date"}, status=400)
+
+    qs = Block.objects.filter(day=day)
+    for b in qs:
+        classify_block_task.delay(b.pk)
+
+    return Response({"ok": True, "reclassified": qs.count()})
+
+
 # -------------------------------------------------------------------
 # Timecard Generation + Management
 # -------------------------------------------------------------------

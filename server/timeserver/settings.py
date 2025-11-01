@@ -1,6 +1,8 @@
 
 from pathlib import Path
 import os
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
 
 # -----------------------------------------------------
 # Base paths
@@ -53,6 +55,14 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+
+# Celery config (safe defaults)
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
+CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "False").lower() == "true"
+CELERY_TASK_TIME_LIMIT = 60 * 3  # 3 minutes per task
+CELERY_ACKS_LATE = True
+
 # -----------------------------------------------------
 # URL / WSGI / ASGI
 # -----------------------------------------------------
@@ -101,6 +111,20 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
+
+
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[DjangoIntegration()],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES", "0.0")),
+        profiles_sample_rate=float(os.getenv("SENTRY_PROFILES", "0.0")),
+        send_default_pii=False,
+        environment=os.getenv("ENV", "dev"),
+    )
+
 
 # -----------------------------------------------------
 # Internationalization

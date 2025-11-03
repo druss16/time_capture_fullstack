@@ -213,36 +213,36 @@ export default function TimecardSummary() {
 
         {/* Stats Overview */}
         {data && (
-          <div className="mb-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="p-6 rounded-2xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-xl shadow-primary/20">
-              <div className="flex items-start justify-between mb-3">
-                <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
-                  <Clock className="w-6 h-6" />
+          <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-4 rounded-xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-lg shadow-primary/20">
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-9 h-9 rounded-lg bg-white/20 backdrop-blur flex items-center justify-center">
+                  <Clock className="w-5 h-5" />
                 </div>
-                <TrendingUp className="w-5 h-5 opacity-70" />
+                <TrendingUp className="w-4 h-4 opacity-70" />
               </div>
-              <div className="text-4xl font-bold mb-1">{fmtHours(data.total_hours)}<span className="text-xl">h</span></div>
-              <div className="text-sm opacity-90">Total Hours Today</div>
+              <div className="text-3xl font-bold mb-0.5">{fmtHours(data.total_hours)}<span className="text-lg">h</span></div>
+              <div className="text-xs opacity-90">Total Hours Today</div>
             </div>
 
-            <div className="p-6 rounded-2xl bg-card border border-border hover:shadow-lg transition-all">
-              <div className="flex items-start justify-between mb-3">
-                <div className="w-12 h-12 rounded-xl bg-accent flex items-center justify-center">
-                  <User className="w-6 h-6 text-accent-foreground" />
+            <div className="p-4 rounded-xl bg-card border border-border hover:shadow-md transition-all">
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-9 h-9 rounded-lg bg-accent flex items-center justify-center">
+                  <User className="w-5 h-5 text-accent-foreground" />
                 </div>
               </div>
-              <div className="text-3xl font-bold text-foreground mb-1">{headerUser}</div>
-              <div className="text-sm text-muted-foreground">Timecard For</div>
+              <div className="text-2xl font-bold text-foreground mb-0.5 truncate">{headerUser}</div>
+              <div className="text-xs text-muted-foreground">Timecard For</div>
             </div>
 
-            <div className="p-6 rounded-2xl bg-card border border-border hover:shadow-lg transition-all">
-              <div className="flex items-start justify-between mb-3">
-                <div className="w-12 h-12 rounded-xl bg-success-light flex items-center justify-center">
-                  <Calendar className="w-6 h-6 text-success" />
+            <div className="p-4 rounded-xl bg-card border border-border hover:shadow-md transition-all">
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-9 h-9 rounded-lg bg-success-light flex items-center justify-center">
+                  <Calendar className="w-5 h-5 text-success" />
                 </div>
               </div>
-              <div className="text-3xl font-bold text-foreground mb-1">{data.clients.length}</div>
-              <div className="text-sm text-muted-foreground">Active Clients</div>
+              <div className="text-3xl font-bold text-foreground mb-0.5">{data.clients.length}</div>
+              <div className="text-xs text-muted-foreground">Active Clients</div>
             </div>
           </div>
         )}

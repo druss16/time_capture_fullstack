@@ -40,16 +40,16 @@ export const StatsCard: React.FC<StatsCardProps> = ({
 }) => {
   return (
     <div
-      className={`p-6 ${DESIGN_SYSTEM.radius.lg} overflow-hidden transition-all duration-300 ${
+      className={`p-5 ${DESIGN_SYSTEM.radius.lg} overflow-hidden transition-all duration-300 ${
         gradient
           ? "bg-gradient-to-br from-primary via-primary to-primary/90 text-primary-foreground shadow-lg shadow-primary/30 hover:shadow-xl hover:shadow-primary/40"
           : "bg-gradient-to-br from-card to-card/80 border border-border hover:border-primary/30 shadow-md hover:shadow-lg hover:scale-105"
       }`}
     >
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3">
         {icon && (
           <div
-            className={`w-12 h-12 ${DESIGN_SYSTEM.radius.md} flex items-center justify-center text-lg ${
+            className={`w-10 h-10 ${DESIGN_SYSTEM.radius.md} flex items-center justify-center ${
               gradient
                 ? "bg-white/20 backdrop-blur text-primary-foreground"
                 : "bg-primary/10 text-primary"
@@ -59,17 +59,17 @@ export const StatsCard: React.FC<StatsCardProps> = ({
           </div>
         )}
         {trend && (
-          <div className={gradient ? "text-primary-foreground/80" : "text-primary"}>
+          <div className={`${gradient ? "text-primary-foreground/80" : "text-primary"}`}>
             {trend}
           </div>
         )}
       </div>
-      <div className="mb-2">
-        <div className="text-4xl font-bold tracking-tight">{value}</div>
+      <div className="mb-1">
+        <div className="text-2xl font-bold tracking-tight">{value}</div>
       </div>
       <div
-        className={`text-sm font-medium ${
-          gradient ? "text-primary-foreground/90" : "text-muted-foreground"
+        className={`text-xs font-medium ${
+          gradient ? "text-primary-foreground/80" : "text-muted-foreground"
         }`}
       >
         {label}

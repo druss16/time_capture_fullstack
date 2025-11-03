@@ -44,7 +44,7 @@ export default function TimecardSummary() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/whoami/`, { credentials: "include" });
+        const r = await fetch(API_ENDPOINTS.whoami, { credentials: "include" });
         if (r.ok) {
           const j = (await r.json()) as { username?: string };
           const name = (j?.username || "").trim();

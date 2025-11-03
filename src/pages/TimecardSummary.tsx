@@ -143,12 +143,12 @@ export default function TimecardSummary() {
       <Header
         title="Timecard"
         subtitle="Time allocation dashboard"
-        icon={<Clock className="w-5 h-5 text-primary-foreground" />}
+        icon={<Clock className="w-6 h-6 text-primary-foreground" />}
         rightContent={
           whoami && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-accent/50 text-sm">
-              <User className="w-4 h-4 text-accent-foreground" />
-              <span className="font-medium text-accent-foreground">{whoami}</span>
+            <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-primary/20 to-primary/10 border border-primary/30 text-sm hover:border-primary/50 transition-all">
+              <User className="w-4 h-4 text-primary" />
+              <span className="font-semibold text-primary">{whoami}</span>
             </div>
           )
         }

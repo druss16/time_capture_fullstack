@@ -114,40 +114,45 @@ export default function TimecardSummary() {
       <style>{`
         .tc-container {
           min-height: 100vh;
-          background: #f8f9fa;
+          background: hsl(0 0% 97%);
           padding: 2rem 1rem;
         }
         .tc-wrapper {
-          max-width: 1200px;
+          max-width: 1280px;
           margin: 0 auto;
         }
         .tc-card {
           background: white;
-          border-radius: 8px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-          border: 1px solid #e5e7eb;
+          border-radius: 12px;
+          box-shadow: 0 1px 2px 0 hsl(215 25% 20% / 0.05);
+          border: 1px solid hsl(215 15% 88%);
           margin-bottom: 1.5rem;
+          overflow: hidden;
         }
         .tc-card-body {
-          padding: 1.5rem;
+          padding: 2rem;
         }
         .tc-title {
-          font-size: 1.875rem;
+          font-size: 2rem;
           font-weight: 700;
-          color: #111827;
+          color: hsl(217 91% 20%);
           margin: 0 0 0.5rem 0;
+          letter-spacing: -0.025em;
         }
         .tc-subtitle {
-          font-size: 0.875rem;
-          color: #6b7280;
+          font-size: 0.9375rem;
+          color: hsl(215 15% 50%);
           margin: 0;
+          font-weight: 400;
         }
         .tc-user-badge {
-          background: #f3f4f6;
-          padding: 0.375rem 0.75rem;
-          border-radius: 4px;
+          background: hsl(217 91% 95%);
+          color: hsl(217 91% 25%);
+          padding: 0.5rem 1rem;
+          border-radius: 8px;
           font-size: 0.875rem;
           display: inline-block;
+          font-weight: 500;
         }
         .tc-form-group {
           display: inline-block;
@@ -158,97 +163,108 @@ export default function TimecardSummary() {
           display: block;
           font-size: 0.75rem;
           font-weight: 600;
-          color: #374151;
-          margin-bottom: 0.25rem;
+          color: hsl(215 25% 20%);
+          margin-bottom: 0.375rem;
           text-transform: uppercase;
-          letter-spacing: 0.025em;
+          letter-spacing: 0.05em;
         }
         .tc-form-input {
-          border: 1px solid #d1d5db;
-          border-radius: 4px;
-          padding: 0.5rem 0.75rem;
+          border: 1.5px solid hsl(215 15% 88%);
+          border-radius: 8px;
+          padding: 0.625rem 0.875rem;
           font-size: 0.875rem;
           width: 220px;
+          transition: all 0.15s;
+          background: white;
         }
         .tc-form-input:focus {
-          outline: 2px solid #3b82f6;
-          outline-offset: 0;
-          border-color: #3b82f6;
+          outline: none;
+          border-color: hsl(217 91% 20%);
+          box-shadow: 0 0 0 3px hsl(217 91% 95%);
         }
         .tc-btn {
-          padding: 0.5rem 1rem;
-          border-radius: 4px;
+          padding: 0.625rem 1.25rem;
+          border-radius: 8px;
           font-size: 0.875rem;
-          font-weight: 500;
+          font-weight: 600;
           cursor: pointer;
-          border: 1px solid #d1d5db;
+          border: 1.5px solid hsl(215 15% 88%);
           background: white;
-          color: #374151;
+          color: hsl(215 25% 20%);
           transition: all 0.15s;
           margin-right: 0.5rem;
           margin-bottom: 0.5rem;
         }
         .tc-btn:hover:not(:disabled) {
-          background: #f9fafb;
+          background: hsl(0 0% 97%);
+          border-color: hsl(215 15% 80%);
         }
         .tc-btn:disabled {
           opacity: 0.5;
           cursor: not-allowed;
         }
         .tc-btn-primary {
-          background: #2563eb;
+          background: hsl(217 91% 20%);
           color: white;
-          border-color: #2563eb;
+          border-color: hsl(217 91% 20%);
         }
         .tc-btn-primary:hover:not(:disabled) {
-          background: #1d4ed8;
+          background: hsl(217 91% 25%);
+          border-color: hsl(217 91% 25%);
+          box-shadow: 0 4px 6px -1px hsl(217 91% 20% / 0.2);
         }
         .tc-alert-error {
-          background: #fef2f2;
-          border: 1px solid #fecaca;
-          color: #991b1b;
-          padding: 0.75rem 1rem;
-          border-radius: 4px;
+          background: hsl(0 72% 97%);
+          border: 1.5px solid hsl(0 72% 85%);
+          color: hsl(0 72% 35%);
+          padding: 0.875rem 1.125rem;
+          border-radius: 8px;
           font-size: 0.875rem;
           margin-top: 1rem;
         }
         .tc-summary-header {
-          background: #f9fafb;
-          border-bottom: 1px solid #e5e7eb;
-          padding: 1.25rem 1.5rem;
+          background: linear-gradient(135deg, hsl(217 91% 20%), hsl(217 91% 25%));
+          padding: 2rem;
           display: grid;
           grid-template-columns: 1fr 1fr auto;
-          gap: 1.5rem;
+          gap: 2rem;
           align-items: center;
         }
         .tc-summary-label {
-          font-size: 0.625rem;
-          color: #6b7280;
+          font-size: 0.6875rem;
+          color: rgba(255,255,255,0.8);
           text-transform: uppercase;
-          letter-spacing: 0.05em;
-          margin-bottom: 0.25rem;
+          letter-spacing: 0.075em;
+          margin-bottom: 0.375rem;
+          font-weight: 600;
         }
         .tc-summary-value {
-          font-size: 1.125rem;
+          font-size: 1.25rem;
           font-weight: 700;
-          color: #111827;
+          color: white;
+          letter-spacing: -0.025em;
         }
         .tc-total-hours {
-          background: #2563eb;
-          color: white;
-          padding: 0.75rem 1.5rem;
-          border-radius: 6px;
+          background: white;
+          color: hsl(217 91% 20%);
+          padding: 1rem 1.75rem;
+          border-radius: 10px;
+          box-shadow: 0 4px 6px -1px hsl(0 0% 0% / 0.15);
         }
         .tc-total-hours .tc-summary-label {
-          color: rgba(255,255,255,0.9);
+          color: hsl(215 15% 50%);
         }
         .tc-total-hours .tc-summary-value {
-          color: white;
-          font-size: 1.5rem;
+          color: hsl(217 91% 20%);
+          font-size: 1.875rem;
         }
         .tc-client-section {
-          padding: 1.25rem 1.5rem;
-          border-bottom: 1px solid #e5e7eb;
+          padding: 1.75rem 2rem;
+          border-bottom: 1px solid hsl(215 15% 92%);
+          transition: background 0.15s;
+        }
+        .tc-client-section:hover {
+          background: hsl(217 91% 99%);
         }
         .tc-client-section:last-child {
           border-bottom: none;
@@ -257,94 +273,105 @@ export default function TimecardSummary() {
           display: flex;
           justify-content: space-between;
           align-items: flex-start;
-          margin-bottom: 0.75rem;
+          margin-bottom: 1rem;
         }
         .tc-client-name {
-          font-size: 1.25rem;
-          font-weight: 600;
-          color: #111827;
+          font-size: 1.375rem;
+          font-weight: 700;
+          color: hsl(217 91% 20%);
           margin: 0;
+          letter-spacing: -0.025em;
         }
         .tc-client-meta {
-          font-size: 0.75rem;
-          color: #6b7280;
-          margin-top: 0.25rem;
+          font-size: 0.8125rem;
+          color: hsl(215 15% 50%);
+          margin-top: 0.375rem;
+          font-weight: 500;
         }
         .tc-client-hours {
-          font-size: 1.25rem;
+          font-size: 1.5rem;
           font-weight: 700;
-          color: #111827;
+          color: hsl(217 91% 20%);
+          letter-spacing: -0.025em;
         }
         .tc-category-tags {
           display: flex;
           flex-wrap: wrap;
-          gap: 0.5rem;
-          margin-bottom: 0.75rem;
+          gap: 0.625rem;
+          margin-bottom: 1rem;
         }
         .tc-category-tag {
           display: inline-flex;
           align-items: center;
-          gap: 0.5rem;
-          background: #eff6ff;
-          border: 1px solid #bfdbfe;
-          color: #1e40af;
-          padding: 0.25rem 0.75rem;
-          border-radius: 9999px;
-          font-size: 0.75rem;
-          font-weight: 500;
+          gap: 0.625rem;
+          background: hsl(217 91% 95%);
+          color: hsl(217 91% 25%);
+          padding: 0.375rem 1rem;
+          border-radius: 8px;
+          font-size: 0.8125rem;
+          font-weight: 600;
+          border: 1px solid hsl(217 91% 85%);
         }
         .tc-category-hours {
-          font-weight: 600;
+          font-weight: 700;
         }
         .tc-task-breakdown {
-          margin-top: 0.75rem;
-          border: 1px solid #e5e7eb;
-          border-radius: 4px;
+          margin-top: 1rem;
+          border: 1.5px solid hsl(215 15% 88%);
+          border-radius: 10px;
           overflow: hidden;
+          background: white;
         }
         .tc-task-breakdown-header {
-          background: #f9fafb;
-          padding: 0.5rem 0.75rem;
-          border-bottom: 1px solid #e5e7eb;
+          background: hsl(215 20% 96%);
+          padding: 0.75rem 1rem;
+          border-bottom: 1.5px solid hsl(215 15% 88%);
         }
         .tc-task-breakdown-title {
-          font-size: 0.75rem;
-          font-weight: 600;
-          color: #6b7280;
+          font-size: 0.6875rem;
+          font-weight: 700;
+          color: hsl(215 25% 20%);
           text-transform: uppercase;
+          letter-spacing: 0.075em;
           margin: 0;
         }
         .tc-task-row {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 0.625rem 0.75rem;
-          border-bottom: 1px solid #f3f4f6;
+          padding: 0.875rem 1rem;
+          border-bottom: 1px solid hsl(215 15% 92%);
+          transition: background 0.15s;
+        }
+        .tc-task-row:hover {
+          background: hsl(0 0% 98%);
         }
         .tc-task-row:last-child {
           border-bottom: none;
         }
         .tc-task-name {
-          font-size: 0.875rem;
-          color: #374151;
+          font-size: 0.9375rem;
+          color: hsl(215 25% 20%);
+          font-weight: 500;
         }
         .tc-task-hours {
-          font-size: 0.875rem;
-          font-weight: 600;
-          color: #111827;
+          font-size: 0.9375rem;
+          font-weight: 700;
+          color: hsl(217 91% 20%);
         }
         .tc-empty-state {
-          padding: 3rem;
+          padding: 4rem 2rem;
           text-align: center;
         }
         .tc-empty-state-title {
-          color: #6b7280;
-          font-weight: 500;
-          margin: 0 0 0.5rem 0;
+          color: hsl(215 25% 20%);
+          font-weight: 600;
+          font-size: 1.125rem;
+          margin: 0 0 0.625rem 0;
         }
         .tc-empty-state-subtitle {
-          font-size: 0.875rem;
-          color: #9ca3af;
+          font-size: 0.9375rem;
+          color: hsl(215 15% 50%);
           margin: 0;
         }
         .tc-header-flex {
@@ -352,15 +379,23 @@ export default function TimecardSummary() {
           justify-content: space-between;
           align-items: flex-start;
           flex-wrap: wrap;
-          gap: 1rem;
-          margin-bottom: 1.5rem;
+          gap: 1.5rem;
+          margin-bottom: 2rem;
         }
         .tc-controls {
-          margin-top: 1.5rem;
+          margin-top: 2rem;
+          padding-top: 2rem;
+          border-top: 1.5px solid hsl(215 15% 92%);
         }
         @media (max-width: 768px) {
           .tc-summary-header {
             grid-template-columns: 1fr;
+          }
+          .tc-card-body {
+            padding: 1.5rem;
+          }
+          .tc-client-section {
+            padding: 1.5rem;
           }
         }
       `}</style>

@@ -1250,22 +1250,43 @@ def reject_timecard(request, timecard_id: int):
 @permission_classes([PermUI])
 def timecard_summary(request):
     """
-    CPA-style rollup:
-    Client → total_hours + merged category_breakdown across entries.
-    Query: ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&user=<username>
+    Summary rollup for managers / end-of-day review.
+
+    Query:
+      ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&user=<username>
+
+    Response:
+    {
+      total_hours: float,
+      by_client: [
+        {
+          client: "Client A",
+          total_hours: 4.0,
+          categories: { "Tax Prep": 1.0, "Email/Communication": 0.5, "Research": 1.0, "1040": 1.5 },
+          entries: [<optional lightweight refs>]
+        },
+        ...
+      ],
+      by_status: { approved: x, pending: y, draft: z, rejected: w },
+      entries_count: N,
+      needs_review_count: M
+    }
     """
+    from django.db.models import Sum
+
     org = get_org_or_default(request)
-    qs = TimecardEntry.objects.filter(org=org).select_related("client")
+    qs = TimecardEntry.objects.filter(org=org)
 
     if start_str := request.GET.get('start_date'):
         qs = qs.filter(date__gte=date_type.fromisoformat(start_str))
     if end_str := request.GET.get('end_date'):
         qs = qs.filter(date__lte=date_type.fromisoformat(end_str))
     if user_filter := request.GET.get('user'):
-        qs = qs.filter(user__username=user_filter)
+        qs = qs.filter(user=user_filter)
 
     total_hours = float(qs.aggregate(total=Sum('total_hours'))['total'] or 0.0)
 
+    # status buckets
     def _sum(q, st):
         return float(q.filter(status=st).aggregate(total=Sum('total_hours'))['total'] or 0.0)
 
@@ -1276,16 +1297,19 @@ def timecard_summary(request):
         'rejected': _sum(qs, 'rejected'),
     }
 
-    rollups: Dict[str, Dict[str, Any]] = {}
+    # merge categories per client
+    rollups = {}  # client_name -> { total_hours, categories{str->float}, entries[] }
     for e in qs.select_related('client'):
         cname = e.client.name if e.client else "Unknown"
         r = rollups.setdefault(cname, {"total_hours": 0.0, "categories": {}, "entries": []})
         r["total_hours"] += float(e.total_hours or 0.0)
+        # merge JSON category_breakdown {name: hours}
         if isinstance(e.category_breakdown, dict):
             for k, v in e.category_breakdown.items():
                 if not k:
                     continue
                 r["categories"][k] = float(r["categories"].get(k, 0.0)) + float(v or 0.0)
+        # (optional) keep a tiny reference for drill-downs
         r["entries"].append({
             "id": e.id,
             "date": e.date.isoformat(),
@@ -1298,7 +1322,7 @@ def timecard_summary(request):
             "client": cname,
             "total_hours": round(v["total_hours"], 2),
             "categories": { k: round(float(h), 2) for k, h in sorted(v["categories"].items()) },
-            "entries": v["entries"],
+            "entries": v["entries"],  # keep or remove if you don't want it
         }
         for cname, v in rollups.items()
     ]
@@ -1735,44 +1759,97 @@ def _pick_or_create_project(org, client, name):
     return Project.objects.create(org=org, client=client, name=name)
 
 
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
+
+def _to_float_or_none(v):
+    # Accept numbers, numeric strings, and strings with trailing 'h' or 'hrs'
+    if v is None:
+        return None
+    try:
+        if isinstance(v, str):
+            s = v.strip().lower().rstrip("h").rstrip("hrs").strip()
+            if s == "":
+                return None
+            return float(s)
+        return float(v)
+    except Exception:
+        return None
+
 @api_view(["POST"])
-@permission_classes([PermUI])
+@permission_classes([PermUI])   # or AllowAny while testing
 @transaction.atomic
 def save_block_classification(request, block_id: int):
     """
-    POST /api/blocks/<id>/classify/
-    Body: { client?: str, project?: str, categories?: {name: hours} }
-    - Ignores 'None' / '—' / 'Unassigned'
-    - Picks oldest duplicate Client/Project instead of 400s
+    POST: { client?: str, project?: str, task?: str, categories?: {name: hours(float)} }
+    - Creates Client/Project if needed (within org)
+    - Coerces category values to floats (hours)
     """
     b = get_object_or_404(Block, id=block_id)
-    org = getattr(b, "org", None) or get_org_or_default(request)
 
-    data = request.data or {}
-    client_name  = _clean_name(data.get("client"))
-    project_name = _clean_name(data.get("project"))
-    categories   = _sanitize_categories(data.get("categories") or {})
+    # Ensure org exists on the block
+    org = getattr(b, "org", None)
+    if org is None:
+        org = get_org_or_default(request)
+        try:
+            # only set if Block has org FK field
+            if any(f.name == "org" for f in Block._meta.fields):
+                b.org = org
+        except Exception:
+            pass  # if no org field, ignore
 
-    if not client_name and not project_name and not categories:
-        return Response({"ok": True, "block_id": b.id, "noop": True})
+    payload = request.data or {}
+    client_name  = (payload.get("client")  or "").strip() or None
+    project_name = (payload.get("project") or "").strip() or None
+    categories   = payload.get("categories", {})
 
-    client_obj = getattr(b, "client", None)
-
+    # Attach/create Client
+    client_obj = None
     if client_name:
-        client_obj = _pick_or_create_client(org, client_name)
+        client_obj, _ = Client.objects.get_or_create(org=org, name=client_name)
         b.client = client_obj
 
+    # Attach/create Project (requires client)
     if project_name:
         if client_obj is None:
-            client_obj = _pick_or_create_client(org, "(General)")
+            client_obj, _ = Client.objects.get_or_create(org=org, name="(General)")
             b.client = client_obj
-        proj_obj = _pick_or_create_project(org, client_obj, project_name)
+        proj_obj, _ = Project.objects.get_or_create(org=org, client=client_obj, name=project_name)
         b.project = proj_obj
 
-    if categories:
-        b.category_hours = categories
+    # Coerce categories (hours)
+    clean_categories = {}
+    if categories is None or categories == {}:
+        clean_categories = {}
+    elif isinstance(categories, dict):
+        for k, v in categories.items():
+            f = _to_float_or_none(v)
+            if f is None or f < 0:
+                # don’t blow up; just skip bad entries
+                continue
+            clean_categories[str(k)] = f
+    else:
+        raise ValidationError({"categories": "Must be an object mapping {category: hours}."})
 
-    b.full_clean()
+    if clean_categories:
+        # Make sure Block has JSONField 'category_hours'
+        if hasattr(b, "category_hours"):
+            b.category_hours = clean_categories
+
+    # Optional task
+    task_name = (payload.get("task") or "").strip() or None
+    if task_name:
+        # Only if you use tasks per project; otherwise skip
+        try:
+            task_obj, _ = Task.objects.get_or_create(org=org, project=b.project, name=task_name)
+            b.task = task_obj
+        except Exception:
+            # If your Task model requires project and it's missing, skip silently
+            pass
+
     b.save()
 
     return Response({

@@ -25,13 +25,17 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             )}
             <div>
-              <h1 className={DESIGN_SYSTEM.typography.title}>{title}</h1>
+              <h1 className="text-2xl font-bold text-foreground">{title}</h1>
               {subtitle && (
-                <p className={DESIGN_SYSTEM.typography.subtitle}>{subtitle}</p>
+                <p className="text-sm text-muted-foreground">{subtitle}</p>
               )}
             </div>
           </div>
-          {rightContent}
+          {rightContent && (
+            <div className="flex items-center gap-3">
+              {rightContent}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 // src/pages/TimecardSummary.tsx
 import { useEffect, useMemo, useState } from "react";
+import { Calendar, User, Clock, Download, RefreshCw, Save, ChevronRight, TrendingUp } from "lucide-react";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -26,6 +27,7 @@ export default function TimecardSummary() {
   const [date, setDate] = useState<string>(todayIso());
   const [err, setErr] = useState<string | null>(null);
   const [whoami, setWhoami] = useState<string>("");
+  const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     (async () => {
@@ -109,448 +111,255 @@ export default function TimecardSummary() {
     return user?.trim() ? user.trim() : (data?.user?.trim() ? data.user : "All Users");
   }, [user, data?.user]);
 
+  const toggleClient = (clientName: string) => {
+    setExpandedClients(prev => {
+      const next = new Set(prev);
+      if (next.has(clientName)) {
+        next.delete(clientName);
+      } else {
+        next.add(clientName);
+      }
+      return next;
+    });
+  };
+
   return (
-    <>
-      <style>{`
-        .tc-container {
-          min-height: 100vh;
-          background: hsl(0 0% 97%);
-          padding: 2rem 1rem;
-        }
-        .tc-wrapper {
-          max-width: 1280px;
-          margin: 0 auto;
-        }
-        .tc-card {
-          background: white;
-          border-radius: 12px;
-          box-shadow: 0 1px 2px 0 hsl(215 25% 20% / 0.05);
-          border: 1px solid hsl(215 15% 88%);
-          margin-bottom: 1.5rem;
-          overflow: hidden;
-        }
-        .tc-card-body {
-          padding: 2rem;
-        }
-        .tc-title {
-          font-size: 2rem;
-          font-weight: 700;
-          color: hsl(217 91% 20%);
-          margin: 0 0 0.5rem 0;
-          letter-spacing: -0.025em;
-        }
-        .tc-subtitle {
-          font-size: 0.9375rem;
-          color: hsl(215 15% 50%);
-          margin: 0;
-          font-weight: 400;
-        }
-        .tc-user-badge {
-          background: hsl(217 91% 95%);
-          color: hsl(217 91% 25%);
-          padding: 0.5rem 1rem;
-          border-radius: 8px;
-          font-size: 0.875rem;
-          display: inline-block;
-          font-weight: 500;
-        }
-        .tc-form-group {
-          display: inline-block;
-          margin-right: 1rem;
-          margin-bottom: 1rem;
-        }
-        .tc-form-label {
-          display: block;
-          font-size: 0.75rem;
-          font-weight: 600;
-          color: hsl(215 25% 20%);
-          margin-bottom: 0.375rem;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-        .tc-form-input {
-          border: 1.5px solid hsl(215 15% 88%);
-          border-radius: 8px;
-          padding: 0.625rem 0.875rem;
-          font-size: 0.875rem;
-          width: 220px;
-          transition: all 0.15s;
-          background: white;
-        }
-        .tc-form-input:focus {
-          outline: none;
-          border-color: hsl(217 91% 20%);
-          box-shadow: 0 0 0 3px hsl(217 91% 95%);
-        }
-        .tc-btn {
-          padding: 0.625rem 1.25rem;
-          border-radius: 8px;
-          font-size: 0.875rem;
-          font-weight: 600;
-          cursor: pointer;
-          border: 1.5px solid hsl(215 15% 88%);
-          background: white;
-          color: hsl(215 25% 20%);
-          transition: all 0.15s;
-          margin-right: 0.5rem;
-          margin-bottom: 0.5rem;
-        }
-        .tc-btn:hover:not(:disabled) {
-          background: hsl(0 0% 97%);
-          border-color: hsl(215 15% 80%);
-        }
-        .tc-btn:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-        .tc-btn-primary {
-          background: hsl(217 91% 20%);
-          color: white;
-          border-color: hsl(217 91% 20%);
-        }
-        .tc-btn-primary:hover:not(:disabled) {
-          background: hsl(217 91% 25%);
-          border-color: hsl(217 91% 25%);
-          box-shadow: 0 4px 6px -1px hsl(217 91% 20% / 0.2);
-        }
-        .tc-alert-error {
-          background: hsl(0 72% 97%);
-          border: 1.5px solid hsl(0 72% 85%);
-          color: hsl(0 72% 35%);
-          padding: 0.875rem 1.125rem;
-          border-radius: 8px;
-          font-size: 0.875rem;
-          margin-top: 1rem;
-        }
-        .tc-summary-header {
-          background: linear-gradient(135deg, hsl(217 91% 20%), hsl(217 91% 25%));
-          padding: 2rem;
-          display: grid;
-          grid-template-columns: 1fr 1fr auto;
-          gap: 2rem;
-          align-items: center;
-        }
-        .tc-summary-label {
-          font-size: 0.6875rem;
-          color: rgba(255,255,255,0.8);
-          text-transform: uppercase;
-          letter-spacing: 0.075em;
-          margin-bottom: 0.375rem;
-          font-weight: 600;
-        }
-        .tc-summary-value {
-          font-size: 1.25rem;
-          font-weight: 700;
-          color: white;
-          letter-spacing: -0.025em;
-        }
-        .tc-total-hours {
-          background: white;
-          color: hsl(217 91% 20%);
-          padding: 1rem 1.75rem;
-          border-radius: 10px;
-          box-shadow: 0 4px 6px -1px hsl(0 0% 0% / 0.15);
-        }
-        .tc-total-hours .tc-summary-label {
-          color: hsl(215 15% 50%);
-        }
-        .tc-total-hours .tc-summary-value {
-          color: hsl(217 91% 20%);
-          font-size: 1.875rem;
-        }
-        .tc-client-section {
-          padding: 1.75rem 2rem;
-          border-bottom: 1px solid hsl(215 15% 92%);
-          transition: background 0.15s;
-        }
-        .tc-client-section:hover {
-          background: hsl(217 91% 99%);
-        }
-        .tc-client-section:last-child {
-          border-bottom: none;
-        }
-        .tc-client-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 1rem;
-        }
-        .tc-client-name {
-          font-size: 1.375rem;
-          font-weight: 700;
-          color: hsl(217 91% 20%);
-          margin: 0;
-          letter-spacing: -0.025em;
-        }
-        .tc-client-meta {
-          font-size: 0.8125rem;
-          color: hsl(215 15% 50%);
-          margin-top: 0.375rem;
-          font-weight: 500;
-        }
-        .tc-client-hours {
-          font-size: 1.5rem;
-          font-weight: 700;
-          color: hsl(217 91% 20%);
-          letter-spacing: -0.025em;
-        }
-        .tc-category-tags {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.625rem;
-          margin-bottom: 1rem;
-        }
-        .tc-category-tag {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.625rem;
-          background: hsl(217 91% 95%);
-          color: hsl(217 91% 25%);
-          padding: 0.375rem 1rem;
-          border-radius: 8px;
-          font-size: 0.8125rem;
-          font-weight: 600;
-          border: 1px solid hsl(217 91% 85%);
-        }
-        .tc-category-hours {
-          font-weight: 700;
-        }
-        .tc-task-breakdown {
-          margin-top: 1rem;
-          border: 1.5px solid hsl(215 15% 88%);
-          border-radius: 10px;
-          overflow: hidden;
-          background: white;
-        }
-        .tc-task-breakdown-header {
-          background: hsl(215 20% 96%);
-          padding: 0.75rem 1rem;
-          border-bottom: 1.5px solid hsl(215 15% 88%);
-        }
-        .tc-task-breakdown-title {
-          font-size: 0.6875rem;
-          font-weight: 700;
-          color: hsl(215 25% 20%);
-          text-transform: uppercase;
-          letter-spacing: 0.075em;
-          margin: 0;
-        }
-        .tc-task-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 0.875rem 1rem;
-          border-bottom: 1px solid hsl(215 15% 92%);
-          transition: background 0.15s;
-        }
-        .tc-task-row:hover {
-          background: hsl(0 0% 98%);
-        }
-        .tc-task-row:last-child {
-          border-bottom: none;
-        }
-        .tc-task-name {
-          font-size: 0.9375rem;
-          color: hsl(215 25% 20%);
-          font-weight: 500;
-        }
-        .tc-task-hours {
-          font-size: 0.9375rem;
-          font-weight: 700;
-          color: hsl(217 91% 20%);
-        }
-        .tc-empty-state {
-          padding: 4rem 2rem;
-          text-align: center;
-        }
-        .tc-empty-state-title {
-          color: hsl(215 25% 20%);
-          font-weight: 600;
-          font-size: 1.125rem;
-          margin: 0 0 0.625rem 0;
-        }
-        .tc-empty-state-subtitle {
-          font-size: 0.9375rem;
-          color: hsl(215 15% 50%);
-          margin: 0;
-        }
-        .tc-header-flex {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          flex-wrap: wrap;
-          gap: 1.5rem;
-          margin-bottom: 2rem;
-        }
-        .tc-controls {
-          margin-top: 2rem;
-          padding-top: 2rem;
-          border-top: 1.5px solid hsl(215 15% 92%);
-        }
-        @media (max-width: 768px) {
-          .tc-summary-header {
-            grid-template-columns: 1fr;
-          }
-          .tc-card-body {
-            padding: 1.5rem;
-          }
-          .tc-client-section {
-            padding: 1.5rem;
-          }
-        }
-      `}</style>
-      <div className="tc-container">
-        <div className="tc-wrapper">
-          {/* Header */}
-          <div className="tc-card">
-            <div className="tc-card-body">
-              <div className="tc-header-flex">
-                <div>
-                  <h1 className="tc-title">Timecard Summary</h1>
-                  <p className="tc-subtitle">Client time allocation with category breakdowns</p>
-                </div>
-                {whoami?.trim() && (
-                  <div className="tc-user-badge">
-                    Signed in as: <strong>{whoami}</strong>
-                  </div>
-                )}
+    <div className="min-h-screen bg-background">
+      {/* Modern Header */}
+      <div className="border-b border-border bg-card/50 backdrop-blur-xl sticky top-0 z-50">
+        <div className="max-w-[1400px] mx-auto px-8 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
+                <Clock className="w-5 h-5 text-primary-foreground" />
               </div>
-
-              {/* Controls */}
-              <div className="tc-controls">
-                <div className="tc-form-group">
-                  <label className="tc-form-label">Date</label>
-                  <input 
-                    type="date" 
-                    className="tc-form-input" 
-                    value={date} 
-                    onChange={(e) => setDate(e.target.value)} 
-                  />
-                </div>
-
-                <div className="tc-form-group">
-                  <label className="tc-form-label">User</label>
-                  <input
-                    type="text"
-                    className="tc-form-input"
-                    placeholder="All users"
-                    value={user}
-                    onChange={(e) => setUser(e.target.value)}
-                    list="user-hints"
-                  />
-                  <datalist id="user-hints">{whoami ? <option value={whoami} /> : null}</datalist>
-                </div>
-
-                <div className="tc-form-group" style={{marginLeft: 'auto'}}>
-                  <label className="tc-form-label">&nbsp;</label>
-                  <div>
-                    <button 
-                      onClick={load} 
-                      className="tc-btn" 
-                      disabled={busy}
-                    >
-                      Refresh
-                    </button>
-                    <button 
-                      onClick={() => generate("draft")} 
-                      className="tc-btn" 
-                      disabled={busy}
-                    >
-                      Save as Draft
-                    </button>
-                    <button 
-                      onClick={() => generate("pending")} 
-                      className="tc-btn tc-btn-primary" 
-                      disabled={busy}
-                    >
-                      Save as Pending
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Status Messages */}
-              {busy && <div style={{marginTop: '1rem', fontSize: '0.875rem', color: '#2563eb'}}>Loading...</div>}
-              {err && <div className="tc-alert-error">{err}</div>}
-            </div>
-          </div>
-
-          {/* Summary Card */}
-          {!!data && (
-            <div className="tc-card">
-              {/* Summary Header */}
-              <div className="tc-summary-header">
-                <div className="tc-summary-field">
-                  <div className="tc-summary-label">Summary For</div>
-                  <div className="tc-summary-value">{headerUser}</div>
-                </div>
-                <div className="tc-summary-field">
-                  <div className="tc-summary-label">Date</div>
-                  <div className="tc-summary-value">{data.date}</div>
-                </div>
-                <div className="tc-total-hours">
-                  <div className="tc-summary-label">Total Hours</div>
-                  <div className="tc-summary-value">{fmtHours(data.total_hours)}</div>
-                </div>
-              </div>
-
-              {/* Client List */}
               <div>
-                {data.clients.map((c) => (
-                  <div key={`${c.client_name}-${fmtHours(c.total_hours)}`} className="tc-client-section">
-                    <div className="tc-client-header">
-                      <div>
-                        <h3 className="tc-client-name">{displayClient(c.client_name)}</h3>
-                        {(c as any).tasks?.length > 0 && (
-                          <p className="tc-client-meta">{(c as any).tasks.length} task{(c as any).tasks.length !== 1 ? 's' : ''}</p>
-                        )}
-                      </div>
-                      <div className="tc-client-hours">{fmtHours(c.total_hours)} h</div>
-                    </div>
-
-                    {/* Category Tags */}
-                    {Object.entries(c.categories || {}).filter(([k]) => !(k === "Uncategorized" && (c.tasks?.length || 0) > 0)).length > 0 && (
-                      <div className="tc-category-tags">
-                        {Object.entries(c.categories || {})
-                          .filter(([k]) => !(k === "Uncategorized" && (c.tasks?.length || 0) > 0))
-                          .map(([cat, hrs]) => (
-                            <span key={cat} className="tc-category-tag">
-                              {cat} <span className="tc-category-hours">{fmtHours(hrs)}h</span>
-                            </span>
-                          ))}
-                      </div>
-                    )}
-
-                    {/* Task Breakdown */}
-                    {(c as any).tasks?.length > 0 && (
-                      <div className="tc-task-breakdown">
-                        <div className="tc-task-breakdown-header">
-                          <h4 className="tc-task-breakdown-title">Tasks</h4>
-                        </div>
-                        <div>
-                          {(c as any).tasks.map((t: any) => (
-                            <div key={`${c.client_name}-${t.task_name}`} className="tc-task-row">
-                              <span className="tc-task-name">{t.task_name}</span>
-                              <span className="tc-task-hours">{fmtHours(Number(t.total_hours || 0))} h</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {!data.clients.length && (
-                  <div className="tc-empty-state">
-                    <p className="tc-empty-state-title">No tracked time for this date</p>
-                    <p className="tc-empty-state-subtitle">Select a different date or user to view time entries</p>
-                  </div>
-                )}
+                <h1 className="text-xl font-bold text-foreground">Timecard</h1>
+                <p className="text-xs text-muted-foreground">Time allocation dashboard</p>
               </div>
             </div>
-          )}
+            
+            {whoami && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-accent/50 text-sm">
+                <User className="w-4 h-4 text-accent-foreground" />
+                <span className="font-medium text-accent-foreground">{whoami}</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </>
+
+      <div className="max-w-[1400px] mx-auto px-8 py-8">
+        {/* Controls Bar */}
+        <div className="mb-8 flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-card hover:shadow-md transition-all">
+            <Calendar className="w-4 h-4 text-muted-foreground" />
+            <input 
+              type="date" 
+              className="bg-transparent border-none outline-none text-sm font-medium text-foreground"
+              value={date} 
+              onChange={(e) => setDate(e.target.value)} 
+            />
+          </div>
+
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-card hover:shadow-md transition-all">
+            <User className="w-4 h-4 text-muted-foreground" />
+            <input
+              type="text"
+              className="bg-transparent border-none outline-none text-sm font-medium text-foreground w-40"
+              placeholder="All users"
+              value={user}
+              onChange={(e) => setUser(e.target.value)}
+              list="user-hints"
+            />
+            <datalist id="user-hints">{whoami ? <option value={whoami} /> : null}</datalist>
+          </div>
+
+          <div className="flex-1" />
+
+          <button 
+            onClick={load} 
+            disabled={busy}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-card hover:bg-accent transition-all disabled:opacity-50 text-sm font-medium"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh
+          </button>
+
+          <button 
+            onClick={() => generate("draft")} 
+            disabled={busy}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-card hover:bg-accent transition-all disabled:opacity-50 text-sm font-medium"
+          >
+            <Download className="w-4 h-4" />
+            Draft
+          </button>
+
+          <button 
+            onClick={() => generate("pending")} 
+            disabled={busy}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground hover:opacity-90 transition-all disabled:opacity-50 text-sm font-semibold shadow-lg shadow-primary/25"
+          >
+            <Save className="w-4 h-4" />
+            Submit
+          </button>
+        </div>
+
+        {err && (
+          <div className="mb-6 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm">
+            {err}
+          </div>
+        )}
+
+        {/* Stats Overview */}
+        {data && (
+          <div className="mb-8 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="p-6 rounded-2xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-xl shadow-primary/20">
+              <div className="flex items-start justify-between mb-3">
+                <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
+                  <Clock className="w-6 h-6" />
+                </div>
+                <TrendingUp className="w-5 h-5 opacity-70" />
+              </div>
+              <div className="text-4xl font-bold mb-1">{fmtHours(data.total_hours)}<span className="text-xl">h</span></div>
+              <div className="text-sm opacity-90">Total Hours Today</div>
+            </div>
+
+            <div className="p-6 rounded-2xl bg-card border border-border hover:shadow-lg transition-all">
+              <div className="flex items-start justify-between mb-3">
+                <div className="w-12 h-12 rounded-xl bg-accent flex items-center justify-center">
+                  <User className="w-6 h-6 text-accent-foreground" />
+                </div>
+              </div>
+              <div className="text-3xl font-bold text-foreground mb-1">{headerUser}</div>
+              <div className="text-sm text-muted-foreground">Timecard For</div>
+            </div>
+
+            <div className="p-6 rounded-2xl bg-card border border-border hover:shadow-lg transition-all">
+              <div className="flex items-start justify-between mb-3">
+                <div className="w-12 h-12 rounded-xl bg-success-light flex items-center justify-center">
+                  <Calendar className="w-6 h-6 text-success" />
+                </div>
+              </div>
+              <div className="text-3xl font-bold text-foreground mb-1">{data.clients.length}</div>
+              <div className="text-sm text-muted-foreground">Active Clients</div>
+            </div>
+          </div>
+        )}
+
+        {/* Client Cards */}
+        {data && data.clients.length > 0 ? (
+          <div className="space-y-4">
+            {data.clients.map((client) => {
+              const isExpanded = expandedClients.has(client.client_name);
+              const hasDetails = (client.tasks?.length || 0) > 0 || Object.keys(client.categories || {}).length > 0;
+              
+              return (
+                <div 
+                  key={`${client.client_name}-${fmtHours(client.total_hours)}`}
+                  className="rounded-2xl border border-border bg-card hover:shadow-lg transition-all overflow-hidden"
+                >
+                  <div 
+                    className="p-6 cursor-pointer"
+                    onClick={() => hasDetails && toggleClient(client.client_name)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4 flex-1">
+                        {hasDetails && (
+                          <ChevronRight 
+                            className={`w-5 h-5 text-muted-foreground transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                          />
+                        )}
+                        <div className="flex-1">
+                          <h3 className="text-xl font-bold text-foreground mb-1">
+                            {displayClient(client.client_name)}
+                          </h3>
+                          {client.tasks && client.tasks.length > 0 && (
+                            <p className="text-sm text-muted-foreground">
+                              {client.tasks.length} task{client.tasks.length !== 1 ? 's' : ''}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-4">
+                        {/* Progress bar */}
+                        <div className="hidden md:block w-32">
+                          <div className="h-2 bg-muted rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-primary rounded-full transition-all"
+                              style={{ width: `${Math.min(100, (client.total_hours / (data.total_hours || 1)) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                        
+                        <div className="text-right">
+                          <div className="text-3xl font-bold text-foreground">{fmtHours(client.total_hours)}</div>
+                          <div className="text-xs text-muted-foreground">hours</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Expanded Details */}
+                  {isExpanded && (
+                    <div className="border-t border-border bg-muted/30">
+                      {/* Categories */}
+                      {Object.entries(client.categories || {}).filter(([k]) => !(k === "Uncategorized" && (client.tasks?.length || 0) > 0)).length > 0 && (
+                        <div className="p-6 border-b border-border">
+                          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Categories</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {Object.entries(client.categories || {})
+                              .filter(([k]) => !(k === "Uncategorized" && (client.tasks?.length || 0) > 0))
+                              .map(([cat, hrs]) => (
+                                <div 
+                                  key={cat}
+                                  className="px-4 py-2 rounded-lg bg-primary-light border border-primary/20 flex items-center gap-2"
+                                >
+                                  <span className="text-sm font-medium text-foreground">{cat}</span>
+                                  <span className="text-sm font-bold text-primary">{fmtHours(hrs)}h</span>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tasks */}
+                      {client.tasks && client.tasks.length > 0 && (
+                        <div className="p-6">
+                          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Task Breakdown</h4>
+                          <div className="space-y-2">
+                            {client.tasks.map((task) => (
+                              <div 
+                                key={`${client.client_name}-${task.task_name}`}
+                                className="flex items-center justify-between p-3 rounded-lg bg-card hover:bg-accent/50 transition-all"
+                              >
+                                <span className="text-sm font-medium text-foreground">{task.task_name}</span>
+                                <span className="text-sm font-bold text-primary">{fmtHours(Number(task.total_hours || 0))}h</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : data && data.clients.length === 0 ? (
+          <div className="text-center py-20 rounded-2xl border-2 border-dashed border-border bg-muted/20">
+            <Clock className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
+            <h3 className="text-xl font-semibold text-foreground mb-2">No time tracked</h3>
+            <p className="text-muted-foreground">Select a different date or user to view entries</p>
+          </div>
+        ) : busy ? (
+          <div className="text-center py-20">
+            <RefreshCw className="w-12 h-12 text-primary mx-auto mb-4 animate-spin" />
+            <p className="text-muted-foreground">Loading timecard data...</p>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }

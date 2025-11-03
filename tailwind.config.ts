@@ -22,22 +22,18 @@ export default {
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
-          hover: "hsl(var(--primary-hover))",
         },
         secondary: {
           DEFAULT: "hsl(var(--secondary))",
           foreground: "hsl(var(--secondary-foreground))",
-          hover: "hsl(var(--secondary-hover))",
         },
         success: {
           DEFAULT: "hsl(var(--success))",
           foreground: "hsl(var(--success-foreground))",
-          light: "hsl(var(--success-light))",
         },
         warning: {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
-          light: "hsl(var(--warning-light))",
         },
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
@@ -59,17 +55,11 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-      },
-      boxShadow: {
-        card: "var(--shadow-card)",
-        elevated: "var(--shadow-elevated)",
-      },
-      backgroundImage: {
-        "gradient-primary": "var(--gradient-primary)",
-        "gradient-subtle": "var(--gradient-subtle)",
-      },
-      transitionProperty: {
-        smooth: "var(--transition-smooth)",
+        table: {
+          header: "hsl(var(--table-header))",
+          hover: "hsl(var(--table-row-hover))",
+          border: "hsl(var(--table-border))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

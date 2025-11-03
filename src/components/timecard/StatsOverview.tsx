@@ -15,23 +15,23 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({
   clientCount,
 }) => {
   return (
-    <div className={`mb-6 grid grid-cols-1 md:grid-cols-3 ${DESIGN_SYSTEM.spacing.gap}`}>
+    <div className={`mb-8 grid grid-cols-1 md:grid-cols-3 gap-6`}>
       <StatsCard
         gradient
-        icon={<Clock className="w-5 h-5" />}
+        icon={<Clock className="w-6 h-6" />}
         label="Total Hours Today"
         value={`${fmtHours(totalHours)}h`}
-        trend={<TrendingUp className="w-4 h-4" />}
+        trend={<TrendingUp className="w-5 h-5" />}
       />
 
       <StatsCard
-        icon={<User className="w-5 h-5 text-accent-foreground" />}
+        icon={<User className="w-6 h-6" />}
         label="Timecard For"
         value={currentUser}
       />
 
       <StatsCard
-        icon={<Calendar className="w-5 h-5 text-success" />}
+        icon={<Calendar className="w-6 h-6" />}
         label="Active Clients"
         value={clientCount}
       />

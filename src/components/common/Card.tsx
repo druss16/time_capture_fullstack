@@ -40,29 +40,38 @@ export const StatsCard: React.FC<StatsCardProps> = ({
 }) => {
   return (
     <div
-      className={`p-4 ${DESIGN_SYSTEM.radius.md} ${
+      className={`p-6 ${DESIGN_SYSTEM.radius.lg} overflow-hidden transition-all duration-300 ${
         gradient
-          ? DESIGN_SYSTEM.colors.primary + " text-primary-foreground"
-          : DESIGN_SYSTEM.colors.card + " " + DESIGN_SYSTEM.shadows.hover
+          ? "bg-gradient-to-br from-primary via-primary to-primary/90 text-primary-foreground shadow-lg shadow-primary/30 hover:shadow-xl hover:shadow-primary/40"
+          : "bg-gradient-to-br from-card to-card/80 border border-border hover:border-primary/30 shadow-md hover:shadow-lg hover:scale-105"
       }`}
     >
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-4">
         {icon && (
           <div
-            className={`w-9 h-9 ${DESIGN_SYSTEM.radius.md} flex items-center justify-center ${
-              gradient ? "bg-white/20 backdrop-blur" : "bg-accent"
+            className={`w-12 h-12 ${DESIGN_SYSTEM.radius.md} flex items-center justify-center text-lg ${
+              gradient
+                ? "bg-white/20 backdrop-blur text-primary-foreground"
+                : "bg-primary/10 text-primary"
             }`}
           >
             {icon}
           </div>
         )}
-        {trend && <div className="opacity-70">{trend}</div>}
+        {trend && (
+          <div className={gradient ? "text-primary-foreground/80" : "text-primary"}>
+            {trend}
+          </div>
+        )}
       </div>
-      <div className="text-3xl font-bold mb-0.5">
-        {value}
-        <span className="text-lg">{gradient ? "" : ""}</span>
+      <div className="mb-2">
+        <div className="text-4xl font-bold tracking-tight">{value}</div>
       </div>
-      <div className={`text-xs ${gradient ? "opacity-90" : "text-muted-foreground"}`}>
+      <div
+        className={`text-sm font-medium ${
+          gradient ? "text-primary-foreground/90" : "text-muted-foreground"
+        }`}
+      >
         {label}
       </div>
     </div>

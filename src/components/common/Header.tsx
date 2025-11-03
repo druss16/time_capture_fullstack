@@ -15,12 +15,12 @@ export const Header: React.FC<HeaderProps> = ({
   rightContent,
 }) => {
   return (
-    <div className="border-b border-border bg-card/50 backdrop-blur-xl sticky top-0 z-50">
+    <div className="border-b border-border/50 bg-gradient-to-r from-primary/5 via-card to-primary/5 backdrop-blur-xl sticky top-0 z-50">
       <div className={DESIGN_SYSTEM.spacing.container}>
-        <div className="py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="py-5 flex items-center justify-between">
+          <div className="flex items-center gap-4">
             {icon && (
-              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
+              <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center shadow-lg shadow-primary/30">
                 {icon}
               </div>
             )}

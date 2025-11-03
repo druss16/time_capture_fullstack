@@ -1,3 +1,4 @@
+// src/pages/DailyReview.tsx
 /**
  * DailyReview.tsx — Beta-ready (hardened)
  * - Buckets blocks into Client → Project with category rollups
@@ -55,7 +56,7 @@ function cleanName(v?: string | null) {
   if (!v) return null;
   const t = String(v).trim();
   if (!t) return null;
-  const BAD = new Set(["none","unassigned","—","-","(none)"]);
+  const BAD = new Set(["none", "unassigned", "—", "-", "(none)"]);
   if (BAD.has(t.toLowerCase())) return null;
   return t.slice(0, 120);
 }
@@ -71,7 +72,10 @@ function cleanCategories(obj: Record<string, any> | undefined | null) {
   return out;
 }
 
-async function classifyBlock(id: number, payload: { client?: string|null; project?: string|null; categories?: Record<string, number> }) {
+async function classifyBlock(
+  id: number,
+  payload: { client?: string | null; project?: string | null; categories?: Record<string, number> }
+) {
   const client = cleanName(payload.client ?? null);
   const project = cleanName(payload.project ?? null);
   const categories = cleanCategories(payload.categories || {});
@@ -84,17 +88,16 @@ async function classifyBlock(id: number, payload: { client?: string|null; projec
   });
   if (!res.ok) {
     let detail = "";
-    try { detail = JSON.stringify(await res.json()); }
-    catch { detail = await res.text(); }
+    try {
+      detail = JSON.stringify(await res.json());
+    } catch {
+      detail = await res.text();
+    }
     console.warn(`[classifyBlock] ${id} -> ${res.status} ${res.statusText} :: ${detail}`);
   }
 }
 
-
-async function fetchWithTimeout(
-  url: string,
-  opts: RequestInit & { timeoutMs?: number } = {}
-) {
+async function fetchWithTimeout(url: string, opts: RequestInit & { timeoutMs?: number } = {}) {
   const { timeoutMs = 12000, ...rest } = opts;
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -119,7 +122,6 @@ function sanitizeCategories(cats: Record<string, any> | undefined | null) {
   return out;
 }
 
-
 async function bulkClassify(blocks: LabeledBlock[], chunkSize = 12) {
   const items = blocks.filter((b) => {
     const client = cleanName(b.client_name || null);
@@ -141,7 +143,6 @@ async function bulkClassify(blocks: LabeledBlock[], chunkSize = 12) {
     );
   }
 }
-
 
 // Lightweight heuristic when AI isn’t available
 function heuristicSuggest(block: BlockDto) {
@@ -186,33 +187,48 @@ function heuristicSuggest(block: BlockDto) {
   };
 }
 
-// --------- main component ----------
 export default function DailyReview() {
   const [blocks, setBlocks] = useState<LabeledBlock[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [autoClassifying, setAutoClassifying] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [whoami, setWhoami] = useState<string>("");
+
+  // Current user for timecard generation
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/whoami/`, { credentials: "include" });
+        if (r.ok) {
+          const j = (await r.json()) as { username?: string };
+          if (j?.username) setWhoami(j.username);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, []);
 
   // Core loader: ask server for suggestions (which compacts), then fetch blocks, merge, save best-effort
   const load = async () => {
     setBusy(true);
+    setErr(null);
     try {
       setAutoClassifying(true);
 
       // 1) Suggestions: AI → rule-based → []
       let ai: AISuggestion[] = [];
       try {
-        const r = await fetchWithTimeout(
-          `${API_BASE}/blocks/suggestions/?timeout_ms=12000&limit=120`,
-          { timeoutMs: 13000 }
-        );
+        const r = await fetchWithTimeout(`${API_BASE}/blocks/suggestions/?timeout_ms=12000&limit=120`, {
+          timeoutMs: 13000,
+        });
         if (r.ok) ai = await r.json();
         else throw new Error(`AI ${r.status}`);
       } catch {
         try {
-          const r2 = await fetchWithTimeout(
-            `${API_BASE}/blocks/suggestions/rule-based/?limit=120`,
-            { timeoutMs: 6000 }
-          );
+          const r2 = await fetchWithTimeout(`${API_BASE}/blocks/suggestions/rule-based/?limit=120`, {
+            timeoutMs: 6000,
+          });
           if (r2.ok) ai = await r2.json();
         } catch {
           ai = [];
@@ -247,6 +263,7 @@ export default function DailyReview() {
       await bulkClassify(withAI, 12);
     } catch (e) {
       console.error("DailyReview load failed:", e);
+      setErr("Failed to load suggestions.");
       // Final fallback: show raw blocks with review needed
       const rawBlocks = await fetchBlocksToday();
       setBlocks(
@@ -340,8 +357,39 @@ export default function DailyReview() {
     };
   }, [blocks]);
 
+  // Create/generate today’s timecard directly from Daily Review
+  async function generateTimecard(status: "draft" | "pending" = "pending") {
+    if (!whoami) {
+      console.warn("Username not available, cannot generate timecard.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const d = new Date();
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+        d.getDate()
+      ).padStart(2, "0")}`;
+
+      const res = await fetch(`${API_BASE}/timecards/generate/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ date: dateStr, user: whoami, status }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Optionally show toast/snackbar
+      console.log(`Timecard saved as ${status} successfully.`);
+    } catch (e: any) {
+      console.error("Timecard generation failed:", e);
+      setErr(e?.message || "Failed to save timecard.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // ---------- UI ----------
-  const downloadCsv = async () => {
+  const downloadCsvClick = async () => {
     const blob = await downloadTodayCsv();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -363,12 +411,18 @@ export default function DailyReview() {
                 ? "🤖 AI is auto-classifying your time blocks..."
                 : "AI has labeled your time. Review and correct any mistakes."}
             </p>
+            {whoami && (
+              <p className="text-xs text-gray-500 mt-1">
+                Signed in as <strong>{whoami}</strong>
+              </p>
+            )}
+            {err && <p className="text-xs text-red-600 mt-1">{err}</p>}
           </div>
           <div className="flex gap-2">
-            <button onClick={load} className="border rounded-lg px-4 py-2 hover:bg-gray-50">
+            <button onClick={load} className="border rounded-lg px-4 py-2 hover:bg-gray-50" disabled={busy}>
               Refresh
             </button>
-            <button onClick={downloadCsv} className="border rounded-lg px-4 py-2 hover:bg-gray-50">
+            <button onClick={downloadCsvClick} className="border rounded-lg px-4 py-2 hover:bg-gray-50">
               Export CSV
             </button>
           </div>
@@ -399,10 +453,29 @@ export default function DailyReview() {
           <div className="bg-white border rounded-lg p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-medium text-lg">Suggested Timecard (by Client → Project)</h3>
-              <div className="text-sm text-gray-600">
-                <strong>Total: {minutesToHours(totalMinutes)} h</strong>
+              <div className="flex flex-col items-end">
+                <div className="text-sm text-gray-600 mb-1">
+                  <strong>Total: {minutesToHours(totalMinutes)} h</strong>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => generateTimecard("draft")}
+                    className="border rounded-lg px-4 py-2 hover:bg-gray-50"
+                    disabled={busy}
+                  >
+                    Save as Draft
+                  </button>
+                  <button
+                    onClick={() => generateTimecard("pending")}
+                    className="border rounded-lg px-4 py-2 hover:bg-gray-50"
+                    disabled={busy}
+                  >
+                    Save as Pending
+                  </button>
+                </div>
               </div>
             </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
@@ -423,10 +496,7 @@ export default function DailyReview() {
                         {Object.keys(bk.categories).length ? (
                           <div className="flex flex-wrap gap-2">
                             {Object.entries(bk.categories).map(([k, v]) => (
-                              <span
-                                key={k}
-                                className="inline-flex items-center rounded-full border px-2 py-0.5"
-                              >
+                              <span key={k} className="inline-flex items-center rounded-full border px-2 py-0.5">
                                 <span className="mr-1">{k}</span>
                                 <span className="font-medium">{safeNum(v, 0).toFixed(2)}h</span>
                               </span>
@@ -436,9 +506,7 @@ export default function DailyReview() {
                           <span className="text-gray-500">—</span>
                         )}
                       </td>
-                      <td className="p-2 border-b text-right font-medium">
-                        {minutesToHours(bk.minutes)}
-                      </td>
+                      <td className="p-2 border-b text-right font-medium">{minutesToHours(bk.minutes)}</td>
                       <td className="p-2 border-b text-right">
                         <span title="High Confidence / Needs Review">
                           {bk.highConfidenceCount} / {bk.needsReviewCount}
@@ -470,8 +538,7 @@ export default function DailyReview() {
             "Loading..."
           ) : (
             <>
-              <strong>Total: {minutesToHours(totalMinutes)} hours</strong> across{" "}
-              {blocks?.length ?? 0} blocks
+              <strong>Total: {minutesToHours(totalMinutes)} hours</strong> across {blocks?.length ?? 0} blocks
             </>
           )}
         </div>
@@ -484,10 +551,8 @@ export default function DailyReview() {
               block={b}
               onLabeled={async (updatedData, originalSuggestion) => {
                 // 1) Classify with the latest user choice (names)
-                const clientName =
-                  updatedData.client_name || updatedData.client || b.client_name || null;
-                const projectName =
-                  updatedData.project_name || updatedData.project || b.project_name || null;
+                const clientName = updatedData.client_name || updatedData.client || b.client_name || null;
+                const projectName = updatedData.project_name || updatedData.project || b.project_name || null;
 
                 try {
                   await classifyBlock(b.id, {
@@ -507,7 +572,6 @@ export default function DailyReview() {
                     body: JSON.stringify({
                       block_id: b.id,
                       text_content: `${b.title || ""} ${b.description || ""}`.trim(),
-                      // If your API expects IDs instead of names, adapt here:
                       correct_client_id: updatedData.client_id,
                       correct_project_id: updatedData.project_id,
                       correct_categories: updatedData.category_hours || {},

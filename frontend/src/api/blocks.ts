@@ -1,6 +1,16 @@
 import api, { API_ROUTES } from "./client";
 import { BlockDto } from "../types";
 
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:7123/api";
+export async function fetchRecentBlocks(me = false, limit = 25) {
+  const u = new URL(`${API_BASE}/recent-blocks/`);
+  if (me) u.searchParams.set("me", "1");
+  u.searchParams.set("limit", String(limit));
+  const r = await fetch(u.toString(), { credentials: "include" });
+  if (!r.ok) throw new Error(`Failed: ${r.status}`);
+  return r.json();
+}
+
 export async function fetchBlocksToday(): Promise<BlockDto[]> {
   const { data } = await api.get<BlockDto[]>(API_ROUTES.blocksToday);
   return data;

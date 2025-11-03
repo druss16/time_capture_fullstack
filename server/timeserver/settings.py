@@ -186,8 +186,8 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-agent-user", "x-agent-host",
 ]
 
-SESSION_COOKIE_SAMESITE = "Lax"   # or "None" if truly cross-site with HTTPS
-SESSION_COOKIE_SECURE = False     # True in prod with HTTPS
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = True
 # -----------------------------------------------------
 # Django REST Framework
 # -----------------------------------------------------

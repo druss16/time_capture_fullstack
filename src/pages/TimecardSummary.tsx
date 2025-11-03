@@ -60,7 +60,7 @@ export default function TimecardSummary() {
     setBusy(true);
     setErr(null);
     try {
-      const url = new URL(`${API_BASE}/timecards/summary/day/`);
+      const url = new URL(API_ENDPOINTS.timecardsSummaryDay);
       url.searchParams.set("date", date);
       if (user.trim()) url.searchParams.set("user", user.trim());
 

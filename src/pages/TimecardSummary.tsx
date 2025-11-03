@@ -101,7 +101,7 @@ export default function TimecardSummary() {
     setBusy(true);
     setErr(null);
     try {
-      const r = await fetch(`${API_BASE}/timecards/generate/`, {
+      const r = await fetch(API_ENDPOINTS.timercardsGenerate, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

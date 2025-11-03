@@ -164,11 +164,6 @@ def _label_from_event(e: RawEvent) -> str:
     return e.app_name or "Unknown"
 
 
-def _client_ip(request) -> str:
-    fwd = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    return (fwd.split(",")[0].strip() if fwd else "") or request.META.get("REMOTE_ADDR", "")
-
-
 def _round_up_minutes(n: int, granularity: int) -> int:
     return n if n % granularity == 0 else n + (granularity - (n % granularity))
 
@@ -1864,23 +1859,259 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+from django.conf import settings
+
+from .models import AgentSession  # adjust import if needed
+
+from django.conf import settings
+
+def _client_ip(request) -> str:
+    """
+    Return the best-effort client IP address.
+    - Respects SECURE_PROXY_SSL_HEADER or trusted proxy settings.
+    - Falls back gracefully to REMOTE_ADDR.
+    - Always returns a clean string (no None).
+    """
+    # 1️⃣ Use X-Forwarded-For only if we are behind a trusted proxy (e.g., Render, Nginx)
+    use_xff = getattr(settings, "SECURE_PROXY_SSL_HEADER", None) or getattr(settings, "USE_X_FORWARDED_HOST", False)
+    if use_xff:
+        xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
+        if xff:
+            # First IP in the list is the real client
+            return xff.split(",")[0].strip()
+
+    # 2️⃣ Otherwise rely on REMOTE_ADDR (direct client IP)
+    ip = request.META.get("REMOTE_ADDR", "")
+    if ip:
+        return ip.strip()
+
+    # 3️⃣ Absolute fallback (shouldn’t really happen)
+    return "0.0.0.0"
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def whoami(request):
-    # (a) logged-in user
+    """
+    Resolve the current identity for either the browser or agent.
+
+    Priority:
+      1. Django session (real login)
+      2. Browser cookies (set by /api/browser/hello/)
+      3. Last known AgentSession by IP (best-effort)
+      4. Unknown (for new installs or cleared cookies)
+    """
+    # (a) Logged-in Django session
     if getattr(request.user, "is_authenticated", False):
-        return Response({"username": request.user.username, "host": None, "source": "session"})
+        return Response({
+            "username": (request.user.username or "").strip(),
+            "host": None,
+            "source": "session",
+        })
 
-    # (b) cookies from agents_hello
-    u = request.COOKIES.get("mavops_username", "").strip()
-    h = request.COOKIES.get("mavops_host", "").strip()
+    # (b) Browser cookies (set by browser_hello)
+    u = (request.COOKIES.get("mavops_username") or "").strip()
+    h = (request.COOKIES.get("mavops_host") or "").strip()
     if u:
-        return Response({"username": u, "host": h or None, "source": "cookie"})
+        return Response({
+            "username": u,
+            "host": (h or None),
+            "source": "cookie",
+        })
 
-    client_ip = (request.META.get("HTTP_X_FORWARDED_FOR","").split(",")[0].strip()
-                 or request.META.get("REMOTE_ADDR",""))
-    sess = AgentSession.objects.filter(last_ip=client_ip).select_related("user").order_by("-last_seen").first()
-    if sess:
-        return Response({"username": sess.user.username, "host": sess.hostname, "source": "ip"})
-    # (c) nothing found
-    return Response({"username": "", "host": None, "source": "unknown"})
+    # (c) AgentSession fallback by IP (if agent ran from this machine)
+    ip = _client_ip(request)
+    if ip:
+        sess = (
+            AgentSession.objects
+            .filter(last_ip=ip)
+            .select_related("user")
+            .order_by("-last_seen")
+            .only("hostname", "user__username")
+            .first()
+        )
+        if sess and getattr(sess, "user", None):
+            return Response({
+                "username": (sess.user.username or "").strip(),
+                "host": (getattr(sess, "hostname", None) or None),
+                "source": "ip",
+            })
+
+    # (d) Unknown → empty username so SPA hides "unknown"
+    return Response({
+        "username": "",
+        "host": None,
+        "source": "unknown",
+    })
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+from django.utils import timezone
+from django.db.models import Q
+from .models import Block
+from .serializers import BlockLiteSerializer
+
+@api_view(["GET"])
+@permission_classes([AllowAny])  # swap to IsAuthenticated once you wire auth
+def recent_classified_blocks(request):
+    """
+    Returns latest classified Blocks (has ai_processed_at) for the last 48h,
+    newest first. Optional ?limit=50 (default 25).
+    Optional filter: ?me=1 to restrict to request.user.
+    """
+    limit = int(request.GET.get("limit", 25))
+    qs = Block.objects.filter(
+        ai_processed_at__isnull=False,
+        ai_category__isnull=False,
+    ).order_by("-ai_processed_at")
+
+    # Example scoping by user (enable when auth is on)
+    if request.GET.get("me") == "1" and request.user.is_authenticated:
+        qs = qs.filter(user=request.user)
+
+    # Optional: last 48h window
+    since = timezone.now() - timezone.timedelta(hours=48)
+    qs = qs.filter(ai_processed_at__gte=since)[:max(1, min(limit, 200))]
+
+    return Response(BlockLiteSerializer(qs, many=True).data)
+
+
+# tracker/views_public.py
+import json
+from django.utils import timezone
+from django.contrib.auth.models import User, Group
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+from .models import AgentSession  # if you have it; safe to remove if not present
+
+@api_view(["POST", "OPTIONS"])
+@permission_classes([AllowAny])
+def agents_hello(request):
+    """
+    Auto-provision user and upsert AgentSession.
+    Tolerates partial schemas and sets cookies for SPA identity.
+    """
+    # headers first, JSON fallback
+    username = (request.headers.get("X-Agent-User") or "").strip()
+    host     = (request.headers.get("X-Agent-Host") or "").strip()
+    plat     = (request.headers.get("X-Agent-Platform") or "").strip()
+    ver      = (request.headers.get("X-Agent-Version") or "").strip()
+
+    if not (username and host):
+        try:
+            body = request.data if isinstance(request.data, dict) else json.loads(request.body.decode("utf-8"))
+        except Exception:
+            body = {}
+        username = username or (body.get("user") or body.get("os_username") or "").strip()
+        host     = host or (body.get("hostname") or body.get("machine") or "").strip()
+        plat     = plat or (body.get("platform") or "").strip()
+        ver      = ver or (body.get("app_version") or body.get("version") or "").strip()
+
+    username = username or "unknown"
+    host     = host or "unknown"
+    cip      = _client_ip(request)
+
+    grp, _ = Group.objects.get_or_create(name="Time Agents")
+    user, created = User.objects.get_or_create(username=username, defaults={"is_active": True, "email": ""})
+    if created:
+        user.set_unusable_password()
+        user.save()
+    if not user.groups.filter(id=grp.id).exists():
+        user.groups.add(grp)
+
+    sess_fields = {f.name for f in AgentSession._meta.get_fields()}
+    filter_kwargs = {"user": user}
+    if "hostname" in sess_fields:
+        filter_kwargs["hostname"] = host
+
+    defaults = {}
+    if "last_seen" in sess_fields:
+        defaults["last_seen"] = timezone.now()
+    if "platform" in sess_fields and plat:
+        defaults["platform"] = plat
+    if "version" in sess_fields and ver:
+        defaults["version"] = ver
+    if "last_ip" in sess_fields and cip:
+        defaults["last_ip"] = cip
+    if "hostname" in sess_fields and "hostname" not in filter_kwargs:
+        defaults["hostname"] = host
+
+    AgentSession.objects.update_or_create(**filter_kwargs, defaults=defaults)
+
+    try:
+        AgentControl.objects.get_or_create(user=user, host=host)
+    except Exception:
+        pass
+
+    resp = Response({
+        "ok": True,
+        "user_id": user.id,
+        "username": user.username,
+        "host": host,
+        "stop": False,
+        "stop_until": None,
+    })
+    secure = request.is_secure()
+    resp.set_cookie("mavops_username", user.username, samesite="Lax", secure=secure, httponly=False)
+    resp.set_cookie("mavops_host", host, samesite="Lax", secure=secure, httponly=False)
+    return resp
+
+@api_view(["POST", "OPTIONS"])
+@permission_classes([AllowAny])
+def browser_hello(request):
+    """
+    Lightweight browser-only handshake that sets the identity cookies used by /whoami.
+    Body: { username: string, host?: string }
+    """
+    try:
+        body = request.data if isinstance(request.data, dict) else json.loads(request.body.decode("utf-8") or "{}")
+    except Exception:
+        body = {}
+
+    username = (body.get("username") or "").strip()
+    host = (body.get("host") or "").strip() or "browser"
+
+    if not username:
+        return Response({"ok": False, "error": "missing-username"}, status=400)
+
+    # Make sure a User exists (optional but helpful)
+    grp, _ = Group.objects.get_or_create(name="Time Agents")
+    user, created = User.objects.get_or_create(username=username, defaults={"is_active": True, "email": ""})
+    if created:
+        user.set_unusable_password()
+        user.save()
+    if not user.groups.filter(id=grp.id).exists():
+        user.groups.add(grp)
+
+    # Update AgentSession best-effort so IP fallback also works later
+    sess_fields = {f.name for f in AgentSession._meta.get_fields()}
+    defaults = {}
+    if "last_seen" in sess_fields:
+        defaults["last_seen"] = timezone.now()
+    if "last_ip" in sess_fields:
+        defaults["last_ip"] = _client_ip(request)
+    if "hostname" in sess_fields:
+        defaults["hostname"] = host
+
+    filter_kwargs = {"user": user}
+    if "hostname" in sess_fields:
+        filter_kwargs["hostname"] = host
+
+    try:
+        AgentSession.objects.update_or_create(**filter_kwargs, defaults=defaults)
+    except Exception:
+        pass
+
+    resp = Response({"ok": True, "username": user.username, "host": host, "source": "browser"})
+    # Cookies for SPA → /whoami
+    secure = request.is_secure()
+    resp.set_cookie("mavops_username", user.username, samesite="Lax", secure=secure, httponly=False)
+    resp.set_cookie("mavops_host", host, samesite="Lax", secure=secure, httponly=False)
+    return resp

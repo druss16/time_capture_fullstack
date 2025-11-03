@@ -1,96 +1,81 @@
 # tracker/admin.py
 from django.contrib import admin
-from .models import (
-    RawEvent, Block, TimecardEntry,
-    AgentControl, AgentSession, Client, Project, Task,
-    Rule, OrganizationSettings, KnownEntity, AITrainingExample, AIProcessingLog
-)
+from django.contrib.admin.sites import NotRegistered
+from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern
 
-@admin.register(AgentControl)
-class AgentControlAdmin(admin.ModelAdmin):
-    list_display = ("user", "host", "stop", "stop_until", "reason", "updated_at")
-    list_filter  = ("stop",)
-    search_fields = ("user__username", "host", "reason")
-    autocomplete_fields = ("user",)
+# ---- Helpers to be idempotent ----
+def _unregister(model):
+    try:
+        admin.site.unregister(model)
+    except NotRegistered:
+        pass
 
-# tracker/admin.py
-@admin.register(AgentSession)
-class AgentSessionAdmin(admin.ModelAdmin):
-    list_display = ("username", "hostname", "last_seen", "platform", "version")
-    search_fields = ("user__username", "hostname")
-
-    def username(self, obj):
-        return getattr(obj.user, "username", obj.user_id)
-
-@admin.register(RawEvent)
-class RawEventAdmin(admin.ModelAdmin):
-    list_display = ("ts_utc", "user", "hostname", "app_name", "bundle_id")
-    search_fields = ("user__username", "hostname", "app_name", "bundle_id", "window_title", "url", "file_path")
-    list_filter = ("app_name", "bundle_id")
-
-from django.contrib import admin
-from .models import Block
-from django.utils.html import format_html
+# Unregister before (re)register to avoid AlreadyRegistered on reloads / refactors
+for m in (Block, Client, Project, Task, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern):
+    _unregister(m)
 
 @admin.register(Block)
 class BlockAdmin(admin.ModelAdmin):
     list_display = (
-        "id", "day", "user", "hostname",
-        "short_title", "minutes",
-        "client", "project", "task",
-        "ai_extracted_client", "ai_category", "ai_confidence",
-        "updated_at", "locked",
+        "start", "end", "user", "hostname", "minutes",
+        "client", "project", "task", "locked",
+        "ai_extracted_client", "ai_category", "ai_confidence", "ai_processed_at",
     )
-    list_filter = (
-        "day", "locked", "client", "project", "task",
-        "ai_extracted_client", "ai_category",
-    )
-    search_fields = (
-        "user__username", "hostname",
-        "title", "window_title", "url", "file_path",
-        "ai_extracted_client", "ai_category",
-    )
-    readonly_fields = ("ai_hash", "ai_confidence", "updated_at")
-    actions = ["reclassify_selected"]
+    search_fields = ("user__username", "hostname", "title", "window_title", "url", "file_path", "ai_extracted_client", "ai_category")
+    list_filter = ("locked", "client", "project", "task", "ai_category")
+    readonly_fields = ("minutes", "day", "ai_processed_at", "ai_confidence", "ai_extracted_client", "ai_category", "ai_hash", "updated_at")
 
-    def short_title(self, obj):
-        t = obj.window_title or obj.title or ""
-        return t[:60] + ("…" if len(t) > 60 else "")
-    short_title.short_description = "Title"
+@admin.register(Client)
+class ClientAdmin(admin.ModelAdmin):
+    list_display = ("org", "name", "is_active")
+    search_fields = ("name",)
+    list_filter = ("is_active", "org")
 
-    def reclassify_selected(self, request, queryset):
-        # Queue Celery tasks to reclassify in background
-        try:
-            from tracker.tasks import classify_block_task
-        except Exception:
-            self.message_user(request, "Celery task not available; did you set up Celery?", level="error")
-            return
-        count = 0
-        for b in queryset:
-            classify_block_task.delay(b.pk)
-            count += 1
-        self.message_user(request, f"Queued reclassification for {count} block(s).")
-    reclassify_selected.short_description = "Reclassify with AI"
-@admin.register(Block)
-class BlockAdmin(admin.ModelAdmin):
-    list_display = (
-        "id", "day", "window_title", "ai_extracted_client", "ai_category", "ai_confidence", "updated_at"
-    )
-    list_filter = ("ai_extracted_client", "ai_category", "day")
-    search_fields = ("window_title", "url", "file_path")
-    readonly_fields = ("ai_hash", "ai_confidence")
+@admin.register(Project)
+class ProjectAdmin(admin.ModelAdmin):
+    list_display = ("org", "client", "name", "is_active")
+    search_fields = ("name", "client__name")
+    list_filter = ("is_active", "org", "client")
+
+@admin.register(Task)
+class TaskAdmin(admin.ModelAdmin):
+    list_display = ("org", "project", "name", "billable")
+    search_fields = ("name", "project__name")
+    list_filter = ("billable", "org", "project")
 
 @admin.register(TimecardEntry)
 class TimecardEntryAdmin(admin.ModelAdmin):
-    list_display = ("date", "user", "client", "project", "total_hours", "status", "needs_review", "reviewed_at")
-    list_filter = ("status", "needs_review", "client")
+    list_display = ("org", "user", "date", "client", "project", "total_hours", "status", "confidence_score", "needs_review")
+    list_filter = ("status", "needs_review", "org", "client", "project")
     search_fields = ("user__username", "client__name", "project__name")
+    readonly_fields = ("created_at", "updated_at")
 
-admin.site.register(Client)
-admin.site.register(Project)
-admin.site.register(Task)
-admin.site.register(Rule)
-admin.site.register(OrganizationSettings)
-admin.site.register(KnownEntity)
-admin.site.register(AITrainingExample)
-admin.site.register(AIProcessingLog)
+@admin.register(Rule)
+class RuleAdmin(admin.ModelAdmin):
+    list_display = ("org", "field", "kind", "value_text", "active")
+    list_filter = ("org", "field", "kind", "active")
+    search_fields = ("pattern", "value_text")
+
+@admin.register(KnownEntity)
+class KnownEntityAdmin(admin.ModelAdmin):
+    list_display = ("org", "entity_type", "name", "is_internal", "confidence_boost", "updated_at")
+    list_filter = ("org", "entity_type", "is_internal")
+    search_fields = ("name",)
+
+@admin.register(AITrainingExample)
+class AITrainingExampleAdmin(admin.ModelAdmin):
+    list_display = ("org", "correct_client", "correct_project", "created_at")
+    list_filter = ("org", "correct_client", "correct_project")
+    search_fields = ("text_content",)
+
+@admin.register(ClientPattern)
+class ClientPatternAdmin(admin.ModelAdmin):
+    list_display = ("client_name", "match_type", "pattern", "weight")
+    list_filter = ("match_type",)
+    search_fields = ("client_name", "pattern")
+
+@admin.register(TaskPattern)
+class TaskPatternAdmin(admin.ModelAdmin):
+    list_display = ("task_category", "match_type", "pattern", "weight")
+    list_filter = ("match_type",)
+    search_fields = ("task_category", "pattern")

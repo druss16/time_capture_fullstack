@@ -19,6 +19,7 @@ urlpatterns = [
     path("blocks/suggestions/", views.ai_suggestions_today, name="ai_suggestions_today"),  # main unified route
     path("blocks/suggestions/rule-based/", views.suggestions_today, name="suggestions_today"),
     path("blocks/<int:block_id>/classify/", views.save_block_classification, name="save_block_classification"),
+    path("recent-blocks/", views.recent_classified_blocks, name="recent-classified-blocks"),
 
     # -------------------------------
     # Timecard Management
@@ -43,6 +44,8 @@ urlpatterns = [
     # Auto Provision User (Agent Handshake)
     # -------------------------------
     path("agents/hello/", views.agents_hello, name="agents_hello"),
+    path("browser/hello/", views.browser_hello),
+
 
     # -------------------------------
     # Agent Control (Admin Kill-Switch)

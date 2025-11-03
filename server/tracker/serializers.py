@@ -117,3 +117,17 @@ class TimecardEntrySerializer(serializers.ModelSerializer):
 
     def get_username(self, obj):
         return getattr(obj.user, 'username', None)
+
+# add/extend this
+from rest_framework import serializers
+from .models import Block
+
+class BlockLiteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Block
+        fields = [
+            "id", "user", "hostname", "start", "end",
+            "window_title", "url", "file_path",
+            "ai_extracted_client", "ai_category", "ai_confidence", "ai_processed_at",
+        ]
+        read_only_fields = fields

@@ -28,15 +28,12 @@ services:
     container_name: time_worker
     env_file:
       - ./server/.env
-    command: celery -A server worker -l info
-    volumes:
-      - ./server:/app
     depends_on:
-      redis:
-        condition: service_started
+      - api
+      - redis
+    command: python -m celery -A timeserver.celery_app worker -l info --concurrency=2
     restart: unless-stopped
 
-  # Optional: periodic tasks (if/when you add Celery Beat schedules)
   beat:
     build:
       context: ./server
@@ -44,12 +41,10 @@ services:
     container_name: time_beat
     env_file:
       - ./server/.env
-    command: celery -A server beat -l info
-    volumes:
-      - ./server:/app
     depends_on:
-      redis:
-        condition: service_started
+      - api
+      - redis
+    command: python -m celery -A timeserver.celery_app beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     restart: unless-stopped
 
   redis:

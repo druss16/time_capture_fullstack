@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "tracker.apps.TrackerConfig",
+    "django_celery_results",
 ]
 
 # -----------------------------------------------------
@@ -145,6 +146,8 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
 
 # -----------------------------------------------------
 # Security & CSRF
@@ -161,7 +164,7 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS", "0"
 SECURE_HSTS_PRELOAD = os.getenv("SECURE_HSTS_PRELOAD", "0") in ("1", "true", "True")
 
 # Trusted CSRF origins (parse from comma-separated env var)
-_raw_csrf = os.getenv("CSRF_TRUSTED_ORIGINS", "http://localhost:5174,http://127.0.0.1:5174")
+_raw_csrf = os.getenv("CSRF_TRUSTED_ORIGINS", "http://localhost:5174,http://127.0.0.1:5174, http://localhost:5174")
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in _raw_csrf.split(",") if o.strip()]
 
 # Optional helper for excluding specific endpoints (like APIs)
@@ -182,6 +185,9 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-agent-key", "agent-key", "authorization",
     "x-agent-user", "x-agent-host",
 ]
+
+SESSION_COOKIE_SAMESITE = "Lax"   # or "None" if truly cross-site with HTTPS
+SESSION_COOKIE_SECURE = False     # True in prod with HTTPS
 # -----------------------------------------------------
 # Django REST Framework
 # -----------------------------------------------------

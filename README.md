@@ -1,3 +1,4 @@
+
 # Time Capture — Full Stack Starter
 - mac_agent/: macOS tracker
 - server/: Django API (DRF, CORS)

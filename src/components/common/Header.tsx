@@ -1,7 +1,7 @@
 import { ReactNode } from "react";
 import { DESIGN_SYSTEM } from "@/lib/design-system";
 
-interface HeaderProps {
+export interface HeaderProps {
   title: string;
   subtitle?: string;
   icon?: ReactNode;

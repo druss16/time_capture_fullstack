@@ -1,4 +1,3 @@
-
 from pathlib import Path
 import os
 import sentry_sdk
@@ -180,6 +179,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173", "http://127.0.0.1:5173",
     "http://localhost:5174", "http://127.0.0.1:5174",
+    "https://463d01aa088f43d1ae615127e617af8e-fcaec2f20afa415aa44dbb66c.fly.dev",
 ]
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-agent-key", "agent-key", "authorization",
@@ -211,5 +211,3 @@ LOGGING = {
     "handlers": {"console": {"class": "logging.StreamHandler"}},
     "root": {"handlers": ["console"], "level": "DEBUG" if DEBUG else "INFO"},
 }
-
-

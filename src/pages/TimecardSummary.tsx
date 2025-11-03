@@ -8,14 +8,7 @@ import { EmptyState, LoadingState, ErrorBanner } from "@/components/timecard/Emp
 import { DESIGN_SYSTEM } from "@/lib/design-system";
 import { todayIso } from "@/lib/utils/date";
 import { displayClientName } from "@/lib/utils/formatting";
-
-const API_BASE = (() => {
-  const envUrl = import.meta.env.VITE_API_BASE_URL || "";
-  if (envUrl) {
-    return envUrl.endsWith("/api") ? envUrl : `${envUrl.replace(/\/+$/, "")}/api`;
-  }
-  return "/api";
-})();
+import { API_ENDPOINTS } from "@/lib/api";
 
 type TaskRow = {
   task_name: string;

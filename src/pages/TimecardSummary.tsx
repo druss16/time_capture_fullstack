@@ -2,22 +2,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Calendar, User, Clock, Download, RefreshCw, Save, ChevronRight, TrendingUp } from "lucide-react";
 
-const getApiBase = () => {
-  const rawBase = import.meta.env.VITE_API_BASE_URL || "";
-
-  if (rawBase) {
-    if (rawBase.endsWith("/api")) return rawBase;
-    return `${rawBase.replace(/\/+$/, "")}/api`;
+const API_BASE = (() => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL || "";
+  if (envUrl) {
+    return envUrl.endsWith("/api") ? envUrl : `${envUrl.replace(/\/+$/, "")}/api`;
   }
-
-  if (typeof window !== "undefined") {
-    return "/api";
-  }
-
-  return "http://localhost:7123/api";
-};
-
-const API_BASE = getApiBase();
+  return "/api";
+})();
 
 type TaskRow = { task_name: string; total_hours: number; categories: Record<string, number>; block_ids?: number[]; };
 type ClientRow = { client_name: string; total_hours: number; categories: Record<string, number>; block_ids?: number[]; tasks?: TaskRow[]; };

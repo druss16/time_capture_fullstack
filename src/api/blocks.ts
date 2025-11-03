@@ -1,8 +1,13 @@
 // src/api/blocks.ts
 import { BlockDto } from "../types";
 
-const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
-const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
+const API_BASE = (() => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL || "";
+  if (envUrl) {
+    return envUrl.endsWith("/api") ? envUrl : `${envUrl.replace(/\/+$/, "")}/api`;
+  }
+  return "/api";
+})();
 
 export async function fetchBlocksToday(): Promise<BlockDto[]> {
   try {

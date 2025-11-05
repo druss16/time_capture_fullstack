@@ -15,52 +15,50 @@ class NoAuth(BaseAuthentication):
     def authenticate(self, request):
         return None
 
+# permissions.py
+import os
+from django.conf import settings
+from rest_framework.permissions import BasePermission
+
 class AgentKeyPermission(BasePermission):
     """
-    Accept key from many places:
+    Accept agent API key from:
       - X-Agent-Key
       - Agent-Key
       - X-Api-Key
       - X-AgentToken
       - X-Auth-Token
       - Authorization: Bearer <key>
-      - ?key=<key>  (last resort for debugging)
-    And compare after stripping whitespace.
+      - ?key=<key>    (diagnostic fallback)
     """
     message = "Missing or invalid agent key."
 
     def has_permission(self, request, view):
-        expected = (getattr(settings, "AGENT_KEY", None) 
+        # Single canonical source of truth
+        expected = (getattr(settings, "AGENT_API_KEY", None) 
                     or os.getenv("AGENT_API_KEY", "")).strip()
         if not expected:
             return False
 
-        # Try multiple header names
-        cand = (
-            request.headers.get("X-Agent-Key")
-            or request.headers.get("Agent-Key")
-            or request.headers.get("X-Api-Key")
-            or request.headers.get("X-AgentToken")
-            or request.headers.get("X-Auth-Token")
-            or ""
-        ).strip()
-
-        if cand and cand == expected:
-            return True
-
-        # Authorization: Bearer <key>
-        auth = (request.headers.get("Authorization") or "").strip()
-        if auth.startswith("Bearer "):
-            if auth[7:].strip() == expected:
+        # 1) Direct key headers
+        for h in ("X-Agent-Key", "Agent-Key", "X-Api-Key", "X-AgentToken", "X-Auth-Token"):
+            cand = (request.headers.get(h) or "").strip()
+            if cand == expected:
                 return True
 
-        # Query param fallback (?key=...) — useful for quick diagnostics
+        # 2) Authorization: Bearer <key>   (case/space tolerant)
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth:
+            parts = auth.split()
+            if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1].strip() == expected:
+                return True
+
+        # 3) Query param (last resort)
         qp = (request.query_params.get("key") or "").strip()
-        if qp and qp == expected:
+        if qp == expected:
             return True
 
         return False
-
 class PermUI(BasePermission):
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS:

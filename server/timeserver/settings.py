@@ -36,16 +36,42 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
     "corsheaders",
     "tracker.apps.TrackerConfig",
     "django_celery_results",
+
 ]
+
+SITE_ID = 1
+ACCOUNT_AUTHENTICATION_METHOD = "username_email"
+ACCOUNT_EMAIL_REQUIRED = False
+ACCOUNT_EMAIL_VERIFICATION = "none"  # can switch on later
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'DEBUG',
+    },
+}
 
 # -----------------------------------------------------
 # Middleware
 # -----------------------------------------------------
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -170,16 +196,24 @@ CSRF_TRUSTED_ORIGINS = [o.strip() for o in _raw_csrf.split(",") if o.strip()]
 CSRF_EXEMPT_URLS = ["/tracker/raw-events/"]  # you can append API endpoints here
 
 # -----------------------------------------------------
-# CORS
+# Security & CSRF / CORS for local dev
 # -----------------------------------------------------
-# settings.py
 from corsheaders.defaults import default_headers
 
+# Your SPA runs on http://localhost:5173, API on http://localhost:7123
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+
+# CORS
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173", "http://127.0.0.1:5173",
-    "http://localhost:5174", "http://127.0.0.1:5174",
-    "http://localhost:8080", "http://127.0.0.1:8080",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    # keep other dev hosts if you actually use them:
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    # prod preview you had:
     "https://463d01aa088f43d1ae615127e617af8e-fcaec2f20afa415aa44dbb66c.fly.dev",
 ]
 CORS_ALLOW_HEADERS = list(default_headers) + [
@@ -187,20 +221,42 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-agent-user", "x-agent-host",
 ]
 
+# CSRF: TRUSTED ORIGINS MUST include scheme + host (+port)
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:7123",
+    "http://127.0.0.1:7123",
+    # add https variants if you test with TLS locally
+]
+
+# Cookies (dev-friendly)
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = False        # True only behind https
+CSRF_COOKIE_SECURE = False           # True only behind https
+CSRF_COOKIE_HTTPONLY = False         # must be False so JS can read csrftoken
+
+CSRF_COOKIE_NAME = os.getenv("CSRF_COOKIE_NAME", "csrftoken")
+
+# If you want to relax SSL redirect in dev:
+SECURE_SSL_REDIRECT = False
+
 # -----------------------------------------------------
 # Django REST Framework
 # -----------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
-        # "rest_framework_simplejwt.authentication.JWTAuthentication",  # enable when ready
+        # "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticated",  # default: lock down
+        "rest_framework.permissions.IsAuthenticated",
     ],
 }
+
+# (Optional) If you truly need to exempt a path from CSRF, you'll need custom middleware.
+# The CSRF_EXEMPT_URLS list by itself isn't used by Django.
 
 
 # -----------------------------------------------------

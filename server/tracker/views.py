@@ -1,90 +1,85 @@
 # tracker/views.py
 from __future__ import annotations
 
+# --- Standard library ---
+import asyncio
 import csv
 import io
 import json
 import os
+import platform
 import re
 import urllib.parse
-import asyncio
-from datetime import timedelta, date as date_type, timezone as dt_timezone, datetime, time as dt_time
-from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta, time as dt_time, date as date_type
+from typing import Any, Dict, List, Optional
 
+# --- Django ---
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model, logout as django_logout
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Sum
+from django.db.models.functions import TruncHour
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import localtime
+from django.views.decorators.csrf import csrf_exempt  # keep only if you actually use it
 
-from rest_framework import status
-from rest_framework.authentication import BaseAuthentication
+# --- DRF ---
+from rest_framework import permissions, status
 from rest_framework.decorators import (
-    api_view, authentication_classes, permission_classes, throttle_classes
+    api_view,
+    authentication_classes,
+    permission_classes,
+    throttle_classes,
 )
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
+# --- Third-party ---
+from allauth.account import app_settings as allauth_settings
+from allauth.account.utils import perform_login
 from openai import OpenAI
 
+# --- Local apps ---
 from .models import (
-    RawEvent, Block, Rule, Suggestion, Client, Project, Task,
-    OrganizationSettings, KnownEntity, AITrainingExample, TimecardEntry,
-    AgentControl, AgentSession
+    AgentControl,
+    AgentSession,
+    AgentPairCode,
+    AgentDevice,
+    AITrainingExample,
+    Block,
+    Client,
+    KnownEntity,
+    OrganizationSettings,
+    Project,
+    RawEvent,
+    Rule,
+    Suggestion,
+    Task,
+    TimecardEntry,
 )
-# tracker/views.py
-from .permissions import PermUI, AgentKeyPermission, NoAuth
+from .permissions import AgentKeyPermission, NoAuth, PermUI
 from .rules import apply_rules
 from .serializers import RawEventSerializer
-
-from .utils import resolve_agent_user  # <— add this import
-
-# views.py
-from datetime import datetime, time as dt_time, timedelta, date as date_type
-from django.utils import timezone
-from django.utils.dateparse import parse_date
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.response import Response
-from .permissions import PermUI
-from .models import Block
-from .utils import get_org_or_default, resolve_client_from_known, infer_task_for_block, compact_rawevents_into_blocks
-from django.contrib.auth import get_user_model
-
-from datetime import datetime, timedelta, time as dt_time, timezone as dt_timezone
-from django.utils import timezone
-from datetime import date, datetime, timedelta, time as dt_time, timezone as dt_timezone
-from django.utils import timezone
-from django.db.models.functions import TruncHour
-
-from .utils import (
-    get_org_or_default,
-    resolve_client_from_known,
-    infer_task_for_block,
-    compact_rawevents_into_blocks,
-)
-
-# tracker/views.py
-import datetime
-from datetime import timedelta, time as dt_time
-from django.utils import timezone
-from django.db.models import Sum
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from .models import Block
 from .services.classify_block import classify_block
 
-# --- helper: resolve which user to show in the day summary ---
-from django.contrib.auth import get_user_model
-User = get_user_model()
+from .utils import (  # re-exported from tracker/utils/__init__.py
+    _client_ip,
+    compact_rawevents_into_blocks,
+    get_org_or_default,
+    infer_task_for_block,
+    resolve_agent_user,
+    resolve_client_from_known,
+)
 
+# If you need a User class reference:
+User = get_user_model()
 
 
 # -------------------------------------------------------------------
@@ -104,6 +99,22 @@ FUZZY_TITLE_THRESHOLD = float(getattr(settings, "FUZZY_TITLE_THRESHOLD", 0.72))
 MAX_NAME_LEN = 120
 
 
+User = get_user_model()
+
+COOKIE_USER_KEY = "mavops_username"
+COOKIE_HOST_KEY = "mavops_host"
+COOKIE_BUNDLE = "mavops_ident"  # signed bundle (preferred)
+
+
+def _signed_cookie_get(request, name: str, default=None):
+    raw = request.COOKIES.get(name)
+    if not raw:
+        return default
+    try:
+        return signing.loads(raw, max_age=60 * 60 * 24 * 14)  # 14 days
+    except signing.BadSignature:
+        return default
+
 # -------------------------------------------------------------------
 # Utility helpers
 # -------------------------------------------------------------------
@@ -117,6 +128,19 @@ def get_org_or_default(request):
         org, _ = Group.objects.get_or_create(name="default-org")
     return org
 
+
+# tracker/views.py
+from django.http import JsonResponse
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+# tracker/views.py
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+@ensure_csrf_cookie
+def get_csrf(request):
+    return Response({"ok": True})
 
 def _get_user_obj(username: Optional[str]):
     if not username:
@@ -252,6 +276,150 @@ def ping(_request):
 # -------------------------------------------------------------------
 # Agent handshake, control, and ingest
 # -------------------------------------------------------------------
+# ---------- Agent-authenticated endpoints ----------
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.exceptions import AuthenticationFailed
+
+@login_required
+@api_view(["POST"])
+def pair_start(request):
+    """Signed-in user clicks 'Pair this Mac' → get code"""
+    pc = AgentPairCode.issue(request.user, ttl_seconds=600)
+    return Response({"code": pc.code, "expires_at": pc.expires_at})
+
+
+# Optional: list & manage devices
+@login_required
+@api_view(["GET"])
+def my_devices(request):
+    q = AgentDevice.objects.filter(user=request.user).order_by("-last_seen_at", "-created_at")
+    return Response([{
+        "id": d.id, "hostname": d.hostname, "device_id": d.device_id,
+        "is_active": d.is_active, "last_seen_at": d.last_seen_at, "created_at": d.created_at,
+    } for d in q])
+
+
+@login_required
+@api_view(["POST"])
+def revoke_device(request, pk=None):
+    try:
+        d = AgentDevice.objects.get(id=pk, user=request.user)
+    except AgentDevice.DoesNotExist:
+        return Response({"detail": "Not found."}, status=404)
+    d.is_active = False
+    d.save(update_fields=["is_active"])
+    return Response({"ok": True})
+
+@csrf_exempt
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def pair_complete(request):
+    """
+    Complete device pairing using a short code.
+
+    Expected JSON:
+    {
+      "code": "ABC123",
+      "device_id": "uuid-or-random",
+      "hostname": "Dans-MacBook",
+      "platform": "macOS 15.1",
+      "app_version": "1.0.0"
+    }
+
+    Returns:
+    {
+      "ok": true,
+      "paired": true,
+      "api_key": "...",
+      "user_id": 123,
+      "username": "danrussell",
+      "device_id": "..."
+    }
+    """
+    data = request.data or {}
+    code = (data.get("code") or "").strip().upper()
+    device_id = (data.get("device_id") or "").strip()
+    hostname = (data.get("hostname") or "").strip()
+    platform_str = (data.get("platform") or "").strip()
+    app_version = (data.get("app_version") or "").strip()
+
+    if not code or not device_id:
+        return Response(
+            {"ok": False, "error": "code and device_id are required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Look up valid, unconsumed, unexpired code
+    now = timezone.now()
+    try:
+        pair = AgentPairCode.objects.select_related("user").get(
+            code=code, consumed_at__isnull=True, expires_at__gte=now
+        )
+    except AgentPairCode.DoesNotExist:
+        return Response(
+            {"ok": False, "error": "Invalid or expired code"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Create/update device + generate API key
+    with transaction.atomic():
+        device, _ = AgentDevice.objects.select_for_update().get_or_create(
+            user=pair.user,
+            device_id=device_id,
+            defaults={"is_active": True},
+        )
+        # (Re)generate key on every successful pair to rotate secrets
+        device.api_key = secrets.token_hex(16)
+        if hostname:
+            device.hostname = hostname
+        if platform_str:
+            device.platform = platform_str
+        if app_version:
+            device.app_version = app_version
+        device.last_seen_at = now
+        device.is_active = True
+        device.save()
+
+        # consume the code
+        pair.consume()
+
+    return Response(
+        {
+            "ok": True,
+            "paired": True,
+            "api_key": device.api_key,
+            "user_id": pair.user.id,
+            "username": getattr(pair.user, "username", str(pair.user)),
+            "device_id": device.device_id,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+class AgentKeyAuthentication(BaseAuthentication):
+    """Authenticate by X-Agent-Key / Bearer <key> → request.user & request.agent_device"""
+    def authenticate(self, request):
+        key = (
+            request.headers.get("X-Agent-Key")
+            or request.headers.get("Agent-Key")
+            or ""
+        ).strip()
+
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth.startswith("Bearer ") and not key:
+            key = auth[7:].strip()
+        if not key:
+            return None
+
+        try:
+            dev = AgentDevice.objects.select_related("user").get(api_key=key, is_active=True)
+        except AgentDevice.DoesNotExist:
+            raise AuthenticationFailed("Invalid agent key")
+
+        # annotate request for views
+        request.agent_device = dev
+        return (dev.user, None)
+
+
 class NoAuth(BaseAuthentication):
     """Disable session/csrf for token/agent endpoints."""
     def authenticate(self, request):
@@ -265,6 +433,20 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 import json
+
+# NEW: paired hello (device-key)
+@api_view(["POST"])
+@authentication_classes([AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def agents_hello2(request):
+    """
+    Authenticated by device key; request.user is the account the device belongs to.
+    request.agent_device can be attached by AgentKeyAuthentication.
+    """
+    user = request.user
+    host = request.data.get("hostname") or request.headers.get("X-Agent-Host") or "unknown"
+    # upsert AgentSession, ensure AgentControl row, set cookies (optional)...
+    return Response({"ok": True, "username": user.username, "host": host})
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -382,30 +564,26 @@ def agent_control(request):
 
 
 
+# views.py (raw_events)
+from django.core.exceptions import PermissionDenied
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+
 @api_view(["POST"])
-@authentication_classes([NoAuth])          # no cookies/csrf
-@permission_classes([AgentKeyPermission])  # require X-Agent-Key
+@authentication_classes([NoAuth])
+@permission_classes([AgentKeyPermission])
 @throttle_classes([AnonRateThrottle])
 def raw_events(request):
+    # Resolve identity
+    agent = resolve_agent_user(request)  # some versions might return (user, host)
+    if isinstance(agent, tuple):
+        agent_user = agent[0]
+    else:
+        agent_user = agent
 
-    # DEBUG: comment out after you confirm
-    # if settings.DEBUG:
-    #     print("----- /api/raw-events/ DEBUG -----")
-    #     print("Headers seen by server:")
-    #     for k, v in request.headers.items():
-    #         if "agent" in k.lower() or k.lower() == "authorization":
-    #             print(f"  {k}: {v!r}")
-    #     print("Query key:", request.query_params.get("key"))
-    #     print("----------------------------------")
-    """
-    Ingest one or many RawEvent objects.
-    - Accepts dict or list[dict].
-    - ts_utc may be ISO string or datetime.
-    - user is derived from headers via resolve_agent_user() -> FK.
-    - hostname comes from header (X-Agent-Host) or item['hostname'] or 'unknown'.
-    """
-    # Resolve the authenticated Django user for attribution
-    agent_user = resolve_agent_user(request)
+    if not isinstance(agent_user, User):
+        raise PermissionDenied("Agent user could not be resolved")
 
     payload = request.data
     if isinstance(payload, dict):
@@ -413,11 +591,11 @@ def raw_events(request):
     if not isinstance(payload, list):
         raise ValidationError("Payload must be an object or an array of objects.")
 
+    # Prefer header host
     header_host = (request.headers.get("X-Agent-Host") or "").strip() or "unknown"
 
     created, errors = 0, []
     for item in payload:
-        # Parse timestamp
         ts = item.get("ts_utc")
         if isinstance(ts, str):
             dt = parse_datetime(ts)
@@ -429,7 +607,6 @@ def raw_events(request):
             errors.append({"item": item, "error": "Missing ts_utc"})
             continue
 
-        # Hostname preference: header > item > 'unknown'
         hostname = (header_host or item.get("hostname") or "unknown").strip() or "unknown"
 
         try:
@@ -440,7 +617,7 @@ def raw_events(request):
                 window_title=item.get("window_title") or "",
                 url=item.get("url"),
                 file_path=item.get("file_path"),
-                user=agent_user,                 # FK from resolve_agent_user
+                user=agent_user,          # ✅ guaranteed User instance
                 hostname=hostname,
                 ctx=item.get("ctx", {}) or {},
             )
@@ -448,8 +625,10 @@ def raw_events(request):
         except Exception as e:
             errors.append({"item": item, "error": str(e)})
 
-    status_code = status.HTTP_201_CREATED if created and not errors else (
-        status.HTTP_207_MULTI_STATUS if created and errors else status.HTTP_400_BAD_REQUEST
+    status_code = (
+        status.HTTP_201_CREATED if created and not errors
+        else status.HTTP_207_MULTI_STATUS if created and errors
+        else status.HTTP_400_BAD_REQUEST
     )
     return Response({"created": created, "errors": errors}, status=status_code)
 
@@ -1462,12 +1641,20 @@ date_type = datetime.date  # if you already have this, keep your version
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])  # or AllowAny if public
 def timecards_summary_day(request):
     """
-    Summarize Blocks for a single day:
+    Summarize Blocks (or RawEvents) for a single day,
+    computing non-overlapping durations per user/host.
+
+    Prevents inflated totals from overlapping 6-min windows.
     Groups by client → tasks → category breakdowns.
     """
+    import datetime
+    from datetime import timedelta, time as dt_time
+    from django.db.models import F
+    from django.utils import timezone
+
     date_str = (request.GET.get("date") or "").strip()
     if not date_str:
         return Response({"error": "date is required (YYYY-MM-DD)"}, status=400)
@@ -1485,22 +1672,41 @@ def timecards_summary_day(request):
     start_utc = start_local.astimezone(datetime.timezone.utc)
     end_utc = end_local.astimezone(datetime.timezone.utc)
 
+    # === Step 1: Load blocks (or events) chronologically ===
     qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc)
     if user_param:
         qs = qs.filter(user__username=user_param)
+    qs = qs.order_by("start")
 
-    blocks = list(qs)
+    rows = list(qs)
+    if not rows:
+        return Response({
+            "date": day.isoformat(),
+            "user": user_param or "",
+            "total_hours": 0.0,
+            "clients": [],
+        })
 
-    clients = {}
-    total_minutes = 0
+    # === Step 2: Compute non-overlapping minutes ===
+    IDLE_CAP = timedelta(minutes=30)
+    MIN_BLOCK = timedelta(seconds=30)
 
-    for b in blocks:
-        mins = int(b.minutes or ((b.end - b.start).total_seconds() // 60))
-        if mins <= 0:
+    blocks = []
+    for i, b in enumerate(rows):
+        start = b.start
+        next_start = rows[i + 1].start if i + 1 < len(rows) else end_utc
+        dur = max(timedelta(0), min(next_start - start, IDLE_CAP))
+        if dur < MIN_BLOCK:
             continue
+        blocks.append((b, dur))
+
+    clients, total_minutes = {}, 0
+
+    # === Step 3: Aggregate per client → task → category ===
+    for b, dur in blocks:
+        mins = dur.total_seconds() / 60.0
         total_minutes += mins
 
-        # ✅ Prefer FK client, else AI-inferred
         client_name = (
             getattr(b.client, "name", None)
             or getattr(b, "ai_extracted_client", None)
@@ -1545,6 +1751,7 @@ def timecards_summary_day(request):
             t_row["categories"][unc] = t_row["categories"].get(unc, 0.0) + hours
             c_row["categories"][unc] = c_row["categories"].get(unc, 0.0) + hours
 
+    # === Step 4: Sort + return ===
     client_rows = []
     for c in clients.values():
         tasks_list = sorted(c["tasks"].values(), key=lambda r: r["total_hours"], reverse=True)
@@ -1946,60 +2153,83 @@ from .models import AgentSession  # adjust import if needed
 
 from django.conf import settings
 
-def _client_ip(request) -> str:
-    """
-    Return the best-effort client IP address.
-    - Respects SECURE_PROXY_SSL_HEADER or trusted proxy settings.
-    - Falls back gracefully to REMOTE_ADDR.
-    - Always returns a clean string (no None).
-    """
-    # 1️⃣ Use X-Forwarded-For only if we are behind a trusted proxy (e.g., Render, Nginx)
-    use_xff = getattr(settings, "SECURE_PROXY_SSL_HEADER", None) or getattr(settings, "USE_X_FORWARDED_HOST", False)
-    if use_xff:
-        xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
-        if xff:
-            # First IP in the list is the real client
-            return xff.split(",")[0].strip()
-
-    # 2️⃣ Otherwise rely on REMOTE_ADDR (direct client IP)
-    ip = request.META.get("REMOTE_ADDR", "")
-    if ip:
-        return ip.strip()
-
-    # 3️⃣ Absolute fallback (shouldn’t really happen)
-    return "0.0.0.0"
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def whoami(request):
     """
-    Resolve the current identity for either the browser or agent.
+    Resolve identity for SPA and mac_agent.
 
     Priority:
-      1. Django session (real login)
-      2. Browser cookies (set by /api/browser/hello/)
-      3. Last known AgentSession by IP (best-effort)
-      4. Unknown (for new installs or cleared cookies)
+      1) Agent auth header (Agent-Key/X-Agent-Key -> AgentDevice -> user)
+      2) Django session (logged in via allauth/session)
+      3) Signed browser cookie bundle from /browser/hello/
+      4) Last AgentSession by IP
+      5) Unknown
+    Response is normalized so SPA can key off fields instead of guessing.
     """
-    # (a) Logged-in Django session
+    # 1) Agent header auth (mac_agent)
+    agent_key = (
+        request.headers.get("X-Agent-Key")
+        or request.headers.get("Agent-Key")
+        or request.META.get("HTTP_X_AGENT_KEY")
+        or request.META.get("HTTP_AGENT_KEY")
+    )
+    if agent_key:
+        device = AgentDevice.objects.filter(api_key=agent_key, is_active=True).select_related("user").first()
+        if device and device.user_id:
+            u = device.user
+            return Response({
+                "is_authenticated": True,
+                "auth_source": "agent",
+                "username": (u.username or "").strip(),
+                "user_id": u.pk,
+                "host": (device.hostname or None),
+                "device_id": device.device_id,
+            })
+
+    # 2) Django session (real web login)
     if getattr(request.user, "is_authenticated", False):
+        u = request.user
         return Response({
-            "username": (request.user.username or "").strip(),
+            "is_authenticated": True,
+            "auth_source": "session",
+            "username": (u.username or "").strip(),
+            "user_id": u.pk,
             "host": None,
-            "source": "session",
+            "device_id": None,
         })
 
-    # (b) Browser cookies (set by browser_hello)
-    u = (request.COOKIES.get("mavops_username") or "").strip()
-    h = (request.COOKIES.get("mavops_host") or "").strip()
-    if u:
-        return Response({
-            "username": u,
-            "host": (h or None),
-            "source": "cookie",
-        })
+    # 3) Signed browser identity cookie from /browser/hello/
+    # Prefer a single signed bundle, fall back to legacy plain cookies if present.
+    bundle = _signed_cookie_get(request, COOKIE_BUNDLE)
+    if bundle and isinstance(bundle, dict):
+        username = (bundle.get("username") or "").strip()
+        host = (bundle.get("host") or "").strip() or None
+        if username:
+            return Response({
+                "is_authenticated": True,
+                "auth_source": "cookie",
+                "username": username,
+                "user_id": None,  # unknown without session; you can embed user_id in the bundle if desired
+                "host": host,
+                "device_id": None,
+            })
+    else:
+        # Legacy (unsafely trusted) cookies — keep only if you must
+        u = (request.COOKIES.get(COOKIE_USER_KEY) or "").strip()
+        h = (request.COOKIES.get(COOKIE_HOST_KEY) or "").strip()
+        if u:
+            return Response({
+                "is_authenticated": True,
+                "auth_source": "cookie_legacy",
+                "username": u,
+                "user_id": None,
+                "host": (h or None),
+                "device_id": None,
+            })
 
-    # (c) AgentSession fallback by IP (if agent ran from this machine)
+    # 4) AgentSession fallback by client IP (best effort)
     ip = _client_ip(request)
     if ip:
         sess = (
@@ -2007,21 +2237,27 @@ def whoami(request):
             .filter(last_ip=ip)
             .select_related("user")
             .order_by("-last_seen")
-            .only("hostname", "user__username")
+            .only("hostname", "user__username", "user__id")
             .first()
         )
         if sess and getattr(sess, "user", None):
             return Response({
+                "is_authenticated": True,
+                "auth_source": "ip",
                 "username": (sess.user.username or "").strip(),
+                "user_id": sess.user_id,
                 "host": (getattr(sess, "hostname", None) or None),
-                "source": "ip",
+                "device_id": None,
             })
 
-    # (d) Unknown → empty username so SPA hides "unknown"
+    # 5) Unknown
     return Response({
+        "is_authenticated": False,
+        "auth_source": "unknown",
         "username": "",
+        "user_id": None,
         "host": None,
-        "source": "unknown",
+        "device_id": None,
     })
 
 
@@ -2140,13 +2376,22 @@ def agents_hello(request):
     resp.set_cookie("mavops_host", host, samesite="Lax", secure=secure, httponly=False)
     return resp
 
+@csrf_exempt  # this endpoint is a lightweight handshake to seed cookies; easier to exempt
 @api_view(["POST", "OPTIONS"])
 @permission_classes([AllowAny])
 def browser_hello(request):
     """
-    Lightweight browser-only handshake that sets the identity cookies used by /whoami.
-    Body: { username: string, host?: string }
+    Lightweight browser-only handshake to set identity cookies used by /whoami.
+    Body: { "username": "dan", "host": "MacBook-Pro" (optional) }
+
+    Sets:
+      - mavops_ident (SIGNED bundle: username, host, ts)  ← preferred
+      - mavops_username + mavops_host (legacy, plain)     ← kept for compatibility
     """
+    if request.method == "OPTIONS":
+        return Response(status=200)
+
+    # Parse body safely
     try:
         body = request.data if isinstance(request.data, dict) else json.loads(request.body.decode("utf-8") or "{}")
     except Exception:
@@ -2158,7 +2403,7 @@ def browser_hello(request):
     if not username:
         return Response({"ok": False, "error": "missing-username"}, status=400)
 
-    # Make sure a User exists (optional but helpful)
+    # Ensure a real User exists (so future session login pairs cleanly)
     grp, _ = Group.objects.get_or_create(name="Time Agents")
     user, created = User.objects.get_or_create(username=username, defaults={"is_active": True, "email": ""})
     if created:
@@ -2167,7 +2412,7 @@ def browser_hello(request):
     if not user.groups.filter(id=grp.id).exists():
         user.groups.add(grp)
 
-    # Update AgentSession best-effort so IP fallback also works later
+    # Best-effort: keep AgentSession fresh for IP fallback
     sess_fields = {f.name for f in AgentSession._meta.get_fields()}
     defaults = {}
     if "last_seen" in sess_fields:
@@ -2184,11 +2429,123 @@ def browser_hello(request):
     try:
         AgentSession.objects.update_or_create(**filter_kwargs, defaults=defaults)
     except Exception:
+        # Non-fatal
         pass
 
+    # Build signed bundle cookie
+    bundle = {"username": user.username, "host": host, "ts": timezone.now().isoformat()}
+    signed = signing.dumps(bundle)
+
     resp = Response({"ok": True, "username": user.username, "host": host, "source": "browser"})
-    # Cookies for SPA → /whoami
-    secure = request.is_secure()
-    resp.set_cookie("mavops_username", user.username, samesite="Lax", secure=secure, httponly=False)
-    resp.set_cookie("mavops_host", host, samesite="Lax", secure=secure, httponly=False)
+    secure = request.is_secure()  # set True in prod behind HTTPS/Proxy
+
+    # Preferred: single signed cookie
+    resp.set_cookie(
+        COOKIE_BUNDLE,
+        signed,
+        max_age=60 * 60 * 24 * 14,  # 14 days
+        samesite="Lax",
+        secure=secure,
+        httponly=False,  # readable by SPA (so /whoami can trust it after verify)
+        path="/",
+    )
+
+    # Legacy cookies (kept for transition / fallback)
+    resp.set_cookie(COOKIE_USER_KEY, user.username, samesite="Lax", secure=secure, httponly=False, path="/")
+    resp.set_cookie(COOKIE_HOST_KEY, host,           samesite="Lax", secure=secure, httponly=False, path="/")
+
+    return resp
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def auth_login(request):
+    """
+    JSON login endpoint for SPA frontend.
+    """
+    data = request.data or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+
+    if not username or not password:
+        return Response(
+            {"ok": False, "error": "Username and password required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user = authenticate(request, username=username, password=password)
+    if not user:
+        return Response(
+            {"ok": False, "error": "Invalid credentials."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
+
+    resp = Response(
+        {
+            "ok": True,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email or "",
+            },
+        }
+    )
+    resp.set_cookie("mavops_username", user.username, samesite="Lax")
+    return resp
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def auth_logout(request):
+    """
+    JSON logout endpoint for SPA frontend.
+    """
+    django_logout(request)
+    resp = Response({"ok": True})
+    resp.delete_cookie("mavops_username")
+    return resp
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def auth_signup(request):
+    """
+    JSON signup endpoint (no email verification required).
+    """
+    data = request.data or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    email = (data.get("email") or "").strip()
+
+    errors = {}
+    if not username:
+        errors["username"] = "Username is required."
+    if not password or len(password) < 6:
+        errors["password"] = "Password must be at least 6 characters."
+
+    if errors:
+        return Response({"ok": False, "errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    if User.objects.filter(username__iexact=username).exists():
+        return Response(
+            {"ok": False, "errors": {"username": "Username already taken."}},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user = User.objects.create_user(username=username, email=email or None, password=password)
+    perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
+
+    resp = Response(
+        {
+            "ok": True,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email or "",
+            },
+        }
+    )
+    resp.set_cookie("mavops_username", user.username, samesite="Lax")
     return resp

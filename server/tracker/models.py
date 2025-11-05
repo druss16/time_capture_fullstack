@@ -3,7 +3,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.contrib.auth.models import Group
 import hashlib
-
+import secrets  # ✅ add this import
 
 # ===========================
 # ======  RAW EVENTS  =======
@@ -67,6 +67,42 @@ class AgentControl(models.Model):
         state = "STOP" if self.stop else "OK"
         return f"{state} {self.user.username}@{self.host}"
 
+class AgentDevice(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_devices")
+    device_id = models.CharField(max_length=64, db_index=True)  # from agent (uuid)
+    hostname = models.CharField(max_length=128, blank=True, default="")
+    platform = models.CharField(max_length=128, blank=True, default="")
+    app_version = models.CharField(max_length=32, blank=True, default="")
+    # Store token hashed if you prefer; plain for dev simplicity:
+    api_key = models.CharField(max_length=64, unique=True, db_index=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    def rotate_key(self):
+        self.api_key = secrets.token_hex(16)
+        self.save(update_fields=["api_key"])
+
+class AgentPairCode(models.Model):
+    """Short-lived code a signed-in user generates, consumed by the agent once."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="pair_codes")
+    code = models.CharField(max_length=8, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    @classmethod
+    def issue(cls, user, ttl_seconds=600):
+        code = secrets.token_hex(3).upper()  # 6 hex chars
+        return cls.objects.create(
+            user=user,
+            code=code,
+            expires_at=timezone.now() + timezone.timedelta(seconds=ttl_seconds),
+        )
+
+    def consume(self):
+        self.consumed_at = timezone.now()
+        self.save(update_fields=["consumed_at"])
 
 # ===========================
 # ======  CORE MODELS  ======

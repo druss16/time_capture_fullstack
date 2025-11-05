@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-Mac Activity Agent with:
-- PID file + CLI (start|stop|status)
-- Admin kill-switch via /api/agent/control/?user=&host=
-- One-time "hello" handshake to auto-provision user in Django (/api/agents/hello/)
-- Identity headers on every POST (X-Agent-User, X-Agent-Host)
-- Context bus for structured hints
+Mac Activity Agent with device pairing:
+
+- One-time "pair" to exchange a short code for a persistent device api_key
+- Authorization: DeviceKey <api_key> on every POST/GET
+- /api/agents/hello2/ heartbeat auto-provisions user/device
+- PID file + context bus + admin kill-switch
 """
 
 import os
@@ -38,6 +38,14 @@ def load_config():
             print(f"[WARN] Failed to load {CONFIG_FILE}: {e}")
     return {}
 
+def save_config(cfg: dict):
+    try:
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] Failed to save {CONFIG_FILE}: {e}")
+
 config = load_config()
 
 # Tunables (config then env then defaults)
@@ -46,8 +54,21 @@ def _get(name, default=None, env=None):
     if env and os.getenv(env) is not None: return os.getenv(env)
     return default
 
-POST_URL          = _get("api_url", os.getenv("AGENT_POST_URL")) or "http://localhost:7123/api/raw-events/"
-API_KEY           = _get("api_key", os.getenv("AGENT_API_KEY"))
+# Core API base (dev default -> localhost)
+API_BASE = (_get("api_base", os.getenv("AGENT_API_BASE")) or "http://localhost:7123/api").rstrip("/")
+
+# Derived endpoints (can be overridden in config if you want)
+POST_URL    = _get("post_url", None) or f"{API_BASE}/raw-events/"
+HELLO_URL   = _get("hello_url", None) or f"{API_BASE}/agents/hello2/"
+CONTROL_URL = _get("control_url", None) or f"{API_BASE}/agent/control/"
+PAIR_CLAIM  = _get("pair_claim_url", None) or f"{API_BASE}/agents/pair/claim/"
+
+# Auth/device settings
+API_KEY           = _get("api_key", os.getenv("AGENT_API_KEY"))  # stored after pairing
+APP_VERSION       = _get("app_version", os.getenv("AGENT_APP_VERSION")) or "1.0.0"
+DEVICE_ID_FILE    = _get("device_id_file", os.path.expanduser("~/.mavops_device_id"))
+
+# Runtime tunables
 POLL_SECONDS      = int(_get("poll_seconds", _get("AGENT_POLL_SECONDS", 5, "AGENT_POLL_SECONDS")) or 5)
 MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS", 15, "AGENT_MIN_DWELL_SECONDS")) or 15)
 VERBOSE           = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
@@ -56,14 +77,10 @@ DISABLE_AX        = bool(_get("disable_ax", os.getenv("AGENT_DISABLE_AX") == "1"
 EXCLUDE_BUNDLES   = set(_get("exclude_bundles", os.getenv("AGENT_EXCLUDE_BUNDLES", "").split(",")) or [])
 DB_PATH           = _get("db_path", os.getenv("MAC_AGENT_DB")) or DB_PATH_DEFAULT
 CONTEXT_PORT      = int(_get("context_port", os.getenv("AGENT_CONTEXT_PORT")) or 7321)
-
-# New: hello + control endpoints
-HELLO_URL         = _get("agent_hello_url", None) or "http://localhost:7123/api/agents/hello/"
-CONTROL_URL       = _get("agent_control_url", None) or "http://localhost:7123/api/agent/control/"
 CONTROL_POLL_S    = int(_get("agent_control_poll_seconds", 10))
 
-APP_VERSION     = _get("app_version", os.getenv("AGENT_APP_VERSION")) or "1.0.0"
-DEVICE_ID_FILE  = _get("device_id_file", os.path.expanduser("~/.mavops_device_id"))
+# Optional: preset pair_code for headless pairing (config/env)
+PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 
 # ---------------- Logging ----------------
 def log(msg: str):
@@ -314,28 +331,46 @@ def read_pid():
         return None
 
 # ---------------- Networking helpers ----------------
-def http_post_json(url: str, payload: dict, headers: dict, timeout=5):
-    import urllib.request
-    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
+def api_headers(user: str, host: str) -> dict:
+    h = {
+        "Content-Type": "application/json",
+        "X-Agent-Host": host,
+        "X-Agent-Platform": platform.platform(),
+        "X-Agent-Version": APP_VERSION,
+    }
+    # (User header is optional once device key is used; keep for diagnostics.)
+    if user: h["X-Agent-User"] = user
+    key = config.get("api_key") or API_KEY
+    if key:
+        h["Authorization"] = f"DeviceKey {key}"
+    return h
+
+def http_post_json(url: str, payload: dict, headers: dict, timeout=6):
+    import urllib.request, urllib.error, json as _json
+    req = urllib.request.Request(url, data=_json.dumps(payload).encode("utf-8"), method="POST")
     for k,v in headers.items(): req.add_header(k, v)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
-def http_get_json(url: str, headers: dict, timeout=5) -> dict:
-    import urllib.request, urllib.error
+def http_get_json(url: str, headers: dict, timeout=6) -> dict:
+    import urllib.request, urllib.error, json as _json
     req = urllib.request.Request(url, method="GET")
     for k,v in headers.items(): req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
-            return json.loads(raw or b"{}")
+            return _json.loads(raw or b"{}")
     except urllib.error.HTTPError as e:
-        log(f"[CTRL] HTTP {e.code} from control")
+        body = ""
+        try: body = e.read().decode("utf-8", errors="ignore")
+        except: pass
+        log(f"[CTRL] HTTP {e.code} from control: {body[:200]}")
         return {}
     except Exception as e:
         log(f"[CTRL] get error: {e}")
         return {}
 
+# ---------------- Device identity ----------------
 def get_device_id() -> str:
     try:
         if os.path.exists(DEVICE_ID_FILE):
@@ -349,11 +384,9 @@ def get_device_id() -> str:
             f.write(did)
         return did
     except Exception:
-        # fall back to a transient id if the file write fails
         return str(uuid.uuid4())
 
 def get_os_username() -> str:
-    # launchd contexts sometimes break os.getlogin(); try multiple sources
     for fn in (
         lambda: os.getlogin(),
         lambda: getpass.getuser(),
@@ -369,35 +402,92 @@ def get_os_username() -> str:
             pass
     return "unknown"
 
+# ---------------- Pairing ----------------
+_pair_lock = threading.Lock()
+
+def _claim_pair(code: str, hostname: str) -> Optional[str]:
+    payload = {
+        "code": code.strip().upper(),
+        "hostname": hostname,
+        "platform": "macOS",
+        "version": APP_VERSION,
+        "device_id": get_device_id(),
+    }
+    try:
+        raw = http_post_json(PAIR_CLAIM, payload, {"Content-Type": "application/json"})
+        data = json.loads(raw or b"{}")
+        key = data.get("api_key")
+        if key:
+            config["api_key"] = key
+            # clear one-off pair_code if present
+            if "pair_code" in config: del config["pair_code"]
+            save_config(config)
+            print("✅ Device paired; key saved.")
+            return key
+        else:
+            print("❌ Pair claim response missing api_key.")
+            return None
+    except Exception as e:
+        print(f"❌ Pair claim failed: {e}")
+        return None
+
+def ensure_api_key_interactive(hostname: str):
+    """Ensure we have an API key; prompt for code if running in a TTY and key missing."""
+    global API_KEY
+    key = config.get("api_key") or API_KEY
+    if key:
+        return key
+    # headless pre-provided code
+    if PAIR_CODE:
+        with _pair_lock:
+            key = _claim_pair(PAIR_CODE, hostname)
+            API_KEY = key
+            return key
+
+    # Interactive prompt (only if a real TTY)
+    if sys.stdin.isatty():
+        print("\n🧩 Enter pairing code from the web app to link this device:")
+        code = input("> ").strip()
+        if code:
+            with _pair_lock:
+                key = _claim_pair(code, hostname)
+                API_KEY = key
+                return key
+    print("⚠️ No api_key configured; set AGENT_API_KEY, or add 'pair_code' to config.json, or run interactively.")
+    return None
+
+def drop_api_key():
+    """Remove bad key so we can re-pair on next cycle."""
+    if "api_key" in config:
+        del config["api_key"]
+        save_config(config)
+    # keep global in sync
+    global API_KEY
+    API_KEY = None
+
 # ---------------- Handshake & control ----------------
 SERVER_USER_ID = None
 
 def hello(server_url: str, user: str, host: str, device_id: str):
+    """Hello using DeviceKey (no need to pass username if device is linked)."""
     global SERVER_USER_ID
-    headers = {
-        "Content-Type": "application/json",
-        "X-Agent-User": user,
-        "X-Agent-Host": host,
-        "X-Agent-Platform": platform.platform(),
-        "X-Agent-Version": APP_VERSION,
-    }
-    if API_KEY:
-        headers["Authorization"] = f"Bearer {API_KEY}"
-
+    headers = api_headers(user, host)
     payload = {
-        # JSON body fallback used by your agents_hello view
-        "user": user,
         "hostname": host,
         "app_version": APP_VERSION,
         "device_id": device_id,
+        # user is inferred from DeviceKey server-side; we also include a hint:
+        "os_username": user,
     }
     try:
         raw = http_post_json(server_url, payload, headers)
         data = json.loads(raw or b"{}")
         SERVER_USER_ID = data.get("user_id")
         log(f"[HELLO] Registered with server: user_id={SERVER_USER_ID}")
+        return True
     except Exception as e:
         log(f"[HELLO] failed: {e}")
+        return False
 
 _last_control_check = 0.0
 def should_stop(control_url: str, user: str, host: str) -> bool:
@@ -406,9 +496,8 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
     if now - _last_control_check < CONTROL_POLL_S:
         return False
     _last_control_check = now
-    qs = f"?user={user}&host={host}"
-    headers = {"Accept": "application/json", "X-Agent-User": user, "X-Agent-Host": host}
-    if API_KEY: headers["Authorization"] = f"Bearer {API_KEY}"
+    qs = f"?host={host}"  # user inferred by DeviceKey; host still distinguishes per-machine control
+    headers = api_headers(user, host)
     data = http_get_json(control_url + qs, headers)
     stop = bool(data.get("stop"))
     if stop:
@@ -416,24 +505,27 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
     return stop
 
 # ---------------- Posting ----------------
-def post_event_async(event: dict):
+def post_event_async(event: dict, user: str, host: str):
     if not POST_URL:
         return
     def _run():
+        import urllib.request, urllib.error, json as _json
+        headers = api_headers(user, host)
         try:
-            import urllib.request
-            req = urllib.request.Request(POST_URL, data=json.dumps(event).encode("utf-8"), method="POST")
-            req.add_header("Content-Type", "application/json")
-            # Identity headers
-            req.add_header("X-Agent-User", event.get("user", "unknown"))
-            req.add_header("X-Agent-Host", event.get("hostname", "unknown"))
-            req.add_header("X-Agent-Platform", platform.platform())
-            req.add_header("X-Agent-Version", APP_VERSION)
-            if API_KEY:
-                req.add_header("Authorization", f"Bearer {API_KEY}")
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            req = urllib.request.Request(POST_URL, data=_json.dumps(event).encode("utf-8"), method="POST")
+            for k, v in headers.items(): req.add_header(k, v)
+            with urllib.request.urlopen(req, timeout=6) as resp:
                 _ = resp.read()
             log(f"[POSTED] {POST_URL}")
+        except urllib.error.HTTPError as e:
+            body = ""
+            try: body = e.read().decode("utf-8", errors="ignore")
+            except: pass
+            log(f"[POST ERROR] HTTP {e.code}: {body[:200]}")
+            # If unauthorized, drop key to trigger re-pair on next loop
+            if e.code in (401, 403):
+                log("[AUTH] Device key rejected — will re-pair.")
+                drop_api_key()
         except Exception as e:
             log(f"[POST ERROR] {e}")
     threading.Thread(target=_run, daemon=True).start()
@@ -456,13 +548,13 @@ def write_event(conn, cur, user: str, hostname: str, sig):
         "window_title": title or "",
         "url": url,
         "file_path": fpath,
-        "user": user,
         "hostname": hostname,
-        "server_user_id": SERVER_USER_ID,   # handy for backend mapping
-        "device_id": get_device_id(),  # include stable device id with each event
+        "server_user_id": SERVER_USER_ID,
+        "device_id": get_device_id(),
         "ctx": snapshot_ctx(),
     }
-    post_event_async(payload)
+    # (No 'user' field needed anymore; backend ties DeviceKey → user)
+    post_event_async(payload, user, hostname)
     log(f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
 
 # ---------------- Main loop ----------------
@@ -479,7 +571,8 @@ def run_agent():
     else: log(f"CONFIG={CONFIG_FILE} (not found, using ENV)")
 
     log(f"DB_PATH={DB_PATH}")
-    log(f"POST_URL={POST_URL or '(disabled)'}")
+    log(f"API_BASE={API_BASE}")
+    log(f"POST_URL={POST_URL}")
     log(f"HELLO_URL={HELLO_URL}")
     log(f"CONTROL_URL={CONTROL_URL} (poll {CONTROL_POLL_S}s)")
     log(f"AX_AVAILABLE={AX_AVAILABLE}")
@@ -488,15 +581,32 @@ def run_agent():
 
     conn = ensure_db()
     cur = conn.cursor()
-    user = get_os_username()
+    os_user = get_os_username()
     hostname = platform.node()
     device_id = get_device_id()
 
     # PID file
     write_pid()
 
-    # Server handshake (auto-provision user)
-    hello(HELLO_URL, user, hostname, device_id)
+    # Ensure we have a device key (pair if needed)
+    key = config.get("api_key") or API_KEY
+    if not key:
+        key = ensure_api_key_interactive(hostname)
+        if not key:
+            print("Exiting: no device key configured.")
+            remove_pid()
+            return
+
+    # Hello (with key)
+    if not hello(HELLO_URL, os_user, hostname, device_id):
+        # If hello failed due to auth, drop key and try pairing once
+        log("[HELLO] Attempting re-pair after hello failure.")
+        drop_api_key()
+        key = ensure_api_key_interactive(hostname)
+        if not key or not hello(HELLO_URL, os_user, hostname, device_id):
+            print("Exiting: hello failed.")
+            remove_pid()
+            return
 
     current_sig = None
     dwell_start = None
@@ -504,7 +614,7 @@ def run_agent():
     try:
         while True:
             # admin kill-switch
-            if should_stop(CONTROL_URL, user, hostname):
+            if should_stop(CONTROL_URL, os_user, hostname):
                 log("[CTRL] Stopping agent per admin request.")
                 break
 
@@ -524,7 +634,7 @@ def run_agent():
                 if current_sig and dwell_start:
                     dwell = time.time() - dwell_start
                     if dwell >= MIN_DWELL_SECONDS:
-                        write_event(conn, cur, user, hostname, current_sig)
+                        write_event(conn, cur, os_user, hostname, current_sig)
                 current_sig = None
                 dwell_start = None
                 time.sleep(POLL_SECONDS)
@@ -542,7 +652,7 @@ def run_agent():
                 if current_sig and dwell_start:
                     dwell = time.time() - dwell_start
                     if dwell >= MIN_DWELL_SECONDS:
-                        write_event(conn, cur, user, hostname, current_sig)
+                        write_event(conn, cur, os_user, hostname, current_sig)
                     else:
                         log(f"[SKIP] dwell too short ({int(dwell)}s) for {current_sig[0]}")
                 current_sig = sig
@@ -559,7 +669,7 @@ def run_agent():
         if current_sig and dwell_start:
             dwell = time.time() - dwell_start
             if dwell >= MIN_DWELL_SECONDS:
-                write_event(conn, cur, user, hostname, current_sig)
+                write_event(conn, cur, os_user, hostname, current_sig)
     finally:
         remove_pid()
 
@@ -599,10 +709,8 @@ def main():
         if sub in ("status",):
             return cmd_status()
         if sub in ("start", "run"):
-            # start in foreground
             return run_agent()
         if sub in ("start-bg", "daemon"):
-            # background
             if read_pid():
                 print("Already running. Use `main.py status`.")
                 return
@@ -610,13 +718,11 @@ def main():
             if pid > 0:
                 print("Started agent in background.")
                 return
-            # child
             os.setsid()
             run_agent()
             return
         print("Usage: main.py [start|start-bg|stop|status]")
         return
-    # default: foreground start
     run_agent()
 
 if __name__ == "__main__":

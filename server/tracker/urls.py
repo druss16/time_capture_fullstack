@@ -46,10 +46,19 @@ urlpatterns = [
     path("agents/hello/", views.agents_hello, name="agents_hello"),
     path("browser/hello/", views.browser_hello),
 
+    path("get-csrf/", views.get_csrf),
+
 
     # -------------------------------
     # Agent Control (Admin Kill-Switch)
     # -------------------------------
+    # web (must be logged-in in browser)
+    path("pair/start/", views.pair_start),
+    path("devices/", views.my_devices),
+    path("devices/<int:pk>/revoke/", views.revoke_device),
+
+    # agent pairing
+    path("pair/complete/", views.pair_complete),
     path("agent/control/", views.agent_control, name="agent_control"),
     path("whoami/", views.whoami, name="whoami"),
 ]

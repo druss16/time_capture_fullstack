@@ -1,41 +1,40 @@
 // src/pages/Login.tsx
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { API_ENDPOINTS, API_BASE, safeFetchJson } from "@/lib/api";
-
-async function primeCsrf() {
-  try {
-    await fetch(API_ENDPOINTS.getCsrf, { credentials: "include" });
-  } catch {
-    /* ignore */
-  }
-}
+import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
+import { primeCsrf } from "@/lib/csrf";
+import { useAuth } from "@/auth/AuthProvider";
 
 export default function Login() {
   const nav = useNavigate();
   const loc = useLocation();
   const params = new URLSearchParams(loc.search);
-  const next = params.get("next") || "/";
+  const next = params.get("next") || "/daily";
+  const { refreshWhoAmI } = useAuth();
 
   const [form, setForm] = useState({ username: "", password: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showPw, setShowPw] = useState(false);
 
-  // If already logged in, hop to next
+  // If already logged in, hop to next; otherwise prime CSRF cookie
   useEffect(() => {
+    let alive = true;
     (async () => {
       try {
-        const j = await safeFetchJson<{ username?: string }>(API_ENDPOINTS.whoami);
-        if (j?.username) {
+        const j = await safeFetchJson<{ is_authenticated?: boolean }>(API_ENDPOINTS.whoami, {
+          credentials: "include",
+        });
+        if (alive && j?.is_authenticated === true) {
           nav(next, { replace: true });
           return;
         }
       } catch {
-        // not logged in
+        /* not logged in / server warming up */
       }
-      await primeCsrf();
+      try { await primeCsrf(); } catch {}
     })();
+    return () => { alive = false; };
   }, [nav, next]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -44,30 +43,21 @@ export default function Login() {
     setErr(null);
 
     try {
+      // Ensure csrftoken is set
+      try { await primeCsrf(); } catch {}
+
       // Attempt login
       const res = await safeFetchJson<{ ok: boolean; error?: string }>(API_ENDPOINTS.authLogin, {
         method: "POST",
+        credentials: "include",
         body: JSON.stringify(form),
       });
-
       if (!res?.ok) throw new Error(res?.error || "Login failed");
 
-      // ✅ NEW: register browser identity with backend
-      try {
-        await fetch(`${API_BASE}/browser/hello/`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: form.username,
-            host: window.location.hostname,
-          }),
-        });
-      } catch (err) {
-        console.warn("browser hello failed", err);
-      }
+      // Refresh whoami so protected routes see the session immediately
+      try { await refreshWhoAmI(); } catch {}
 
-      // Redirect after both succeed
+      // Redirect
       nav(next, { replace: true });
     } catch (e: any) {
       setErr(e?.message || "Login failed");

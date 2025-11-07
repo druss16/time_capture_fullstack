@@ -25,6 +25,8 @@ TASK_CATEGORIES = [
     "Meetings/Calls",
     "Planning",
     "Admin/Other",
+    "Idle/Uncategorized",   # ← add this
+
 ]
 
 def _norm(s: Optional[str]) -> str:
@@ -82,72 +84,118 @@ def match_task_patterns(sig: Dict[str, str]) -> Tuple[Optional[str], float, str]
 # ---------------------------------------
 # LLM fallback (defensive, no schema arg)
 # ---------------------------------------
-def _safe_openai_classify(prompt: str) -> dict:
+# tracker/services/classify_block.py
+
+def _safe_openai_classify(prompt: str, *, timeout_s: float = 8.0, max_retries: int = 2) -> dict:
     """
-    Minimal, defensive OpenAI call. No response_format kwarg.
-    Works with openai>=1.50 (Responses API).
+    Minimal, defensive OpenAI call with strict timeouts + tiny retries.
+    Keeps output small to avoid long generations (and timeouts).
     """
     try:
+        import time as _time
+        import httpx
         from openai import OpenAI
-        client = OpenAI(api_key=getattr(settings, "OPENAI_API_KEY", None), timeout=15)
 
-        resp = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt,
-            temperature=0
+        # Allow env to override without code changes
+        try:
+            timeout_s = float(getattr(settings, "OPENAI_TIMEOUT_SEC", None) or os.getenv("OPENAI_TIMEOUT_SEC") or timeout_s)
+        except Exception:
+            pass
+        try:
+            max_retries = int(getattr(settings, "OPENAI_MAX_RETRIES", None) or os.getenv("OPENAI_MAX_RETRIES") or max_retries)
+        except Exception:
+            pass
+
+        client = OpenAI(
+            api_key=getattr(settings, "OPENAI_API_KEY", None),
+            # httpx.Timeout(total) is NOT supported; set per-phase to avoid hangs
+            timeout=httpx.Timeout(connect=5.0, read=timeout_s, write=timeout_s, pool=5.0),
+            # We manage our own retry loop; disable SDK retries
+            max_retries=0,
         )
 
-        text = getattr(resp, "output_text", None)
-        if not text:
-            # Fallback: output -> content -> text -> value
+        last_err = None
+        for attempt in range(max_retries + 1):
             try:
-                parts = []
-                for item in getattr(resp, "output", []) or []:
-                    for c in getattr(item, "content", []) or []:
-                        v = getattr(getattr(c, "text", None), "value", None)
-                        if v:
-                            parts.append(v)
-                text = "\n".join(parts).strip()
-            except Exception:
-                text = ""
+                resp = client.responses.create(
+                    model="gpt-4.1-mini",     # small/fast model; keep it here
+                    input=prompt,
+                    temperature=0,
+                    # keep outputs compact so responses return quickly
+                    max_output_tokens=200,
+                )
 
-        data = {}
-        try:
-            data = json.loads(text)
-        except Exception:
-            try:
-                start, end = text.find("{"), text.rfind("}")
-                if start != -1 and end != -1 and end > start:
-                    data = json.loads(text[start:end+1])
-            except Exception:
+                # Prefer output_text, then manual extraction
+                text = getattr(resp, "output_text", None)
+                if not text:
+                    parts = []
+                    for item in getattr(resp, "output", []) or []:
+                        for c in getattr(item, "content", []) or []:
+                            v = getattr(getattr(c, "text", None), "value", None)
+                            if v:
+                                parts.append(v)
+                    text = "\n".join(parts).strip()
+
                 data = {}
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    try:
+                        start, end = text.find("{"), text.rfind("}")
+                        if start != -1 and end != -1 and end > start:
+                            data = json.loads(text[start:end+1])
+                    except Exception:
+                        data = {}
 
-        client_name = _norm(data.get("client_name"))
-        task_category = _norm(data.get("task_category"))
-        # enforce whitelist
-        if task_category not in TASK_CATEGORIES:
-            low = task_category.lower()
-            best = next((c for c in TASK_CATEGORIES if c.lower() in low or low in c.lower()), None)
-            task_category = best or "Admin/Other"
+                client_name = _norm(data.get("client_name"))
+                task_category = _norm(data.get("task_category"))
+                if task_category not in TASK_CATEGORIES:
+                    low = (task_category or "").lower()
+                    best = next((c for c in TASK_CATEGORIES if c.lower() in low or low in c.lower()), None)
+                    task_category = best or "Admin/Other"
 
+                return {
+                    "client_name": client_name or None,
+                    "task_category": task_category,
+                    "client_conf": float(data.get("client_conf", 0) or 0),
+                    "task_conf": float(data.get("task_conf", 0) or 0),
+                    "explanation": _norm(data.get("explanation")),
+                }
+
+            except Exception as e:
+                last_err = e
+                # Retry only on network/timeout-ish failures
+                etxt = str(e)
+                retryable = (
+                    isinstance(e, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout)) or
+                    "ReadTimeout" in etxt or "ConnectTimeout" in etxt or "WriteTimeout" in etxt or
+                    "Timed out" in etxt
+                )
+                if attempt < max_retries and retryable:
+                    _time.sleep(0.25 * (2 ** attempt))  # tiny exponential backoff
+                    continue
+                # Fallthrough → break and default
+                break
+
+        # If we’re here, the call failed; record & return a safe default
+        capture_exception(last_err)
         return {
-            "client_name": client_name or None,
-            "task_category": task_category,
-            "client_conf": float(data.get("client_conf", 0) or 0),
-            "task_conf": float(data.get("task_conf", 0) or 0),
-            "explanation": _norm(data.get("explanation")),
+            "client_name": None,
+            "task_category": "Admin/Other",
+            "client_conf": 0.0,
+            "task_conf": 0.0,
+            "explanation": "LLM call/parse failed or timed out",
         }
 
     except Exception as e:
         capture_exception(e)
         return {
             "client_name": None,
-            "task_category": None,
+            "task_category": "Admin/Other",
             "client_conf": 0.0,
             "task_conf": 0.0,
-            "explanation": "LLM call/parse failed",
+            "explanation": "LLM setup error",
         }
-
 def ask_llm_for_classification(sig: Dict[str, str], known_clients=None) -> Dict[str, str]:
     prompt = f"""
 You are a classifier for CPA time tracking. Return STRICT JSON with keys:
@@ -192,6 +240,24 @@ def classify_block(block: Block) -> Block:
         "ctx": getattr(block, "hints", {}) or {},
         "hostname": getattr(block, "hostname", "") or "",
     }
+
+    # --- IDLE FAST PATH ---
+    # Your agent emits Idle rows with bundle_id="__idle__" and title="Uncategorized - Idle".
+    if (getattr(block, "bundle_id", "") == "__idle__"
+        or getattr(block, "app_name", "") == "Idle"
+        or getattr(block, "window_title", "") == "Uncategorized - Idle"):
+        block.ai_extracted_client = None
+        block.ai_category = "Uncategorized - Idle"
+        block.ai_confidence = 1.0
+        block.ai_processed_at = timezone.now()
+        # Do NOT attach a client; this is intentionally uncategorized/idle
+        block.save(update_fields=[
+            "ai_extracted_client",
+            "ai_category",
+            "ai_confidence",
+            "ai_processed_at",
+        ])
+        return block
 
     # 1) Patterns
     client_guess, c_score, c_src = match_client_patterns(sig)

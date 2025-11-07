@@ -24,6 +24,17 @@ import getpass
 from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 
+from Quartz import (
+    CGWindowListCopyWindowInfo,
+    kCGWindowListOptionOnScreenOnly,
+    kCGWindowListOptionOnScreenAboveWindow,
+    kCGNullWindowID,
+    # NEW:
+    CGEventSourceSecondsSinceLastEventType,
+    kCGEventSourceStateCombinedSessionState,
+    kCGEventMouseMoved,
+)
+
 # ---------------- Config ----------------
 CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
 PID_FILE    = os.path.expanduser("~/Library/ActivityAgent/agent.pid")
@@ -81,6 +92,14 @@ CONTROL_POLL_S    = int(_get("agent_control_poll_seconds", 10))
 
 # Optional: preset pair_code for headless pairing (config/env)
 PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
+
+# Runtime tunables
+POLL_SECONDS      = int(_get("poll_seconds", _get("AGENT_POLL_SECONDS", 5, "AGENT_POLL_SECONDS")) or 5)
+MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS", 15, "AGENT_MIN_DWELL_SECONDS")) or 15)
+# NEW: mouse idle threshold (seconds) before pausing tracking
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 20))
+
+IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 
 # ---------------- Logging ----------------
 def log(msg: str):
@@ -179,6 +198,21 @@ def osa_retry(script: str, tries: int = 2, delay: float = 0.15) -> str:
             return out
         time.sleep(delay)
     return ""
+
+# ------------- Mouse Idle --------------
+def mouse_idle_seconds() -> float:
+    """
+    Returns seconds since the last mouse move at the session level.
+    Uses Quartz CGEventSourceSecondsSinceLastEventType.
+    """
+    try:
+        return float(CGEventSourceSecondsSinceLastEventType(
+            kCGEventSourceStateCombinedSessionState,
+            kCGEventMouseMoved
+        ))
+    except Exception:
+        # If Quartz errors for any reason, pretend there is no idle time.
+        return 0.0
 
 # Frontmost via System Events
 def get_frontmost_via_system_events() -> Optional[Tuple[str, int]]:
@@ -337,12 +371,8 @@ def api_headers(user: str, host: str) -> dict:
         "X-Agent-Host": host,
         "X-Agent-Platform": platform.platform(),
         "X-Agent-Version": APP_VERSION,
+        "Authorization": f"DeviceKey {config.get('api_key') or API_KEY}"
     }
-    # (User header is optional once device key is used; keep for diagnostics.)
-    if user: h["X-Agent-User"] = user
-    key = config.get("api_key") or API_KEY
-    if key:
-        h["Authorization"] = f"DeviceKey {key}"
     return h
 
 def http_post_json(url: str, payload: dict, headers: dict, timeout=6):
@@ -530,19 +560,26 @@ def post_event_async(event: dict, user: str, host: str):
             log(f"[POST ERROR] {e}")
     threading.Thread(target=_run, daemon=True).start()
 
-def write_event(conn, cur, user: str, hostname: str, sig):
+# change signature
+def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | None = None):
     app_name, bundle_id, title, url, fpath = sig
-    ts = datetime.now(timezone.utc).isoformat()
+
+    # use override if provided, otherwise now()
+    if ts_override is not None:
+        ts_dt = datetime.fromtimestamp(ts_override, tz=timezone.utc)
+    else:
+        ts_dt = datetime.now(timezone.utc)
+    ts_iso = ts_dt.isoformat()
 
     cur.execute(
         "INSERT INTO raw_events (ts_utc, app_name, bundle_id, window_title, url, file_path, user, hostname) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (ts, app_name, bundle_id, title or "", url, fpath, user, hostname),
+        (ts_iso, app_name, bundle_id, title or "", url, fpath, user, hostname),
     )
     conn.commit()
 
     payload = {
-        "ts_utc": ts,
+        "ts_utc": ts_iso,
         "app_name": app_name,
         "bundle_id": bundle_id,
         "window_title": title or "",
@@ -553,10 +590,8 @@ def write_event(conn, cur, user: str, hostname: str, sig):
         "device_id": get_device_id(),
         "ctx": snapshot_ctx(),
     }
-    # (No 'user' field needed anymore; backend ties DeviceKey → user)
     post_event_async(payload, user, hostname)
-    log(f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
-
+    log(f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} at {ts_iso}")
 # ---------------- Main loop ----------------
 def run_agent():
     try:
@@ -610,6 +645,7 @@ def run_agent():
 
     current_sig = None
     dwell_start = None
+    paused = False  # NEW
 
     try:
         while True:
@@ -618,6 +654,49 @@ def run_agent():
                 log("[CTRL] Stopping agent per admin request.")
                 break
 
+            # --- NEW: mouse idle pause ---
+            # --- NEW: idle → record as its own dwell ("Uncategorized - Idle") ---
+            idle = mouse_idle_seconds()
+
+            if idle >= MOUSE_IDLE_PAUSE_S:
+                # If we're not already in an idle dwell, transition INTO idle now.
+                if current_sig != IDLE_SIG:
+                    # Finalize the active dwell up to the moment idle crossed the threshold,
+                    # so we don't over-count active time during idle.
+                    if current_sig and dwell_start:
+                        now = time.time()
+                        effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                        dwell = effective_end - dwell_start
+                        if dwell >= MIN_DWELL_SECONDS:
+                            write_event(conn, cur, os_user, hostname, current_sig)
+                        else:
+                            log(f"[SKIP] dwell too short ({int(dwell)}s) before idle for {current_sig[0]}")
+
+                    # Start an idle dwell beginning at the threshold boundary
+                    # (we approximate by starting now; most workflows don't need backdating)
+                    current_sig = IDLE_SIG
+                    dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)  # small nudge so idle has length
+                    log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
+                
+                # Remain in idle; do not attempt normal frontmost tracking until mouse moves again
+                time.sleep(POLL_SECONDS)
+                
+            else:
+                # Mouse moved. If we WERE in idle, finalize the idle dwell.
+                if current_sig == IDLE_SIG and dwell_start:
+                    dwell = time.time() - dwell_start
+                    if dwell >= MIN_DWELL_SECONDS:
+                        write_event(conn, cur, os_user, hostname, current_sig)
+                        log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
+                    else:
+                        log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
+                    # Clear and let normal tracking pick up the real frontmost app.
+                    current_sig = None
+                    dwell_start = None
+            # --- end idle-as-dwell logic ---
+            # --- end new pause logic ---
+
+            # (your existing logic continues below unchanged)
             front = get_frontmost_app()
             if not front:
                 if PRINT_EVERY_POLL:

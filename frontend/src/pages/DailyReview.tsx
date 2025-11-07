@@ -3,16 +3,32 @@
  * - Buckets blocks into Client → Project with category rollups
  * - Uses AI if available; falls back to rule-based, then heuristics
  * - Saves classifications (chunked), learns from user corrections
- * - Shows overlap-inflation banner when raw sum >> time span
+ * - Compacts overlapping time (overall + per-bucket) like TimecardSummary
+ * - Treats idle as first-class: "Uncategorized - Idle" (excluded from review stats)
+ * - Matches TimecardSummary's date/user scoping to keep totals in sync
+ * - CSRF-safe POSTs with retry-after-prime
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { Clock, User, RefreshCw, Download, FileText, Send, BarChart3, CheckCircle2, AlertCircle } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import {
+  Clock,
+  User,
+  RefreshCw,
+  Download,
+  FileText,
+  Send,
+  BarChart3,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 import { Header } from "@/components/common/Header";
 import { DESIGN_SYSTEM } from "@/lib/design-system";
 import { BlockDto } from "@/types";
-import { downloadTodayCsv, fetchBlocksToday } from "@/api/blocks";
 import BlockCard from "@/components/BlockCard";
+import { FilterBar, ErrorBanner } from "@/components/timecard";
+import { todayIso } from "@/lib/utils/date";
+import { getCookie, primeCsrf } from "@/lib/csrf";
+import { useWhoAmI } from "@/lib/useWhoAmI"; // ← page-level hook use only
 
 // Normalize API base so it always ends with /api
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -44,16 +60,13 @@ function titleCase(s?: string | null) {
   if (!s) return s ?? null;
   return s.trim().toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
 }
-
 function safeNum(n: any, d = 0) {
   const x = Number(n);
   return Number.isFinite(x) ? x : d;
 }
-
 function minutesToHours(mins: number) {
   return (mins / 60).toFixed(2);
 }
-
 function cleanName(v?: string | null) {
   if (!v) return null;
   const t = String(v).trim();
@@ -62,7 +75,6 @@ function cleanName(v?: string | null) {
   if (BAD.has(t.toLowerCase())) return null;
   return t.slice(0, 120);
 }
-
 function cleanCategories(obj: Record<string, any> | undefined | null) {
   const out: Record<string, number> = {};
   if (!obj) return out;
@@ -72,31 +84,6 @@ function cleanCategories(obj: Record<string, any> | undefined | null) {
     if (Number.isFinite(f) && f >= 0) out[String(k).trim()] = f;
   }
   return out;
-}
-
-async function classifyBlock(
-  id: number,
-  payload: { client?: string | null; project?: string | null; categories?: Record<string, number> }
-) {
-  const client = cleanName(payload.client ?? null);
-  const project = cleanName(payload.project ?? null);
-  const categories = cleanCategories(payload.categories || {});
-  if (!client && !project && Object.keys(categories).length === 0) return; // no-op
-
-  const res = await fetch(`${API_BASE}/blocks/${id}/classify/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client, project, categories }),
-  });
-  if (!res.ok) {
-    let detail = "";
-    try {
-      detail = JSON.stringify(await res.json());
-    } catch {
-      detail = await res.text();
-    }
-    console.warn(`[classifyBlock] ${id} -> ${res.status} ${res.statusText} :: ${detail}`);
-  }
 }
 
 async function fetchWithTimeout(url: string, opts: RequestInit & { timeoutMs?: number } = {}) {
@@ -111,6 +98,31 @@ async function fetchWithTimeout(url: string, opts: RequestInit & { timeoutMs?: n
   }
 }
 
+// Centralized CSRF-safe POST helper with one retry after priming on 403
+async function postJson(url: string, data: any, { timeoutMs = 15000 } = {}) {
+  const doPost = async () => {
+    const csrftoken = getCookie("csrftoken");
+    return fetchWithTimeout(url, {
+      method: "POST",
+      credentials: "include",
+      timeoutMs,
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": csrftoken || "",
+        "X-Requested-With": "XMLHttpRequest",
+      } as any,
+      body: JSON.stringify(data),
+    });
+  };
+
+  let res = await doPost();
+  if (res.status === 403) {
+    try { await primeCsrf(API_BASE); } catch {}
+    res = await doPost();
+  }
+  return res;
+}
+
 // Sanitize categories to floats in HOURS (accepts "1.25", "1.25h", 1.25)
 function sanitizeCategories(cats: Record<string, any> | undefined | null) {
   const out: Record<string, number> = {};
@@ -122,6 +134,27 @@ function sanitizeCategories(cats: Record<string, any> | undefined | null) {
     if (Number.isFinite(num) && num >= 0) out[k] = num;
   }
   return out;
+}
+
+async function classifyBlock(
+  id: number,
+  payload: { client?: string | null; project?: string | null; categories?: Record<string, number> }
+) {
+  const client = cleanName(payload.client ?? null);
+  const project = cleanName(payload.project ?? null);
+  const categories = cleanCategories(payload.categories || {});
+  if (!client && !project && Object.keys(categories).length === 0) return; // no-op
+
+  const res = await postJson(`${API_BASE}/blocks/${id}/classify/`, { client, project, categories });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = JSON.stringify(await res.json());
+    } catch {
+      detail = await res.text();
+    }
+    console.warn(`[classifyBlock] ${id} -> ${res.status} ${res.statusText} :: ${detail}`);
+  }
 }
 
 async function bulkClassify(blocks: LabeledBlock[], chunkSize = 12) {
@@ -146,8 +179,26 @@ async function bulkClassify(blocks: LabeledBlock[], chunkSize = 12) {
   }
 }
 
-// Lightweight heuristic when AI isn't available
+// ---------- Idle helpers ----------
+function isIdle(b: BlockDto) {
+  const t = (b.window_title || (b as any).title || "").trim();
+  return (b as any).bundle_id === "__idle__" || (b as any).app_name === "Idle" || t === "Uncategorized - Idle";
+}
+
+// Lightweight heuristic when AI isn't available (idle-aware)
 function heuristicSuggest(block: BlockDto) {
+  if (isIdle(block)) {
+    const hours = safeNum(block.minutes ?? 0) / 60;
+    return {
+      client: null,
+      project: null,
+      categories: { "Uncategorized - Idle": hours },
+      confidence: 1.0,
+      needs_review: false,
+      reasoning: "Idle time (mouse/keyboard inactivity).",
+    };
+  }
+
   const u = block.url || "";
   const h = (block as any).hints || {};
   const host = (() => {
@@ -158,7 +209,6 @@ function heuristicSuggest(block: BlockDto) {
     }
   })();
 
-  // Try browser-origin → repo → workspace → jira/github → hostname
   let client: string | null =
     (h.browser_origin?.replace(/^https?:\/\//, "").replace(/^www\./, "") as string | undefined) ||
     host ||
@@ -171,7 +221,6 @@ function heuristicSuggest(block: BlockDto) {
     (h.repo_root ? String(h.repo_root).split("/").slice(-1)[0] : null) ||
     null;
 
-  // Default category guess (HOURS)
   const hours = safeNum(block.minutes ?? 0) / 60;
   const categories: Record<string, number> = {};
   if (host?.includes("mail.google.com")) categories["Email"] = hours;
@@ -189,30 +238,109 @@ function heuristicSuggest(block: BlockDto) {
   };
 }
 
+// ---- time compaction helpers (minutes, no double-counting) ----
+type WithSpan = { start?: string | Date; end?: string | Date };
+function toEpoch(d?: string | Date) {
+  if (!d) return NaN;
+  try {
+    return typeof d === "string" ? new Date(d).getTime() : (d as Date).getTime();
+  } catch {
+    return NaN;
+  }
+}
+/** Returns union duration in **minutes** across all [start,end) intervals */
+function unionMinutes(spans: WithSpan[]): number {
+  const ranges = spans
+    .map((s) => [toEpoch(s.start), toEpoch(s.end)] as const)
+    .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && a < b)
+    .sort((A, B) => A[0] - B[0]);
+
+  let totalMs = 0;
+  let curStart = -1,
+    curEnd = -1;
+
+  for (const [s, e] of ranges) {
+    if (curStart < 0) {
+      curStart = s;
+      curEnd = e;
+      continue;
+    }
+    if (s <= curEnd) {
+      if (e > curEnd) curEnd = e; // extend
+    } else {
+      totalMs += curEnd - curStart;
+      curStart = s;
+      curEnd = e;
+    }
+  }
+  if (curStart >= 0) totalMs += curEnd - curStart;
+  return totalMs / 60000;
+}
+
+// Merge adjacent blocks that have identical (client, project, categories signature) and ≤ maxGap minutes gap
+function catSig(cats?: Record<string, number>) {
+  const entries = Object.entries(cats || {}).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(entries);
+}
+function compactBlocks(items: LabeledBlock[], maxGapMin = 2): LabeledBlock[] {
+  if (!items?.length) return items || [];
+  const sorted = [...items].sort((a, b) => +new Date(a.start as any) - +new Date(b.start as any));
+  const out: LabeledBlock[] = [];
+  for (const cur of sorted) {
+    const last = out[out.length - 1];
+    if (
+      last &&
+      (last.client_name || null) === (cur.client_name || null) &&
+      (last.project_name || null) === (cur.project_name || null) &&
+      catSig(last.categories) === catSig(cur.categories)
+    ) {
+      const gapMin = (+new Date(cur.start as any) - +new Date(last.end as any)) / 60000;
+      if (gapMin <= maxGapMin) {
+        last.end = cur.end;
+        last.minutes = safeNum(last.minutes, 0) + safeNum(cur.minutes, 0);
+        continue;
+      }
+    }
+    out.push({ ...cur });
+  }
+  return out;
+}
+
+// ---------- API parity with TimecardSummary ----------
+type BlockMeta = { id: number; start: string; end: string; minutes?: number; client_name?: string | null; project_name?: string | null };
+async function fetchBlocksForDay(date: string, user: string) {
+  const url = new URL(`${API_BASE}/blocks/today/`);
+  url.searchParams.set("date", date);
+  if (user?.trim()) url.searchParams.set("user", user.trim());
+  const res = await fetch(url.toString(), { credentials: "include" });
+  return res.ok ? ((await res.json()) as BlockMeta[]) : [];
+}
+
 export default function DailyReview() {
+  // identity (page-level only)
+  const me = useWhoAmI();
+  const whoami = (me?.username || "").trim();
+
   const [blocks, setBlocks] = useState<LabeledBlock[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [autoClassifying, setAutoClassifying] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [whoami, setWhoami] = useState<string>("");
 
-  // Current user for timecard generation
+  const [user, setUser] = useState<string>("");
+  const [date, setDate] = useState<string>(todayIso());
+
+  // keep user in sync with whoami once it resolves
   useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch(`${API_BASE}/whoami/`, { credentials: "include" });
-        if (r.ok) {
-          const j = (await r.json()) as { username?: string };
-          if (j?.username) setWhoami(j.username);
-        }
-      } catch {
-        /* ignore */
-      }
-    })();
+    if (!user && whoami) setUser(whoami);
+  }, [whoami, user]);
+
+  // Prime CSRF on mount (so POSTs have a cookie to send)
+  useEffect(() => {
+    (async () => { try { await primeCsrf(API_BASE); } catch {} })();
   }, []);
 
-  // Core loader: ask server for suggestions (which compacts), then fetch blocks, merge, save best-effort
-  const load = async () => {
+  // Core loader: suggestions (AI/rules) → fetch day blocks (scoped) → merge → compact → save
+  const load = useCallback(async () => {
     setBusy(true);
     setErr(null);
     try {
@@ -221,27 +349,34 @@ export default function DailyReview() {
       // 1) Suggestions: AI → rule-based → []
       let ai: AISuggestion[] = [];
       try {
-        const r = await fetchWithTimeout(`${API_BASE}/blocks/suggestions/?timeout_ms=12000&limit=120`, {
-          timeoutMs: 13000,
-        });
+        const sUrl = new URL(`${API_BASE}/blocks/suggestions/`);
+        sUrl.searchParams.set("timeout_ms", "12000");
+        sUrl.searchParams.set("limit", "160");
+        sUrl.searchParams.set("date", date);
+        if (user.trim()) sUrl.searchParams.set("user", user.trim());
+
+        const r = await fetchWithTimeout(sUrl.toString(), { timeoutMs: 13000, credentials: "include" });
         if (r.ok) ai = await r.json();
         else throw new Error(`AI ${r.status}`);
       } catch {
         try {
-          const r2 = await fetchWithTimeout(`${API_BASE}/blocks/suggestions/rule-based/?limit=120`, {
-            timeoutMs: 6000,
-          });
+          const r2 = await fetchWithTimeout(
+            `${API_BASE}/blocks/suggestions/rule-based/?limit=160&date=${encodeURIComponent(date)}${
+              user.trim() ? `&user=${encodeURIComponent(user.trim())}` : ""
+            }`,
+            { timeoutMs: 6000, credentials: "include" }
+          );
           if (r2.ok) ai = await r2.json();
         } catch {
           ai = [];
         }
       }
 
-      // 2) Today's blocks (IDs should match what the server just compacted)
-      const rawBlocks = await fetchBlocksToday();
+      // 2) Day-scoped blocks (match Summary exactly)
+      const dayBlocks = await fetchBlocksForDay(date, user);
 
       // 3) Merge AI (or heuristics) onto blocks
-      const withAI: LabeledBlock[] = rawBlocks.map((b) => {
+      const withAI: LabeledBlock[] = dayBlocks.map((b: any) => {
         const match = ai.find((s) => s.block_id === b.id);
         const picked =
           match?.ai_suggestion && (match.ai_suggestion.client || match.ai_suggestion.project)
@@ -259,39 +394,48 @@ export default function DailyReview() {
         };
       });
 
-      setBlocks(withAI);
+      // 3.5) Trim micro-fragments (mirror backend if it drops very tiny slices)
+      const MIN_KEEP_MIN = 0.05; // ~3 seconds
+      const trimmed = withAI.filter((b) => safeNum(b.minutes, 0) >= MIN_KEEP_MIN);
 
-      // 4) Opportunistic save (chunked)
-      await bulkClassify(withAI, 12);
-    } catch (e) {
+      // 3.6) Merge adjacent same-signature blocks to reduce review noise
+      const compacted = compactBlocks(trimmed, 2);
+
+      setBlocks(compacted);
+
+      // 4) Opportunistic save (chunked) — save compacted set
+      await bulkClassify(compacted, 12);
+    } catch (e: any) {
       console.error("DailyReview load failed:", e);
-      setErr("Failed to load suggestions.");
-      // Final fallback: raw blocks with review needed
-      const rawBlocks = await fetchBlocksToday();
+      setErr(e?.message || "Failed to load suggestions.");
+
+      // Final fallback: raw day blocks with idle-aware defaults
+      const raw = await fetchBlocksForDay(date, user);
       setBlocks(
-        rawBlocks.map((b) => ({
+        raw.map((b: any) => ({
           ...b,
-          needs_review: true,
-          ai_confidence: 0,
-          categories: {},
+          needs_review: !isIdle(b),
+          ai_confidence: isIdle(b) ? 1 : 0,
+          categories: isIdle(b) ? { "Uncategorized - Idle": safeNum(b.minutes ?? 0) / 60 } : {},
         }))
       );
     } finally {
       setBusy(false);
       setAutoClassifying(false);
     }
-  };
+  }, [date, user]);
 
+  // Auto-load on first render and when date/user changes
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const t = setTimeout(() => load(), 200);
+    return () => clearTimeout(t);
+  }, [load]);
 
   // --------- bucket & rollups ----------
   type Bucket = {
     client: string;
     project: string | null;
-    minutes: number;
+    minutes: number; // COMPACTED minutes (union of spans)
     categories: Record<string, number>; // HOURS
     blocks: LabeledBlock[];
     highConfidenceCount: number;
@@ -306,19 +450,18 @@ export default function DailyReview() {
       const project = titleCase(b.project_name) || null;
       const key = `${client}::${project || "-"}`;
 
-      const ex = acc.get(key) || {
-        client,
-        project,
-        minutes: 0,
-        categories: {},
-        blocks: [],
-        highConfidenceCount: 0,
-        needsReviewCount: 0,
-      };
+      const ex =
+        acc.get(key) ||
+        ({
+          client,
+          project,
+          minutes: 0,
+          categories: {},
+          blocks: [],
+          highConfidenceCount: 0,
+          needsReviewCount: 0,
+        } as Bucket);
 
-      ex.minutes += b.minutes || 0;
-
-      // categories are in HOURS here
       const cats = b.categories || {};
       Object.entries(cats).forEach(([k, v]) => {
         const cur = ex.categories[k] || 0;
@@ -332,63 +475,67 @@ export default function DailyReview() {
       acc.set(key, ex);
     });
 
-    // Backfill a single "General" bucket in HOURS if none present
     acc.forEach((bucket) => {
+      bucket.minutes = Math.round(
+        unionMinutes(bucket.blocks.map((b) => ({ start: b.start as any, end: b.end as any })))
+      );
+
       const hasAny = Object.keys(bucket.categories).length > 0;
+      const bucketHasIdle = bucket.blocks.some((b) => isIdle(b));
       if (!hasAny) {
         const hours = safeNum(bucket.minutes, 0) / 60;
-        bucket.categories["General"] = (bucket.categories["General"] || 0) + hours;
+        if (bucketHasIdle) {
+          bucket.categories["Uncategorized - Idle"] =
+            (bucket.categories["Uncategorized - Idle"] || 0) + hours;
+        } else {
+          bucket.categories["General"] = (bucket.categories["General"] || 0) + hours;
+        }
       }
     });
 
     return Array.from(acc.values()).sort((a, b) => b.minutes - a.minutes);
   }, [blocks]);
 
-  const totalMinutes = useMemo(
-    () => (blocks?.reduce((acc, b) => acc + (b.minutes || 0), 0) ?? 0),
-    [blocks]
-  );
+  // Compacted overall total minutes (global union)
+  const totalMinutes = useMemo(() => {
+    const arr = blocks ?? [];
+    return Math.round(unionMinutes(arr.map((b) => ({ start: b.start as any, end: b.end as any }))));
+  }, [blocks]);
 
+  // Stats (exclude idle from auto/needs/high)
   const stats = useMemo(() => {
     if (!blocks) return { total: 0, autoClassified: 0, needsReview: 0, highConfidence: 0 };
+    const notIdle = blocks.filter((b) => !isIdle(b));
     return {
       total: blocks.length,
-      autoClassified: blocks.filter((b) => (b.ai_confidence || 0) > 0).length,
-      needsReview: blocks.filter((b) => b.needs_review).length,
-      highConfidence: blocks.filter((b) => (b.ai_confidence || 0) >= 0.8).length,
+      autoClassified: notIdle.filter((b) => (b.ai_confidence || 0) > 0).length,
+      needsReview: notIdle.filter((b) => b.needs_review).length,
+      highConfidence: notIdle.filter((b) => (b.ai_confidence || 0) >= 0.8).length,
     };
   }, [blocks]);
 
-  // ---- overlap warning (client-side heuristic) ----
+  // ---- overlap warning (client-side heuristic, diagnostic only)
   const rawTotalMins = (blocks ?? []).reduce((a, b) => a + (b.minutes || 0), 0);
   const hasSpan = (blocks ?? []).length > 0;
   const spanHours = hasSpan
-    ? (Math.max(...(blocks ?? []).map(b => +new Date(b.end as any))) -
-       Math.min(...(blocks ?? []).map(b => +new Date(b.start as any)))) / 3600000
+    ? (Math.max(...(blocks ?? []).map((b) => +new Date(b.end as any))) -
+        Math.min(...(blocks ?? []).map((b) => +new Date(b.start as any)))) /
+      3600000
     : 0;
-  const overlapRatio = spanHours ? (rawTotalMins / 60) / spanHours : 1;
-  const hasOverlap = overlapRatio > 1.15; // 15%+ inflation
+  const overlapRatio = spanHours ? rawTotalMins / 60 / spanHours : 1;
+  const hasOverlap = overlapRatio > 1.15;
 
-  // Create/generate today's timecard directly from Daily Review
+  // Create/generate timecard directly from Daily Review
   async function generateTimecard(status: "draft" | "pending" = "pending") {
-    if (!whoami) {
+    const actingUser = (user || whoami);
+    if (!actingUser) {
       console.warn("Username not available, cannot generate timecard.");
       return;
     }
     setBusy(true);
     setErr(null);
     try {
-      const d = new Date();
-      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-        d.getDate()
-      ).padStart(2, "0")}`;
-
-      const res = await fetch(`${API_BASE}/timecards/generate/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ date: dateStr, user: whoami, status }),
-      });
+      const res = await postJson(`${API_BASE}/timecards/generate/`, { date, user: actingUser, status });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       console.log(`Timecard saved as ${status} successfully.`);
     } catch (e: any) {
@@ -401,14 +548,22 @@ export default function DailyReview() {
 
   // ---------- UI ----------
   const downloadCsvClick = async () => {
-    const blob = await downloadTodayCsv();
-    const url = URL.createObjectURL(blob);
+    const url = new URL(`${API_BASE}/blocks/export/csv`);
+    url.searchParams.set("date", date);
+    if (user?.trim()) url.searchParams.set("user", user.trim());
+    const res = await fetch(url.toString(), { credentials: "include" });
+    const blob = await res.blob();
+    const link = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = "blocks_today.csv";
+    a.href = link;
+    a.download = `blocks_${date}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(link);
   };
+
+  const headerUser = useMemo(() => {
+    return user?.trim() ? user.trim() : whoami?.trim() ? whoami : "All Users";
+  }, [user, whoami]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -421,75 +576,68 @@ export default function DailyReview() {
         }
         icon={<Clock className="w-6 h-6 text-primary-foreground" />}
         rightContent={
-          whoami && (
+          headerUser && (
             <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-primary/20 to-accent/20 border border-primary/30 text-sm hover:border-primary/50 transition-all shadow-sm">
               <User className="w-4 h-4 text-primary" />
-              <span className="font-semibold text-primary">{whoami}</span>
+              <span className="font-semibold text-primary">{headerUser}</span>
             </div>
           )
         }
       />
 
       <div className={DESIGN_SYSTEM.spacing.container + " " + DESIGN_SYSTEM.spacing.section}>
+        {/* Match Summary controls */}
+        <FilterBar
+          date={date}
+          user={user}
+          whoami={whoami}
+          onDateChange={setDate}
+          onUserChange={setUser}
+          onRefresh={load}
+          onDraft={undefined as any}
+          onSubmit={undefined as any}
+          isLoading={busy}
+        />
+
         {hasOverlap && (
           <div className="mb-4 p-3 rounded-md border border-red-200 bg-red-50 text-red-700 text-sm">
             Totals may be inflated due to overlapping segments. Refresh after compaction.
           </div>
         )}
 
-        {/* Action buttons */}
-        <div className="flex gap-2 justify-end mb-6">
-          <button
-            onClick={load}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-card hover:bg-accent/10 text-card-foreground border border-border transition-all disabled:opacity-50 shadow-sm hover:shadow-md"
-            disabled={busy}
-          >
-            <RefreshCw className={`w-4 h-4 ${busy ? "animate-spin text-primary" : ""}`} />
-            <span>Refresh</span>
-          </button>
-          <button
-            onClick={downloadCsvClick}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-card hover:bg-info/10 text-card-foreground border border-border transition-all shadow-sm hover:shadow-md hover:border-info/30"
-          >
-            <Download className="w-4 h-4 text-info" />
-            <span>Export CSV</span>
-          </button>
-        </div>
-
-        {err && (
-          <div className="mb-6 p-4 bg-destructive/10 border border-destructive/20 rounded-lg text-destructive flex items-start gap-2">
-            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-            <span>{err}</span>
-          </div>
-        )}
+        {err && <ErrorBanner message={err} />}
 
         {/* Stats - colorful cards */}
         <div className="grid grid-cols-4 gap-4 mb-6">
-          <div className="bg-gradient-to-br from-card to-muted rounded-lg border border-border p-4 shadow-sm hover:shadow-md transition-shadow">
+          {/* Total Blocks */}
+          <div className="bg-gradient-to-br from-primary-light to-white rounded-lg border border-primary/30 p-4 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-2">
               <BarChart3 className="w-5 h-5 text-primary" />
             </div>
-            <div className="text-2xl font-bold text-foreground">{stats.total}</div>
-            <div className="text-sm text-muted-foreground">Total Blocks</div>
+            <div className="text-2xl font-bold text-primary">{stats.total}</div>
+            <div className="text-sm text-primary">Total Blocks</div>
           </div>
-          
-          <div className="bg-gradient-to-br from-success-light to-success-light/50 rounded-lg border border-success/30 p-4 shadow-sm hover:shadow-md transition-shadow">
+
+          {/* Auto-Classified */}
+          <div className="bg-gradient-to-br from-success-light to-white rounded-lg border border-success/30 p-4 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-2">
               <CheckCircle2 className="w-5 h-5 text-success" />
             </div>
             <div className="text-2xl font-bold text-success">{stats.autoClassified}</div>
             <div className="text-sm text-success">Auto-Classified</div>
           </div>
-          
-          <div className="bg-gradient-to-br from-info-light to-info-light/50 rounded-lg border border-info/30 p-4 shadow-sm hover:shadow-md transition-shadow">
+
+          {/* High Confidence */}
+          <div className="bg-gradient-to-br from-info-light to-white rounded-lg border border-info/30 p-4 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-2">
               <CheckCircle2 className="w-5 h-5 text-info" />
             </div>
             <div className="text-2xl font-bold text-info">{stats.highConfidence}</div>
             <div className="text-sm text-info">High Confidence</div>
           </div>
-          
-          <div className="bg-gradient-to-br from-warning-light to-warning-light/50 rounded-lg border border-warning/30 p-4 shadow-sm hover:shadow-md transition-shadow">
+
+          {/* Needs Review */}
+          <div className="bg-gradient-to-br from-warning-light to-white rounded-lg border border-warning/30 p-4 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-2">
               <AlertCircle className="w-5 h-5 text-warning" />
             </div>
@@ -552,9 +700,7 @@ export default function DailyReview() {
                       <td className="p-3 border-b border-border">
                         <span className="font-medium text-foreground">{bk.client}</span>
                       </td>
-                      <td className="p-3 border-b border-border text-muted-foreground">
-                        {bk.project || "—"}
-                      </td>
+                      <td className="p-3 border-b border-border text-muted-foreground">{bk.project || "—"}</td>
                       <td className="p-3 border-b border-border">
                         {Object.keys(bk.categories).length ? (
                           <div className="flex flex-wrap gap-2">
@@ -603,11 +749,12 @@ export default function DailyReview() {
                 </tfoot>
               </table>
             </div>
-            
+
             <div className="mt-4 p-3 bg-info-light border border-info/30 rounded-lg flex items-start gap-2">
               <BarChart3 className="w-4 h-4 text-info flex-shrink-0 mt-0.5" />
               <p className="text-xs text-info">
-                <strong>Tip:</strong> You can correct labels on the blocks below—your corrections train the AI model to improve future predictions.
+                <strong>Tip:</strong> You can correct labels on the blocks below—your corrections train the AI model to
+                improve future predictions.
               </p>
             </div>
           </div>
@@ -627,6 +774,23 @@ export default function DailyReview() {
                 </>
               )}
             </div>
+            <div className="flex gap-2">
+              <button
+                onClick={downloadCsvClick}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-card hover:bg-info/10 text-card-foreground border border-border transition-all shadow-sm hover:shadow-md hover:border-info/30"
+              >
+                <Download className="w-4 h-4 text-info" />
+                <span>Export CSV</span>
+              </button>
+              <button
+                onClick={load}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-card hover:bg-accent/10 text-card-foreground border border-border transition-all disabled:opacity-50 shadow-sm hover:shadow-md"
+                disabled={busy}
+              >
+                <RefreshCw className={`w-4 h-4 ${busy ? "animate-spin text-primary" : ""}`} />
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -637,7 +801,6 @@ export default function DailyReview() {
               key={b.id}
               block={b}
               onLabeled={async (updatedData, originalSuggestion) => {
-                // 1) Classify with the latest user choice (names)
                 const clientName = updatedData.client_name || updatedData.client || b.client_name || null;
                 const projectName = updatedData.project_name || updatedData.project || b.project_name || null;
 
@@ -651,26 +814,21 @@ export default function DailyReview() {
                   console.error("Failed to classify block:", err);
                 }
 
-                // 2) Save a training example (optional, non-blocking)
+                // Optional training signal (non-blocking)
                 try {
-                  await fetch(`${API_BASE}/settings/training/`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      block_id: b.id,
-                      text_content: `${b.title || ""} ${b.description || ""}`.trim(),
-                      correct_client_id: updatedData.client_id,
-                      correct_project_id: updatedData.project_id,
-                      correct_categories: updatedData.category_hours || {},
-                      original_prediction: originalSuggestion || {},
-                    }),
+                  const res = await postJson(`${API_BASE}/settings/training/`, {
+                    block_id: b.id,
+                    text_content: `${(b as any).title || ""} ${(b as any).description || ""}`.trim(),
+                    correct_client_id: (updatedData as any).client_id,
+                    correct_project_id: (updatedData as any).project_id,
+                    correct_categories: updatedData.category_hours || {},
+                    original_prediction: originalSuggestion || {},
                   });
-                  console.log("✓ AI learned from your correction!");
+                  if (!res.ok) console.warn("Training save failed", res.status);
                 } catch (error) {
                   console.error("Failed to save training:", error);
                 }
 
-                // 3) Refresh
                 await load();
               }}
             />
@@ -681,7 +839,7 @@ export default function DailyReview() {
               <div className="w-16 h-16 bg-primary-light rounded-full flex items-center justify-center mx-auto mb-4">
                 <Clock className="w-8 h-8 text-primary" />
               </div>
-              <p className="text-xl font-semibold text-foreground mb-2">No blocks yet today</p>
+              <p className="text-xl font-semibold text-foreground mb-2">No blocks yet</p>
               <p className="text-sm text-muted-foreground max-w-md mx-auto">
                 Your calendar events and activity will appear here automatically as you work throughout the day.
               </p>

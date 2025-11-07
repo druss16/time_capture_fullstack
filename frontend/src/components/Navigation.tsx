@@ -1,49 +1,53 @@
 /**
- * Navigation.tsx - Simple navigation component
- * Place in: frontend/src/components/Navigation.tsx
+ * Navigation.tsx — Updated, blue-only theme
  */
-
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { useAuth } from '../auth/AuthProvider';
+import React from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthProvider";
 
 export default function Navigation() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { logout } = useAuth();
 
-  const isActive = (path: string) => {
-    return location.pathname === path;
-  };
+  const isActive = (path: string) => location.pathname === path;
 
   const linkClass = (path: string) => {
-    const base = "px-4 py-2 rounded-lg transition-colors";
+    const base = "px-4 py-2 rounded-lg font-medium text-sm transition-colors duration-150";
     return isActive(path)
       ? `${base} bg-blue-600 text-white`
-      : `${base} hover:bg-gray-100`;
+      : `${base} text-blue-800 hover:bg-blue-50 hover:text-blue-900`;
   };
 
   return (
-    <nav className="bg-white border-b border-gray-200 px-6 py-4">
-      <div className="max-w-7xl mx-auto flex items-center justify-between">
-        <div className="flex items-center gap-1">
-          <Link to="/" className={linkClass("/")}>
-            📅 Daily Review
+    <nav className="sticky top-0 z-40 bg-white border-b border-blue-100 shadow-sm">
+      <div className="max-w-7xl mx-auto flex items-center justify-between px-6 py-3">
+        {/* Left: Brand + links */}
+        <div className="flex items-center gap-2">
+          <Link to="/" className="flex items-center gap-2 text-blue-900 font-semibold">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white font-bold text-sm">
+              T
+            </span>
+            <span>Time Capture</span>
           </Link>
-          <Link to="/timecards" className={linkClass("/timecards")}>
-            ⏱️ Timecards
-          </Link>
-          <Link to="/settings" className={linkClass("/settings")}>
-            ⚙️ Settings
-          </Link>
+
+          <div className="hidden sm:flex items-center gap-1 ml-4">
+            <Link to="/daily" className={linkClass("/daily")}>📅 Daily Review</Link>
+            <Link to="/timecards" className={linkClass("/timecards")}>⏱️ Timecards</Link>
+            <Link to="/devices" className={linkClass("/devices")}>💻 Devices</Link>
+            <Link to="/settings" className={linkClass("/settings")}>⚙️ Settings</Link>
+          </div>
         </div>
-        
+
+        {/* Right: Date + Logout */}
         <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">
-            {new Date().toLocaleDateString()}
-          </span>
+          <span className="text-sm text-blue-700 hidden sm:inline">{new Date().toLocaleDateString()}</span>
           <button
-            onClick={logout}
-            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+            onClick={async () => {
+              await logout();
+              navigate("/login");
+            }}
+            className="rounded-lg border border-blue-200 px-4 py-2 text-sm text-blue-800 hover:bg-blue-50 hover:text-blue-900"
           >
             Logout
           </button>

@@ -36,10 +36,11 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
+
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle, ScopedRateThrottle
 
 # --- Third-party ---
 from allauth.account import app_settings as allauth_settings
@@ -69,6 +70,8 @@ from .rules import apply_rules
 from .serializers import RawEventSerializer
 from .services.classify_block import classify_block
 
+from .auth import AgentKeyAuthentication, AgentKeyPermission, NoAuth
+
 from .utils import (  # re-exported from tracker/utils/__init__.py
     _client_ip,
     compact_rawevents_into_blocks,
@@ -77,6 +80,9 @@ from .utils import (  # re-exported from tracker/utils/__init__.py
     resolve_agent_user,
     resolve_client_from_known,
 )
+
+from .throttles import AgentIngestThrottle, UIReadThrottle, UIWriteThrottle, AIGenerateThrottle, PublicHelloThrottle, PairIssueRate, PairClaimRate
+
 
 # If you need a User class reference:
 User = get_user_model()
@@ -106,6 +112,79 @@ COOKIE_HOST_KEY = "mavops_host"
 COOKIE_BUNDLE = "mavops_ident"  # signed bundle (preferred)
 
 
+# imports you should have near top of views.py
+import datetime as _dt
+from django.utils import timezone
+from django.utils.dateparse import parse_date
+from django.utils.timezone import get_current_timezone, localtime
+
+# imports
+import datetime as _dt
+from django.utils import timezone
+from django.utils.dateparse import parse_date
+from django.utils.timezone import get_current_timezone, localtime
+
+def _make_aware_local(dt_naive: _dt.datetime, tz) -> _dt.datetime:
+    """
+    Make a naive local datetime aware. Works for both pytz and zoneinfo.
+    """
+    try:
+        # pytz style
+        return tz.localize(dt_naive)  # type: ignore[attr-defined]
+    except Exception:
+        # zoneinfo (Django 4/5)
+        return timezone.make_aware(dt_naive, tz)
+
+
+# --- day window helpers (Django 5 safe) ---
+import datetime as _dt
+from django.utils import timezone
+from django.utils.timezone import get_current_timezone, localtime
+from django.utils.dateparse import parse_date
+
+def _make_aware_local(dt_naive: _dt.datetime, tz) -> _dt.datetime:
+    try:
+        return tz.localize(dt_naive)  # pytz
+    except Exception:
+        return timezone.make_aware(dt_naive, tz)  # zoneinfo
+
+def _start_end_of_local_day_utc(date_str: str | None = None) -> tuple[_dt.datetime, _dt.datetime]:
+    tz = get_current_timezone()
+    if date_str:
+        d = parse_date(date_str) or localtime(timezone.now()).date()
+    else:
+        d = localtime(timezone.now()).date()
+
+    start_local = _make_aware_local(_dt.datetime.combine(d, _dt.time.min), tz)
+    next_local  = _make_aware_local(_dt.datetime.combine(d + _dt.timedelta(days=1), _dt.time.min), tz)
+
+    return (start_local.astimezone(_dt.timezone.utc),
+            next_local.astimezone(_dt.timezone.utc))
+
+def _start_of_local_day_utc(dt: _dt.datetime | None = None) -> _dt.datetime:
+    # if a datetime is passed, convert that instant to local midnight; else today
+    if dt is None:
+        return _start_end_of_local_day_utc(None)[0]
+    local = timezone.localtime(dt)
+    sod_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return sod_local.astimezone(_dt.timezone.utc)   # <-- key change
+
+def _compact_safe(username, hostname, org, date_str):
+    try:
+        # If your function supports day / start_utc / end_utc, pass them:
+        start_utc, end_utc = _start_end_of_local_day_utc(date_str)
+        return compact_rawevents_into_blocks(
+            user=username,
+            hostname=hostname,
+            org=org,
+            day=date_str,                 # ok if supported
+            start_utc=start_utc,          # ok if supported
+            end_utc=end_utc,              # ok if supported
+        )
+    except TypeError:
+        # Old signature — just call the legacy form
+        return compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
+
 def _signed_cookie_get(request, name: str, default=None):
     raw = request.COOKIES.get(name)
     if not raw:
@@ -118,8 +197,12 @@ def _signed_cookie_get(request, name: str, default=None):
 # -------------------------------------------------------------------
 # Utility helpers
 # -------------------------------------------------------------------
+# --- utility: org helper (safe default group) ---
 def get_org_or_default(request):
-    """Get org from user or a default dev org."""
+    """
+    Get org from user or a default dev org ('default-org').
+    Ensures there's always a Group so queries don't crash.
+    """
     if USE_AUTH and getattr(request, "user", None) and request.user.is_authenticated:
         org = request.user.groups.first()
     else:
@@ -150,6 +233,15 @@ def _get_user_obj(username: Optional[str]):
     except User.DoesNotExist:
         return None
 
+def _get_agent_device(request):
+    """Return the AgentDevice for the given API key, or None."""
+    api_key = request.META.get(AGENT_HEADER)
+    if not api_key:
+        return None
+    try:
+        return AgentDevice.objects.select_related("user").get(api_key=api_key, is_active=True)
+    except AgentDevice.DoesNotExist:
+        return None
 
 def _host(url: str) -> str:
     try:
@@ -164,12 +256,6 @@ def _similar(a: str, b: str) -> float:
     b = (b or "").strip().lower()
     return SequenceMatcher(None, a, b).ratio()
 
-
-def _start_of_local_day_utc(dt: Optional[timezone.datetime] = None) -> timezone.datetime:
-    dt = dt or timezone.now()
-    local = localtime(dt)
-    sod_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
-    return sod_local.astimezone(dt_timezone.utc)
 
 
 def _label_from_event(e: RawEvent) -> str:
@@ -395,36 +481,9 @@ def pair_complete(request):
         status=status.HTTP_200_OK,
     )
 
-class AgentKeyAuthentication(BaseAuthentication):
-    """Authenticate by X-Agent-Key / Bearer <key> → request.user & request.agent_device"""
-    def authenticate(self, request):
-        key = (
-            request.headers.get("X-Agent-Key")
-            or request.headers.get("Agent-Key")
-            or ""
-        ).strip()
-
-        auth = (request.headers.get("Authorization") or "").strip()
-        if auth.startswith("Bearer ") and not key:
-            key = auth[7:].strip()
-        if not key:
-            return None
-
-        try:
-            dev = AgentDevice.objects.select_related("user").get(api_key=key, is_active=True)
-        except AgentDevice.DoesNotExist:
-            raise AuthenticationFailed("Invalid agent key")
-
-        # annotate request for views
-        request.agent_device = dev
-        return (dev.user, None)
-
-
-class NoAuth(BaseAuthentication):
-    """Disable session/csrf for token/agent endpoints."""
-    def authenticate(self, request):
-        return None
-
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.exceptions import AuthenticationFailed
+from .models import AgentDevice  # adjust import
 
 # views.py (DRF)
 from django.utils import timezone
@@ -435,100 +494,109 @@ from rest_framework.response import Response
 import json
 
 # NEW: paired hello (device-key)
+# NEW: paired hello (device-key)
 @api_view(["POST"])
-@authentication_classes([AgentKeyAuthentication])
+@authentication_classes([AgentKeyAuthentication])  # sets request.user + request.agent_device
 @permission_classes([IsAuthenticated])
 def agents_hello2(request):
     """
-    Authenticated by device key; request.user is the account the device belongs to.
-    request.agent_device can be attached by AgentKeyAuthentication.
+    DeviceKey-authenticated heartbeat.
+    - Updates AgentDevice metadata
+    - Upserts AgentSession
+    - Returns a minimal payload (user_id optional for convenience)
     """
     user = request.user
-    host = request.data.get("hostname") or request.headers.get("X-Agent-Host") or "unknown"
-    # upsert AgentSession, ensure AgentControl row, set cookies (optional)...
-    return Response({"ok": True, "username": user.username, "host": host})
+    dev = getattr(request, "agent_device", None)  # set by AgentKeyAuthentication
+
+    # host: prefer payload, else header, else device hostname, else 'unknown'
+    payload_host = (request.data.get("hostname") or "").strip()
+    header_host  = (request.headers.get("X-Agent-Host") or "").strip()
+    dev_host     = (getattr(dev, "hostname", "") or "").strip()
+    host = (payload_host or header_host or dev_host or "unknown")[:128]
+
+    # keep device metadata fresh
+    if dev:
+        dev.hostname    = host or dev.hostname
+        dev.app_version = (request.data.get("app_version") or dev.app_version or "")[:32]
+        dev.is_active   = True
+        dev.last_seen_at = timezone.now()
+        # optional: record platform from header for quick visibility
+        plat_hdr = (request.headers.get("X-Agent-Platform") or "").strip()
+        if hasattr(dev, "platform") and plat_hdr:
+            dev.platform = plat_hdr[:128]
+        dev.save(update_fields=["hostname", "app_version", "is_active", "last_seen_at", "platform"] if plat_hdr else ["hostname", "app_version", "is_active", "last_seen_at"])
+
+    # upsert AgentSession for dashboards/fallbacks
+    AgentSession.objects.update_or_create(
+        user=user,
+        hostname=host,
+        defaults={
+            "last_seen": timezone.now(),
+            "last_app": request.data.get("last_app", "")[:120],
+            "last_window_title": request.data.get("last_window_title", "")[:512],
+            "platform": (request.headers.get("X-Agent-Platform") or "")[:80],
+            "version": (request.headers.get("X-Agent-Version") or "")[:40],
+            "last_ip": (request.META.get("REMOTE_ADDR") or _client_ip(request) or "")[:45],
+        },
+    )
+
+    # keep response minimal; user_id is optional – agent shouldn't depend on it
+    return Response({
+        "ok": True,
+        "user_id": user.id,
+        "username": user.username,
+        "host": host,
+    })
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def agents_hello(request):
     """
-    Auto-provision user and upsert AgentSession.
-    Tolerates partial schemas by only touching fields that exist on AgentSession.
-    Also sets cookies so the SPA can show the username without login.
+    Legacy browser hello: sets a signed *hint* cookie for the SPA.
+    - Does NOT create users
+    - Does NOT upsert sessions
+    - Keeps the flow clean (pair via AgentPairCode + DeviceKey)
     """
-    # ---- Gather inputs (headers first, JSON fallback) ----
-    username = (request.headers.get("X-Agent-User") or "").strip()
-    host     = (request.headers.get("X-Agent-Host") or "").strip()
-    plat     = (request.headers.get("X-Agent-Platform") or "").strip()
-    ver      = (request.headers.get("X-Agent-Version") or "").strip()
-
-    if not (username and host):
-        body = {}
-        try:
-            body = request.data if isinstance(request.data, dict) else json.loads(request.body.decode("utf-8"))
-        except Exception:
-            body = {}
-        username = username or (body.get("user") or body.get("os_username") or "").strip()
-        host     = host or (body.get("hostname") or body.get("machine") or "").strip()
-        plat     = plat or (body.get("platform") or "").strip()
-        ver      = ver or (body.get("app_version") or body.get("version") or "").strip()
-
-    username = username or "unknown"
-    host     = host or "unknown"
-    cip      = _client_ip(request)
-
-    # ---- Ensure group & user ----
-    grp, _ = Group.objects.get_or_create(name="Time Agents")
-    user, created = User.objects.get_or_create(username=username, defaults={"is_active": True, "email": ""})
-    if created:
-        user.set_unusable_password()
-        user.save()
-    if not user.groups.filter(id=grp.id).exists():
-        user.groups.add(grp)
-
-    # ---- Build safe filter/defaults for AgentSession ----
-    sess_fields = {f.name for f in AgentSession._meta.get_fields()}
-
-    filter_kwargs = {"user": user}
-    if "hostname" in sess_fields:
-        filter_kwargs["hostname"] = host
-
-    defaults = {}
-    if "last_seen" in sess_fields:
-        defaults["last_seen"] = timezone.now()
-    if "platform" in sess_fields and plat:
-        defaults["platform"] = plat
-    if "version" in sess_fields and ver:
-        defaults["version"] = ver
-    if "last_ip" in sess_fields and cip:
-        defaults["last_ip"] = cip
-    # If hostname is a field but not in filter (in case your unique key is just user),
-    # add to defaults so we keep it current:
-    if "hostname" in sess_fields and "hostname" not in filter_kwargs:
-        defaults["hostname"] = host
-
-    AgentSession.objects.update_or_create(**filter_kwargs, defaults=defaults)
-
-    # ---- Ensure AgentControl row (schema tolerant) ----
+    # Gather inputs (headers preferred, JSON fallback)
     try:
-        AgentControl.objects.get_or_create(user=user, host=host)
+        body = request.data if isinstance(request.data, dict) else json.loads(request.body.decode("utf-8") or "{}")
     except Exception:
-        # If your AgentControl uses different field names, ignore gently.
-        pass
+        body = {}
 
-    # ---- Response + cookies for SPA ----
+    username = ((request.headers.get("X-Agent-User") or body.get("user") or body.get("os_username") or "").strip())[:150]
+    host     = ((request.headers.get("X-Agent-Host") or body.get("hostname") or body.get("machine") or "").strip() or "browser")[:128]
+
+    if not username:
+        # nothing useful to hint; respond ok without cookies
+        return Response({"ok": True, "hint": False})
+
+    # Build signed bundle cookie (HINT ONLY — not auth)
+    bundle = {"username": username, "host": host, "ts": timezone.now().isoformat()}
+    signed = signing.dumps(bundle)
+
     resp = Response({
         "ok": True,
-        "user_id": user.id,
-        "username": user.username,
+        "hint": True,
+        "username": username,
         "host": host,
-        # If AgentControl exists with (user, host), return flags if available:
-        "stop": False,
-        "stop_until": None,
     })
-    # Cookies used by /api/whoami/ (so your frontend can show the username)
-    resp.set_cookie("mavops_username", user.username, samesite="Lax")
-    resp.set_cookie("mavops_host", host, samesite="Lax")
+
+    secure = request.is_secure()  # make sure True in prod behind HTTPS
+    # Preferred: single signed cookie the SPA can read
+    resp.set_cookie(
+        COOKIE_BUNDLE,
+        signed,
+        max_age=60 * 60 * 24 * 14,  # 14 days
+        samesite="Lax",
+        secure=secure,
+        httponly=False,  # readable by SPA; only a display hint
+        path="/",
+    )
+
+    # Optional legacy cookies for transition (safe to remove later)
+    resp.set_cookie(COOKIE_USER_KEY, username, samesite="Lax", secure=secure, httponly=False, path="/")
+    resp.set_cookie(COOKIE_HOST_KEY, host,     samesite="Lax", secure=secure, httponly=False, path="/")
+
     return resp
 
 @api_view(["GET"])
@@ -570,20 +638,36 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
-@api_view(["POST"])
-@authentication_classes([NoAuth])
-@permission_classes([AgentKeyPermission])
-@throttle_classes([AnonRateThrottle])
-def raw_events(request):
-    # Resolve identity
-    agent = resolve_agent_user(request)  # some versions might return (user, host)
-    if isinstance(agent, tuple):
-        agent_user = agent[0]
-    else:
-        agent_user = agent
+# use your existing auth class that sets request.user and request.agent_device
+from .auth import AgentKeyAuthentication   # ← adjust import to your project
+from .models import RawEvent
 
-    if not isinstance(agent_user, User):
-        raise PermissionDenied("Agent user could not be resolved")
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.exceptions import ValidationError, PermissionDenied
+from django.utils.dateparse import parse_datetime
+from django.utils import timezone
+
+from .models import RawEvent
+
+@csrf_exempt                          # <-- add this
+@api_view(["POST"])
+@authentication_classes([AgentKeyAuthentication])   # DeviceKey / X-Agent-Key auth
+@permission_classes([IsAuthenticated])              # request.user = linked account
+# @throttle_classes([AgentIngestThrottle])  # enable in prod
+def raw_events(request):
+    """
+    Ingest events from a paired agent.
+    - Requires Authorization: DeviceKey <api_key> (or X-Agent-Key)
+    - request.user = linked user from AgentDevice
+    - request.agent_device = the AgentDevice instance
+    """
+    agent_user = request.user
+    device = getattr(request, "agent_device", None)
+
+    if not getattr(agent_user, "is_authenticated", False):
+        raise PermissionDenied("Device not linked or invalid key.")
 
     payload = request.data
     if isinstance(payload, dict):
@@ -591,8 +675,9 @@ def raw_events(request):
     if not isinstance(payload, list):
         raise ValidationError("Payload must be an object or an array of objects.")
 
-    # Prefer header host
-    header_host = (request.headers.get("X-Agent-Host") or "").strip() or "unknown"
+    header_host = (request.headers.get("X-Agent-Host") or "").strip()
+    device_host = getattr(device, "hostname", "") if device else ""
+    default_host = header_host or device_host or "unknown"
 
     created, errors = 0, []
     for item in payload:
@@ -607,7 +692,7 @@ def raw_events(request):
             errors.append({"item": item, "error": "Missing ts_utc"})
             continue
 
-        hostname = (header_host or item.get("hostname") or "unknown").strip() or "unknown"
+        hostname = (default_host or item.get("hostname") or "unknown").strip() or "unknown"
 
         try:
             RawEvent.objects.create(
@@ -617,7 +702,7 @@ def raw_events(request):
                 window_title=item.get("window_title") or "",
                 url=item.get("url"),
                 file_path=item.get("file_path"),
-                user=agent_user,          # ✅ guaranteed User instance
+                user=agent_user,              # linked real user from DeviceKey
                 hostname=hostname,
                 ctx=item.get("ctx", {}) or {},
             )
@@ -631,8 +716,6 @@ def raw_events(request):
         else status.HTTP_400_BAD_REQUEST
     )
     return Response({"created": created, "errors": errors}, status=status_code)
-
-
 # -------------------------------------------------------------------
 # Compactor: RawEvent -> Block (for TODAY only; compaction-on-read)
 # -------------------------------------------------------------------
@@ -793,30 +876,56 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
 # -------------------------------------------------------------------
 # UI endpoints (compaction-on-read)
 # -------------------------------------------------------------------
+from rest_framework.response import Response
+
+# tracker/views.py (snippets)
+import datetime as _dt
+from django.utils import timezone
+
 @api_view(["GET"])
 @permission_classes([PermUI])
-@throttle_classes([UserRateThrottle])
+@throttle_classes([UIReadThrottle])
 def blocks_today(request):
-    """Compact RawEvents -> Blocks for today and return display-ready blocks."""
-    username = request.GET.get("user") or None
-    hostname = request.GET.get("hostname") or None
-    org = get_org_or_default(request)
+    date_str  = request.GET.get("date") or None
+    username  = request.GET.get("user") or None
+    hostname  = request.GET.get("hostname") or None
+    limit_str = request.GET.get("limit") or None
+    org       = get_org_or_default(request)
 
-    compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
+    # compact safely (handles None date → today)
+    _compact_safe(username, hostname, org, date_str)
 
-    start_utc = _start_of_local_day_utc()
-    qs = Block.objects.filter(start__gte=start_utc).order_by("start")
+    # day window in UTC (uses datetime.timezone.utc under the hood)
+    start_utc, end_utc = _start_end_of_local_day_utc(date_str)
+
+    qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
     if username:
-        qs = qs.filter(user__username=username)  # FK filter
+        qs = qs.filter(user__username=username)
     if hostname:
         qs = qs.filter(hostname=hostname)
     if org:
         qs = qs.filter(org=org)
 
-    def minutes(b: Block) -> int:
-        if hasattr(b, "minutes") and b.minutes is not None:
-            return int(b.minutes)
-        return int((b.end - b.start).total_seconds() / 60)
+    # optional limit (clamped)
+    if limit_str:
+        try:
+            qs = qs[: max(1, min(int(limit_str), 1000))]
+        except Exception:
+            pass
+
+    def _minutes(b: Block) -> int:
+        m = getattr(b, "minutes", None)
+        if m is not None:
+            try:
+                return int(m)
+            except Exception:
+                pass
+        try:
+            if not b.end or not b.start:
+                return 0
+            return max(0, int((b.end - b.start).total_seconds() // 60))
+        except Exception:
+            return 0
 
     data = []
     for b in qs.select_related("client", "project", "task", "user"):
@@ -824,7 +933,7 @@ def blocks_today(request):
             "id": b.id,
             "start": b.start,
             "end": b.end,
-            "minutes": minutes(b),
+            "minutes": _minutes(b),
             "title": b.title,
             "window_title": getattr(b, "window_title", "") or "",
             "url": b.url or "",
@@ -842,19 +951,21 @@ def blocks_today(request):
     return Response(data)
 
 
+from django.db import transaction
+
 @api_view(["GET"])
 @permission_classes([PermUI])
 @throttle_classes([UserRateThrottle])
 def suggestions_today(request):
-    """Recompute up to 3 rule-based suggestions per Block for today, after compaction."""
+    date_str = request.GET.get("date") or None
     username = request.GET.get("user") or None
     hostname = request.GET.get("hostname") or None
-    org = get_org_or_default(request)
+    org      = get_org_or_default(request)
 
-    compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
+    _compact_safe(username, hostname, org, date_str)
 
-    start_utc = _start_of_local_day_utc()
-    qs = Block.objects.filter(start__gte=start_utc).order_by("start")
+    start_utc, end_utc = _start_end_of_local_day_utc(date_str)
+    qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
     if username:
         qs = qs.filter(user__username=username)
     if hostname:
@@ -862,11 +973,18 @@ def suggestions_today(request):
     if org:
         qs = qs.filter(org=org)
 
-    rules = list(Rule.objects.filter(active=True, org=org))
+    # Safely scope rules by org only if the model has that field and org is set
+    rule_qs = Rule.objects.filter(active=True)
+    try:
+        if org and "org" in {f.name for f in Rule._meta.get_fields()}:
+            rule_qs = rule_qs.filter(org=org)
+    except Exception:
+        pass
+    rules = list(rule_qs)
 
     out = []
     with transaction.atomic():
-        for b in qs:
+        for b in qs.select_related("client", "project", "task"):
             Suggestion.objects.filter(block=b).delete()
             for field, value_text, conf in list(apply_rules(b, rules))[:3]:
                 Suggestion.objects.create(
@@ -877,7 +995,7 @@ def suggestions_today(request):
                 "id": b.id,
                 "start": b.start,
                 "end": b.end,
-                "minutes": int((b.end - b.start).total_seconds() / 60),
+                "minutes": max(0, int(((b.end or b.start) - b.start).total_seconds() // 60)) if b.start else 0,
                 "title": b.title,
                 "window_title": getattr(b, "window_title", "") or "",
                 "url": b.url or "",
@@ -891,7 +1009,6 @@ def suggestions_today(request):
                 ],
             })
     return Response(out)
-
 
 @api_view(["POST"])
 @permission_classes([PermUI])
@@ -978,7 +1095,7 @@ def label_block(request):
 # -------------------------------------------------------------------
 @api_view(["GET"])
 @permission_classes([PermUI])
-@throttle_classes([UserRateThrottle])
+@throttle_classes([AIGenerateThrottle])
 def ai_suggestions_today(request):
     """
     Generate AI-powered suggestions for today's blocks.
@@ -1207,7 +1324,7 @@ def reclassify_day(request):
 # -------------------------------------------------------------------
 @api_view(["POST"])
 @permission_classes([PermUI])
-@throttle_classes([UserRateThrottle])
+# @throttle_classes([UserRateThrottle])
 def generate_timecard(request):
     """Generate AI-powered timecard for a specific date."""
     target_date_str = request.data.get('date')
@@ -2154,21 +2271,25 @@ from .models import AgentSession  # adjust import if needed
 from django.conf import settings
 
 
+from django.views.decorators.cache import cache_control
+from django.views.decorators.vary import vary_on_headers
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+# views.py
+from django.views.decorators.cache import cache_control
+from django.views.decorators.vary import vary_on_headers
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
+@cache_control(private=True, max_age=300)
+@vary_on_headers("Cookie")
 def whoami(request):
-    """
-    Resolve identity for SPA and mac_agent.
-
-    Priority:
-      1) Agent auth header (Agent-Key/X-Agent-Key -> AgentDevice -> user)
-      2) Django session (logged in via allauth/session)
-      3) Signed browser cookie bundle from /browser/hello/
-      4) Last AgentSession by IP
-      5) Unknown
-    Response is normalized so SPA can key off fields instead of guessing.
-    """
-    # 1) Agent header auth (mac_agent)
+    # 1) Agent header
     agent_key = (
         request.headers.get("X-Agent-Key")
         or request.headers.get("Agent-Key")
@@ -2188,7 +2309,7 @@ def whoami(request):
                 "device_id": device.device_id,
             })
 
-    # 2) Django session (real web login)
+    # 2) Django session
     if getattr(request.user, "is_authenticated", False):
         u = request.user
         return Response({
@@ -2200,28 +2321,26 @@ def whoami(request):
             "device_id": None,
         })
 
-    # 3) Signed browser identity cookie from /browser/hello/
-    # Prefer a single signed bundle, fall back to legacy plain cookies if present.
+    # 3) Signed cookie (NOT a login)
     bundle = _signed_cookie_get(request, COOKIE_BUNDLE)
     if bundle and isinstance(bundle, dict):
         username = (bundle.get("username") or "").strip()
         host = (bundle.get("host") or "").strip() or None
         if username:
             return Response({
-                "is_authenticated": True,
+                "is_authenticated": False,        # <- important
                 "auth_source": "cookie",
                 "username": username,
-                "user_id": None,  # unknown without session; you can embed user_id in the bundle if desired
+                "user_id": None,
                 "host": host,
                 "device_id": None,
             })
     else:
-        # Legacy (unsafely trusted) cookies — keep only if you must
         u = (request.COOKIES.get(COOKIE_USER_KEY) or "").strip()
         h = (request.COOKIES.get(COOKIE_HOST_KEY) or "").strip()
         if u:
             return Response({
-                "is_authenticated": True,
+                "is_authenticated": False,        # <- important
                 "auth_source": "cookie_legacy",
                 "username": u,
                 "user_id": None,
@@ -2229,7 +2348,7 @@ def whoami(request):
                 "device_id": None,
             })
 
-    # 4) AgentSession fallback by client IP (best effort)
+    # 4) AgentSession by IP (NOT a login)
     ip = _client_ip(request)
     if ip:
         sess = (
@@ -2242,7 +2361,7 @@ def whoami(request):
         )
         if sess and getattr(sess, "user", None):
             return Response({
-                "is_authenticated": True,
+                "is_authenticated": False,        # <- important
                 "auth_source": "ip",
                 "username": (sess.user.username or "").strip(),
                 "user_id": sess.user_id,
@@ -2259,7 +2378,6 @@ def whoami(request):
         "host": None,
         "device_id": None,
     })
-
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -2376,17 +2494,14 @@ def agents_hello(request):
     resp.set_cookie("mavops_host", host, samesite="Lax", secure=secure, httponly=False)
     return resp
 
-@csrf_exempt  # this endpoint is a lightweight handshake to seed cookies; easier to exempt
 @api_view(["POST", "OPTIONS"])
 @permission_classes([AllowAny])
 def browser_hello(request):
     """
-    Lightweight browser-only handshake to set identity cookies used by /whoami.
+    Lightweight browser-only handshake to set a signed identity hint cookie for /whoami.
     Body: { "username": "dan", "host": "MacBook-Pro" (optional) }
 
-    Sets:
-      - mavops_ident (SIGNED bundle: username, host, ts)  ← preferred
-      - mavops_username + mavops_host (legacy, plain)     ← kept for compatibility
+    NOTE: This NO LONGER creates shadow users. It's strictly a client hint.
     """
     if request.method == "OPTIONS":
         return Response(status=200)
@@ -2403,41 +2518,12 @@ def browser_hello(request):
     if not username:
         return Response({"ok": False, "error": "missing-username"}, status=400)
 
-    # Ensure a real User exists (so future session login pairs cleanly)
-    grp, _ = Group.objects.get_or_create(name="Time Agents")
-    user, created = User.objects.get_or_create(username=username, defaults={"is_active": True, "email": ""})
-    if created:
-        user.set_unusable_password()
-        user.save()
-    if not user.groups.filter(id=grp.id).exists():
-        user.groups.add(grp)
-
-    # Best-effort: keep AgentSession fresh for IP fallback
-    sess_fields = {f.name for f in AgentSession._meta.get_fields()}
-    defaults = {}
-    if "last_seen" in sess_fields:
-        defaults["last_seen"] = timezone.now()
-    if "last_ip" in sess_fields:
-        defaults["last_ip"] = _client_ip(request)
-    if "hostname" in sess_fields:
-        defaults["hostname"] = host
-
-    filter_kwargs = {"user": user}
-    if "hostname" in sess_fields:
-        filter_kwargs["hostname"] = host
-
-    try:
-        AgentSession.objects.update_or_create(**filter_kwargs, defaults=defaults)
-    except Exception:
-        # Non-fatal
-        pass
-
-    # Build signed bundle cookie
-    bundle = {"username": user.username, "host": host, "ts": timezone.now().isoformat()}
+    # Build signed bundle cookie (HINT ONLY — not auth)
+    bundle = {"username": username, "host": host, "ts": timezone.now().isoformat()}
     signed = signing.dumps(bundle)
 
-    resp = Response({"ok": True, "username": user.username, "host": host, "source": "browser"})
-    secure = request.is_secure()  # set True in prod behind HTTPS/Proxy
+    resp = Response({"ok": True, "username": username, "host": host, "source": "browser"})
+    secure = request.is_secure()  # ensure True in prod behind HTTPS
 
     # Preferred: single signed cookie
     resp.set_cookie(
@@ -2446,16 +2532,19 @@ def browser_hello(request):
         max_age=60 * 60 * 24 * 14,  # 14 days
         samesite="Lax",
         secure=secure,
-        httponly=False,  # readable by SPA (so /whoami can trust it after verify)
+        httponly=False,  # SPA can read; it's only a hint
         path="/",
     )
 
-    # Legacy cookies (kept for transition / fallback)
-    resp.set_cookie(COOKIE_USER_KEY, user.username, samesite="Lax", secure=secure, httponly=False, path="/")
-    resp.set_cookie(COOKIE_HOST_KEY, host,           samesite="Lax", secure=secure, httponly=False, path="/")
+    # (Optional) legacy plain cookies — safe to delete later
+    resp.set_cookie(COOKIE_USER_KEY, username, samesite="Lax", secure=secure, httponly=False, path="/")
+    resp.set_cookie(COOKIE_HOST_KEY, host,     samesite="Lax", secure=secure, httponly=False, path="/")
 
     return resp
 
+# tracker/views.py
+from django.core import signing
+from django.utils import timezone
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -2468,43 +2557,58 @@ def auth_login(request):
     password = data.get("password") or ""
 
     if not username or not password:
-        return Response(
-            {"ok": False, "error": "Username and password required."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return Response({"ok": False, "error": "Username and password required."},
+                        status=status.HTTP_400_BAD_REQUEST)
 
     user = authenticate(request, username=username, password=password)
     if not user:
-        return Response(
-            {"ok": False, "error": "Invalid credentials."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return Response({"ok": False, "error": "Invalid credentials."},
+                        status=status.HTTP_400_BAD_REQUEST)
 
     perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
 
-    resp = Response(
-        {
-            "ok": True,
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email or "",
-            },
-        }
-    )
-    resp.set_cookie("mavops_username", user.username, samesite="Lax")
+    # Build the same signed “hint” bundle cookie here (no need for /browser/hello/)
+    host = request.get_host() or "browser"
+    bundle = {"username": user.username, "host": host, "ts": timezone.now().isoformat()}
+    signed = signing.dumps(bundle, salt="browser-ident-v1")
+
+    resp = Response({"ok": True, "user": {"id": user.id, "username": user.username, "email": user.email or ""}})
+    resp.set_cookie(COOKIE_USER_KEY, user.username, samesite="Lax", path="/")
+    resp.set_cookie(COOKIE_HOST_KEY, host, samesite="Lax", path="/")
+    resp.set_cookie(COOKIE_BUNDLE, signed, samesite="Lax", httponly=False, path="/")
     return resp
 
 
+from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth import logout as django_logout
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+# tracker/views.py
+from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
+from django.contrib.auth import logout as django_logout
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.authentication import SessionAuthentication
+from rest_framework.response import Response
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@authentication_classes([SessionAuthentication])  # use session + CSRF
+@ensure_csrf_cookie                                # set csrftoken if missing
+@csrf_protect                                      # require + validate CSRF
 def auth_logout(request):
     """
-    JSON logout endpoint for SPA frontend.
+    Logs out the current session (if any). Requires CSRF.
     """
     django_logout(request)
     resp = Response({"ok": True})
-    resp.delete_cookie("mavops_username")
+    # Don’t delete the CSRF cookie; it’s useful for the next POST.
+    resp.delete_cookie("sessionid", path="/")
+    # If you previously set custom identity cookies, clear them:
+    for cookie_name in ("mavops_username", "mavops_host", "mavops_ident"):
+        resp.delete_cookie(cookie_name, path="/")
     return resp
 
 
@@ -2549,3 +2653,90 @@ def auth_signup(request):
     )
     resp.set_cookie("mavops_username", user.username, samesite="Lax")
     return resp
+
+# views.py
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+from django.utils import timezone
+
+from .models import AgentDevice, AgentPairCode
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([PairIssueRate])
+def agents_pair_issue(request):
+    ttl = int(request.data.get("ttl_seconds") or 600)
+    ttl = max(60, min(ttl, 3600))  # 1–60 min
+    code_obj = AgentPairCode.issue(request.user, ttl_seconds=ttl)
+    return Response({
+        "ok": True,
+        "code": code_obj.code,
+        "expires_at": code_obj.expires_at.isoformat(),
+        "ttl_seconds": ttl,
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([PairClaimRate])
+@transaction.atomic
+def agents_pair_claim(request):
+    data = request.data or {}
+    code = (data.get("code") or "").strip().upper()
+    device_id = (data.get("device_id") or "").strip()
+    hostname = (data.get("hostname") or "unknown")[:128]
+    platform_s = (data.get("platform") or "")[:128]
+    version = (data.get("version") or "")[:32]
+
+    if not code or not device_id:
+        return Response({"ok": False, "error": "missing code or device_id"}, status=400)
+
+    now = timezone.now()
+    pc = (AgentPairCode.objects
+          .select_for_update()
+          .filter(code=code, consumed_at__isnull=True, expires_at__gt=now)
+          .first())
+    if not pc:
+        return Response({"ok": False, "error": "invalid_or_expired_code"}, status=400)
+
+    dev, _created = AgentDevice.objects.select_for_update().get_or_create(
+        device_id=device_id,
+        defaults={
+            "user": pc.user,
+            "hostname": hostname,
+            "platform": platform_s,
+            "app_version": version,
+            "is_active": False,
+        },
+    )
+    # If device belongs to another user, block
+    if dev.user_id and dev.user_id != pc.user_id:
+        return Response({"ok": False, "error": "device_belongs_to_another_user"}, status=409)
+
+    # Link/refresh and rotate key
+    if not dev.user_id:
+        dev.user = pc.user
+    if hostname:
+        dev.hostname = hostname
+    if platform_s:
+        dev.platform = platform_s
+    if version:
+        dev.app_version = version
+
+    dev.rotate_key()  # sets api_key, last_seen_at, is_active=True
+    pc.consume()
+
+    return Response({
+        "ok": True,
+        "api_key": dev.api_key,
+        "username": pc.user.username,
+        "hostname": dev.hostname,
+    }, status=200)
+
+# views.py (TEMP ONLY FOR DEV!)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def agents_pair_issue_dev_open(request):
+    code = AgentPairCode.issue(User.objects.first(), ttl_seconds=600)  # pick a test user
+    return Response({"ok": True, "code": code.code, "expires_at": code.expires_at.isoformat(), "ttl_seconds": 600})

@@ -13,7 +13,8 @@ import {
 import { DESIGN_SYSTEM } from "@/lib/design-system";
 import { todayIso } from "@/lib/utils/date";
 import { displayClientName } from "@/lib/utils/formatting";
-import { API_ENDPOINTS, safeFetchJson, primeCsrf } from "@/lib/api";
+import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
+import { primeCsrf, getCookie } from "@/lib/csrf";
 
 // ---------- Types ----------
 type TaskRow = {
@@ -53,6 +54,25 @@ async function fetchBlocksForDay(date: string, user: string) {
   }
 }
 
+async function postJson(url: string, data: any) {
+  const csrftoken = getCookie("csrftoken");
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRFToken": csrftoken,
+      "X-Requested-With": "XMLHttpRequest",
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`HTTP ${res.status}: ${detail}`);
+  }
+  return res.json().catch(() => ({}));
+}
+
 // ---------- Component ----------
 export default function TimecardSummary() {
   const [data, setData] = useState<SummaryResp | null>(null);
@@ -83,6 +103,7 @@ export default function TimecardSummary() {
 
   // ---------- Load summary + blocks ----------
   const load = useCallback(async () => {
+    if (!date) return;
     setBusy(true);
     setErr(null);
     try {
@@ -137,14 +158,19 @@ export default function TimecardSummary() {
 
   // ---------- Generate timecard ----------
   const generate = async (status: "draft" | "pending" = "pending") => {
+    if (!(whoami || user)) {
+      setErr("No user detected — cannot generate timecard.");
+      return;
+    }
+
     setBusy(true);
     setErr(null);
     try {
-      await primeCsrf(); // ensure csrftoken exists for POST
-      await safeFetchJson(API_ENDPOINTS.timecardsGenerate, {
-        method: "POST",
-        credentials: "include",
-        body: JSON.stringify({ date, user, status }),
+      await primeCsrf(); // ensure csrftoken exists
+      await postJson(API_ENDPOINTS.timecardsGenerate, {
+        date,
+        user: user || whoami,
+        status,
       });
       await load();
     } catch (e: any) {

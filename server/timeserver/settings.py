@@ -151,6 +151,9 @@ if SENTRY_DSN:
         environment=os.getenv("ENV", "dev"),
     )
 
+OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "8"))
+OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
+
 
 # -----------------------------------------------------
 # Internationalization
@@ -179,7 +182,8 @@ USE_X_FORWARDED_HOST = True
 # -----------------------------------------------------
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0") in ("1", "true", "True")
 CSRF_COOKIE_SECURE = os.getenv("CSRF_COOKIE_SECURE", "0") in ("1", "true", "True")
-CSRF_COOKIE_HTTPONLY = os.getenv("CSRF_COOKIE_HTTPONLY", "1") in ("1", "true", "True")
+CSRF_COOKIE_HTTPONLY = False           # <-- JS can read csrftoken
+# CSRF_COOKIE_HTTPONLY = os.getenv("CSRF_COOKIE_HTTPONLY", "1") in ("1", "true", "True")
 CSRF_COOKIE_SAMESITE = os.getenv("CSRF_COOKIE_SAMESITE", "Lax")  # can be "Strict" or "None"
 CSRF_COOKIE_NAME = os.getenv("CSRF_COOKIE_NAME", "csrftoken")
 
@@ -247,14 +251,35 @@ SECURE_SSL_REDIRECT = False
 # -----------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "tracker.auth.AgentKeyAuthentication",
         "rest_framework.authentication.SessionAuthentication",
-        # "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.BasicAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
-}
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        # generous for agent firehose in prod; set to "" or remove in dev if needed
+        "agent_ingest": "6000/minute",     # bursts OK, adjust as you like
 
+        # UI
+        "ui_read": "120/minute",           # list/detail GETs
+        "ui_write": "60/minute",           # POST/PUT/DELETE from the UI
+
+        # AI work (expensive)
+        "ai_generate": "20/minute",        # AI suggestions / timecard gen
+
+        # public pings/identity (optional guard)
+        "public_hello": "120/minute",
+
+        # legacy buckets (used only if you explicitly apply User/AnonRateThrottle)
+        "anon": "100/minute",
+        "user": "1000/minute",
+    },
+}
 # (Optional) If you truly need to exempt a path from CSRF, you'll need custom middleware.
 # The CSRF_EXEMPT_URLS list by itself isn't used by Django.
 

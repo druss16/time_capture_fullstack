@@ -3,37 +3,51 @@ from . import views
 
 urlpatterns = [
     # -------------------------------
-    # Basic + ingestion endpoints
+    # Basic / Health
     # -------------------------------
-    path("ping/", views.ping),
-    path("raw-events/", views.raw_events),              # For authenticated agent posts
-    path("ingest-raw-event/", views.raw_events),  # Dev/open ingestion
-    path("blocks-today/", views.blocks_today),
+    path("ping/", views.ping, name="ping"),
 
     # -------------------------------
-    # Suggestions (Rule-based + AI)
+    # Agent Pairing & Communication
     # -------------------------------
-    path("suggestions-today/", views.suggestions_today),        # old rule-based
-    path("ai-suggestions-today/", views.ai_suggestions_today, name="ai_suggestions_today"),
-    path("label-block/", views.label_block, name="label_block"),
-    path("blocks/suggestions/", views.ai_suggestions_today, name="ai_suggestions_today"),  # main unified route
+    path("agents/pair/issue/", views.agents_pair_issue, name="agents_pair_issue"),   # web → get pairing code (auth required)
+    path("agents/pair/claim/", views.agents_pair_claim, name="agents_pair_claim"),   # agent → redeem code, receive api_key
+    path("agents/hello2/", views.agents_hello2, name="agents_hello2"),               # device heartbeat (DeviceKey)
+    path("raw-events/", views.raw_events, name="raw_events"),                        # event ingestion (DeviceKey)
+
+    # Optional: browser hint for SPA identity (non-auth)
+    path("browser/hello/", views.browser_hello, name="browser_hello"),
+
+    # Device management (web UI)
+    path("devices/", views.my_devices, name="my_devices"),
+    path("devices/<int:pk>/revoke/", views.revoke_device, name="revoke_device"),
+
+    # Admin / control & identity
+    path("agent/control/", views.agent_control, name="agent_control"),
+    path("whoami/", views.whoami, name="whoami"),
+
+    # -------------------------------
+    # Blocks / Suggestions (Rule-based + AI)
+    # -------------------------------
+    path("blocks-today/", views.blocks_today, name="blocks_today"),
+    path("blocks/suggestions/", views.ai_suggestions_today, name="ai_suggestions_today"),
     path("blocks/suggestions/rule-based/", views.suggestions_today, name="suggestions_today"),
     path("blocks/<int:block_id>/classify/", views.save_block_classification, name="save_block_classification"),
-    path("recent-blocks/", views.recent_classified_blocks, name="recent-classified-blocks"),
+    path("recent-blocks/", views.recent_classified_blocks, name="recent_classified_blocks"),
+    path("label-block/", views.label_block, name="label_block"),
 
     # -------------------------------
-    # Timecard Management
+    # Timecards
     # -------------------------------
-    path("timecards/generate/", views.generate_timecard),
+    path("timecards/generate/", views.generate_timecard, name="generate_timecard"),
     path("timecards/", views.list_timecards, name="list_timecards"),
     path("timecards/summary/", views.timecard_summary, name="timecard_summary"),
+    path("timecards/summary/day/", views.timecards_summary_day, name="timecards_summary_day"),
     path("timecards/<int:timecard_id>/approve/", views.approve_timecard, name="approve_timecard"),
     path("timecards/<int:timecard_id>/reject/", views.reject_timecard, name="reject_timecard"),
-    path("timecards/summary/day/", views.timecards_summary_day, name="timecard-summary-day"),
-
 
     # -------------------------------
-    # Organization Settings
+    # Organization / Settings
     # -------------------------------
     path("settings/organization/", views.organization_settings, name="organization_settings"),
     path("settings/entities/", views.known_entities, name="known_entities"),
@@ -41,24 +55,7 @@ urlpatterns = [
     path("settings/training/", views.save_training_example, name="save_training_example"),
 
     # -------------------------------
-    # Auto Provision User (Agent Handshake)
+    # Misc / CSRF
     # -------------------------------
-    path("agents/hello/", views.agents_hello, name="agents_hello"),
-    path("browser/hello/", views.browser_hello),
-
-    path("get-csrf/", views.get_csrf),
-
-
-    # -------------------------------
-    # Agent Control (Admin Kill-Switch)
-    # -------------------------------
-    # web (must be logged-in in browser)
-    path("pair/start/", views.pair_start),
-    path("devices/", views.my_devices),
-    path("devices/<int:pk>/revoke/", views.revoke_device),
-
-    # agent pairing
-    path("pair/complete/", views.pair_complete),
-    path("agent/control/", views.agent_control, name="agent_control"),
-    path("whoami/", views.whoami, name="whoami"),
+    path("get-csrf/", views.get_csrf, name="get_csrf"),
 ]

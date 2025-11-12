@@ -15,6 +15,25 @@ urlpatterns = [
     path("agents/hello2/", views.agents_hello2, name="agents_hello2"),               # device heartbeat (DeviceKey)
     path("raw-events/", views.raw_events, name="raw_events"),                        # event ingestion (DeviceKey)
 
+        # === ADD THESE 6 NEW ROUTES HERE ===
+    path("client/set-current", views.set_current_client, name="set_current_client"),
+    path("client/current", views.get_current_client, name="get_current_client"),
+    path("clients/list", views.list_clients, name="list_clients"),
+    path("context/guess", views.context_guess, name="context_guess"),
+    path("context/confirm", views.context_confirm, name="context_confirm"),
+    path("context/reject", views.context_reject, name="context_reject"),
+    # path('bulk-assign/', views.dbulk_assign_current_client, name='bulk_assign_current_client'),
+
+    # === END NEW ROUTES ===
+
+    # 👇 ADD THESE NEW ROUTES:
+    path("clients/", views.create_client, name="create_client"),  # POST to create client
+    path("import-clients-csv/", views.import_clients_csv, name="import_clients_csv"),  # POST to import CSV
+    path("profile/", views.user_profile, name="user_profile"),  # GET user profile
+    path("onboarding/complete", views.complete_onboarding, name="complete_onboarding"),  # POST to complete onboarding
+
+    path("today-time/", views.today_time, name="today_time"),
+
     # Optional: browser hint for SPA identity (non-auth)
     path("browser/hello/", views.browser_hello, name="browser_hello"),
 

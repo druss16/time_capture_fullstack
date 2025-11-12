@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "tracker.apps.TrackerConfig",
     "django_celery_results",
+    "django_celery_beat",
 
 ]
 
@@ -233,6 +234,9 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:7123",
     # add https variants if you test with TLS locally
 ]
+
+CORS_ALLOW_CREDENTIALS = True
+
 
 # Cookies (dev-friendly)
 SESSION_COOKIE_SAMESITE = "Lax"

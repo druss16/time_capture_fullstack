@@ -1,0 +1,5 @@
+client,code,project,active,contact,email
+Acme Corporation,ACME,Tax Prep 2024,true,John Smith,john@acme.com
+Beta Industries,BETA,Audit,true,Jane Doe,jane@beta.com
+Gamma LLC,GAMMA,,true,Bob Johnson,bob@gamma.com
+Delta Partners,DELTA,Consulting,false,,,

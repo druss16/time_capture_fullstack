@@ -31,7 +31,7 @@ services:
     depends_on:
       - api
       - redis
-    command: python -m celery -A timeserver.celery_app worker -l info --concurrency=2
+    command: python -m celery -A celery_app worker -l info --concurrency=2
     restart: unless-stopped
 
   beat:
@@ -44,7 +44,7 @@ services:
     depends_on:
       - api
       - redis
-    command: python -m celery -A timeserver.celery_app beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: python -m celery -A celery_app beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     restart: unless-stopped
 
   redis:

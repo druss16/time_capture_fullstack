@@ -15,25 +15,77 @@ class RawEvent(models.Model):
     window_title = models.TextField(blank=True, null=True)
     url = models.TextField(blank=True, null=True)
     file_path = models.TextField(blank=True, null=True)
-
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-
-    # NEW: persist the agent that produced the event
     device_id = models.CharField(max_length=64, db_index=True, default="unknown")
-
     hostname = models.CharField(max_length=255, blank=True, null=True, default="unknown")
     ctx = models.JSONField(default=dict, blank=True)
-
+    
+    # NEW: Store which client was selected when this event was captured
+    current_client_id = models.IntegerField(null=True, blank=True, db_index=True)
+    
     class Meta:
         indexes = [
             models.Index(fields=["ts_utc"]),
-            models.Index(fields=["user", "device_id", "ts_utc"]),  # NEW: fast day queries
+            models.Index(fields=["user", "device_id", "ts_utc"]),
             models.Index(fields=["user", "hostname"]),
         ]
-
 # ===========================
 # ======  AGENT MODELS  =====
 # ===========================
+# Add this model to tracker/models.py
+# Add it near the other Agent models (after AgentDevice, before Client)
+
+from django.db import models
+from django.conf import settings
+from django.utils import timezone
+
+class CurrentClient(models.Model):
+    """
+    Tracks which client the user is currently working on for each device.
+    This enables auto-tagging of events and blocks with the selected client.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="current_clients",
+        db_index=True,
+    )
+    device_id = models.IntegerField(
+        default=0,
+        db_index=True,
+        help_text="AgentDevice.id for per-device client selection (0 = all devices)"
+    )
+    client = models.ForeignKey(
+        'Client',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="current_selections",
+    )
+    started_at = models.DateTimeField(
+        default=timezone.now,
+        help_text="When the user switched to this client"
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text="Last time this selection was confirmed/updated"
+    )
+
+    class Meta:
+        unique_together = [["user", "device_id"]]
+        indexes = [
+            models.Index(fields=["user", "device_id"]),
+            models.Index(fields=["user", "updated_at"]),
+        ]
+        verbose_name = "Current Client Selection"
+        verbose_name_plural = "Current Client Selections"
+
+    def __str__(self):
+        username = getattr(self.user, 'username', self.user_id)
+        client_name = self.client.name if self.client else "None"
+        return f"{username} → {client_name}"
+
+
 class AgentSession(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, db_index=True)
     hostname = models.CharField(max_length=120, db_index=True)
@@ -170,15 +222,28 @@ class AgentPairCode(models.Model):
 # ===========================
 class Client(models.Model):
     org = models.ForeignKey(Group, on_delete=models.CASCADE)
-    name = models.CharField(max_length=200)
+    name = models.CharField(max_length=255)
+    
+    # ✅ ADD THIS FIELD
+    code = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text="Short code like 'ACME' or 'JOHN'"
+    )
+    
     is_active = models.BooleanField(default=True)
-
+    
     class Meta:
-        unique_together = (("org", "name"),)
-        indexes = [models.Index(fields=["org", "name"])]
-
-    def __str__(self):
-        return f"{self.name}"
+        # ✅ ADD THIS - Prevents duplicate codes per org
+        unique_together = [['org', 'code']]
+    
+    def save(self, *args, **kwargs):
+        # ✅ AUTO-GENERATE CODE IF EMPTY
+        if not self.code and self.name:
+            # Take first 4 letters, uppercase, remove spaces
+            self.code = self.name[:10].upper().replace(' ', '')[:10]
+        super().save(*args, **kwargs)
 
 
 class Project(models.Model):
@@ -220,6 +285,9 @@ class Block(models.Model):
     url = models.TextField(blank=True, default="")
     file_path = models.TextField(blank=True, default="")
     hints = models.JSONField(default=dict, blank=True)
+    
+    app_name = models.CharField(max_length=255, blank=True, default="")
+    bundle_id = models.CharField(max_length=255, blank=True, default="")
 
     day = models.DateField(db_index=True, null=True, blank=True)
     minutes = models.IntegerField(null=True, blank=True)

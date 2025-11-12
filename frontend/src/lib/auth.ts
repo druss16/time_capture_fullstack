@@ -10,3 +10,4 @@ export async function browserRemember(API_BASE: string, username: string, host?:
     }),
   });
 }
+

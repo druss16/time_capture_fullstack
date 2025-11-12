@@ -24,6 +24,9 @@ import getpass
 from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 
+from urllib.parse import urlparse     # <-- ADD THIS AT TOP LEVEL with other imports
+from timetracker_gui import run_gui_app, GUI_AVAILABLE
+
 from Quartz import (
     CGWindowListCopyWindowInfo,
     kCGWindowListOptionOnScreenOnly,
@@ -34,6 +37,19 @@ from Quartz import (
     kCGEventSourceStateCombinedSessionState,
     kCGEventMouseMoved,
 )
+
+# Notifications (PyObjC)
+try:
+    import objc
+    from Foundation import NSObject, NSLog
+    from UserNotifications import (
+        UNUserNotificationCenter, UNMutableNotificationContent, UNNotificationRequest,
+        UNNotificationAction, UNNotificationCategory, UNNotificationActionOptionForeground
+    )
+    NOTIF_AVAILABLE = True
+except Exception:
+    NOTIF_AVAILABLE = False
+
 
 # ---------------- Config ----------------
 CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
@@ -100,6 +116,46 @@ MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS"
 MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 20))
 
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
+
+# ---- Nudge/Guess settings (NEW) ----
+NUDGE_ENABLED        = bool(_get("nudge_enabled", os.getenv("AGENT_NUDGE_ENABLED") == "1") or True)
+GUESS_POLL_SECONDS   = int(_get("guess_poll_seconds", os.getenv("AGENT_GUESS_POLL_SECONDS") or 10))  # every 10s
+GUESS_MIN_CONF       = float(_get("guess_min_conf", os.getenv("AGENT_GUESS_MIN_CONF") or 0.45))      # show nudge at/above
+GUESS_MAX_CONF       = float(_get("guess_max_conf", os.getenv("AGENT_GUESS_MAX_CONF") or 0.80))      # auto-assign above this
+NUDGE_SNOOZE_MIN     = int(_get("nudge_snooze_min", os.getenv("AGENT_NUDGE_SNOOZE_MIN") or 20))      # 20-min snooze per client
+NUDGE_TIMEOUT_SEC    = int(_get("nudge_timeout_sec", os.getenv("AGENT_NUDGE_TIMEOUT_SEC") or 15))     # dialog timeout
+CONTEXT_GUESS_URL    = _get("context_guess_url", None) or f"{API_BASE}/context/guess"
+CONTEXT_CONFIRM_URL  = _get("context_confirm_url", None) or f"{API_BASE}/context/confirm"
+CONTEXT_REJECT_URL   = _get("context_reject_url", None) or f"{API_BASE}/context/reject"
+
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 20))
+IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
+
+# --- Tools vs Clients (NEW) ---
+TOOL_BUNDLES = set(
+    [b.strip() for b in (_get("tool_bundles", os.getenv("AGENT_TOOL_BUNDLES")) or "").split(",") if b.strip()]
+) or {
+    "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders",
+    "com.jetbrains.pycharm", "com.jetbrains.intellij", "com.jetbrains.datagrip",
+    "com.apple.dt.Xcode", "org.sublimetext.4",
+    "com.googlecode.iterm2", "dev.warp.Warp-Stable", "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm", "org.alacritty", "com.apple.Terminal",
+    "com.google.Chrome", "com.google.Chrome.canary", "com.google.Chrome.beta",
+    "com.apple.Safari", "com.apple.SafariTechnologyPreview",
+    "com.brave.Browser", "org.mozilla.firefox", "com.microsoft.edgemac",
+    "com.apple.mail", "com.microsoft.Outlook",
+    "com.tinyspeck.slackmacgap", "com.microsoft.teams2", "us.zoom.xos", "notion.id",
+}
+
+TOOL_HOSTS = set(
+    [h.strip().lower() for h in (_get("tool_hosts", os.getenv("AGENT_TOOL_HOSTS")) or "").split(",") if h.strip()]
+) or {
+    "chatgpt.com", "openai.com", "localhost", "127.0.0.1",
+    "github.com", "gitlab.com", "bitbucket.org",
+    "stackoverflow.com", "vercel.app", "render.com"
+}
+
+
 
 # ---------------- Logging ----------------
 def log(msg: str):
@@ -198,6 +254,203 @@ def osa_retry(script: str, tries: int = 2, delay: float = 0.15) -> str:
             return out
         time.sleep(delay)
     return ""
+
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Add these helper functions to main.py (near the top, after imports)
+"""
+
+import json
+import urllib.request
+import urllib.error
+
+# ==============================================================================
+# BACKEND CLIENT SYNC HELPERS (Add to main.py)
+# ==============================================================================
+
+def get_current_client_from_backend(api_base: str, api_key: str) -> dict:
+    """
+    Fetch current client from backend on startup.
+    Returns: {"client_id": int, "client_name": str} or {"client_id": None}
+    """
+    if not api_base or not api_key:
+        return {"client_id": None, "client_name": None}
+    
+    url = f"{api_base}/client/current"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Correct!
+    req.add_header("Content-Type", "application/json")
+    
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+            return data
+    except urllib.error.HTTPError as e:
+        log(f"[CLIENT] HTTP error fetching current client: {e.code}")
+        return {"client_id": None, "client_name": None}
+    except Exception as e:
+        log(f"[CLIENT] Failed to fetch current client: {e}")
+        return {"client_id": None, "client_name": None}
+
+
+def set_current_client_on_backend(api_base: str, api_key: str, 
+                                   client_id: int = None, client_name: str = None) -> bool:
+    """
+    Tell backend about client switch.
+    Returns True on success.
+    """
+    if not api_base or not api_key:
+        return False
+    
+    url = f"{api_base}/client/set-current"
+    
+    payload = {}
+    if client_id:
+        payload["client_id"] = client_id
+    if client_name:
+        payload["client_name"] = client_name
+    
+    req = urllib.request.Request(
+        url, 
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST"
+    )
+    req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Fixed
+    req.add_header("Content-Type", "application/json")
+    
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+            log(f"[CLIENT] Backend updated: {data.get('message', 'ok')}")
+            # Also log retroactive blocks
+            retro = data.get('retroactive_blocks', 0)
+            if retro > 0:
+                log(f"[CLIENT] Retroactively assigned {retro} recent blocks")
+            return True
+    except urllib.error.HTTPError as e:
+        log(f"[CLIENT] HTTP error updating backend: {e.code}")
+        return False
+    except Exception as e:
+        log(f"[CLIENT] Failed to update backend: {e}")
+        return False
+
+
+def fetch_clients_from_backend(api_base: str, api_key: str) -> list:
+    """
+    Fetch list of clients from backend for GUI menu.
+    Returns: [{"id": 1, "name": "Acme Corp", "code": "ACME"}, ...]
+    """
+    if not api_base or not api_key:
+        return []
+    
+    url = f"{api_base}/clients/list"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Fixed
+    req.add_header("Content-Type", "application/json")
+    
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+            if isinstance(data, list):
+                log(f"[CLIENT] Loaded {len(data)} clients from backend")
+                return data
+            return []
+    except urllib.error.HTTPError as e:
+        log(f"[CLIENT] HTTP error fetching clients: {e.code}")
+        return []
+    except Exception as e:
+        log(f"[CLIENT] Failed to fetch clients: {e}")
+        return []
+
+# Add these functions to main.py after fetch_clients_from_backend (around line 360)
+
+def set_current_client_backend(api_base: str, api_key: str, client_id: int) -> bool:
+    """
+    Set the current client on the backend.
+    POST /api/client/set-current
+    """
+    if not api_base or not api_key:
+        return False
+    
+    url = f"{api_base}/client/set-current"
+    data = {"client_id": client_id}
+    
+    req = urllib.request.Request(url, method="POST")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+    
+    try:
+        with urllib.request.urlopen(req, data=json.dumps(data).encode('utf-8'), timeout=6) as resp:
+            result = json.loads(resp.read())
+            if result.get("ok"):
+                log(f"[CLIENT] Set current client to ID {client_id}")
+                return True
+            else:
+                log(f"[CLIENT] Failed to set client: {result.get('error', 'unknown')}")
+                return False
+    except Exception as e:
+        log(f"[CLIENT] Error setting current client: {e}")
+        return False
+
+
+def get_current_client_backend(api_base: str, api_key: str) -> dict:
+    """
+    Get the current client from the backend.
+    GET /api/client/current
+    Returns: {"id": 1, "name": "Acme Corp", "code": "ACME"} or {}
+    """
+    if not api_base or not api_key:
+        return {}
+    
+    url = f"{api_base}/client/current"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+    
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+            if data.get("client"):
+                log(f"[CLIENT] Current client: {data['client'].get('name')}")
+                return data["client"]
+            else:
+                log("[CLIENT] No current client set on backend")
+                return {}
+    except Exception as e:
+        log(f"[CLIENT] Error getting current client: {e}")
+        return {}
+
+# ---------------- Native notifications (UNUserNotificationCenter) ----------------
+_NOTIFICATION_CATEGORY_ID = "MAVOPS_TIME_NUDGE"
+_ACTION_YES = "ACTION_YES"
+_ACTION_NO  = "ACTION_NO"
+
+# storage for in-flight prompts by request id
+_PENDING_PROMPTS = {}
+
+def _post_nudge_decision_async(is_yes: bool, data: dict):
+    """Call /context/confirm or /context/reject asynchronously."""
+    def _run():
+        try:
+            headers = api_headers(data["os_user"], data["hostname"])
+            payload = {
+                "client_id": data["client_id"],
+                "confidence": data["confidence"],
+                "hostname": data["hostname"],
+                "device_id": get_device_id(),
+                "os_username": data["os_user"],
+                "prompt_id": data["prompt_id"],
+                "channel": "agent",
+            }
+            url = CONTEXT_CONFIRM_URL if is_yes else CONTEXT_REJECT_URL
+            http_post_json(url, payload, headers, timeout=6)
+            log(f"[NUDGE] {'Confirmed' if is_yes else 'Rejected'} via notification: {data['client_name']} ({data['client_id']})")
+        except Exception as e:
+            log(f"[NUDGE] post decision error: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+
 
 # ------------- Mouse Idle --------------
 def mouse_idle_seconds() -> float:
@@ -400,6 +653,22 @@ def http_get_json(url: str, headers: dict, timeout=6) -> dict:
         log(f"[CTRL] get error: {e}")
         return {}
 
+def looks_toolish(bundle_id: Optional[str], url: Optional[str]) -> tuple[bool, str, str]:
+    """Return (toolish, reason, host)."""
+    b = (bundle_id or "").strip()
+    host = ""
+    if url:
+        try:
+            host = (urlparse(url).hostname or "").lower()
+        except Exception:
+            host = ""
+    if b in TOOL_BUNDLES:
+        return True, "bundle", host
+    if host and (host in TOOL_HOSTS or host.startswith("localhost") or host.startswith("127.")):
+        return True, "host", host
+    return False, "", host
+
+
 # ---------------- Device identity ----------------
 def get_device_id() -> str:
     try:
@@ -495,6 +764,7 @@ def drop_api_key():
     global API_KEY
     API_KEY = None
 
+
 # ---------------- Handshake & control ----------------
 SERVER_USER_ID = None
 
@@ -534,6 +804,340 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
         log(f"[CTRL] Stop received from server: reason={data.get('reason','')}")
     return stop
 
+
+# -------------- Guess/Nudge worker (NEW) --------------
+_nudge_lock = threading.Lock()
+_last_nudge: Dict[str, float] = {}   # key = f"{user}:{client_id}", val = epoch seconds until allowed again
+
+def _snoozed(user: str, client_id: int) -> bool:
+    key = f"{user}:{client_id}"
+    until = _last_nudge.get(key, 0)
+    return time.time() < until
+
+def _snooze(user: str, client_id: int, minutes: int):
+    key = f"{user}:{client_id}"
+    _last_nudge[key] = time.time() + minutes * 60
+
+# ---- Notification delegate (unique, guarded, verbose) ----
+# ---- Notification delegate (single definition only) ----
+
+
+class _NotificationDelegate(NSObject):
+    """
+    Handles action responses from Notification Center.
+    Maps action → confirm/reject and logs verbosely.
+    """
+    def userNotificationCenter_didReceiveNotificationResponse_withCompletionHandler_(self, center, response, completion):
+        try:
+            req = response.notification().request()
+            req_id = str(req.identifier())
+            action_id = str(response.actionIdentifier())
+
+            # Make sure we can see *something* in your terminal
+            NSLog(f"[NOTIF] delegate fired: req_id={req_id} action_id={action_id}")
+
+            data = _PENDING_PROMPTS.pop(req_id, None)
+            if not data:
+                NSLog(f"[NOTIF] no pending meta for {req_id} (ignored)")
+            else:
+                # Treat default body-tap as YES; dismiss = None
+                DEFAULT = "com.apple.UNNotificationDefaultActionIdentifier"
+                DISMISS  = "com.apple.UNNotificationDismissActionIdentifier"
+
+                if action_id == _ACTION_YES or action_id == DEFAULT:
+                    _post_nudge_decision_async(True, data)
+                    NSLog(f"[NUDGE] Confirmed via notification: {data['client_name']} ({data['client_id']})")
+                elif action_id == _ACTION_NO:
+                    _post_nudge_decision_async(False, data)
+                    NSLog(f"[NUDGE] Rejected via notification: {data['client_name']} ({data['client_id']})")
+                elif action_id == DISMISS:
+                    NSLog(f"[NUDGE] Dismissed notification: {data['client_name']} ({data['client_id']})")
+                else:
+                    NSLog(f"[NOTIF] Unhandled action_id={action_id}")
+
+                # If a waiter is present, release it
+                evt = data.get("_evt")
+                if evt:
+                    try: evt.set()
+                    except Exception: pass
+
+        except Exception as e:
+            NSLog(f"[NOTIF] error in delegate: {e}")
+
+        if completion:
+            completion()
+
+
+_ACTION_YES = "ACTION_YES"
+_ACTION_NO  = "ACTION_NO"
+_NOTIFICATION_CATEGORY_ID = "MAVOPS_TIME_NUDGE"
+
+class NotificationManager:
+    def __init__(self):
+        self.center = None
+        self.delegate = None
+        self.ready = False
+
+    def setup(self):
+        if not NOTIF_AVAILABLE:
+            log("[NOTIF] UserNotifications not available; will fallback to AppleScript.")
+            return False
+        try:
+            self.center = UNUserNotificationCenter.currentNotificationCenter()
+
+            # Hook delegate once (avoid double-registering)
+            if not self.delegate:
+                self.delegate = _NotificationDelegate.alloc().init()
+                self.center.setDelegate_(self.delegate)
+
+            # Register actions + category
+            yes_action = UNNotificationAction.actionWithIdentifier_title_options_(
+                _ACTION_YES, "Yes", UNNotificationActionOptionForeground
+            )
+            no_action = UNNotificationAction.actionWithIdentifier_title_options_(
+                _ACTION_NO, "No", 0
+            )
+            category = UNNotificationCategory.categoryWithIdentifier_actions_intentIdentifiers_options_(
+                _NOTIFICATION_CATEGORY_ID, [yes_action, no_action], [], 0
+            )
+            self.center.setNotificationCategories_({category})
+
+            # Request authorization (alert + sound)
+            evt = threading.Event()
+            def _auth(granted, err):
+                log(f"[NOTIF] authorization granted={bool(granted)}")
+                self.ready = bool(granted)
+                evt.set()
+
+            self.center.requestAuthorizationWithOptions_completionHandler_(1 << 0 | 1 << 2, _auth)
+            evt.wait(timeout=5)
+            return self.ready
+        except Exception as e:
+            log(f"[NOTIF] setup error: {e}")
+            self.ready = False
+            return False
+
+    def notify_nudge(self, *, prompt_id: str, client_id: int, client_name: str,
+                     confidence: float, hostname: str, os_user: str) -> bool:
+        if not (self.ready and NOTIF_AVAILABLE):
+            return False
+        try:
+            req_id = f"mavops-{prompt_id}"
+
+            # Stash metadata so delegate knows what to post
+            _PENDING_PROMPTS[req_id] = {
+                "prompt_id": prompt_id,
+                "client_id": int(client_id),
+                "client_name": client_name,
+                "confidence": float(confidence),
+                "hostname": hostname,
+                "os_user": os_user,
+            }
+
+            content = UNMutableNotificationContent.alloc().init()
+            content.setTitle_("Time Tracker")
+            content.setSubtitle_(f"Are you working on “{client_name}”?")
+            content.setBody_(f"Confidence {int(confidence*100)}% • Tap Yes or No")
+            content.setCategoryIdentifier_(_NOTIFICATION_CATEGORY_ID)
+
+            request = UNNotificationRequest.requestWithIdentifier_content_trigger_(req_id, content, None)
+            self.center.addNotificationRequest_withCompletionHandler_(request, None)
+            log(f"[NOTIF] scheduled id={req_id}")
+            return True
+        except Exception as e:
+            log(f"[NOTIF] schedule error: {e}")
+            return False
+
+
+
+
+# ---------------------------------------------------------
+# Singleton
+NOTIFIER = NotificationManager()
+
+
+# --- Native Yes/No prompt (AppleScript) with timeout (NEW) ---
+def prompt_yes_no(title: str, message: str, timeout_s: int = 15) -> Optional[bool]:
+    """
+    Returns True if 'Yes', False if 'No', None if timed out or dismissed.
+    Non-throwing. Runs in a background thread safe manner.
+    """
+    try:
+        # AppleScript dialog with timeout & custom buttons
+        script = f'''
+        display dialog {json.dumps(message)} with title {json.dumps(title)}
+            buttons {{"No","Yes"}} default button "Yes" giving up after {int(timeout_s)}
+        '''
+        out = osa(script)  # e.g., "button returned:Yes, gave up:false"
+        out_l = out.lower()
+        if "gave up:true" in out_l:
+            return None
+        if "button returned:yes" in out_l:
+            return True
+        if "button returned:no" in out_l:
+            return False
+        # Some localized systems may vary—best-effort parse:
+        if "yes" in out_l:
+            return True
+        if "no" in out_l:
+            return False
+        return None
+    except Exception:
+        return None
+# ---------------------------------------------------------
+
+def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_menu_bar=None):
+    """
+    Polls /context/guess. If GUI available, shows prompt in floating window.
+    Otherwise falls back to notification/AppleScript.
+    
+    UPDATED: Now accepts gui_menu_bar parameter
+    """
+    if not NUDGE_ENABLED:
+        log("[NUDGE] Disabled.")
+        return
+
+    log(f"[NUDGE] Guess worker started (every {GUESS_POLL_SECONDS}s, conf {GUESS_MIN_CONF}..{GUESS_MAX_CONF}, snooze {NUDGE_SNOOZE_MIN}m)")
+    headers = api_headers(os_user, hostname)
+
+    def _fetch():
+        params = f"?host={hostname}&device_id={get_device_id()}"
+        return http_get_json(CONTEXT_GUESS_URL + params, headers=headers)
+
+    # Eager first check so the nudge can appear right after launch.
+    try:
+        data = _fetch()
+    except Exception as e:
+        log(f"[NUDGE] eager fetch error: {e}")
+        data = None
+
+    while not stop_event.is_set():
+        try:
+            if data is None:
+                data = _fetch()
+
+            if not data:
+                data = None
+                time.sleep(GUESS_POLL_SECONDS)
+                continue
+
+            client_id = data.get("client_id")
+            client_name = data.get("client_name") or ""
+            conf = float(data.get("confidence") or 0.0)
+            # Reset for next loop iteration
+            data = None
+
+            if not client_id or conf <= 0:
+                time.sleep(GUESS_POLL_SECONDS)
+                continue
+
+            # Server will auto-assign above max
+            if conf >= GUESS_MAX_CONF:
+                log(f"[NUDGE] High confidence {conf:.2f} for {client_name} (id={client_id}) → no prompt.")
+                time.sleep(GUESS_POLL_SECONDS)
+                continue
+
+            # Only prompt in mid window
+            if conf < GUESS_MIN_CONF:
+                time.sleep(GUESS_POLL_SECONDS)
+                continue
+
+            # Snooze check
+            if _snoozed(os_user, int(client_id)):
+                time.sleep(GUESS_POLL_SECONDS)
+                continue
+
+            with _nudge_lock:
+                if _snoozed(os_user, int(client_id)):
+                    time.sleep(GUESS_POLL_SECONDS)
+                    continue
+
+                # === TRY GUI FIRST ===
+                if gui_menu_bar:
+                    prompt_id = f"{int(time.time())}-{client_id}"
+                    prompt_data = {
+                        "prompt_id": prompt_id,
+                        "client_id": int(client_id),
+                        "client_name": client_name,
+                        "confidence": float(conf),
+                        "hostname": hostname,
+                        "os_user": os_user,
+                    }
+                    gui_menu_bar.show_client_prompt(
+                        int(client_id), client_name, float(conf), prompt_data
+                    )
+                    log(f"[NUDGE] GUI prompt shown for {client_name} ({conf:.2f})")
+                    _snooze(os_user, int(client_id), NUDGE_SNOOZE_MIN)
+                    continue
+                # === END GUI prompt ===
+
+                # Fallback: Prefer native interactive notification if available
+                if NOTIFIER and getattr(NOTIFIER, "ready", False):
+                    prompt_id = f"{int(time.time())}-{client_id}"
+                    did_schedule = NOTIFIER.notify_nudge(
+                        prompt_id=prompt_id,
+                        client_id=int(client_id),
+                        client_name=client_name,
+                        confidence=float(conf),
+                        hostname=hostname,
+                        os_user=os_user,
+                    )
+                    if did_schedule:
+                        log(f"[NUDGE] Notification scheduled for {client_name} ({conf:.2f}).")
+                        _snooze(os_user, int(client_id), NUDGE_SNOOZE_MIN)
+                        continue
+                    else:
+                        log("[NUDGE] Notification schedule failed; falling back to AppleScript.")
+
+                # Fallback: AppleScript modal (blocking)
+                msg = f"Are you working on {client_name} right now?\n(confidence {int(conf*100)}%)"
+                ans = prompt_yes_no("Time Tracker", msg, timeout_s=NUDGE_TIMEOUT_SEC)
+
+                if ans is True:
+                    try:
+                        payload = {
+                            "client_id": client_id,
+                            "confidence": conf,
+                            "hostname": hostname,
+                            "device_id": get_device_id(),
+                            "os_username": os_user,
+                        }
+                        http_post_json(CONTEXT_CONFIRM_URL, payload, headers=headers, timeout=6)
+                        log(f"[NUDGE] Confirmed {client_name} (id={client_id})")
+                    except Exception as e:
+                        log(f"[NUDGE] confirm error: {e}")
+                    finally:
+                        _snooze(os_user, int(client_id), NUDGE_SNOOZE_MIN)
+
+                elif ans is False:
+                    try:
+                        payload = {
+                            "client_id": client_id,
+                            "confidence": conf,
+                            "hostname": hostname,
+                            "device_id": get_device_id(),
+                            "os_username": os_user,
+                        }
+                        http_post_json(CONTEXT_REJECT_URL, payload, headers=headers, timeout=6)
+                        log(f"[NUDGE] Rejected {client_name} (id={client_id})")
+                    except Exception as e:
+                        log(f"[NUDGE] reject error: {e}")
+                    finally:
+                        _snooze(os_user, int(client_id), NUDGE_SNOOZE_MIN)
+
+                else:
+                    # Dismissed/timeout -> short snooze so we don't spam
+                    _snooze(os_user, int(client_id), max(5, min(NUDGE_SNOOZE_MIN, 10)))
+                    log(f"[NUDGE] Dismissed/timeout for {client_name} (id={client_id})")
+
+            # Sleep at end so first iteration can fire immediately after launch
+            time.sleep(GUESS_POLL_SECONDS)
+
+        except Exception as e:
+            log(f"[NUDGE] worker error: {e}")
+            time.sleep(max(5, GUESS_POLL_SECONDS))
+
+
 # ---------------- Posting ----------------
 def post_event_async(event: dict, user: str, host: str):
     if not POST_URL:
@@ -564,7 +1168,6 @@ def post_event_async(event: dict, user: str, host: str):
 def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | None = None):
     app_name, bundle_id, title, url, fpath = sig
 
-    # use override if provided, otherwise now()
     if ts_override is not None:
         ts_dt = datetime.fromtimestamp(ts_override, tz=timezone.utc)
     else:
@@ -578,6 +1181,19 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
     )
     conn.commit()
 
+    # NEW: Get current client from backend
+    api_key = config.get("api_key") or API_KEY
+    current_client_id = None
+    current_client_name = None
+    if api_key and API_BASE:
+        try:
+            current = get_current_client_from_backend(API_BASE, api_key)
+            if current and current.get("client_id"):
+                current_client_id = current["client_id"]
+                current_client_name = current.get("client_name")
+        except Exception as e:
+            log(f"[CLIENT] Failed to get current client: {e}")
+
     payload = {
         "ts_utc": ts_iso,
         "app_name": app_name,
@@ -589,11 +1205,124 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
         "server_user_id": SERVER_USER_ID,
         "device_id": get_device_id(),
         "ctx": snapshot_ctx(),
+        "current_client_id": current_client_id,  # ← NEW
+        "current_client_name": current_client_name,  # ← NEW (for logging)
     }
+
+    toolish, tool_reason, tool_host = looks_toolish(bundle_id, url)
+    payload["toolish"] = bool(toolish)
+    if toolish:
+        payload["tool_reason"] = tool_reason
+        if tool_host:
+            payload["tool_host"] = tool_host
+
     post_event_async(payload, user, hostname)
-    log(f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} at {ts_iso}")
+    client_msg = f" → {current_client_name}" if current_client_name else ""
+    log(
+        f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} "
+        f"• url={url or '-'} • path={fpath or '-'}"
+        + (f" • toolish({tool_reason})" if toolish else "")
+        + client_msg
+        + f" at {ts_iso}"
+    )
+
+def handle_client_confirmed(client_id, client_name, prompt_data):
+    """
+    Called when user confirms a client via GUI.
+    MODIFIED: Now updates backend.
+    """
+    try:
+        # Original feedback to backend (you already have this)
+        payload = {
+            "client_id": client_id,
+            "confidence": prompt_data.get("confidence", 0),
+            "hostname": platform.node(),
+            "device_id": get_device_id(),
+            "os_username": get_os_username(),
+        }
+        http_post_json(CONTEXT_CONFIRM_URL, payload, 
+                      api_headers(get_os_username(), platform.node()), timeout=6)
+        
+        # NEW: Also set as current client
+        api_key = config.get("api_key") or API_KEY
+        if api_key and API_BASE:
+            set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
+        
+        log(f"[GUI] Client confirmed and set: {client_name}")
+    except Exception as e:
+        log(f"[GUI] confirm error: {e}")
+
+
+def handle_client_rejected(prompt_data):
+    """Called when user rejects a client via GUI"""
+    try:
+        payload = {
+            "client_id": prompt_data.get("client_id"),
+            "confidence": prompt_data.get("confidence", 0),
+            "hostname": platform.node(),
+            "device_id": get_device_id(),
+            "os_username": get_os_username(),
+        }
+        http_post_json(CONTEXT_REJECT_URL, payload,
+                      api_headers(get_os_username(), platform.node()), timeout=6)
+        log(f"[GUI] Client rejected")
+    except Exception as e:
+        log(f"[GUI] reject error: {e}")
+
+def fetch_today_time():
+    """Fetch today's time for GUI display"""
+    api_key = config.get("api_key") or API_KEY
+    if not api_key or not API_BASE:
+        return []
+    
+    url = f"{API_BASE}/today-time/"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+    
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+            if isinstance(data, list):
+                return data
+            return []
+    except Exception as e:
+        print(f"[GUI] Failed to fetch today's time: {e}")
+        return []
+
+def on_client_switch_from_menu(client_id: int, client_name: str):
+    """
+    NEW: Called when user manually switches client from menu bar.
+    This replaces your existing onSwitchClient_ handler.
+    """
+    # Update local state
+    if hasattr(gui_menu_bar, "state"):
+        gui_menu_bar.state.set_client(client_id, client_name)
+    
+    # Update backend
+    api_key = config.get("api_key") or API_KEY
+    if api_key and API_BASE:
+        success = set_current_client_on_backend(
+            API_BASE, api_key, 
+            client_id=client_id,
+            client_name=client_name
+        )
+        if success:
+            print(f"[CLIENT] Switched to: {client_name}")
+        else:
+            print(f"[CLIENT] Failed to sync switch to backend")
+    
+    # Update GUI display
+    if hasattr(gui_menu_bar, "updateMenu_"):
+        gui_menu_bar.updateMenu_(None)
+
+# ---------------- Main loop ----------------
 # ---------------- Main loop ----------------
 def run_agent():
+    """
+    Main agent function with GUI integration.
+    Starts tracking in background thread, runs GUI in main thread.
+    """
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
@@ -601,9 +1330,27 @@ def run_agent():
 
     start_context_bus(CONTEXT_PORT)
 
+    # === GUI INITIALIZATION ===
+    gui_menu_bar = None
+    if GUI_AVAILABLE:
+        try:
+            gui_menu_bar = run_gui_app(
+                on_client_confirmed=handle_client_confirmed,
+                on_client_rejected=handle_client_rejected,
+                get_today_time=fetch_today_time,
+                fetch_clients=lambda: fetch_clients_from_backend(API_BASE, API_KEY),  # ✅ Add this!
+                set_current_client=lambda client_id: set_current_client_backend(API_BASE, API_KEY, client_id),  # ✅ Add this!
+                get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY)  # ✅ Add this!
+            )
+            log("[GUI] Menu bar initialized")
+        except Exception as e:
+            log(f"[GUI] Failed to initialize: {e}")
+
     log("=== Mac Activity Agent starting… (Ctrl+C to stop) ===")
-    if os.path.exists(CONFIG_FILE): log(f"CONFIG={CONFIG_FILE} (loaded)")
-    else: log(f"CONFIG={CONFIG_FILE} (not found, using ENV)")
+    if os.path.exists(CONFIG_FILE): 
+        log(f"CONFIG={CONFIG_FILE} (loaded)")
+    else: 
+        log(f"CONFIG={CONFIG_FILE} (not found, using ENV)")
 
     log(f"DB_PATH={DB_PATH}")
     log(f"API_BASE={API_BASE}")
@@ -612,10 +1359,13 @@ def run_agent():
     log(f"CONTROL_URL={CONTROL_URL} (poll {CONTROL_POLL_S}s)")
     log(f"AX_AVAILABLE={AX_AVAILABLE}")
     log(f"POLL_SECONDS={POLL_SECONDS}, MIN_DWELL_SECONDS={MIN_DWELL_SECONDS}")
-    if EXCLUDE_BUNDLES: log(f"EXCLUDE_BUNDLES={sorted([b for b in EXCLUDE_BUNDLES if b])}")
+    if EXCLUDE_BUNDLES: 
+        log(f"EXCLUDE_BUNDLES={sorted([b for b in EXCLUDE_BUNDLES if b])}")
+    try:
+        log(f"[NUDGE] enabled={NUDGE_ENABLED} poll={GUESS_POLL_SECONDS}s conf=[{GUESS_MIN_CONF:.2f}..{GUESS_MAX_CONF:.2f}] snooze={NUDGE_SNOOZE_MIN}m timeout={NUDGE_TIMEOUT_SEC}s")
+    except Exception:
+        pass
 
-    conn = ensure_db()
-    cur = conn.cursor()
     os_user = get_os_username()
     hostname = platform.node()
     device_id = get_device_id()
@@ -634,7 +1384,6 @@ def run_agent():
 
     # Hello (with key)
     if not hello(HELLO_URL, os_user, hostname, device_id):
-        # If hello failed due to auth, drop key and try pairing once
         log("[HELLO] Attempting re-pair after hello failure.")
         drop_api_key()
         key = ensure_api_key_interactive(hostname)
@@ -643,114 +1392,189 @@ def run_agent():
             remove_pid()
             return
 
-    current_sig = None
-    dwell_start = None
-    paused = False  # NEW
+    # === NEW: RESTORE CLIENT STATE FROM BACKEND ===
+    api_key = config.get("api_key") or API_KEY
+    if api_key and API_BASE and gui_menu_bar:
+        try:
+            log("[CLIENT] Fetching current client from backend...")
+            current = get_current_client_from_backend(API_BASE, api_key)
+            
+            if current and current.get("client_id"):
+                if hasattr(gui_menu_bar, "state"):
+                    gui_menu_bar.state.set_client(
+                        current["client_id"], 
+                        current["client_name"]
+                    )
+                    log(f"[CLIENT] Restored from backend: {current['client_name']}")
+            else:
+                log("[CLIENT] No current client set on backend")
+            
+            # # Set up backend sync callbacks
+            # if hasattr(gui_menu_bar, 'fetch_clients_callback'):
+            #     gui_menu_bar.fetch_clients_callback = lambda: fetch_clients_from_backend(API_BASE, api_key)
+            
+            # if hasattr(gui_menu_bar, 'set_current_client_callback'):
+            #     gui_menu_bar.set_current_client_callback = lambda cid, cname: set_current_client_on_backend(API_BASE, api_key, cid, cname)
+            
+            # if hasattr(gui_menu_bar, 'get_current_client_callback'):
+            #     gui_menu_bar.get_current_client_callback = lambda: get_current_client_from_backend(API_BASE, api_key)
+            
+            # Trigger initial sync
+            if hasattr(gui_menu_bar, '_sync_from_backend'):
+                gui_menu_bar._sync_from_backend()
+            
+        except Exception as e:
+            log(f"[CLIENT] Failed to restore client state: {e}")
 
+    # --- Notifications: set up after hello, before worker ---
     try:
-        while True:
-            # admin kill-switch
-            if should_stop(CONTROL_URL, os_user, hostname):
-                log("[CTRL] Stopping agent per admin request.")
-                break
+        if NOTIFIER.setup():
+            log("[NOTIF] Ready (UNUserNotificationCenter).")
+        else:
+            log("[NOTIF] Not ready; will fallback to AppleScript prompt.")
+    except Exception as e:
+        log(f"[NOTIF] setup exception: {e}")
 
-            # --- NEW: mouse idle pause ---
-            # --- NEW: idle → record as its own dwell ("Uncategorized - Idle") ---
-            idle = mouse_idle_seconds()
+    # --- Guess/Nudge worker ---
+    stop_flag = threading.Event()
+    t_guess = None
+    try:
+        if NUDGE_ENABLED:
+            t_guess = threading.Thread(
+                target=guess_worker,
+                args=(hostname, os_user, stop_flag, gui_menu_bar),  # ← PASS gui_menu_bar
+                daemon=True
+            )
+            t_guess.start()
+    except Exception as e:
+        log(f"[NUDGE] failed to start worker: {e}")
 
-            if idle >= MOUSE_IDLE_PAUSE_S:
-                # If we're not already in an idle dwell, transition INTO idle now.
-                if current_sig != IDLE_SIG:
-                    # Finalize the active dwell up to the moment idle crossed the threshold,
-                    # so we don't over-count active time during idle.
+    # === TRACKING LOOP FUNCTION ===
+    def tracking_loop():
+        """Main tracking loop - monitors frontmost app and records dwell time"""
+        conn = ensure_db()
+        cur = conn.cursor()
+        current_sig = None
+        dwell_start = None
+        paused = False
+
+        try:
+            while True:
+                if should_stop(CONTROL_URL, os_user, hostname):
+                    log("[CTRL] Stopping agent per admin request.")
+                    break
+
+                idle = mouse_idle_seconds()
+                if idle >= MOUSE_IDLE_PAUSE_S:
+                    if current_sig != IDLE_SIG:
+                        if current_sig and dwell_start:
+                            now = time.time()
+                            effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                            dwell = effective_end - dwell_start
+                            if dwell >= MIN_DWELL_SECONDS:
+                                write_event(conn, cur, os_user, hostname, current_sig)
+                            else:
+                                log(f"[SKIP] dwell too short ({int(dwell)}s) before idle for {current_sig[0]}")
+                        current_sig = IDLE_SIG
+                        dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
+                        log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
+                    time.sleep(POLL_SECONDS)
+                else:
+                    if current_sig == IDLE_SIG and dwell_start:
+                        dwell = time.time() - dwell_start
+                        if dwell >= MIN_DWELL_SECONDS:
+                            write_event(conn, cur, os_user, hostname, current_sig)
+                            log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
+                        else:
+                            log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
+                        current_sig = None
+                        dwell_start = None
+
+                front = get_frontmost_app()
+                if not front:
+                    if PRINT_EVERY_POLL:
+                        log("[POLL] No frontmost")
+                    time.sleep(POLL_SECONDS)
+                    continue
+
+                app_name, bundle_id, pid, fallback_title = front
+
+                if bundle_id in EXCLUDE_BUNDLES:
+                    if PRINT_EVERY_POLL:
+                        log(f"[POLL] Excluded: {bundle_id}")
                     if current_sig and dwell_start:
-                        now = time.time()
-                        effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
-                        dwell = effective_end - dwell_start
+                        dwell = time.time() - dwell_start
+                        if dwell >= MIN_DWELL_SECONDS:
+                            write_event(conn, cur, os_user, hostname, current_sig)
+                    current_sig = None
+                    dwell_start = None
+                    time.sleep(POLL_SECONDS)
+                    continue
+
+                title_ax = get_window_title_via_ax(pid) or ""
+                title = title_ax or (fallback_title or "")
+
+                extras = try_get_url_or_path(bundle_id)
+                url, fpath = extras.get("url"), extras.get("file_path")
+                sig = (app_name, bundle_id, title, url, fpath)
+
+                if sig != current_sig:
+                    if current_sig and dwell_start:
+                        dwell = time.time() - dwell_start
                         if dwell >= MIN_DWELL_SECONDS:
                             write_event(conn, cur, os_user, hostname, current_sig)
                         else:
-                            log(f"[SKIP] dwell too short ({int(dwell)}s) before idle for {current_sig[0]}")
+                            log(f"[SKIP] dwell too short ({int(dwell)}s) for {current_sig[0]}")
+                    current_sig = sig
+                    dwell_start = time.time()
+                    log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
+                else:
+                    if PRINT_EVERY_POLL:
+                        log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")
 
-                    # Start an idle dwell beginning at the threshold boundary
-                    # (we approximate by starting now; most workflows don't need backdating)
-                    current_sig = IDLE_SIG
-                    dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)  # small nudge so idle has length
-                    log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
-                
-                # Remain in idle; do not attempt normal frontmost tracking until mouse moves again
                 time.sleep(POLL_SECONDS)
-                
-            else:
-                # Mouse moved. If we WERE in idle, finalize the idle dwell.
-                if current_sig == IDLE_SIG and dwell_start:
-                    dwell = time.time() - dwell_start
-                    if dwell >= MIN_DWELL_SECONDS:
-                        write_event(conn, cur, os_user, hostname, current_sig)
-                        log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
-                    else:
-                        log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
-                    # Clear and let normal tracking pick up the real frontmost app.
-                    current_sig = None
-                    dwell_start = None
-            # --- end idle-as-dwell logic ---
-            # --- end new pause logic ---
 
-            # (your existing logic continues below unchanged)
-            front = get_frontmost_app()
-            if not front:
-                if PRINT_EVERY_POLL:
-                    log("[POLL] No frontmost")
-                time.sleep(POLL_SECONDS)
-                continue
+        except KeyboardInterrupt:
+            log("=== Stopping (Ctrl+C) ===")
+            if current_sig and dwell_start:
+                dwell = time.time() - dwell_start
+                if dwell >= MIN_DWELL_SECONDS:
+                    write_event(conn, cur, os_user, hostname, current_sig)
+        finally:
+            try:
+                conn.close()  # Close connection
+                if stop_flag:
+                    stop_flag.set()
+                if t_guess is not None:
+                    t_guess.join(timeout=2.0)
+            except Exception:
+                pass
+            remove_pid()
+    # === END tracking_loop() ===
 
-            app_name, bundle_id, pid, fallback_title = front
+    # === START TRACKING THREAD ===
+    tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
+    tracking_thread.start()
+    log("[TRACKING] Started tracking thread")
 
-            # excludes
-            if bundle_id in EXCLUDE_BUNDLES:
-                if PRINT_EVERY_POLL:
-                    log(f"[POLL] Excluded: {bundle_id}")
-                if current_sig and dwell_start:
-                    dwell = time.time() - dwell_start
-                    if dwell >= MIN_DWELL_SECONDS:
-                        write_event(conn, cur, os_user, hostname, current_sig)
-                current_sig = None
-                dwell_start = None
-                time.sleep(POLL_SECONDS)
-                continue
+    # === RUN GUI IN MAIN THREAD ===
+    if gui_menu_bar and GUI_AVAILABLE:
+        from AppKit import NSApp
+        log("[GUI] Starting GUI event loop...")
+        try:
+            NSApp.run()  # Blocks here until user quits from menu
+        except KeyboardInterrupt:
+            log("[GUI] Interrupted")
+    else:
+        log("[TRACKING] No GUI, waiting for tracking thread...")
+        try:
+            tracking_thread.join()
+        except KeyboardInterrupt:
+            log("[TRACKING] Interrupted")
 
-            # title
-            title_ax = get_window_title_via_ax(pid) or ""
-            title = title_ax or (fallback_title or "")
+    log("[AGENT] Shutdown complete")
 
-            extras = try_get_url_or_path(bundle_id)
-            url, fpath = extras.get("url"), extras.get("file_path")
-            sig = (app_name, bundle_id, title, url, fpath)
 
-            if sig != current_sig:
-                if current_sig and dwell_start:
-                    dwell = time.time() - dwell_start
-                    if dwell >= MIN_DWELL_SECONDS:
-                        write_event(conn, cur, os_user, hostname, current_sig)
-                    else:
-                        log(f"[SKIP] dwell too short ({int(dwell)}s) for {current_sig[0]}")
-                current_sig = sig
-                dwell_start = time.time()
-                log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
-            else:
-                if PRINT_EVERY_POLL:
-                    log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")
-
-            time.sleep(POLL_SECONDS)
-
-    except KeyboardInterrupt:
-        log("=== Stopping (Ctrl+C) ===")
-        if current_sig and dwell_start:
-            dwell = time.time() - dwell_start
-            if dwell >= MIN_DWELL_SECONDS:
-                write_event(conn, cur, os_user, hostname, current_sig)
-    finally:
-        remove_pid()
 
 # ---------------- CLI ----------------
 def cmd_status():

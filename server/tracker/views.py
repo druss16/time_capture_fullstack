@@ -10,45 +10,80 @@ import os
 import platform
 import re
 import urllib.parse
-from datetime import datetime, timedelta, time as dt_time, date as date_type
+from collections import defaultdict
+from datetime import datetime as dt, time as dt_time, timedelta, timezone as dt_timezone
 from typing import Any, Dict, List, Optional
+
 
 # --- Django ---
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, logout as django_logout
-from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from django.db.models.functions import TruncHour
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import localtime
-from django.views.decorators.csrf import csrf_exempt  # keep only if you actually use it
+from django.views.decorators.csrf import csrf_exempt  # only if used
+
+
 
 # --- DRF ---
 from rest_framework import permissions, status
-from rest_framework.decorators import (
-    api_view,
-    authentication_classes,
-    permission_classes,
-    throttle_classes,
-)
-
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle, ScopedRateThrottle
+from rest_framework.authentication import SessionAuthentication
+
 
 # --- Third-party ---
 from allauth.account import app_settings as allauth_settings
 from allauth.account.utils import perform_login
 from openai import OpenAI
 
+import datetime
+
+# --- day window helpers (Django 5 safe) ---
+import datetime as _dt
+from django.utils import timezone
+from django.utils.timezone import get_current_timezone, localtime
+from django.utils.dateparse import parse_date
+
+# --- imports (make sure these exist at top of views.py) ---
+from collections import defaultdict
+from datetime import datetime as dt, time as dt_time, timedelta
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+
+# imports you should have near top of views.py
+import datetime as _dt
+from django.utils import timezone
+from django.utils.dateparse import parse_date
+from django.utils.timezone import get_current_timezone, localtime
+
+# imports
+import datetime as _dt
+from django.utils import timezone
+from django.utils.dateparse import parse_date
+from django.utils.timezone import get_current_timezone, localtime
+
+from django.contrib.auth.decorators import login_required
+
+# tracker/views.py
+from django.http import JsonResponse
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+from django.db import transaction
+
 # --- Local apps ---
-from .models import (
+from tracker.models import (
     AgentControl,
     AgentSession,
     AgentPairCode,
@@ -65,14 +100,12 @@ from .models import (
     Task,
     TimecardEntry,
 )
-from .permissions import AgentKeyPermission, NoAuth, PermUI
-from .rules import apply_rules
-from .serializers import RawEventSerializer
-from .services.classify_block import classify_block
-
-from .auth import AgentKeyAuthentication, AgentKeyPermission, NoAuth
-
-from .utils import (  # re-exported from tracker/utils/__init__.py
+from tracker.permissions import AgentKeyPermission, NoAuth, PermUI
+from tracker.rules import apply_rules
+from tracker.serializers import RawEventSerializer
+from tracker.services.classify_block import classify_block
+from tracker.auth import AgentKeyAuthentication
+from tracker.utils import (
     _client_ip,
     compact_rawevents_into_blocks,
     get_org_or_default,
@@ -80,9 +113,31 @@ from .utils import (  # re-exported from tracker/utils/__init__.py
     resolve_agent_user,
     resolve_client_from_known,
 )
+from tracker.throttles import (
+    AgentIngestThrottle,
+    UIReadThrottle,
+    UIWriteThrottle,
+    AIGenerateThrottle,
+    PublicHelloThrottle,
+    PairIssueRate,
+    PairClaimRate,
+)
 
-from .throttles import AgentIngestThrottle, UIReadThrottle, UIWriteThrottle, AIGenerateThrottle, PublicHelloThrottle, PairIssueRate, PairClaimRate
+from tracker.utils.blocks import (
+    get_current_client_for_user,
+    apply_current_client_to_recent_blocks
+)
 
+# REPLACE your existing raw_events() function with this version
+
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from django.utils.dateparse import parse_datetime
+from django.utils import timezone
+from .auth import AgentKeyAuthentication
+from .models import RawEvent, CurrentClient, Client
 
 # If you need a User class reference:
 User = get_user_model()
@@ -112,17 +167,131 @@ COOKIE_HOST_KEY = "mavops_host"
 COOKIE_BUNDLE = "mavops_ident"  # signed bundle (preferred)
 
 
-# imports you should have near top of views.py
-import datetime as _dt
-from django.utils import timezone
-from django.utils.dateparse import parse_date
-from django.utils.timezone import get_current_timezone, localtime
+# tracker/views.py
+import os, threading, logging
+logger = logging.getLogger(__name__)
 
-# imports
-import datetime as _dt
-from django.utils import timezone
-from django.utils.dateparse import parse_date
-from django.utils.timezone import get_current_timezone, localtime
+NON_BLOCKING_COMPACT = os.getenv("NON_BLOCKING_COMPACT", "1") == "1"
+
+# --- helpers at top of file (keep your _to_epoch_ms and _union_minutes) ---
+
+# --- Idle detection (shared) ---
+IDLE_TITLES = {
+    "uncategorized - idle", "idle/uncategorized", "idle",
+    "uncategorized", "newtab", "new tab", "screen saver",
+    "loginwindow", "lock screen"
+}
+IDLE_APPS = {
+    "idle", "loginwindow", "screensaverengine", "screensaver",
+    "lockscreen", "notificationcenter", "controlcenter", "dock"
+}
+
+def _iso(dt):
+    return dt.isoformat() if dt else None
+
+def _is_idle_block(b):
+    # keep consistent with your agent semantics
+    try:
+        if getattr(b, "bundle_id", None) == "__idle__": return True
+        if (getattr(b, "app_name", "") or "").lower() == "idle": return True
+        if (getattr(b, "window_title", "") or "").strip() == "Uncategorized - Idle": return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_idle_activity(app_name=None, bundle_id=None, window_title=None):
+    """Detect if activity is idle/AFK - idle blocks should NOT get client assigned."""
+    if bundle_id == "__idle__":
+        return True
+    if app_name and app_name.lower() in ("idle", "loginwindow", "screensaver"):
+        return True
+    if window_title:
+        title_lower = window_title.strip().lower()
+        if title_lower in ("uncategorized - idle", "idle", "lock screen"):
+            return True
+    return False
+
+
+def _idle_minutes_from_gaps(spans_ms, start_ms, end_ms) -> int:
+    """
+    Given merged-eligible spans (ms) for ACTIVE work within [start_ms, end_ms),
+    return minutes of 'idle/away' gaps between them.
+    """
+    if not spans_ms:
+        return int((end_ms - start_ms) // 60_000)
+
+    spans_ms = sorted(spans_ms, key=lambda p: p[0])
+    idle_ms = 0
+    cur = start_ms
+    for s, e in spans_ms:
+        if s > cur:
+            idle_ms += (s - cur)
+        cur = max(cur, e)
+    if cur < end_ms:
+        idle_ms += (end_ms - cur)
+    return int(idle_ms // 60_000)
+
+
+def _block_minutes_fallback(b) -> int:
+    m = getattr(b, "minutes", None)
+    try: m = int(m) if m is not None else None
+    except Exception: m = None
+    if m is None:
+        if not getattr(b, "end", None) and getattr(b, "start", None):
+            return 5
+        return 0
+    return max(0, min(m, 180))  # cap to 3h
+
+def _to_epoch_ms(d):
+    if not d: return None
+    if timezone.is_naive(d):
+        d = d.replace(tzinfo=dt_timezone.utc)
+    return int(d.timestamp() * 1000)
+
+def _union_minutes(spans):
+    if not spans: return 0
+    norm = []
+    for s, e in spans:
+        if isinstance(s, (int, float)) and isinstance(e, (int, float)):
+            s = dt.fromtimestamp(s / 1000.0, tz=dt_timezone.utc)
+            e = dt.fromtimestamp(e / 1000.0, tz=dt_timezone.utc)
+        if not s or not e or e <= s: continue
+        if timezone.is_naive(s): s = s.replace(tzinfo=dt_timezone.utc)
+        if timezone.is_naive(e): e = e.replace(tzinfo=dt_timezone.utc)
+        norm.append((s, e))
+    if not norm: return 0
+    norm.sort(key=lambda x: x[0])
+    merged = []
+    cur_s, cur_e = norm[0]
+    for s, e in norm[1:]:
+        if s <= cur_e: cur_e = max(cur_e, e)
+        else: merged.append((cur_s, cur_e)); cur_s, cur_e = s, e
+    merged.append((cur_s, cur_e))
+    return int(sum((e - s).total_seconds() for s, e in merged) // 60)
+
+def _make_aware_local(dt_naive, tz):
+    try:
+        return tz.localize(dt_naive)  # pytz
+    except Exception:
+        return timezone.make_aware(dt_naive, tz)  # zoneinfo
+
+def _start_end_of_local_day_utc(date_str: Optional[str] = None):
+    tz = get_current_timezone()
+    d = parse_date(date_str) if date_str else None
+    if not d:
+        d = localtime(timezone.now()).date()
+    start_local = _make_aware_local(dt.combine(d, dt_time.min), tz)
+    next_local  = _make_aware_local(dt.combine(d + timedelta(days=1), dt_time.min), tz)
+    return (start_local.astimezone(dt_timezone.utc), next_local.astimezone(dt_timezone.utc))
+
+def _compact_fire_and_forget(username, hostname, org, date_str):
+    try:
+        # IMPORTANT: add fast/llm flags inside _compact_safe (or wrap your classify) to skip LLM here
+        _compact_safe(username, hostname, org, date_str, fast=True, llm=False, max_seconds=3)
+    except Exception as e:
+        logger.warning("non-blocking compact skipped: %s", e)
+
 
 def _make_aware_local(dt_naive: _dt.datetime, tz) -> _dt.datetime:
     """
@@ -136,30 +305,43 @@ def _make_aware_local(dt_naive: _dt.datetime, tz) -> _dt.datetime:
         return timezone.make_aware(dt_naive, tz)
 
 
-# --- day window helpers (Django 5 safe) ---
-import datetime as _dt
+
+# from tracker.models import Block   # <-- already in your file
+
+# --- helpers: MILLIS-BASED path (used by your current view) ---
+
+# ---- HELPER FUNCTIONS ----
+
+from datetime import datetime as dt, timezone as dt_timezone, timedelta
 from django.utils import timezone
-from django.utils.timezone import get_current_timezone, localtime
-from django.utils.dateparse import parse_date
 
-def _make_aware_local(dt_naive: _dt.datetime, tz) -> _dt.datetime:
-    try:
-        return tz.localize(dt_naive)  # pytz
-    except Exception:
-        return timezone.make_aware(dt_naive, tz)  # zoneinfo
 
-def _start_end_of_local_day_utc(date_str: str | None = None) -> tuple[_dt.datetime, _dt.datetime]:
-    tz = get_current_timezone()
-    if date_str:
-        d = parse_date(date_str) or localtime(timezone.now()).date()
+
+def _span_for_block(b, day_start, day_end):
+    """Return clamped (start, end) tuple inside [day_start, day_end) in UTC."""
+    s = getattr(b, "start", None)
+    e = getattr(b, "end", None)
+    if not s:
+        return None
+    if timezone.is_naive(s):
+        s = s.replace(tzinfo=dt_timezone.utc)
     else:
-        d = localtime(timezone.now()).date()
-
-    start_local = _make_aware_local(_dt.datetime.combine(d, _dt.time.min), tz)
-    next_local  = _make_aware_local(_dt.datetime.combine(d + _dt.timedelta(days=1), _dt.time.min), tz)
-
-    return (start_local.astimezone(_dt.timezone.utc),
-            next_local.astimezone(_dt.timezone.utc))
+        s = s.astimezone(dt_timezone.utc)
+    if e:
+        if timezone.is_naive(e):
+            e = e.replace(tzinfo=dt_timezone.utc)
+        else:
+            e = e.astimezone(dt_timezone.utc)
+    else:
+        mins = getattr(b, "minutes", None)
+        e = s + (timedelta(minutes=float(mins)) if isinstance(mins, (int, float)) and mins > 0 else timedelta(seconds=1))
+    if e <= day_start or s >= day_end:
+        return None
+    if s < day_start: s = day_start
+    if e > day_end: e = day_end
+    if e <= s:
+        return None
+    return (s, e)
 
 def _start_of_local_day_utc(dt: _dt.datetime | None = None) -> _dt.datetime:
     # if a datetime is passed, convert that instant to local midnight; else today
@@ -212,12 +394,6 @@ def get_org_or_default(request):
     return org
 
 
-# tracker/views.py
-from django.http import JsonResponse
-from django.views.decorators.csrf import ensure_csrf_cookie
-
-# tracker/views.py
-from django.views.decorators.csrf import ensure_csrf_cookie
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -496,7 +672,7 @@ import json
 # NEW: paired hello (device-key)
 # NEW: paired hello (device-key)
 @api_view(["POST"])
-@authentication_classes([AgentKeyAuthentication])  # sets request.user + request.agent_device
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def agents_hello2(request):
     """
@@ -651,35 +827,48 @@ from django.utils import timezone
 
 from .models import RawEvent
 
-@csrf_exempt                          # <-- add this
+# tracker/views.py
 @api_view(["POST"])
-@authentication_classes([AgentKeyAuthentication])   # DeviceKey / X-Agent-Key auth
-@permission_classes([IsAuthenticated])              # request.user = linked account
-# @throttle_classes([AgentIngestThrottle])  # enable in prod
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
 def raw_events(request):
     """
     Ingest events from a paired agent.
-    - Requires Authorization: DeviceKey <api_key> (or X-Agent-Key)
+    NOW: Auto-tags events with current client if set.
+    
+    - Requires Authorization: DeviceKey <api_key>
     - request.user = linked user from AgentDevice
     - request.agent_device = the AgentDevice instance
     """
     agent_user = request.user
     device = getattr(request, "agent_device", None)
-
     if not getattr(agent_user, "is_authenticated", False):
-        raise PermissionDenied("Device not linked or invalid key.")
-
+        return Response({"error": "Not authenticated"}, status=403)
+    
     payload = request.data
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list):
-        raise ValidationError("Payload must be an object or an array of objects.")
-
+        return Response({"error": "Must be object or array"}, status=400)
+    
+    # Get current client for this user/device
+    current_client_id = None
+    current_client_name = None
+    try:
+        current = CurrentClient.objects.select_related('client').get(
+            user=agent_user,
+            device_id=device.id if device else 0
+        )
+        current_client_id = current.client.id if current.client else None
+        current_client_name = current.client.name if current.client else None
+    except CurrentClient.DoesNotExist:
+        pass  # No current client set
+    
     header_host = (request.headers.get("X-Agent-Host") or "").strip()
     device_host = getattr(device, "hostname", "") if device else ""
     default_host = header_host or device_host or "unknown"
-
     created, errors = 0, []
+    
     for item in payload:
         ts = item.get("ts_utc")
         if isinstance(ts, str):
@@ -691,31 +880,42 @@ def raw_events(request):
         elif not ts:
             errors.append({"item": item, "error": "Missing ts_utc"})
             continue
-
+        
         hostname = (default_host or item.get("hostname") or "unknown").strip() or "unknown"
-
+        
         try:
-            RawEvent.objects.create(
+            # Create RawEvent with current_client_id
+            event = RawEvent.objects.create(
                 ts_utc=item["ts_utc"],
                 app_name=item.get("app_name"),
                 bundle_id=item.get("bundle_id"),
                 window_title=item.get("window_title") or "",
                 url=item.get("url"),
                 file_path=item.get("file_path"),
-                user=agent_user,              # linked real user from DeviceKey
+                user=agent_user,
                 hostname=hostname,
                 ctx=item.get("ctx", {}) or {},
+                device_id=getattr(device, "device_id", "unknown") if device else "unknown",
+                current_client_id=current_client_id,  # ← NEW: Store current client
             )
+            
             created += 1
         except Exception as e:
             errors.append({"item": item, "error": str(e)})
-
+    
     status_code = (
         status.HTTP_201_CREATED if created and not errors
         else status.HTTP_207_MULTI_STATUS if created and errors
         else status.HTTP_400_BAD_REQUEST
     )
-    return Response({"created": created, "errors": errors}, status=status_code)
+    
+    return Response({
+        "created": created,
+        "errors": errors,
+        "current_client": current_client_name  # Return client name for logging
+    }, status=status_code)
+
+
 # -------------------------------------------------------------------
 # Compactor: RawEvent -> Block (for TODAY only; compaction-on-read)
 # -------------------------------------------------------------------
@@ -757,6 +957,9 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
     """
     Compacts today's RawEvents into Block rows with merging & rounding.
     `user` may be a username or a User instance; we normalize to FK.
+    
+    NEW: Applies current client from CurrentClient table to blocks.
+    CRITICAL: Does NOT assign client to idle/AFK blocks!
     """
     start_utc = _start_of_local_day_utc()
 
@@ -786,7 +989,11 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
     def _duration_minutes(cur: Dict[str, Any]) -> int:
         return int((cur["end"] - cur["start"]).total_seconds() // 60)
 
-    def _finalize_and_create(cur: Dict[str, Any], org_val) -> int:
+    def _finalize_and_create(cur: Dict[str, Any], org_val, user_obj) -> int:
+        """
+        Finalize and create a block.
+        CRITICAL: Check for idle BEFORE assigning client!
+        """
         actual = _duration_minutes(cur)
         target = max(MIN_BLOCK_DURATION, _round_up_minutes(actual, BLOCK_GRANULARITY))
         if actual < target:
@@ -810,6 +1017,44 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
 
         if hasattr(Block, "hints") and isinstance(cur.get("hints"), dict):
             kwargs["hints"] = cur.get("hints")
+
+        # ✅ CRITICAL: Check if this is IDLE activity before assigning client
+        is_idle = _is_idle_activity(
+            app_name=cur.get("app_name"),
+            bundle_id=cur.get("bundle_id"),
+            window_title=cur.get("window_title")
+        )
+        
+        if is_idle:
+            # ❌ IDLE blocks get NO CLIENT - never bill for breaks/lunch/sleep
+            kwargs["client"] = None
+            if hasattr(Block, "app_name"):
+                kwargs["app_name"] = cur.get("app_name") or "idle"
+            if hasattr(Block, "bundle_id"):
+                kwargs["bundle_id"] = cur.get("bundle_id") or "__idle__"
+        else:
+            # ✅ NON-IDLE blocks: Try to get current client
+            # ✅ NON-IDLE blocks: Get client from stored current_client_id
+            current_client = None
+
+            # Use the client_id that was stored when the event was captured
+            stored_client_id = cur.get("current_client_id")
+            if stored_client_id:
+                try:
+                    from tracker.models import Client
+                    current_client = Client.objects.get(id=stored_client_id)
+                except Client.DoesNotExist:
+                    pass  # Client was deleted
+                                    
+            # Apply client to block (may be None if no client selected)
+            if current_client and hasattr(Block, "client"):
+                kwargs["client"] = current_client
+            
+            # Store app/bundle info for non-idle blocks too (useful for debugging)
+            if hasattr(Block, "app_name"):
+                kwargs["app_name"] = cur.get("app_name") or ""
+            if hasattr(Block, "bundle_id"):
+                kwargs["bundle_id"] = cur.get("bundle_id") or ""
 
         # org handling
         if any(f.name == "org" for f in Block._meta.fields):
@@ -843,11 +1088,15 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         url = e.url or ""
         fpath = e.file_path or ""
         wtitle = getattr(e, "window_title", "") or ""
+        app_name = getattr(e, "app_name", "") or ""
+        bundle_id = getattr(e, "bundle_id", "") or ""
 
         if current is None:
             current = dict(
                 start=et, end=et, title=lbl, window_title=wtitle,
                 url=url, file_path=fpath, user=u_fk, hostname=h,
+                app_name=app_name, bundle_id=bundle_id,
+                current_client_id=getattr(e, "current_client_id", None),  # ← ADD THIS
             )
             _merge_ctx(current, e)
             continue
@@ -860,17 +1109,20 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
             current["end"] = et
             _merge_ctx(current, e)
         else:
-            created += _finalize_and_create(current, org)
+            created += _finalize_and_create(current, org, user_obj)
             current = dict(
                 start=et, end=et, title=lbl, window_title=wtitle,
                 url=url, file_path=fpath, user=u_fk, hostname=h,
+                app_name=app_name, bundle_id=bundle_id,
+                current_client_id=getattr(e, "current_client_id", None),  # ← ADD THIS
             )
             _merge_ctx(current, e)
 
     if current:
-        created += _finalize_and_create(current, org)
+        created += _finalize_and_create(current, org, user_obj)
 
     return created
+
 
 
 # -------------------------------------------------------------------
@@ -882,6 +1134,10 @@ from rest_framework.response import Response
 import datetime as _dt
 from django.utils import timezone
 
+from django.db.models import Q
+
+from django.db.models import Q
+
 @api_view(["GET"])
 @permission_classes([PermUI])
 @throttle_classes([UIReadThrottle])
@@ -892,50 +1148,51 @@ def blocks_today(request):
     limit_str = request.GET.get("limit") or None
     org       = get_org_or_default(request)
 
-    # compact safely (handles None date → today)
-    _compact_safe(username, hostname, org, date_str)
+    # background compaction as you had...
 
-    # day window in UTC (uses datetime.timezone.utc under the hood)
     start_utc, end_utc = _start_end_of_local_day_utc(date_str)
-
     qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
     if username:
         qs = qs.filter(user__username=username)
     if hostname:
         qs = qs.filter(hostname=hostname)
-    if org:
-        qs = qs.filter(org=org)
 
-    # optional limit (clamped)
+    # match your dev/prod org scoping used elsewhere
+    if USE_AUTH and org:
+        if settings.DEBUG:
+            qs = qs.filter(Q(org=org) | Q(org__isnull=True))
+        else:
+            qs = qs.filter(org=org)
+
     if limit_str:
-        try:
-            qs = qs[: max(1, min(int(limit_str), 1000))]
-        except Exception:
-            pass
+        try: qs = qs[: max(1, min(int(limit_str), 1000))]
+        except Exception: pass
 
     def _minutes(b: Block) -> int:
         m = getattr(b, "minutes", None)
-        if m is not None:
-            try:
-                return int(m)
-            except Exception:
-                pass
+        if isinstance(m, (int, float)):
+            try: return int(m)
+            except Exception: pass
         try:
-            if not b.end or not b.start:
-                return 0
+            if not b.end or not b.start: return 0
             return max(0, int((b.end - b.start).total_seconds() // 60))
         except Exception:
             return 0
 
     data = []
     for b in qs.select_related("client", "project", "task", "user"):
+        idle = _is_idle_block(b)
+        win_title = getattr(b, "window_title", "") or ""
+        if idle:
+            win_title = "Uncategorized - Idle"  # normalize for UI
+
         data.append({
             "id": b.id,
-            "start": b.start,
-            "end": b.end,
+            "start": _iso(b.start),
+            "end": _iso(b.end),
             "minutes": _minutes(b),
             "title": b.title,
-            "window_title": getattr(b, "window_title", "") or "",
+            "window_title": win_title,
             "url": b.url or "",
             "file_path": b.file_path or "",
             "description": getattr(b, "description", "") or "",
@@ -947,11 +1204,16 @@ def blocks_today(request):
             "notes": getattr(b, "notes", "") or "",
             "user": b.user.username if b.user_id else None,
             "hostname": b.hostname,
+            # expose app/bundle if you have them (optional but useful)
+            "app_name": getattr(b, "app_name", "") or "",
+            "bundle_id": getattr(b, "bundle_id", "") or "",
+            "is_idle": _is_idle_block(b),   # <--- reuse your server idle logic
+
         })
+
     return Response(data)
 
-
-from django.db import transaction
+from django.db.models import Q
 
 @api_view(["GET"])
 @permission_classes([PermUI])
@@ -962,7 +1224,11 @@ def suggestions_today(request):
     hostname = request.GET.get("hostname") or None
     org      = get_org_or_default(request)
 
-    _compact_safe(username, hostname, org, date_str)
+    # quick compact to improve block edges
+    try:
+        _compact_safe(username, hostname, org, date_str)
+    except Exception:
+        pass
 
     start_utc, end_utc = _start_end_of_local_day_utc(date_str)
     qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
@@ -970,10 +1236,15 @@ def suggestions_today(request):
         qs = qs.filter(user__username=username)
     if hostname:
         qs = qs.filter(hostname=hostname)
-    if org:
-        qs = qs.filter(org=org)
 
-    # Safely scope rules by org only if the model has that field and org is set
+    # mirror /summary org filtering
+    if USE_AUTH and org:
+        if settings.DEBUG:
+            qs = qs.filter(Q(org=org) | Q(org__isnull=True))
+        else:
+            qs = qs.filter(org=org)
+
+    # scope rules to org if available
     rule_qs = Rule.objects.filter(active=True)
     try:
         if org and "org" in {f.name for f in Rule._meta.get_fields()}:
@@ -985,29 +1256,67 @@ def suggestions_today(request):
     out = []
     with transaction.atomic():
         for b in qs.select_related("client", "project", "task"):
+            # Clean slate (optional)
             Suggestion.objects.filter(block=b).delete()
+
+            mins = int(getattr(b, "minutes", 0) or 0)
+            if mins <= 0 and b.start and b.end:
+                mins = max(0, int((b.end - b.start).total_seconds() // 60))
+            hours = round(mins / 60.0, 2)
+
+            # 🔒 IDLE short-circuit
+            if _is_idle_block(b):
+                # store a Suggestion row (optional) for audit trail
+                Suggestion.objects.create(
+                    block=b, label_type="category",
+                    value_text="Uncategorized - Idle",
+                    confidence=1.0, source="idle"
+                )
+                out.append({
+                    "block_id": b.id,
+                    "ai_suggestion": {
+                        "client": None,
+                        "project": None,
+                        "categories": {"Uncategorized - Idle": hours},
+                        "confidence": 1.0,
+                        "needs_review": False,
+                        "reasoning": "Detected system/user idle; not billable.",
+                    }
+                })
+                continue
+
+            # Apply your existing rules (top 3) → we still persist them if you want
             for field, value_text, conf in list(apply_rules(b, rules))[:3]:
                 Suggestion.objects.create(
                     block=b, label_type=field, value_text=value_text,
                     confidence=conf, source="rule"
                 )
+
+            # Heuristic fallback for non-idle
+            host = ""
+            try:
+                if b.url:
+                    host = urllib.parse.urlparse(b.url).hostname or ""
+                    host = host.replace("www.", "")
+            except Exception:
+                pass
+
+            client_guess  = getattr(b.client, "name", None) or (host or None)
+            project_guess = getattr(b.project, "name", None)
+            cats = {"General": hours} if hours > 0 else {}
+
             out.append({
-                "id": b.id,
-                "start": b.start,
-                "end": b.end,
-                "minutes": max(0, int(((b.end or b.start) - b.start).total_seconds() // 60)) if b.start else 0,
-                "title": b.title,
-                "window_title": getattr(b, "window_title", "") or "",
-                "url": b.url or "",
-                "file_path": b.file_path or "",
-                "client": getattr(b.client, "name", None),
-                "project": getattr(b.project, "name", None),
-                "task": getattr(b.task, "name", None),
-                "suggestions": [
-                    {"label_type": s.label_type, "value_text": s.value_text, "confidence": s.confidence}
-                    for s in b.suggestions.all().order_by("-confidence")[:3]
-                ],
+                "block_id": b.id,
+                "ai_suggestion": {
+                    "client": client_guess,
+                    "project": project_guess,
+                    "categories": cats,
+                    "confidence": 0.55,
+                    "needs_review": True,
+                    "reasoning": "Rule/URL heuristic.",
+                }
             })
+
     return Response(out)
 
 @api_view(["POST"])
@@ -1754,149 +2063,170 @@ def _resolve_summary_user(request):
     return (None, "")  # All Users
 
 
-date_type = datetime.date  # if you already have this, keep your version
+date_type = dt.date
+
+
+# tracker/views.py
+from collections import defaultdict
+from datetime import datetime as dt, time as dt_time, timedelta, timezone as dt_timezone
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from tracker.models import Block
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])  # or AllowAny if public
+@permission_classes([PermUI])
+@throttle_classes([UIReadThrottle])
 def timecards_summary_day(request):
-    """
-    Summarize Blocks (or RawEvents) for a single day,
-    computing non-overlapping durations per user/host.
-
-    Prevents inflated totals from overlapping 6-min windows.
-    Groups by client → tasks → category breakdowns.
-    """
-    import datetime
-    from datetime import timedelta, time as dt_time
-    from django.db.models import F
-    from django.utils import timezone
-
-    date_str = (request.GET.get("date") or "").strip()
-    if not date_str:
-        return Response({"error": "date is required (YYYY-MM-DD)"}, status=400)
-
-    try:
-        day = datetime.date.fromisoformat(date_str)
-    except ValueError:
-        return Response({"error": "Invalid date format (use YYYY-MM-DD)"}, status=400)
-
+    date_str   = request.GET.get("date") or None
     user_param = (request.GET.get("user") or "").strip()
+    hostname   = request.GET.get("hostname") or None
+    org        = get_org_or_default(request)
 
-    # Time window for that day (UTC)
-    start_local = timezone.make_aware(datetime.datetime.combine(day, dt_time.min))
-    end_local = start_local + timedelta(days=1)
-    start_utc = start_local.astimezone(datetime.timezone.utc)
-    end_utc = end_local.astimezone(datetime.timezone.utc)
+    # Optional compact (no LLM); best-effort
+    try:
+        compact_rawevents_into_blocks(
+            user=user_param, hostname=hostname, org=org,
+            start_utc=None, end_utc=None, day=date_str
+        )
+    except Exception:
+        pass
 
-    # === Step 1: Load blocks (or events) chronologically ===
+    # Day window in UTC
+    start_utc, end_utc = _start_end_of_local_day_utc(date_str)
+    start_ms = _to_epoch_ms(start_utc)
+    end_ms   = _to_epoch_ms(end_utc)
+
+    # Base queryset
     qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc)
     if user_param:
         qs = qs.filter(user__username=user_param)
-    qs = qs.order_by("start")
+    if hostname:
+        qs = qs.filter(hostname=hostname)
 
-    rows = list(qs)
-    if not rows:
-        return Response({
-            "date": day.isoformat(),
-            "user": user_param or "",
-            "total_hours": 0.0,
-            "clients": [],
-        })
-
-    # === Step 2: Compute non-overlapping minutes ===
-    IDLE_CAP = timedelta(minutes=30)
-    MIN_BLOCK = timedelta(seconds=30)
-
-    blocks = []
-    for i, b in enumerate(rows):
-        start = b.start
-        next_start = rows[i + 1].start if i + 1 < len(rows) else end_utc
-        dur = max(timedelta(0), min(next_start - start, IDLE_CAP))
-        if dur < MIN_BLOCK:
-            continue
-        blocks.append((b, dur))
-
-    clients, total_minutes = {}, 0
-
-    # === Step 3: Aggregate per client → task → category ===
-    for b, dur in blocks:
-        mins = dur.total_seconds() / 60.0
-        total_minutes += mins
-
-        client_name = (
-            getattr(b.client, "name", None)
-            or getattr(b, "ai_extracted_client", None)
-            or "Unknown"
-        )
-        task_name = (
-            getattr(b.task, "name", None)
-            or getattr(b, "ai_category", None)
-            or "Uncategorized"
-        )
-
-        c_row = clients.setdefault(
-            client_name,
-            {
-                "client_name": client_name,
-                "total_hours": 0.0,
-                "categories": {},
-                "tasks": {},
-                "block_ids": [],
-            },
-        )
-        c_row["total_hours"] += mins / 60.0
-        c_row["block_ids"].append(b.id)
-
-        t_row = c_row["tasks"].setdefault(
-            task_name,
-            {"task_name": task_name, "total_hours": 0.0, "categories": {}, "block_ids": []},
-        )
-        t_row["total_hours"] += mins / 60.0
-        t_row["block_ids"].append(b.id)
-
-        cats = getattr(b, "category_hours", {}) or {}
-        if isinstance(cats, dict) and cats:
-            for k, v in cats.items():
-                kk = str(k)[:120]
-                hh = max(0.0, float(v))
-                t_row["categories"][kk] = t_row["categories"].get(kk, 0.0) + hh
-                c_row["categories"][kk] = c_row["categories"].get(kk, 0.0) + hh
+    # ✅ Keep legacy NULL-org rows in dev; be strict in prod
+    if USE_AUTH and org:
+        if settings.DEBUG:
+            qs = qs.filter(Q(org=org) | Q(org__isnull=True))
         else:
-            unc = "Uncategorized"
-            hours = mins / 60.0
-            t_row["categories"][unc] = t_row["categories"].get(unc, 0.0) + hours
-            c_row["categories"][unc] = c_row["categories"].get(unc, 0.0) + hours
+            qs = qs.filter(org=org)
 
-    # === Step 4: Sort + return ===
-    client_rows = []
-    for c in clients.values():
-        tasks_list = sorted(c["tasks"].values(), key=lambda r: r["total_hours"], reverse=True)
-        client_rows.append({
-            "client_name": c["client_name"],
-            "total_hours": round(c["total_hours"], 2),
-            "categories": {k: round(v, 2) for k, v in c["categories"].items()},
-            "tasks": [
-                {
-                    "task_name": t["task_name"],
-                    "total_hours": round(t["total_hours"], 2),
-                    "categories": {k: round(v, 2) for k, v in (t["categories"] or {}).items()},
-                    "block_ids": t["block_ids"],
-                }
-                for t in tasks_list
-            ],
-            "block_ids": c["block_ids"],
+    blocks = list(qs.select_related("client", "project"))
+
+    # ---------- aggregate ----------
+    from collections import defaultdict
+
+    def BucketAgg():
+        return {
+            "spans": [],                # list[(s_ms, e_ms)] — for per-bucket union
+            "sum_minutes": 0,           # raw (pre-union) minutes; for category rescale
+            "categories_hours": defaultdict(float),
+        }
+
+    buckets = defaultdict(BucketAgg)
+    all_active_spans = []  # for header union + idle envelope
+
+    for b in blocks:
+        # Skip idle/AFK blocks completely
+        if _is_idle_block(b):
+            continue
+
+        s_dt = getattr(b, "start", None)
+        e_dt = getattr(b, "end", None)
+
+        s_ms = _to_epoch_ms(s_dt)
+        if e_dt:
+            e_ms = _to_epoch_ms(e_dt)
+        else:
+            # conservative fallback when end missing
+            e_ms = s_ms + _block_minutes_fallback(b) * 60_000 if s_ms else None
+
+        if s_ms is None or e_ms is None:
+            continue
+
+        # clamp to day window
+        if e_ms <= start_ms or s_ms >= end_ms:
+            continue
+        s_ms = max(s_ms, start_ms)
+        e_ms = min(e_ms, end_ms)
+        if e_ms <= s_ms:
+            continue
+
+        # header/envelope
+        all_active_spans.append((s_ms, e_ms))
+
+        client  = (getattr(b, "client_name", None) or getattr(getattr(b, "client", None), "name", "") or "").strip() or "Unassigned"
+        project = (getattr(b, "project_name", None) or getattr(getattr(b, "project", None), "name", None))
+        key = (client, project or "-")
+
+        block_minutes = int((e_ms - s_ms) // 60_000)
+        if block_minutes <= 0:
+            continue
+
+        # categories are HOURS — allocate proportionally for this block
+        cats = getattr(b, "category_hours", {}) or {}
+        if not isinstance(cats, dict) or not cats:
+            cats = {"General": round(block_minutes / 60.0, 2)}
+        else:
+            numeric_cats = {str(k)[:120]: max(0.0, float(v or 0)) for k, v in cats.items()}
+            tot = sum(numeric_cats.values())
+            if tot <= 0:
+                cats = {"General": round(block_minutes / 60.0, 2)}
+            else:
+                cats = {k: round((block_minutes * (v / tot)) / 60.0, 2) for k, v in numeric_cats.items()}
+
+        agg = buckets[key]
+        agg["spans"].append((s_ms, e_ms))
+        agg["sum_minutes"] += block_minutes
+        for kcat, h in cats.items():
+            agg["categories_hours"][kcat] += float(h)
+
+    # Header: active union across ALL included non-idle spans
+    active_union_minutes = _union_minutes(all_active_spans)
+
+    # Idle: envelope between first and last active span (NOT full 24h)
+    if all_active_spans:
+        first_ms = min(s for s, _ in all_active_spans)
+        last_ms  = max(e for _, e in all_active_spans)
+        envelope_minutes = int(max(0, (last_ms - first_ms) // 60_000))
+        idle_minutes = max(0, envelope_minutes - active_union_minutes)
+    else:
+        idle_minutes = 0
+
+    # Build rows: per-bucket UNION + rescale categories to union minutes
+    out_rows = []
+    for (client, project_key), agg in buckets.items():
+        union_mins = _union_minutes(agg["spans"])
+        sum_mins   = max(1, int(agg["sum_minutes"]))      # guard div-by-zero
+        scale      = union_mins / float(sum_mins)
+        cats_rescaled = {k: round(v * scale, 2) for k, v in agg["categories_hours"].items()}
+        cats_rescaled = dict(sorted(cats_rescaled.items(), key=lambda kv: kv[0].lower()))
+
+        out_rows.append({
+            "client":  client,
+            "project": (None if project_key == "-" else project_key),
+            "minutes": union_mins,
+            "hours":   round(union_mins / 60.0, 2),
+            "categories": cats_rescaled,
         })
 
-    client_rows.sort(key=lambda r: r["total_hours"], reverse=True)
+    out_rows.sort(key=lambda r: (r["client"].lower(), (r["project"] or "~zzz").lower()))
 
     return Response({
-        "date": day.isoformat(),
+        "date": (parse_date(date_str) or localtime(timezone.now()).date()).isoformat(),
         "user": user_param or "",
-        "total_hours": round(total_minutes / 60.0, 2),
-        "clients": client_rows,
+        "total_hours": round(active_union_minutes / 60.0, 2),  # ACTIVE only
+        "buckets": out_rows,                                   # per-bucket union
+        "meta": {
+            "count_blocks": len(blocks),
+            "active_minutes": active_union_minutes,
+            "idle_minutes": idle_minutes,   # envelope idle
+            "stable": True,
+        },
     })
-
 # -------------------------------------------------------------------
 # Org Settings & Knowledge
 # -------------------------------------------------------------------
@@ -2196,16 +2526,28 @@ def clients_list(request):
     return Response([{"id": c.id, "name": c.name} for c in qs])
 
 
+# tracker/views.py - Enhanced version
+
 @api_view(["POST"])
 @permission_classes([PermUI])
 def import_clients_csv(request):
     """
-    CSV columns supported:
-      client (required), project (optional), active (optional true/false)
+    Enhanced CSV import with validation.
+    
+    Supported columns:
+      - client (required): Client name
+      - code (optional): Short code (e.g., "ACME")
+      - contact (optional): Contact person
+      - email (optional): Email address
+      - phone (optional): Phone number
+      - project (optional): Default project name
+      - active (optional): true/false (default: true)
+      - billable (optional): true/false (default: true)
     """
     org = get_org_or_default(request)
+    
     if 'file' not in request.FILES:
-        raise ValidationError({"file": "Upload a CSV file with 'file' field."})
+        raise ValidationError({"file": "Upload a CSV file."})
 
     f = request.FILES['file']
     try:
@@ -2214,22 +2556,53 @@ def import_clients_csv(request):
         text = f.read().decode('latin-1', errors='ignore')
 
     reader = csv.DictReader(io.StringIO(text))
-    created = {"clients": 0, "projects": 0}
-    for row in reader:
-        cname = (row.get('client') or '').strip()
-        if not cname:
+    
+    created = {"clients": 0, "projects": 0, "skipped": 0}
+    errors = []
+    
+    for row_num, row in enumerate(reader, start=2):
+        client_name = (row.get('client') or '').strip()
+        
+        if not client_name:
+            errors.append(f"Row {row_num}: Missing client name")
             continue
-        is_active = str(row.get('active', 'true')).lower() in ('1', 'true', 'yes', 'y')
-        client, c_created = Client.objects.get_or_create(org=org, name=cname, defaults={'is_active': is_active})
-        if c_created:
-            created['clients'] += 1
-        pname = (row.get('project') or '').strip()
-        if pname:
-            _, p_created = Project.objects.get_or_create(org=org, g=client, name=pname, defaults={'is_active': True})
-            if p_created:
-                created['projects'] += 1
+        
+        # Check if already exists
+        existing = Client.objects.filter(org=org, name=client_name).first()
+        if existing:
+            created['skipped'] += 1
+            continue
+        
+        # Parse active field
+        active_str = str(row.get('active', 'true')).lower()
+        is_active = active_str in ('1', 'true', 'yes', 'y')
+        
+        # Create client
+        client = Client.objects.create(
+            org=org,
+            name=client_name,
+            is_active=is_active
+        )
+        created['clients'] += 1
+        
+        # Optional: Create default project
+        project_name = (row.get('project') or '').strip()
+        if project_name:
+            Project.objects.create(
+                org=org,
+                client=client,
+                name=project_name,
+                is_active=True
+            )
+            created['projects'] += 1
 
-    return Response({"message": "Import complete", **created})
+    return Response({
+        "message": "Import complete",
+        "clients": created['clients'],
+        "projects": created['projects'],
+        "skipped": created['skipped'],
+        "errors": errors if errors else None
+    })
 
 
 # -------------------------------------------------------------------
@@ -2590,7 +2963,6 @@ from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 from django.contrib.auth import logout as django_logout
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny
-from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 
 @api_view(["POST"])
@@ -2740,3 +3112,740 @@ def agents_pair_claim(request):
 def agents_pair_issue_dev_open(request):
     code = AgentPairCode.issue(User.objects.first(), ttl_seconds=600)  # pick a test user
     return Response({"ok": True, "code": code.code, "expires_at": code.expires_at.isoformat(), "ttl_seconds": 600})
+
+
+
+# tracker/views.py
+# Add these 2 endpoints for current client management
+
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.utils import timezone
+from .auth import AgentKeyAuthentication
+from .models import Client, CurrentClient, Block
+
+# ==============================================================================
+# CURRENT CLIENT MANAGEMENT (Add these to your views.py)
+# ==============================================================================
+
+@api_view(["POST"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def set_current_client(request):
+    """
+    Set the current client for this device/user.
+    NOW: Also retroactively assigns recent unassigned blocks.
+    
+    Body: {
+      "client_id": int | null,
+      "client_name": str | null
+    }
+    
+    Pass null/empty to clear current client.
+    """
+    user = request.user
+    device = getattr(request, "agent_device", None)
+    data = request.data or {}
+    
+    client_id = data.get("client_id")
+    client_name = data.get("client_name")
+    
+    # Get org
+    org = user.groups.first()
+    if not org:
+        from django.contrib.auth.models import Group
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    # Handle clearing current client
+    if not client_id and not client_name:
+        CurrentClient.objects.filter(
+            user=user,
+            device_id=device.id if device else 0
+        ).delete()
+        
+        return Response({
+            "ok": True,
+            "client_id": None,
+            "client_name": None,
+            "message": "Current client cleared"
+        })
+    
+    # Resolve client
+    client = None
+    if client_id:
+        try:
+            client = Client.objects.get(id=client_id, org=org)
+        except Client.DoesNotExist:
+            return Response({"error": "Client not found"}, status=404)
+    elif client_name:
+        # Create client if it doesn't exist
+        client, created = Client.objects.get_or_create(
+            org=org,
+            name=client_name,
+            defaults={'is_active': True}
+        )
+    
+    if not client:
+        return Response({"error": "Must provide client_id or client_name"}, status=400)
+    
+    # Update or create CurrentClient
+    CurrentClient.objects.update_or_create(
+        user=user,
+        device_id=device.id if device else 0,
+        defaults={
+            'client': client,
+            'started_at': timezone.now(),
+            'updated_at': timezone.now(),
+        }
+    )
+    
+    # ✅ NEW: Retroactively assign recent unassigned blocks using helper
+    count = apply_current_client_to_recent_blocks(
+        user=user,
+        client=client,
+        minutes_back=15,
+        device_id=getattr(device, 'device_id', None) if device else None
+    )
+    
+    return Response({
+        "ok": True,
+        "client_id": client.id,
+        "client_name": client.name,
+        "message": f"Set current client to {client.name}",
+        "retroactive_blocks": count
+    })
+
+
+@api_view(["GET"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def get_current_client(request):
+    """
+    Get the current client for this device/user.
+    Called by GUI on startup to restore state.
+    
+    Returns: {
+      "client_id": int | null,
+      "client_name": str | null,
+      "started_at": timestamp | null
+    }
+    """
+    user = request.user
+    device = getattr(request, "agent_device", None)
+    
+    try:
+        current = CurrentClient.objects.select_related('client').get(
+            user=user,
+            device_id=device.id if device else 0
+        )
+        
+        return Response({
+            "client_id": current.client_id,
+            "client_name": current.client.name if current.client else None,
+            "started_at": current.started_at.isoformat() if current.started_at else None,
+            "updated_at": current.updated_at.isoformat() if current.updated_at else None,
+        })
+    except CurrentClient.DoesNotExist:
+        return Response({
+            "client_id": None,
+            "client_name": None,
+            "started_at": None,
+            "updated_at": None,
+        })
+
+
+@api_view(["GET"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def list_clients(request):
+    """
+    List all clients for this user's org.
+    Called by GUI to populate "Switch Client" menu.
+    
+    Returns: [
+      {"id": 1, "name": "Acme Corp", "code": "ACME", "is_active": true},
+      ...
+    ]
+    """
+    user = request.user
+    org = user.groups.first()
+    
+    if not org:
+        from django.contrib.auth.models import Group
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    clients = Client.objects.filter(org=org, is_active=True).order_by('name')
+    
+    return Response([{
+        "id": c.id,
+        "name": c.name,
+        "code": getattr(c, 'code', '') or c.name[:4].upper(),
+        "is_active": c.is_active,
+    } for c in clients])
+
+
+@api_view(["GET"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def context_guess(request):
+    """
+    AI-powered client suggestion based on recent activity.
+    
+    Query params:
+      - host: hostname (optional, from agent)
+      - device_id: device UUID (optional)
+    
+    Returns: { client_id, client_name, confidence, reason }
+    """
+    user = request.user
+    device = getattr(request, "agent_device", None)
+    host = request.GET.get("host", "")
+    device_id_param = request.GET.get("device_id", "")
+    
+    # Get recent blocks (last 10 minutes)
+    from datetime import timedelta
+    cutoff = timezone.now() - timedelta(minutes=10)
+    
+    recent_blocks = Block.objects.filter(
+        user=user,
+        start__gte=cutoff
+    ).order_by("-start")[:20]
+    
+    if not recent_blocks:
+        return Response({
+            "client_id": None,
+            "client_name": None,
+            "confidence": 0.0,
+            "reason": "No recent activity"
+        })
+    
+    # Get user's clients
+    org = user.groups.first()
+    if not org:
+        from django.contrib.auth.models import Group
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    clients = list(Client.objects.filter(org=org, is_active=True))
+    if not clients:
+        return Response({
+            "client_id": None,
+            "client_name": None,
+            "confidence": 0.0,
+            "reason": "No clients defined"
+        })
+    
+    # Simple matching logic
+    scores = {}
+    reasons = {}
+    
+    for client in clients:
+        score = 0.0
+        reason_parts = []
+        
+        # Check window titles for client name
+        for block in recent_blocks:
+            window_title = (getattr(block, "window_title", "") or "").lower()
+            if client.name.lower() in window_title:
+                score += 0.3
+                reason_parts.append(f"Window title matches '{client.name}'")
+                break
+        
+        # Check URLs for client name/domain
+        for block in recent_blocks:
+            url = (block.url or "").lower()
+            if client.name.lower() in url:
+                score += 0.4
+                reason_parts.append(f"URL contains '{client.name}'")
+                break
+        
+        # Check file paths
+        for block in recent_blocks:
+            file_path = (block.file_path or "").lower()
+            if client.name.lower() in file_path:
+                score += 0.2
+                reason_parts.append(f"File path contains '{client.name}'")
+                break
+        
+        # Check against KnownEntity aliases
+        try:
+            known = KnownEntity.objects.filter(
+                org=org,
+                entity_type="client",
+                name=client.name
+            ).first()
+            
+            if known and known.aliases:
+                for alias in known.aliases:
+                    for block in recent_blocks:
+                        if alias.lower() in (getattr(block, "window_title", "") or "").lower():
+                            score += 0.3
+                            reason_parts.append(f"Alias '{alias}' matched")
+                            break
+        except:
+            pass
+        
+        if score > 0:
+            scores[client.id] = score
+            reasons[client.id] = "; ".join(reason_parts[:2])
+    
+    # Find best match
+    if not scores:
+        return Response({
+            "client_id": None,
+            "client_name": None,
+            "confidence": 0.0,
+            "reason": "No matches found"
+        })
+    
+    best_client_id = max(scores, key=scores.get)
+    best_score = scores[best_client_id]
+    
+    # Only suggest if confidence is reasonable
+    if best_score < 0.45:
+        return Response({
+            "client_id": None,
+            "client_name": None,
+            "confidence": best_score,
+            "reason": "Confidence too low"
+        })
+    
+    best_client = Client.objects.get(id=best_client_id)
+    
+    return Response({
+        "client_id": best_client.id,
+        "client_name": best_client.name,
+        "confidence": min(best_score, 0.95),
+        "reason": reasons.get(best_client_id, "Pattern match")
+    })
+
+
+@api_view(["POST"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def context_confirm(request):
+    """
+    User confirmed the AI suggestion.
+    
+    Body: {
+      client_id: int,
+      confidence: float,
+      hostname: str,
+      device_id: str,
+      os_username: str,
+      prompt_id: str (optional)
+    }
+    """
+    user = request.user
+    device = getattr(request, "agent_device", None)
+    data = request.data or {}
+    
+    client_id = data.get("client_id")
+    confidence = float(data.get("confidence", 0.0))
+    
+    if not client_id:
+        return Response({"error": "client_id required"}, status=400)
+    
+    try:
+        client = Client.objects.get(id=client_id)
+    except Client.DoesNotExist:
+        return Response({"error": "Client not found"}, status=404)
+    
+    # Get recent unassigned blocks (last 15 minutes)
+    from datetime import timedelta
+    cutoff = timezone.now() - timedelta(minutes=15)
+    
+    recent_blocks = Block.objects.filter(
+        user=user,
+        start__gte=cutoff,
+        client__isnull=True
+    )
+    
+    # Assign them to this client
+    count = recent_blocks.update(client=client)
+    
+    # Optional: Store feedback for ML training
+    try:
+        sample_block = recent_blocks.first()
+        if sample_block:
+            text_content = f"{sample_block.window_title or ''} | {sample_block.url or ''}"
+            
+            AITrainingExample.objects.create(
+                org=client.org,
+                text_content=text_content[:500],
+                correct_client=client,
+                correct_categories={"feedback_type": "confirm"},
+                original_prediction={"confidence": confidence}
+            )
+    except:
+        pass
+    
+    return Response({
+        "ok": True,
+        "client_id": client_id,
+        "client_name": client.name,
+        "blocks_updated": count,
+        "message": f"Assigned {count} recent blocks to {client.name}"
+    })
+
+
+@api_view(["POST"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def context_reject(request):
+    """
+    User rejected the AI suggestion.
+    
+    Body: {
+      client_id: int,
+      confidence: float,
+      hostname: str,
+      device_id: str,
+      os_username: str,
+      prompt_id: str (optional)
+    }
+    """
+    user = request.user
+    data = request.data or {}
+    
+    client_id = data.get("client_id")
+    confidence = float(data.get("confidence", 0.0))
+    
+    # Store negative feedback for ML training
+    try:
+        client = Client.objects.get(id=client_id)
+        
+        # Get recent block context
+        from datetime import timedelta
+        cutoff = timezone.now() - timedelta(minutes=5)
+        
+        recent_block = Block.objects.filter(
+            user=user,
+            start__gte=cutoff
+        ).order_by("-start").first()
+        
+        if recent_block:
+            text_content = f"{recent_block.window_title or ''} | {recent_block.url or ''}"
+            
+            AITrainingExample.objects.create(
+                org=client.org,
+                text_content=text_content[:500],
+                correct_client=None,
+                correct_categories={"feedback_type": "reject", "rejected_client": client.name},
+                original_prediction={"confidence": confidence, "client_id": client_id}
+            )
+    except:
+        pass
+    
+    return Response({
+        "ok": True,
+        "message": "Feedback recorded"
+    })
+
+
+# ============================================================================== 
+# ADD THESE NEW VIEWS TO YOUR views.py
+# ==============================================================================
+
+@api_view(["POST"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def create_client(request):
+    """
+    Create a new client.
+    
+    Body: {
+      "name": str,
+      "code": str,
+      "email": str (optional),
+      "billable_rate": float (optional)
+    }
+    """
+    user = request.user
+    data = request.data or {}
+    
+    name = data.get("name", "").strip()
+    code = data.get("code", "").strip()
+    
+    if not name:
+        return Response({"error": "Client name is required"}, status=400)
+    
+    if not code:
+        # Auto-generate code from name
+        code = name[:10].upper().replace(" ", "")
+    
+    # Get org
+    org = user.groups.first()
+    if not org:
+        from django.contrib.auth.models import Group
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    # Check if client already exists
+    if Client.objects.filter(org=org, code=code).exists():
+        return Response(
+            {"error": f"Client with code '{code}' already exists"},
+            status=400
+        )
+    
+    # Create client
+    client = Client.objects.create(
+        org=org,
+        name=name,
+        code=code,
+        is_active=True
+    )
+    
+    return Response({
+        "ok": True,
+        "client": {
+            "id": client.id,
+            "name": client.name,
+            "code": client.code,
+            "is_active": client.is_active,
+        },
+        "message": f"Client '{name}' created successfully"
+    }, status=201)
+
+
+@api_view(["POST"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def import_clients_csv(request):
+    """
+    Import clients from CSV file.
+    
+    Expected CSV format:
+    name,code,email,billable_rate
+    Acme Corp,ACME,contact@acme.com,250
+    Smith LLC,SMITH,info@smith.com,200
+    """
+    user = request.user
+    
+    if 'file' not in request.FILES:
+        return Response({"error": "No file provided"}, status=400)
+    
+    csv_file = request.FILES['file']
+    
+    # Decode file
+    try:
+        decoded_file = csv_file.read().decode('utf-8')
+    except UnicodeDecodeError:
+        return Response(
+            {"error": "Invalid file encoding. Please use UTF-8."},
+            status=400
+        )
+    
+    # Get org
+    org = user.groups.first()
+    if not org:
+        from django.contrib.auth.models import Group
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    # Parse CSV
+    import csv
+    import io
+    
+    io_string = io.StringIO(decoded_file)
+    reader = csv.DictReader(io_string)
+    
+    clients_created = 0
+    clients_skipped = 0
+    errors = []
+    
+    for row_num, row in enumerate(reader, start=2):
+        try:
+            name = row.get('name', '').strip()
+            if not name:
+                errors.append(f"Row {row_num}: Missing client name")
+                clients_skipped += 1
+                continue
+            
+            code = row.get('code', '').strip() or name[:10].upper().replace(" ", "")
+            
+            # Check if exists
+            if Client.objects.filter(org=org, code=code).exists():
+                clients_skipped += 1
+                continue
+            
+            # Create client
+            Client.objects.create(
+                org=org,
+                name=name,
+                code=code,
+                is_active=True
+            )
+            
+            clients_created += 1
+            
+        except Exception as e:
+            errors.append(f"Row {row_num}: {str(e)}")
+            clients_skipped += 1
+    
+    return Response({
+        "ok": True,
+        "clients": clients_created,
+        "skipped": clients_skipped,
+        "errors": errors,
+        "message": f"Successfully imported {clients_created} clients ({clients_skipped} skipped)"
+    })
+
+
+@api_view(["GET"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def user_profile(request):
+    """
+    Get current user profile with onboarding status.
+    
+    Returns: {
+      "id": int,
+      "email": str,
+      "username": str,
+      "onboarding_completed": bool,
+      "organization": {...}
+    }
+    """
+    user = request.user
+    
+    # Get org
+    org = user.groups.first()
+    
+    return Response({
+        "id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        # Check if user has onboarding_completed field, default to True for existing users
+        "onboarding_completed": getattr(user, 'onboarding_completed', True),
+        "organization": {
+            "id": org.id if org else None,
+            "name": org.name if org else None,
+        }
+    })
+
+
+@api_view(["POST"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def complete_onboarding(request):
+    """
+    Mark user's onboarding as complete.
+    Called when user finishes onboarding wizard.
+    """
+    user = request.user
+    
+    # Set onboarding_completed flag
+    if hasattr(user, 'onboarding_completed'):
+        user.onboarding_completed = True
+        user.save()
+    
+    return Response({
+        "ok": True,
+        "message": "Onboarding completed"
+    })
+
+
+@api_view(["GET"])
+@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
+@permission_classes([IsAuthenticated])
+def today_time(request):
+    """
+    Get today's tracked time organized by client → category.
+    Uses union-of-spans to avoid double-counting overlapping blocks.
+    """
+    from datetime import date
+    from collections import defaultdict
+    
+    user = request.user
+    today = date.today()
+    
+    # Get ALL blocks for today
+    blocks = Block.objects.filter(
+        user=user,
+        day=today
+    ).select_related('client').order_by('start')
+    
+    # Helper: union of time spans (avoid overlaps)
+    def union_minutes(spans):
+        if not spans:
+            return 0
+        ranges = []
+        for s in spans:
+            if s['start'] and s['end']:
+                start_ms = int(s['start'].timestamp() * 1000)
+                end_ms = int(s['end'].timestamp() * 1000)
+                if start_ms < end_ms:
+                    ranges.append((start_ms, end_ms))
+        
+        ranges.sort()
+        total_ms = 0
+        cur_start, cur_end = -1, -1
+        
+        for start, end in ranges:
+            if cur_start < 0:
+                cur_start, cur_end = start, end
+                continue
+            if start <= cur_end:
+                if end > cur_end:
+                    cur_end = end
+            else:
+                total_ms += cur_end - cur_start
+                cur_start, cur_end = start, end
+        
+        if cur_start >= 0:
+            total_ms += cur_end - cur_start
+        
+        return total_ms / 60000  # Convert to minutes
+    
+    # Group by client → category
+    data = defaultdict(lambda: {
+        'client_id': None,
+        'client_name': None,
+        'categories': defaultdict(lambda: {'spans': [], 'count': 0, 'samples': []})
+    })
+    
+    for block in blocks:
+        client_name = block.client.name if block.client else 'Unassigned'
+        client_id = block.client.id if block.client else None
+        category = block.ai_category or 'Uncategorized'
+        
+        data[client_name]['client_id'] = client_id
+        data[client_name]['client_name'] = client_name
+        
+        cat_data = data[client_name]['categories'][category]
+        cat_data['spans'].append({'start': block.start, 'end': block.end})
+        cat_data['count'] += 1
+        
+        # Sample activities (max 3)
+        if len(cat_data['samples']) < 3:
+            title = block.window_title or block.url or block.app_name or 'Unknown'
+            if len(title) > 60:
+                title = title[:57] + '...'
+            cat_data['samples'].append(title)
+    
+    # Calculate union minutes for each category
+    result = []
+    for client_name, client_data in sorted(data.items()):
+        categories = []
+        total_client_minutes = 0
+        
+        for cat_name, cat_data in sorted(client_data['categories'].items()):
+            minutes = union_minutes(cat_data['spans'])
+            total_client_minutes += minutes
+            
+            categories.append({
+                'name': cat_name,
+                'hours': round(minutes / 60, 2),
+                'block_count': cat_data['count'],
+                'sample_activities': cat_data['samples']
+            })
+        
+        result.append({
+            'client_id': client_data['client_id'],
+            'client': client_name,
+            'total_hours': round(total_client_minutes / 60, 2),
+            'categories': categories
+        })
+    
+    return Response(result)

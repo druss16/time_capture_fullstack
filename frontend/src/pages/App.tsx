@@ -16,6 +16,12 @@ import PairDeviceModal from "@/components/agent/PairDeviceModal";
 import Navigation from "@/components/Navigation";
 import ProtectedRoute from "@/routes/ProtectedRoute";
 
+// Client management components
+import { ClientList } from '@/components/clients/ClientList';
+import { ClientImport } from '@/components/clients/ClientImport';
+import { ManualClientEntry } from '@/components/clients/ManualClientEntry';
+import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
+
 // --------- Lazy pages (code-splitting) ---------
 const DailyReview = lazy(() => import("./DailyReview"));
 const TimecardReview = lazy(() => import("./TimecardReview"));
@@ -59,6 +65,44 @@ function ScrollToTop() {
   return null;
 }
 
+// 👇 NEW: Check if user needs onboarding
+function OnboardingCheck({ children }: { children: React.ReactNode }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    // Skip check on login, signup, and onboarding pages
+    const skipPaths = ['/login', '/signup', '/onboarding'];
+    if (skipPaths.includes(location.pathname)) {
+      return;
+    }
+
+    // Check onboarding status
+    const checkOnboarding = async () => {
+      try {
+        const response = await fetch('/api/profile/', {
+          credentials: 'include',
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          // Redirect to onboarding if not completed
+          if (!data.onboarding_completed) {
+            navigate('/onboarding');
+          }
+        }
+      } catch (error) {
+        console.error('Error checking onboarding:', error);
+      }
+    };
+
+    checkOnboarding();
+  }, [navigate, location.pathname]);
+
+  return <>{children}</>;
+}
+
 // Wrap ProtectedRoute, but bypass if AUTH is disabled (useful in dev)
 function MaybeProtected({ children }: { children: React.ReactNode }) {
   if (AUTH_DISABLED) return <>{children}</>;
@@ -84,75 +128,120 @@ export default function App() {
         <AuthProvider>
           <BrowserRouter>
             <ScrollToTop />
-            {/* Globally-mounted pairing modal so any page can open it */}
-            <PairDeviceModal />
+            {/* 👇 NEW: Add onboarding check globally */}
+            <OnboardingCheck>
+              {/* Globally-mounted pairing modal so any page can open it */}
+              <PairDeviceModal />
 
-            <Suspense fallback={<div className="p-6 text-blue-800">Loading…</div>}>
-              <Routes>
-                {/* Redirect root → /daily */}
-                <Route path="/" element={<Navigate to="/daily" replace />} />
+              <Suspense fallback={<div className="p-6 text-blue-800">Loading…</div>}>
+                <Routes>
+                  {/* Redirect root → /daily */}
+                  <Route path="/" element={<Navigate to="/daily" replace />} />
 
-                {/* Public auth routes */}
-                {!AUTH_DISABLED && <Route path="/login" element={<Login />} />}
-                {!AUTH_DISABLED && <Route path="/signup" element={<Signup />} />}
-                {!AUTH_DISABLED && <Route path="/logout" element={<Logout />} />}
+                  {/* Public auth routes */}
+                  {!AUTH_DISABLED && <Route path="/login" element={<Login />} />}
+                  {!AUTH_DISABLED && <Route path="/signup" element={<Signup />} />}
+                  {!AUTH_DISABLED && <Route path="/logout" element={<Logout />} />}
 
-                {/* Protected pages (wrapped in AppLayout) */}
-                <Route
-                  path="/daily"
-                  element={
-                    <MaybeProtected>
-                      <AppLayout>
-                        <DailyReview />
-                      </AppLayout>
-                    </MaybeProtected>
-                  }
-                />
-                <Route
-                  path="/timecards"
-                  element={
-                    <MaybeProtected>
-                      <AppLayout>
-                        <TimecardReview />
-                      </AppLayout>
-                    </MaybeProtected>
-                  }
-                />
-                <Route
-                  path="/summary"
-                  element={
-                    <MaybeProtected>
-                      <AppLayout>
-                        <TimecardSummary />
-                      </AppLayout>
-                    </MaybeProtected>
-                  }
-                />
-                <Route
-                  path="/settings"
-                  element={
-                    <MaybeProtected>
-                      <AppLayout>
-                        <OrganizationSettings />
-                      </AppLayout>
-                    </MaybeProtected>
-                  }
-                />
-                <Route
-                  path="/devices"
-                  element={
-                    <MaybeProtected>
-                      <AppLayout>
-                        <Devices />
-                      </AppLayout>
-                    </MaybeProtected>
-                  }
-                />
+                  {/* 👇 NEW: Onboarding route (no AppLayout - full screen) */}
+                  <Route
+                    path="/onboarding"
+                    element={
+                      <MaybeProtected>
+                        <OnboardingWizard />
+                      </MaybeProtected>
+                    }
+                  />
 
-                {/* 404 */}
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </Suspense>
+                  {/* Protected pages (wrapped in AppLayout) */}
+                  <Route
+                    path="/daily"
+                    element={
+                      <MaybeProtected>
+                        <AppLayout>
+                          <DailyReview />
+                        </AppLayout>
+                      </MaybeProtected>
+                    }
+                  />
+                  <Route
+                    path="/timecards"
+                    element={
+                      <MaybeProtected>
+                        <AppLayout>
+                          <TimecardReview />
+                        </AppLayout>
+                      </MaybeProtected>
+                    }
+                  />
+                  <Route
+                    path="/summary"
+                    element={
+                      <MaybeProtected>
+                        <AppLayout>
+                          <TimecardSummary />
+                        </AppLayout>
+                      </MaybeProtected>
+                    }
+                  />
+                  <Route
+                    path="/settings"
+                    element={
+                      <MaybeProtected>
+                        <AppLayout>
+                          <OrganizationSettings />
+                        </AppLayout>
+                      </MaybeProtected>
+                    }
+                  />
+                  <Route
+                    path="/devices"
+                    element={
+                      <MaybeProtected>
+                        <AppLayout>
+                          <Devices />
+                        </AppLayout>
+                      </MaybeProtected>
+                    }
+                  />
+
+                  {/* 👇 UPDATED: Client Management Routes - now properly wrapped */}
+                  <Route
+                    path="/clients"
+                    element={
+                      <MaybeProtected>
+                        <AppLayout>
+                          <ClientList />
+                        </AppLayout>
+                      </MaybeProtected>
+                    }
+                  />
+                  <Route
+                    path="/clients/import"
+                    element={
+                      <MaybeProtected>
+                        <AppLayout>
+                          <ClientImport />
+                        </AppLayout>
+                      </MaybeProtected>
+                    }
+                  />
+                  <Route
+                    path="/clients/add"
+                    element={
+                      <MaybeProtected>
+                        <AppLayout>
+                          <ManualClientEntry />
+                        </AppLayout>
+                      </MaybeProtected>
+                    }
+                  />
+
+                  {/* 404 */}
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </Suspense>
+            </OnboardingCheck>
           </BrowserRouter>
         </AuthProvider>
       </TooltipProvider>

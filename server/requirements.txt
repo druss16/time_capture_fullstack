@@ -4,9 +4,9 @@ django-cors-headers==4.4.0
 psycopg2-binary==2.9.9
 openai>=1.50.0
 sentry-sdk
-django-allauth>=0.63.0  # Or whatever version you need; check compatibility with your Django version
-
-# NEW
+django-allauth>=0.63.0
+# Celery
 celery>=5.3,<6
 redis>=5.0
 django-celery-results>=2.5
+django-celery-beat>=2.6.0

@@ -11,3 +11,10 @@
     "com.apple.ActivityMonitor"
   ]
 }
+
+{
+  "api_base": "http://localhost:7123/api",
+  "context_guess_url": "http://127.0.0.1:8901",
+  "context_confirm_url": "http://localhost:7123/api/context/confirm",
+  "context_reject_url": "http://localhost:7123/api/context/reject"
+}

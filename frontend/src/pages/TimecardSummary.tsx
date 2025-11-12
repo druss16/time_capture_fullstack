@@ -1,5 +1,5 @@
 // src/pages/TimecardSummary.tsx
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Clock, User } from "lucide-react";
 import { Header } from "@/components/common/Header";
 import {
@@ -14,9 +14,9 @@ import { DESIGN_SYSTEM } from "@/lib/design-system";
 import { todayIso } from "@/lib/utils/date";
 import { displayClientName } from "@/lib/utils/formatting";
 import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
-import { primeCsrf, getCookie } from "@/lib/csrf";
+import { primeCsrf, postJson } from "@/lib/csrf";
 
-// ---------- Types ----------
+// ---------- UI shapes ----------
 type TaskRow = {
   task_name: string;
   total_hours: number;
@@ -32,77 +32,68 @@ type ClientRow = {
   tasks?: TaskRow[];
 };
 
-type SummaryResp = {
-  date: string;
-  user: string;
-  total_hours: number;
-  clients: ClientRow[];
+// ---------- server response shape ----------
+type Bucket = {
+  client: string;
+  project: string | null;
+  minutes: number; // union-minutes within the bucket (int)
+  hours: number;   // rounded on server (2 dp)
+  categories: Record<string, number | string>;
 };
 
-type BlockMeta = { id: number; start: string; end: string; minutes?: number };
+type SummaryRespStable = {
+  date: string;
+  user: string;
+  total_hours: number;   // ACTIVE, de-duplicated across all buckets
+  buckets: Bucket[];
+  meta?: {
+    count_blocks?: number;
+    stable?: boolean;
+    active_minutes?: number;
+    idle_minutes?: number; // we'll surface this as Idle/Away
+  };
+};
 
-// ---------- API helpers ----------
-async function fetchBlocksForDay(date: string, user: string) {
-  const url = new URL(API_ENDPOINTS.blocksToday);
-  url.searchParams.set("date", date);
-  if (user?.trim()) url.searchParams.set("user", user.trim());
-
-  try {
-    return (await safeFetchJson<BlockMeta[]>(url.toString(), { credentials: "include" })) ?? [];
-  } catch {
-    return [] as BlockMeta[];
-  }
-}
-
-async function postJson(url: string, data: any) {
-  const csrftoken = getCookie("csrftoken");
-  const res = await fetch(url, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRFToken": csrftoken,
-      "X-Requested-With": "XMLHttpRequest",
-    },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`HTTP ${res.status}: ${detail}`);
-  }
-  return res.json().catch(() => ({}));
-}
-
-// ---------- Component ----------
 export default function TimecardSummary() {
-  const [data, setData] = useState<SummaryResp | null>(null);
+  const [data, setData] = useState<{
+    date: string;
+    user: string;
+    total_hours: number;     // active hours (header)
+    clients: ClientRow[];
+    idle_hours: number;      // derived from meta.idle_minutes
+    active_minutes: number;  // passthrough for debugging/QA if needed
+  } | null>(null);
+
   const [busy, setBusy] = useState(false);
   const [user, setUser] = useState<string>("");
   const [date, setDate] = useState<string>(todayIso());
   const [err, setErr] = useState<string | null>(null);
   const [whoami, setWhoami] = useState<string>("");
   const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
-  const [blocks, setBlocks] = useState<BlockMeta[] | null>(null);
-  const [hasOverlap, setHasOverlap] = useState(false);
 
-  // ---------- Identify current user ----------
+  // StrictMode double-run guard
+  const loadOnceRef = useRef(0);
+  useEffect(() => { loadOnceRef.current = 0; }, [date, user]);
+
+  // ---------- identify current user ----------
   useEffect(() => {
     (async () => {
       try {
-        const j = await safeFetchJson<{ username?: string }>(API_ENDPOINTS.whoami, {
-          credentials: "include",
-        });
+        const j = await safeFetchJson<{ username?: string }>(API_ENDPOINTS.whoami, { credentials: "include" });
         const name = (j?.username || "").trim();
         setWhoami(name);
         setUser((u) => (u.trim() ? u : name));
       } catch {
-        // ignore — anon
+        // ok if anonymous
       }
     })();
   }, []);
 
-  // ---------- Load summary + blocks ----------
+  // ---------- load snapshot & adapt to UI ----------
   const load = useCallback(async () => {
+    if (loadOnceRef.current) return;
+    loadOnceRef.current = 1;
+
     if (!date) return;
     setBusy(true);
     setErr(null);
@@ -111,67 +102,131 @@ export default function TimecardSummary() {
       url.searchParams.set("date", date);
       if (user.trim()) url.searchParams.set("user", user.trim());
 
-      const j = await safeFetchJson<SummaryResp>(url.toString(), { credentials: "include" });
+      const j = await safeFetchJson<SummaryRespStable>(url.toString(), { credentials: "include" });
+      const buckets = Array.isArray(j?.buckets) ? j.buckets : [];
 
-      const clients = (Array.isArray(j.clients) ? j.clients : []).map((c) => ({
+      // bucket → clients + tasks
+      const byClient: Record<string, ClientRow> = {};
+      for (const b of buckets) {
+        const clientNameRaw = b.client || "Unassigned";
+        const clientName = displayClientName(clientNameRaw);
+        const project = b.project || "—";
+        const hours = Number(b.hours || 0);
+
+        if (!byClient[clientName]) {
+          byClient[clientName] = {
+            client_name: clientName,
+            total_hours: 0,
+            categories: {},
+            tasks: [],
+            block_ids: [],
+          };
+        }
+
+        const C = byClient[clientName];
+        C.total_hours = Number((C.total_hours + hours).toFixed(2));
+
+        // sum categories at client level (coerce to number)
+        for (const [k, v] of Object.entries(b.categories || {})) {
+          const n = Number(v || 0);
+          C.categories[k] = Number(((C.categories[k] || 0) + n).toFixed(2));
+        }
+
+        // upsert task row by project
+        const idx = C.tasks!.findIndex((t) => t.task_name === project);
+        if (idx === -1) {
+          const cat: Record<string, number> = {};
+          for (const [k, v] of Object.entries(b.categories || {})) cat[k] = Number(v || 0);
+          C.tasks!.push({
+            task_name: project,
+            total_hours: Number(hours || 0),
+            categories: cat,
+          });
+        } else {
+          const T = C.tasks![idx];
+          T.total_hours = Number((T.total_hours + hours).toFixed(2));
+          for (const [k, v] of Object.entries(b.categories || {})) {
+            const n = Number(v || 0);
+            T.categories[k] = Number(((T.categories[k] || 0) + n).toFixed(2));
+          }
+        }
+      }
+
+      // sort tasks per client (hours desc, then alpha)
+      const clients: ClientRow[] = Object.values(byClient).map((c) => ({
         ...c,
-        client_name: displayClientName(c.client_name),
-        tasks: Array.isArray((c as any).tasks) ? (c as any).tasks : [],
+        tasks: (c.tasks || []).sort(
+          (a, b) => (b.total_hours - a.total_hours) || a.task_name.localeCompare(b.task_name)
+        ),
       }));
 
+      // client sort: Unassigned last → hours desc → alpha
       clients.sort((a, b) => {
         const au = a.client_name === "Unassigned";
         const bu = b.client_name === "Unassigned";
         if (au && !bu) return 1;
         if (!au && bu) return -1;
-        return b.total_hours - a.total_hours;
+        if (b.total_hours !== a.total_hours) return b.total_hours - a.total_hours;
+        return a.client_name.localeCompare(b.client_name);
       });
+
+      const idleMinutes = Number(j?.meta?.idle_minutes || 0);
+      const activeMinutes = Number(j?.meta?.active_minutes || Math.round((j?.total_hours || 0) * 60));
+      const idleHours = Number((idleMinutes / 60).toFixed(2));
+
+      // Add an explicit Idle bucket (NOT counted in header total_hours)
+      if (idleHours >= 0.1) {
+        clients.push({
+          client_name: "Idle/Away",
+          total_hours: idleHours,
+          categories: { Idle: idleHours },
+          tasks: [
+            {
+              task_name: "—",
+              total_hours: idleHours,
+              categories: { Idle: idleHours },
+            },
+          ],
+        });
+      }
 
       setData({
-        date: j.date || date,
-        user: typeof j.user === "string" ? j.user : user,
-        total_hours: Number(j.total_hours || 0),
+        date: j?.date || date,
+        user: typeof j?.user === "string" ? j.user : user,
+        total_hours: Number(j?.total_hours || 0), // ACTIVE hours only
         clients,
+        idle_hours: idleHours,
+        active_minutes: activeMinutes,
       });
-
-      // ---- Compute overlap warning ----
-      const blk = await fetchBlocksForDay(date, user);
-      setBlocks(blk);
-
-      const rawTotalMins = (blk ?? []).reduce((a, b) => a + (b.minutes || 0), 0);
-      const hasSpan = (blk ?? []).length > 0;
-      const minStart = hasSpan ? Math.min(...blk.map((b) => +new Date(b.start))) : 0;
-      const maxEnd = hasSpan ? Math.max(...blk.map((b) => +new Date(b.end))) : 0;
-      const spanHours = hasSpan ? (maxEnd - minStart) / 3600000 : 0;
-      const overlapRatio = spanHours ? (rawTotalMins / 60) / spanHours : 1;
-      setHasOverlap(overlapRatio > 1.15);
     } catch (e: any) {
       console.error(e);
       setErr(e?.message || "Failed to load.");
-      setData({ date, user, total_hours: 0, clients: [] });
-      setBlocks([]);
-      setHasOverlap(false);
+      setData({ date, user, total_hours: 0, clients: [], idle_hours: 0, active_minutes: 0 });
     } finally {
       setBusy(false);
     }
   }, [date, user]);
 
-  // ---------- Generate timecard ----------
+  // ---------- generate timecard then reload ----------
   const generate = async (status: "draft" | "pending" = "pending") => {
     if (!(whoami || user)) {
       setErr("No user detected — cannot generate timecard.");
       return;
     }
-
     setBusy(true);
     setErr(null);
     try {
       await primeCsrf(); // ensure csrftoken exists
-      await postJson(API_ENDPOINTS.timecardsGenerate, {
+      const res = await postJson(API_ENDPOINTS.timecardsGenerate, {
         date,
         user: user || whoami,
         status,
       });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`Generate failed: HTTP ${res.status} ${res.statusText} ${t?.slice(0, 200)}`);
+      }
+      loadOnceRef.current = 0;
       await load();
     } catch (e: any) {
       console.error(e);
@@ -181,15 +236,13 @@ export default function TimecardSummary() {
     }
   };
 
-  // ---------- Auto-load ----------
+  // ---------- auto-load ----------
   useEffect(() => {
-    const timer = setTimeout(() => {
-      load();
-    }, 300);
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => { void load(); }, 250);
+    return () => clearTimeout(t);
   }, [load]);
 
-  // ---------- UI Helpers ----------
+  // ---------- helpers ----------
   const headerUser = useMemo(() => {
     return user?.trim() ? user.trim() : data?.user?.trim() ? data.user : "All Users";
   }, [user, data?.user]);
@@ -202,7 +255,35 @@ export default function TimecardSummary() {
     });
   };
 
-  // ---------- Render ----------
+  // Cross-bucket overlap notice — header total is a union across buckets
+  const overlapBanner = useMemo(() => {
+    if (!data) return null;
+    const sumBuckets = Number(
+      data.clients.reduce((a, c) => a + (c.total_hours || 0), 0).toFixed(2)
+    );
+    const overlap = sumBuckets > data.total_hours * 1.1; // wiggle room for rounding
+    if (!overlap) return null;
+    return (
+      <div className="mb-3 p-3 rounded-md border border-amber-200 bg-amber-50 text-amber-800 text-sm">
+        Heads-up: client totals can exceed the header total when work overlaps across buckets.
+        The header shows de-duplicated time across all buckets; each bucket de-duplicates only within itself.
+      </div>
+    );
+  }, [data]);
+
+  // ---------- tiny component: Idle pill ----------
+  const IdlePill = ({ hours }: { hours: number }) => {
+    if (!hours || hours < 0.01) return null;
+    return (
+      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs ml-2
+                      border-slate-200 bg-slate-50 text-slate-700">
+        <span className="inline-block w-2 h-2 rounded-full bg-slate-400" />
+        Idle/Away: <span className="font-semibold">{hours.toFixed(2)}h</span>
+      </div>
+    );
+  };
+
+  // ---------- render ----------
   return (
     <div className="min-h-screen bg-background">
       <Header
@@ -226,33 +307,32 @@ export default function TimecardSummary() {
           whoami={whoami}
           onDateChange={setDate}
           onUserChange={setUser}
-          onRefresh={load}
+          onRefresh={() => { loadOnceRef.current = 0; void load(); }}
           onDraft={() => generate("draft")}
           onSubmit={() => generate("pending")}
           isLoading={busy}
         />
 
-        {hasOverlap && (
-          <div className="mb-4 p-3 rounded-md border border-red-200 bg-red-50 text-red-700 text-sm">
-            Totals may be inflated due to overlapping segments. Refresh after compaction.
-          </div>
-        )}
+        {overlapBanner}
 
         {err && <ErrorBanner message={err} />}
 
         {data && (
-          <StatsOverview
-            totalHours={data.total_hours}
-            currentUser={headerUser}
-            clientCount={data.clients.length}
-          />
+          <div className="mb-3 flex items-center">
+            <StatsOverview
+              totalHours={data.total_hours}   // active only
+              currentUser={headerUser}
+              clientCount={data.clients.length}
+            />
+            <IdlePill hours={data.idle_hours} />
+          </div>
         )}
 
         {data && data.clients.length > 0 ? (
           <div className="space-y-4">
             {data.clients.map((client) => (
               <ClientCard
-                key={`${client.client_name}-${client.total_hours}`}
+                key={client.client_name}
                 client={client}
                 totalHours={data.total_hours}
                 isExpanded={expandedClients.has(client.client_name)}

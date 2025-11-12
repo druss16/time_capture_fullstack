@@ -1,39 +1,209 @@
-
+# ============================================
+# Operating Systems
+# ============================================
 # macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
 
-# python / django
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# ============================================
+# Python / Django
+# ============================================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.sqlite3
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.pot
+
+# Virtual Environments
 env/
 venv/
-*.log
-*.pot
-*.py[cod]
-*.egg-info/
+ENV/
+env.bak/
+venv.bak/
+.Python
+
+# Django
+*.sqlite3
 db.sqlite3
+*.db
 media/
 staticfiles/
+local_settings.py
 
-# node / react
+# Logs
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ============================================
+# Time Tracking Agents (Mac & Windows)
+# ============================================
+
+# Agent Databases (SQLite)
+mac_agent/*.sqlite3
+mac_agent/*.db
+windows_agent/*.sqlite3
+windows_agent/*.db
+
+# Agent Configuration (contains API keys!)
+mac_agent/config.json
+windows_agent/config.json
+.timetracker/
+~/.timetracker/
+
+# Agent Runtime Files
+mac_agent/*.pid
+windows_agent/*.pid
+*.pid
+
+# Agent Data & State
+mac_agent/clients.json
+mac_agent/gui_state.json
+windows_agent/clients.json
+windows_agent/gui_state.json
+mac_agent/.device_id
+windows_agent/.device_id
+
+# Agent Logs
+mac_agent/logs/
+windows_agent/logs/
+~/Library/Logs/ActivityAgent/
+%APPDATA%/TimeTracker/logs/
+
+# Agent Build Artifacts (PyInstaller)
+mac_agent/build/
+mac_agent/dist/
+mac_agent/*.spec
+windows_agent/build/
+windows_agent/dist/
+windows_agent/*.spec
+
+# macOS LaunchAgent
+~/Library/LaunchAgents/com.mavops.activityagent.plist
+
+# Windows Startup
+**/startup.lnk
+
+# ============================================
+# Node / React / Frontend
+# ============================================
 node_modules/
 frontend/dist/
+frontend/build/
 frontend/.vite/
 frontend/.eslintcache
 frontend/.parcel-cache
 *.tsbuildinfo
+.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# docker
-*.pid
-*.log
+# ============================================
+# Docker
+# ============================================
 *.tmp
+.dockerignore
+docker-compose.override.yml
+
+# ============================================
+# Environment Variables & Secrets
+# ============================================
 .env
 .env.*
-.dockerignore
+!.env.example
+.envrc
+*.env.local
+*.env.development.local
+*.env.test.local
+*.env.production.local
 
-# IDE
+# API Keys & Tokens
+*.pem
+*.key
+*.cert
+secrets/
+credentials/
+
+# ============================================
+# IDE & Editors
+# ============================================
+# VSCode
 .vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# PyCharm / IntelliJ
 .idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# ============================================
+# Testing & Coverage
+# ============================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ============================================
+# Miscellaneous
+# ============================================
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Compressed files
+*.zip
+*.tar.gz
+*.rar
+
+# Temporary files
+*.tmp
+temp/
+tmp/

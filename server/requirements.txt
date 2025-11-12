@@ -10,3 +10,24 @@ celery>=5.3,<6
 redis>=5.0
 django-celery-results>=2.5
 django-celery-beat>=2.6.0
+
+# TimeTracker Windows Agent - Required Dependencies
+
+# Windows API access (REQUIRED)
+pywin32>=305
+
+# Process information
+psutil>=5.9.0
+
+# HTTP requests
+requests>=2.31.0
+
+# System tray GUI
+pystray>=0.19.4
+pillow>=10.0.0
+
+# Windows notifications
+win10toast>=0.9
+
+# Optional: Build standalone executable
+# pyinstaller>=6.0.0

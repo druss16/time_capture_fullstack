@@ -43,7 +43,6 @@ INSTALLED_APPS = [
     "tracker.apps.TrackerConfig",
     "django_celery_results",
     "django_celery_beat",
-    "timetracker-api-k375.onrender.com",
 
 ]
 
@@ -207,7 +206,7 @@ CSRF_EXEMPT_URLS = ["/tracker/raw-events/"]  # you can append API endpoints here
 from corsheaders.defaults import default_headers
 
 # Your SPA runs on http://localhost:5173, API on http://localhost:7123
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "timetracker-api-k375.onrender.com"]
 
 # CORS
 CORS_ALLOW_CREDENTIALS = True

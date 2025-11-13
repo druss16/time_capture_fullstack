@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "tracker.apps.TrackerConfig",
     "django_celery_results",
     "django_celery_beat",
+    "timetracker-api-k375.onrender.com",
 
 ]
 
@@ -219,7 +220,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://127.0.0.1:8080",
     # prod preview you had:
-    "https://timetracker.mavops.ai"
+    "https://timetracker.mavops.ai",
+    "timetracker-api-k375.onrender.com",
 ]
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-agent-key", "agent-key", "authorization",
@@ -234,6 +236,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:7123",
     # add https variants if you test with TLS locally
     "https://timetracker.mavops.ai",
+    "timetracker-api-k375.onrender.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True

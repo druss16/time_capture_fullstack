@@ -219,7 +219,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://127.0.0.1:8080",
     # prod preview you had:
-    "https://463d01aa088f43d1ae615127e617af8e-fcaec2f20afa415aa44dbb66c.fly.dev",
+    "https://timetracker.mavops.ai"
 ]
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-agent-key", "agent-key", "authorization",
@@ -233,6 +233,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:7123",
     "http://127.0.0.1:7123",
     # add https variants if you test with TLS locally
+    "https://timetracker.mavops.ai",
 ]
 
 CORS_ALLOW_CREDENTIALS = True

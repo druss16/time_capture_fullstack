@@ -10,8 +10,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates tzdata netcat-traditional gcc \
     && rm -rf /var/lib/apt/lists/*
-# (Optional) if you want non-root
-RUN useradd -m appuser
+# Create appuser and staticfiles directory
+RUN useradd -m appuser && \
+    mkdir -p /app/staticfiles && \
+    chown -R appuser:appuser /app
 USER appuser
 COPY --chown=appuser:appuser requirements.txt .
 RUN pip install -r requirements.txt

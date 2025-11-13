@@ -6,6 +6,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     POETRY_VIRTUALENVS_CREATE=false
 
+ENV PATH="/home/appuser/.local/bin:$PATH"
+
 WORKDIR /app
 
 # Useful system deps for “wait-for”, SSL, tz, and building the odd wheel

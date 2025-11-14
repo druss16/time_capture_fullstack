@@ -2,6 +2,7 @@
  * DailyReview.tsx — Clean time summary view
  * - Shows organized time by client → category
  * - Simple, focused interface
+ * - Excludes idle/uncategorized time from totals
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -99,7 +100,26 @@ export default function DailyReview() {
     return user?.trim() ? user.trim() : whoami?.trim() ? whoami : "All Users";
   }, [user, whoami]);
 
-  const summaryTotalHours = timeSummary.reduce((sum, client) => sum + client.total_hours, 0);
+  // Filter out idle/uncategorized time from totals
+  const isIdleCategory = (catName: string) => {
+    const lower = catName.toLowerCase();
+    return lower.includes('idle') || lower.includes('uncategorized');
+  };
+
+  // Calculate total hours excluding idle time
+  const summaryTotalHours = timeSummary.reduce((sum, client) => {
+    const clientBillableHours = client.categories
+      .filter(cat => !isIdleCategory(cat.name))
+      .reduce((catSum, cat) => catSum + cat.hours, 0);
+    return sum + clientBillableHours;
+  }, 0);
+
+  // Helper to get client's billable hours (excluding idle)
+  const getClientBillableHours = (client: ClientTime) => {
+    return client.categories
+      .filter(cat => !isIdleCategory(cat.name))
+      .reduce((sum, cat) => sum + cat.hours, 0);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -142,52 +162,81 @@ export default function DailyReview() {
                 Today's Summary
               </h3>
               <div className="px-6 py-3 bg-gradient-to-r from-primary/20 to-accent/20 rounded-lg border border-primary/30">
-                <span className="text-sm text-muted-foreground">Total: </span>
+                <span className="text-sm text-muted-foreground">Billable: </span>
                 <span className="text-3xl font-bold text-primary">{summaryTotalHours.toFixed(2)}h</span>
               </div>
             </div>
             
             <div className="space-y-6">
-              {timeSummary.map((client) => (
-                <div 
-                  key={client.client_id || client.client} 
-                  className="border border-border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow"
-                >
-                  {/* Client Header */}
-                  <div className="bg-gradient-to-r from-primary/10 to-accent/10 px-6 py-4 flex items-center justify-between">
-                    <h4 className="font-semibold text-xl text-foreground">{client.client}</h4>
-                    <span className="text-2xl font-bold text-primary">{client.total_hours.toFixed(2)}h</span>
-                  </div>
-                  
-                  {/* Categories */}
-                  <div className="divide-y divide-border bg-white">
-                    {client.categories.map((cat) => (
-                      <div key={cat.name} className="px-6 py-4 hover:bg-accent/30 transition-colors">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-medium text-foreground text-lg">{cat.name}</span>
-                          <div className="flex items-center gap-4">
-                            <span className="text-sm text-muted-foreground">
-                              {cat.block_count} {cat.block_count === 1 ? 'block' : 'blocks'}
-                            </span>
-                            <span className="font-bold text-success text-xl">{cat.hours.toFixed(2)}h</span>
-                          </div>
-                        </div>
-                        
-                        {cat.sample_activities && cat.sample_activities.length > 0 && (
-                          <ul className="mt-3 ml-2 space-y-1.5">
-                            {cat.sample_activities.map((activity, idx) => (
-                              <li key={idx} className="text-sm text-muted-foreground flex gap-2 items-start">
-                                <span className="text-muted-foreground/50 mt-0.5">→</span>
-                                <span className="flex-1">{activity}</span>
-                              </li>
-                            ))}
-                          </ul>
+              {timeSummary.map((client) => {
+                const billableHours = getClientBillableHours(client);
+                
+                return (
+                  <div 
+                    key={client.client_id || client.client} 
+                    className="border border-border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow"
+                  >
+                    {/* Client Header */}
+                    <div className="bg-gradient-to-r from-primary/10 to-accent/10 px-6 py-4 flex items-center justify-between">
+                      <h4 className="font-semibold text-xl text-foreground">{client.client}</h4>
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl font-bold text-primary">{billableHours.toFixed(2)}h</span>
+                        {billableHours !== client.total_hours && (
+                          <span className="text-sm text-muted-foreground">
+                            ({client.total_hours.toFixed(2)}h total)
+                          </span>
                         )}
                       </div>
-                    ))}
+                    </div>
+                    
+                    {/* Categories */}
+                    <div className="divide-y divide-border bg-white">
+                      {client.categories.map((cat) => {
+                        const isIdle = isIdleCategory(cat.name);
+                        
+                        return (
+                          <div 
+                            key={cat.name} 
+                            className={`px-6 py-4 hover:bg-accent/30 transition-colors ${isIdle ? 'opacity-60' : ''}`}
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className={`font-medium text-lg ${isIdle ? 'text-muted-foreground' : 'text-foreground'}`}>
+                                  {cat.name}
+                                </span>
+                                {isIdle && (
+                                  <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">
+                                    non-billable
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-4">
+                                <span className="text-sm text-muted-foreground">
+                                  {cat.block_count} {cat.block_count === 1 ? 'block' : 'blocks'}
+                                </span>
+                                <span className={`font-bold text-xl ${isIdle ? 'text-muted-foreground' : 'text-success'}`}>
+                                  {cat.hours.toFixed(2)}h
+                                </span>
+                              </div>
+                            </div>
+                            
+                            {cat.sample_activities && cat.sample_activities.length > 0 && (
+                              <ul className="mt-3 ml-2 space-y-1.5">
+                                {cat.sample_activities.map((activity, idx) => (
+                                  <li key={idx} className="text-sm text-muted-foreground flex gap-2 items-start">
+                                    <span className="text-muted-foreground/50 mt-0.5">→</span>
+                                    <span className="flex-1">{activity}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

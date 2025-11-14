@@ -1,6 +1,4 @@
 # docker-compose.yml
-# tip: the `version:` key is deprecated; omitting it silences the warning.
-
 services:
   api:
     build:
@@ -58,6 +56,7 @@ services:
     restart: unless-stopped
 
   web:
+    platform: linux/amd64  # ← ADD THIS LINE - fixes ARM64/Rollup issue
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -65,12 +64,13 @@ services:
     env_file:
       - ./frontend/.env
     ports:
-      - "5174:5174"
+      - "5173:5173"
     environment:
       - VITE_API_BASE=http://localhost:7123
     volumes:
       - ./frontend:/usr/src/app
-    command: npm run dev -- --host --port 5174
+      - /usr/src/app/node_modules  # ← ADD THIS LINE - prevents overwriting node_modules
+    command: npm run dev -- --host --port 5173
     depends_on:
       api:
         condition: service_started

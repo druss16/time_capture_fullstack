@@ -1402,12 +1402,94 @@ def label_block(request):
 # -------------------------------------------------------------------
 # AI-Enhanced Suggestions (context-aware)
 # -------------------------------------------------------------------
+def pre_classify_obvious_categories(block) -> dict:
+    """
+    Pre-classify obvious patterns before AI runs.
+    Enhanced with CPA-specific tool detection.
+    Returns: {"categories": {...}, "confidence": float, "reasoning": str} or empty dict
+    """
+    title = (getattr(block, "window_title", "") or block.title or "").lower()
+    url = (block.url or "").lower()
+    app_name = (getattr(block, "app_name", "") or "").lower()
+    file_path = (block.file_path or "").lower()
+    
+    # Calculate block duration in hours
+    if block.end and block.start:
+        hours = round((block.end - block.start).total_seconds() / 3600, 2)
+    else:
+        hours = 0.1  # fallback
+    
+    combined_text = f"{title} {url} {app_name} {file_path}"
+    
+    # === EMAIL DETECTION ===
+    email_indicators = [
+        "@gmail.com", "@outlook.com", "@yahoo.com", "@hotmail.com",
+        "mail.google.com", "outlook.office.com", "inbox",
+        "compose", "draft", "sent mail", "email", "message"
+    ]
+    if any(indicator in combined_text for indicator in email_indicators):
+        return {
+            "categories": {"Email/Communication": hours},
+            "confidence": 0.90,
+            "reasoning": "Email activity detected"
+        }
+    
+    # === MEETING DETECTION ===
+    meeting_indicators = [
+        "zoom.us", "zoom meeting", "meet.google.com", "teams.microsoft.com",
+        "webex", "gotomeeting", "join meeting", "video call", "conference"
+    ]
+    if any(indicator in combined_text for indicator in meeting_indicators):
+        return {
+            "categories": {"Meetings": hours},
+            "confidence": 0.95,
+            "reasoning": "Virtual meeting detected"
+        }
+    
+    # === CPA TOOL DETECTION ===
+    for tool_key, tool_config in CPA_TOOL_DETECTION.items():
+        # Check keywords
+        if any(keyword in combined_text for keyword in tool_config["keywords"]):
+            return {
+                "categories": {tool_config["category"]: hours},
+                "confidence": tool_config["confidence"],
+                "reasoning": f"{tool_config['category']} software detected"
+            }
+        
+        # Check domains
+        if any(domain in url for domain in tool_config["domains"]):
+            return {
+                "categories": {tool_config["category"]: hours},
+                "confidence": tool_config["confidence"],
+                "reasoning": f"{tool_config['category']} platform detected from URL"
+            }
+        
+        # Check URL patterns
+        if any(pattern in combined_text for pattern in tool_config.get("urls", [])):
+            return {
+                "categories": {tool_config["category"]: hours},
+                "confidence": tool_config["confidence"] - 0.05,
+                "reasoning": f"{tool_config['category']} content detected"
+            }
+    
+    # === IRS.GOV SPECIAL CASE ===
+    if "irs.gov" in url:
+        return {
+            "categories": {"Tax Research": hours},
+            "confidence": 0.93,
+            "reasoning": "IRS website research"
+        }
+    
+    return {}
+
+
 @api_view(["GET"])
 @permission_classes([PermUI])
 @throttle_classes([AIGenerateThrottle])
 def ai_suggestions_today(request):
     """
     Generate AI-powered suggestions for today's blocks.
+    NOW: Auto-saves high-confidence results (>= 0.75 confidence)!
     """
     # toggles
     username = request.GET.get("user") or None
@@ -1529,13 +1611,32 @@ def ai_suggestions_today(request):
     client = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
 
     system_msg = (
-        "You are a time-tracking classifier. "
-        "Use the organization context and each block's hints "
-        "(browser_origin, pathname, repo_root, jira_key, github_repo, etc.) "
-        "to map blocks to {client, project, categories(hours)}. "
-        "If unsure, set needs_review=true. "
-        "Return ONLY a JSON array matching the order of provided blocks. "
-        "Include fields: client, project, categories, confidence, needs_review, reasoning."
+        "You are a time-tracking classifier for a CPA firm. "
+        "Use the organization context and each block's hints to classify time blocks. "
+        "\n\n"
+        "AVAILABLE CATEGORIES (use these exact names):\n"
+        "- Tax Preparation: Tax returns, forms, calculations\n"
+        "- Accounting/Bookkeeping: General ledger, reconciliations, journal entries\n"
+        "- Audit/Assurance: Audit procedures, testing, working papers\n"
+        "- Tax Research: IRS codes, regulations, research\n"
+        "- Payroll Services: Payroll processing, filings\n"
+        "- Financial Planning: Retirement, investment planning\n"
+        "- Regulatory/Compliance: SEC filings, compliance work\n"
+        "- Document Management: File organization, signatures\n"
+        "- Email/Communication: Client emails, correspondence\n"
+        "- Meetings: Video calls, client meetings\n"
+        "- Administration: Practice management, billing, workflows\n"
+        "- Review: Reviewing work, quality control\n"
+        "\n"
+        "CRITICAL RULES:\n"
+        "1. Use exact category names from the list above\n"
+        "2. Email apps/domains → 'Email/Communication'\n"
+        "3. Zoom/Teams/Meet → 'Meetings'\n"
+        "4. QuickBooks/Xero/Sage → 'Accounting/Bookkeeping'\n"
+        "5. UltraTax/Drake/Lacerte → 'Tax Preparation'\n"
+        "6. Set confidence >= 0.85 for obvious professional tools\n"
+        "\n"
+        "Return ONLY a JSON array. Include: client, project, categories, confidence, needs_review, reasoning."
         "\n\n--- ORG CONTEXT ---\n" + org_context
     )
 
@@ -1579,32 +1680,104 @@ def ai_suggestions_today(request):
             })
         return Response(out, status=200)
 
-    out = []
-    N = min(len(blocks), len(ai_suggestions))
-    for i in range(N):
-        b = blocks[i]
-        sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
-        out.append({
-            "block_id": b.id,
-            "start": b.start,
-            "end": b.end,
-            "title": b.title,
-            "ai_suggestion": {
-                "client": sug.get("client"),
-                "project": sug.get("project"),
-                "categories": sug.get("categories", {}),
-                "confidence": sug.get("confidence", 0.0),
-                "needs_review": sug.get("needs_review", True),
-                "reasoning": sug.get("reasoning", ""),
-                "source": "ai_with_context",
-            },
-            "current_client": getattr(b.client, "name", None),
-            "current_project": getattr(b.project, "name", None),
-        })
+        # ✅ NEW: Auto-save high-confidence classifications
+        out = []
+        N = min(len(blocks), len(ai_suggestions))
+        saved_count = 0
+
+        with transaction.atomic():  # ← Line 1688
+            for i in range(N):  # ← Line 1689 - MUST be indented (4 spaces)
+                b = blocks[i]
+                sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
+                
+                # ✅ NEW: Try pre-classification first (CPA tools, emails, meetings)
+                pre_class = pre_classify_obvious_categories(b)
+                if pre_class:
+                    # Override AI suggestion with obvious classification
+                    sug["categories"] = pre_class.get("categories", sug.get("categories", {}))
+                    # Boost confidence if pre-classified
+                    sug["confidence"] = max(float(sug.get("confidence", 0)), pre_class.get("confidence", 0))
+                    if pre_class.get("reasoning"):
+                        sug["reasoning"] = pre_class["reasoning"]
+                
+                confidence = float(sug.get("confidence", 0.0))
+                needs_review = sug.get("needs_review", True)
+                client_name = (sug.get("client") or "").strip()
+                categories = sug.get("categories", {})
+                
+                # Auto-save if high confidence (lowered to 0.70 for pre-classified items)
+                # Auto-save if high confidence (lowered to 0.70 for pre-classified items)
+                auto_saved = False
+                if confidence >= 0.70 and categories:
+                    try:
+                        # ✅ FIXED: Save categories even if block already has a client
+                        # Only skip if categories are already set
+                        if not getattr(b, "category_hours", None) or not b.category_hours:
+                            
+                            # Create/get client if provided AND block doesn't have one
+                            if client_name and not b.client:
+                                client_obj, _ = Client.objects.get_or_create(
+                                    org=org,
+                                    name=client_name,
+                                    defaults={"is_active": True}
+                                )
+                                b.client = client_obj
+                            
+                            # ✅ NEW: Save categories REGARDLESS of whether block has client
+                            if categories and isinstance(categories, dict):
+                                # Clean categories (ensure hours are floats)
+                                clean_cats = {}
+                                for k, v in categories.items():
+                                    try:
+                                        clean_cats[str(k)] = float(v)
+                                    except (ValueError, TypeError):
+                                        pass
+                                
+                                if clean_cats:
+                                    b.category_hours = clean_cats
+                                    
+                                    # Mark as AI-processed (if fields exist)
+                                    if hasattr(b, "ai_processed_at"):
+                                        b.ai_processed_at = timezone.now()
+                                    if hasattr(b, "ai_confidence"):
+                                        b.ai_confidence = confidence
+                                    
+                                    b.save()
+                                    auto_saved = True
+                                    saved_count += 1
+                                    
+                                    # Better logging
+                                    existing_client = getattr(b.client, "name", None)
+                                    log(f"[AI] Auto-saved block {b.id} → Client: {existing_client or client_name or 'none'} | Categories: {list(clean_cats.keys())} ({confidence:.2f})")
+                    
+                    except Exception as e:
+                        log(f"[AI] Failed to auto-save block {b.id}: {e}")
+                
+                out.append({
+                    "block_id": b.id,
+                    "start": b.start,
+                    "end": b.end,
+                    "title": b.title,
+                    "ai_suggestion": {
+                        "client": client_name or None,
+                        "project": sug.get("project"),
+                        "categories": categories,
+                        "confidence": confidence,
+                        "needs_review": needs_review,
+                        "reasoning": sug.get("reasoning", ""),
+                        "source": "ai_with_context",
+                        "auto_saved": auto_saved,
+                    },
+                    "current_client": getattr(b.client, "name", None),
+                    "current_project": getattr(b.project, "name", None),
+                })
+
+    if saved_count > 0:
+        log(f"[AI] Auto-saved {saved_count}/{N} high-confidence classifications")
 
     return Response(out)
 
-
+    
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def reclassify_day(request):
@@ -3549,7 +3722,7 @@ def context_reject(request):
 
 @api_view(["POST"])
 @authentication_classes([SessionAuthentication, AgentKeyAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([PermUI])  # ← Use this instead
 def create_client(request):
     """
     Create a new client.
@@ -3609,7 +3782,7 @@ def create_client(request):
 
 @api_view(["POST"])
 @authentication_classes([SessionAuthentication, AgentKeyAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([PermUI])  # ← Use this instead
 def import_clients_csv(request):
     """
     Import clients from CSV file.
@@ -3690,9 +3863,9 @@ def import_clients_csv(request):
     })
 
 
-@api_view(["GET"])
+@api_view(["GET"])  # ← Change from POST to GET
 @authentication_classes([SessionAuthentication, AgentKeyAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([PermUI])
 def user_profile(request):
     """
     Get current user profile with onboarding status.
@@ -3727,7 +3900,7 @@ def user_profile(request):
 
 @api_view(["POST"])
 @authentication_classes([SessionAuthentication, AgentKeyAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([PermUI])  # ← Use this instead
 def complete_onboarding(request):
     """
     Mark user's onboarding as complete.
@@ -3746,9 +3919,9 @@ def complete_onboarding(request):
     })
 
 
-@api_view(["GET"])
+@api_view(["GET"])  # ← Change from POST to GET
 @authentication_classes([SessionAuthentication, AgentKeyAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([PermUI])
 def today_time(request):
     """
     Get today's tracked time organized by client → category.

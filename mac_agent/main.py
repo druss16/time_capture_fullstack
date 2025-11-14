@@ -155,6 +155,211 @@ TOOL_HOSTS = set(
     "stackoverflow.com", "vercel.app", "render.com"
 }
 
+# --- Meeting Apps (NEW) ---
+MEETING_BUNDLES = set(
+    [b.strip() for b in (_get("meeting_bundles", os.getenv("AGENT_MEETING_BUNDLES")) or "").split(",") if b.strip()]
+) or {
+    "us.zoom.xos",                    # Zoom
+    "com.microsoft.teams",            # Teams (old)
+    "com.microsoft.teams2",           # Teams (new)
+    "com.google.Chrome",              # For web meetings
+    "com.apple.Safari",               # For web meetings
+    "com.brave.Browser",              # For web meetings
+    "org.mozilla.firefox",            # For web meetings
+    "com.cisco.webexmeetings",        # Webex
+    "com.ringcentral.rcapp",          # RingCentral
+    "com.skype.skype",                # Skype
+    "com.gotomeeting",                # GoToMeeting
+    "com.bluejeans.app",              # BlueJeans
+}
+
+MEETING_DOMAINS = {
+    "zoom.us",
+    "meet.google.com",
+    "teams.microsoft.com",
+    "teams.live.com",
+    "webex.com",
+    "gotomeeting.com",
+    "bluejeans.com",
+    "whereby.com",
+    "around.co",
+}
+
+MEETING_KEYWORDS = {
+    "zoom meeting",
+    "teams meeting",
+    "google meet",
+    "webex meeting",
+}
+
+# --- CPA-Specific Tools & Categories (NEW) ---
+CPA_TOOL_DETECTION = {
+    # Tax Preparation Software
+    "tax_prep": {
+        "category": "Tax Preparation",
+        "confidence": 0.95,
+        "keywords": [
+            "ultratax", "drake tax", "lacerte", "proseries", "atx",
+            "taxact", "taxwise", "turbotax", "intuit tax", "proconnect",
+            "cch axcess tax", "thomson reuters ultratax", "corptax",
+            "onesource", "taxslayer pro", "crosslink", "gosystem tax"
+        ],
+        "domains": [
+            "ultratax.com", "drakesoftware.com", "intuit.com/lacerte",
+            "intuit.com/proseries", "cchaxcess.com", "taxact.com"
+        ],
+        "urls": [
+            "form 1040", "form 1120", "form 1065", "schedule c",
+            "schedule e", "form 990", "form 1099", "w-2", "k-1"
+        ]
+    },
+    
+    # Accounting/Bookkeeping Software
+    "accounting": {
+        "category": "Accounting/Bookkeeping",
+        "confidence": 0.93,
+        "keywords": [
+            "quickbooks", "xero", "sage", "freshbooks", "wave accounting",
+            "netsuite", "zoho books", "bench", "kashoo", "financialforce"
+        ],
+        "domains": [
+            "quickbooks.intuit.com", "qbo.intuit.com", "xero.com",
+            "sage.com", "freshbooks.com", "waveapps.com", "netsuite.com",
+            "zoho.com/books"
+        ],
+        "urls": [
+            "chart of accounts", "general ledger", "reconciliation",
+            "journal entry", "trial balance", "financial statements"
+        ]
+    },
+    
+    # Audit & Assurance
+    "audit": {
+        "category": "Audit/Assurance",
+        "confidence": 0.94,
+        "keywords": [
+            "caseware", "idea data analysis", "acl analytics", "teammate audit",
+            "workiva", "auditboard", "cch engagement", "pfx engagement",
+            "audit analytics", "confirmation.com"
+        ],
+        "domains": [
+            "caseware.com", "caseware.cloud", "auditanalytics.com",
+            "auditboard.com", "workiva.com", "confirmation.com",
+            "teammate.wolterskluwer.com"
+        ],
+        "urls": [
+            "audit program", "working papers", "lead schedule",
+            "audit procedures", "testing", "substantive procedures"
+        ]
+    },
+    
+    # Tax Research
+    "research": {
+        "category": "Tax Research",
+        "confidence": 0.92,
+        "keywords": [
+            "checkpoint", "intelliconnect", "bloomberg tax", "ria",
+            "tax notes", "bna", "lexis tax", "westlaw", "cch answerconnect"
+        ],
+        "domains": [
+            "checkpoint.riag.com", "intelliconnect.cch.com",
+            "pro.bloombergtax.com", "news.bloombergtax.com",
+            "taxnotes.com", "irs.gov", "taxfoundation.org"
+        ],
+        "urls": [
+            "irc section", "revenue ruling", "private letter ruling",
+            "treasury regulation", "notice", "publication"
+        ]
+    },
+    
+    # Practice Management
+    "practice_mgmt": {
+        "category": "Administration",
+        "confidence": 0.90,
+        "keywords": [
+            "cch axcess", "thomson reuters cs", "xcm solutions",
+            "karbon", "practice ignition", "canopy", "financial cents",
+            "jetpack workflow", "tax dome"
+        ],
+        "domains": [
+            "cchaxcess.com", "cs.thomsonreuters.com", "karbonhq.com",
+            "practiceignition.com", "getcanopy.com", "taxdome.com"
+        ],
+        "urls": [
+            "client portal", "workflow", "time tracking", "billing",
+            "engagement letter", "client management"
+        ]
+    },
+    
+    # Document Management
+    "documents": {
+        "category": "Document Management",
+        "confidence": 0.91,
+        "keywords": [
+            "sharefile", "smartvault", "safesend", "docusign",
+            "adobe sign", "rightfax", "dropbox business"
+        ],
+        "domains": [
+            "sharefile.com", "smartvault.com", "safesendreturns.com",
+            "docusign.com", "adobesign.com"
+        ],
+        "urls": [
+            "signature", "e-signature", "secure file", "client upload"
+        ]
+    },
+    
+    # Payroll Services
+    "payroll": {
+        "category": "Payroll Services",
+        "confidence": 0.93,
+        "keywords": [
+            "adp", "paychex", "gusto", "quickbooks payroll",
+            "patriot payroll", "onpay", "surepayroll", "paycor"
+        ],
+        "domains": [
+            "adp.com", "paychex.com", "gusto.com", "payroll.intuit.com",
+            "onpay.com", "surepayroll.com", "paycor.com"
+        ],
+        "urls": [
+            "payroll", "pay stub", "direct deposit", "941", "940",
+            "unemployment", "workers comp"
+        ]
+    },
+    
+    # Financial Planning
+    "financial_planning": {
+        "category": "Financial Planning",
+        "confidence": 0.90,
+        "keywords": [
+            "moneyguidepro", "emoney", "rightcapital", "naviplan",
+            "wealth management", "financial planning software"
+        ],
+        "domains": [
+            "moneyguidepro.com", "emoney.com", "rightcapital.com"
+        ],
+        "urls": [
+            "retirement planning", "investment analysis", "estate planning"
+        ]
+    },
+    
+    # SEC/Corporate Filings
+    "sec_filings": {
+        "category": "Regulatory/Compliance",
+        "confidence": 0.94,
+        "keywords": [
+            "edgar", "sec filing", "10-k", "10-q", "form s-1",
+            "proxy statement", "8-k"
+        ],
+        "domains": [
+            "sec.gov", "edgar.sec.gov"
+        ],
+        "urls": [
+            "edgar", "form 10-k", "form 10-q", "form 8-k",
+            "prospectus", "registration statement"
+        ]
+    }
+}
+
 
 
 # ---------------- Logging ----------------
@@ -347,7 +552,7 @@ def fetch_clients_from_backend(api_base: str, api_key: str) -> list:
     
     url = f"{api_base}/clients/list"
     req = urllib.request.Request(url, method="GET")
-    req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Fixed
+    req.add_header("Authorization", f"DeviceKey {api_key}")  # ✅ Fixed
     req.add_header("Content-Type", "application/json")
     
     try:
@@ -378,7 +583,7 @@ def set_current_client_backend(api_base: str, api_key: str, client_id: int) -> b
     data = {"client_id": client_id}
     
     req = urllib.request.Request(url, method="POST")
-    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Authorization", f"DeviceKey {api_key}")
     req.add_header("Content-Type", "application/json")
     
     try:
@@ -406,7 +611,7 @@ def get_current_client_backend(api_base: str, api_key: str) -> dict:
     
     url = f"{api_base}/client/current"
     req = urllib.request.Request(url, method="GET")
-    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Authorization", f"DeviceKey {api_key}")
     req.add_header("Content-Type", "application/json")
     
     try:
@@ -668,6 +873,45 @@ def looks_toolish(bundle_id: Optional[str], url: Optional[str]) -> tuple[bool, s
         return True, "host", host
     return False, "", host
 
+
+def is_in_meeting(bundle_id: Optional[str], url: Optional[str], 
+                  app_name: Optional[str], title: Optional[str]) -> bool:
+    """
+    Detect if user is in a virtual meeting.
+    Returns True if in Zoom, Teams, Meet, etc.
+    """
+    # Check bundle ID
+    if bundle_id and bundle_id in MEETING_BUNDLES:
+        # For browsers, need additional URL check
+        if bundle_id in {"com.google.Chrome", "com.apple.Safari", "com.brave.Browser", "org.mozilla.firefox"}:
+            if not url:
+                return False
+            # Check if URL is a meeting domain
+            try:
+                host = (urlparse(url).hostname or "").lower()
+                if any(domain in host for domain in MEETING_DOMAINS):
+                    return True
+            except:
+                pass
+            return False
+        # Native meeting apps (Zoom, Teams, etc.)
+        return True
+    
+    # Check URL for web-based meetings
+    if url:
+        try:
+            host = (urlparse(url).hostname or "").lower()
+            if any(domain in host for domain in MEETING_DOMAINS):
+                return True
+        except:
+            pass
+    
+    # Check app name and title for meeting keywords
+    check_str = f"{app_name or ''} {title or ''}".lower()
+    if any(keyword in check_str for keyword in MEETING_KEYWORDS):
+        return True
+    
+    return False
 
 # ---------------- Device identity ----------------
 def get_device_id() -> str:
@@ -1449,6 +1693,7 @@ def run_agent():
     except Exception as e:
         log(f"[NUDGE] failed to start worker: {e}")
 
+
     # === TRACKING LOOP FUNCTION ===
     def tracking_loop():
         """Main tracking loop - monitors frontmost app and records dwell time"""
@@ -1465,7 +1710,15 @@ def run_agent():
                     break
 
                 idle = mouse_idle_seconds()
-                if idle >= MOUSE_IDLE_PAUSE_S:
+                
+                # ✅ NEW: Check if in meeting before marking idle
+                in_meeting = False
+                if current_sig and current_sig != IDLE_SIG:
+                    app_name, bundle_id, title, url, fpath = current_sig
+                    in_meeting = is_in_meeting(bundle_id, url, app_name, title)
+                
+                # Only enter idle if NOT in a meeting
+                if idle >= MOUSE_IDLE_PAUSE_S and not in_meeting:
                     if current_sig != IDLE_SIG:
                         if current_sig and dwell_start:
                             now = time.time()
@@ -1479,7 +1732,15 @@ def run_agent():
                         dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
                         log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
                     time.sleep(POLL_SECONDS)
+                    continue
+                elif in_meeting and idle >= MOUSE_IDLE_PAUSE_S:
+                    # ✅ NEW: Log that we're skipping idle because of meeting
+                    if PRINT_EVERY_POLL or (int(idle) % 60 < POLL_SECONDS):  # Log roughly every minute
+                        log(f"[MEETING] In meeting ({current_sig[0]}), skipping idle check (mouse idle {int(idle)}s)")
+                    time.sleep(POLL_SECONDS)
+                    continue
                 else:
+                    # Exiting idle (mouse activity detected)
                     if current_sig == IDLE_SIG and dwell_start:
                         dwell = time.time() - dwell_start
                         if dwell >= MIN_DWELL_SECONDS:
@@ -1527,7 +1788,12 @@ def run_agent():
                             log(f"[SKIP] dwell too short ({int(dwell)}s) for {current_sig[0]}")
                     current_sig = sig
                     dwell_start = time.time()
-                    log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
+                    
+                    # ✅ NEW: Log if entering a meeting
+                    if is_in_meeting(bundle_id, url, app_name, title):
+                        log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} • [MEETING]")
+                    else:
+                        log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
                 else:
                     if PRINT_EVERY_POLL:
                         log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")

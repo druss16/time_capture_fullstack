@@ -4,6 +4,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save } from 'lucide-react';
+
+import { API_BASE } from '@/lib/api';
 import { postJson } from '@/lib/csrf';
 
 interface ClientFormData {
@@ -47,20 +49,16 @@ export function ManualClientEntry() {
     setError(null);
 
     try {
-      // ✅ Use your existing postJson utility - handles CSRF automatically!
-      const response = await postJson('/api/clients/', {
+      // ✅ Use API_BASE (already imported at top)
+      const response = await postJson(`${API_BASE}/clients/`, {
         name: formData.name.trim(),
         code: formData.code.trim(),
       });
 
       if (response.ok) {
         const data = await response.json();
-        if (data.ok) {
-          // Success! Navigate back to clients list
-          navigate('/clients');
-        } else {
-          setError(data.error || 'Failed to create client');
-        }
+        // Success! Navigate back to clients list
+        navigate('/clients');
       } else {
         const data = await response.json().catch(() => ({ error: 'Failed to create client' }));
         setError(data.error || `Error: ${response.status}`);

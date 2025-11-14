@@ -2,11 +2,14 @@
 
 import { useState } from 'react';
 import { uploadClientCSV } from '../api/clients';
+import { API_BASE } from '@/lib/api';
+import { postJson } from '@/lib/csrf';
 
 export function ClientImport() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<any>(null);
+
 
   const handleUpload = async () => {
     if (!file) return;

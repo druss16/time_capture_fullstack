@@ -10,7 +10,8 @@ const DEFAULT_API_BASE = (() => {
 export async function primeCsrf(apiBase?: string) {
   const base = (apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
   try {
-    // ✅ FIXED: Changed template literal to function call
+    // ❌ BUG WAS HERE - fetch`...` is wrong syntax
+    // ✅ FIXED: Should be fetch(`...`)
     await fetch(`${base}/get-csrf/`, {
       credentials: "include",
       headers: { "X-Requested-With": "XMLHttpRequest" },
@@ -44,7 +45,7 @@ export async function postJson(
       clearTimeout(id);
     }
   };
-
+  
   const doPost = async () => {
     const csrftoken = getCookie("csrftoken") || "";
     return fetchWithTimeout(url, {
@@ -58,7 +59,7 @@ export async function postJson(
       body: JSON.stringify(data),
     });
   };
-
+  
   let res = await doPost();
   if (res.status === 403) {
     try { 

@@ -4,6 +4,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Plus, Upload, Pencil, Trash2 } from 'lucide-react';
+import { API_BASE } from '@/lib/api';
+import { postJson } from '@/lib/csrf';
 
 interface Client {
   id: number;
@@ -11,6 +13,8 @@ interface Client {
   code: string;
   is_active: boolean;
 }
+
+
 
 export function ClientList() {
   const navigate = useNavigate();

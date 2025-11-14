@@ -223,7 +223,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8080",
     # prod preview you had:
     "https://timetracker.mavops.ai",
-    "timetracker-api-k375.onrender.com",
+    "https://timetracker-api-k375.onrender.com",
 ]
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-agent-key", "agent-key", "authorization",
@@ -235,10 +235,11 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:7123",
+    "http://localhost:5174",
     "http://127.0.0.1:7123",
     # add https variants if you test with TLS locally
     "https://timetracker.mavops.ai",
-    "timetracker-api-k375.onrender.com",
+    "https://timetracker-api-k375.onrender.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True

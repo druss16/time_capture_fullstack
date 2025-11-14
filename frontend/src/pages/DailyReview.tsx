@@ -2,7 +2,8 @@
  * DailyReview.tsx — Clean time summary view
  * - Shows organized time by client → category
  * - Simple, focused interface
- * - Excludes idle/uncategorized time from totals
+ * - Excludes uncategorized, idle time, and unassigned client from billable totals
+ * - Forces proper categorization for accurate CPA billing
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -100,24 +101,42 @@ export default function DailyReview() {
     return user?.trim() ? user.trim() : whoami?.trim() ? whoami : "All Users";
   }, [user, whoami]);
 
-  // Filter out idle/uncategorized time from totals
+  // Filter logic: exclude idle, uncategorized categories and entire "Unassigned" client
   const isIdleCategory = (catName: string) => {
     const lower = catName.toLowerCase();
-    return lower.includes('idle') || lower.includes('uncategorized');
+    return lower.includes('idle');
   };
 
-  // Calculate total hours excluding idle time
+  const isUncategorizedCategory = (catName: string) => {
+    const lower = catName.toLowerCase();
+    return lower.includes('uncategorized');
+  };
+
+  const isUnassignedClient = (clientName: string) => {
+    return clientName.toLowerCase() === 'unassigned';
+  };
+
+  const isNonBillableCategory = (catName: string) => {
+    return isIdleCategory(catName) || isUncategorizedCategory(catName);
+  };
+
+  // Calculate total hours excluding idle, uncategorized, and unassigned client
   const summaryTotalHours = timeSummary.reduce((sum, client) => {
+    // Skip entire Unassigned client
+    if (isUnassignedClient(client.client)) {
+      return sum;
+    }
+    
     const clientBillableHours = client.categories
-      .filter(cat => !isIdleCategory(cat.name))
+      .filter(cat => !isNonBillableCategory(cat.name))
       .reduce((catSum, cat) => catSum + cat.hours, 0);
     return sum + clientBillableHours;
   }, 0);
 
-  // Helper to get client's billable hours (excluding idle)
+  // Helper to get client's billable hours (excluding idle and uncategorized)
   const getClientBillableHours = (client: ClientTime) => {
     return client.categories
-      .filter(cat => !isIdleCategory(cat.name))
+      .filter(cat => !isNonBillableCategory(cat.name))
       .reduce((sum, cat) => sum + cat.hours, 0);
   };
 
@@ -170,18 +189,30 @@ export default function DailyReview() {
             <div className="space-y-6">
               {timeSummary.map((client) => {
                 const billableHours = getClientBillableHours(client);
+                const isUnassigned = isUnassignedClient(client.client);
                 
                 return (
                   <div 
                     key={client.client_id || client.client} 
-                    className="border border-border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow"
+                    className={`border border-border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow ${isUnassigned ? 'opacity-60' : ''}`}
                   >
                     {/* Client Header */}
                     <div className="bg-gradient-to-r from-primary/10 to-accent/10 px-6 py-4 flex items-center justify-between">
-                      <h4 className="font-semibold text-xl text-foreground">{client.client}</h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className={`font-semibold text-xl ${isUnassigned ? 'text-muted-foreground' : 'text-foreground'}`}>
+                          {client.client}
+                        </h4>
+                        {isUnassigned && (
+                          <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">
+                            non-billable
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-3">
-                        <span className="text-2xl font-bold text-primary">{billableHours.toFixed(2)}h</span>
-                        {billableHours !== client.total_hours && (
+                        <span className={`text-2xl font-bold ${isUnassigned ? 'text-muted-foreground' : 'text-primary'}`}>
+                          {isUnassigned ? client.total_hours.toFixed(2) : billableHours.toFixed(2)}h
+                        </span>
+                        {!isUnassigned && billableHours !== client.total_hours && (
                           <span className="text-sm text-muted-foreground">
                             ({client.total_hours.toFixed(2)}h total)
                           </span>
@@ -192,21 +223,21 @@ export default function DailyReview() {
                     {/* Categories */}
                     <div className="divide-y divide-border bg-white">
                       {client.categories.map((cat) => {
-                        const isIdle = isIdleCategory(cat.name);
+                        const isNonBillable = isNonBillableCategory(cat.name);
                         
                         return (
                           <div 
                             key={cat.name} 
-                            className={`px-6 py-4 hover:bg-accent/30 transition-colors ${isIdle ? 'opacity-60' : ''}`}
+                            className={`px-6 py-4 hover:bg-accent/30 transition-colors ${isNonBillable ? 'opacity-60' : ''}`}
                           >
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center gap-2">
-                                <span className={`font-medium text-lg ${isIdle ? 'text-muted-foreground' : 'text-foreground'}`}>
+                                <span className={`font-medium text-lg ${isNonBillable ? 'text-muted-foreground' : 'text-foreground'}`}>
                                   {cat.name}
                                 </span>
-                                {isIdle && (
+                                {isNonBillable && (
                                   <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">
-                                    non-billable
+                                    needs review
                                   </span>
                                 )}
                               </div>
@@ -214,7 +245,7 @@ export default function DailyReview() {
                                 <span className="text-sm text-muted-foreground">
                                   {cat.block_count} {cat.block_count === 1 ? 'block' : 'blocks'}
                                 </span>
-                                <span className={`font-bold text-xl ${isIdle ? 'text-muted-foreground' : 'text-success'}`}>
+                                <span className={`font-bold text-xl ${isNonBillable ? 'text-muted-foreground' : 'text-success'}`}>
                                   {cat.hours.toFixed(2)}h
                                 </span>
                               </div>

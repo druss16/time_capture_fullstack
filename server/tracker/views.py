@@ -956,10 +956,9 @@ def _merge_ctx(cur: dict, e: RawEvent):
 def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional[str] = None, org=None) -> int:
     """
     Compacts today's RawEvents into Block rows with merging & rounding.
-    `user` may be a username or a User instance; we normalize to FK.
     
-    NEW: Applies current client from CurrentClient table to blocks.
-    CRITICAL: Does NOT assign client to idle/AFK blocks!
+    ✅ NEW: PRESERVES blocks that have user data (categories, manual client assignments)
+    ✅ Only recreates blocks that are "raw" (no user edits)
     """
     start_utc = _start_of_local_day_utc()
 
@@ -972,13 +971,29 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         ev_qs = ev_qs.filter(hostname=hostname)
     events: List[RawEvent] = list(ev_qs)
 
-    # wipe today's scope
+    # ✅ CRITICAL FIX: Only delete blocks WITHOUT user data
     blk_qs = Block.objects.filter(start__gte=start_utc)
     if user_obj:
         blk_qs = blk_qs.filter(user=user_obj)
     if hostname:
         blk_qs = blk_qs.filter(hostname=hostname)
-    blk_qs.delete()
+    
+    # ✅ NEW: Preserve blocks with user data (categories or manually set clients)
+    # Only delete "raw" blocks that can be safely recreated
+    blocks_to_preserve = blk_qs.filter(
+        Q(category_hours__isnull=False) |  # Has categories
+        Q(client__isnull=False)  # Has manually assigned client
+    ).exclude(
+        category_hours={}  # Exclude empty category dicts
+    )
+    
+    preserved_blocks = list(blocks_to_preserve.values_list('id', 'start', 'end'))
+    preserved_count = len(preserved_blocks)
+    
+    # Only delete raw/uncategorized blocks
+    blk_qs.exclude(id__in=[b[0] for b in preserved_blocks]).delete()
+    
+    log(f"[COMPACT] Preserved {preserved_count} user-categorized blocks")
 
     created = 0
     pad = timedelta(minutes=BLOCK_PAD_MINUTES)
@@ -989,15 +1004,28 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
     def _duration_minutes(cur: Dict[str, Any]) -> int:
         return int((cur["end"] - cur["start"]).total_seconds() // 60)
 
+    def _is_time_covered_by_preserved_blocks(start_time, end_time) -> bool:
+        """Check if this time range overlaps with preserved blocks"""
+        for block_id, block_start, block_end in preserved_blocks:
+            # Check for overlap
+            if start_time < block_end and end_time > block_start:
+                return True
+        return False
+
     def _finalize_and_create(cur: Dict[str, Any], org_val, user_obj) -> int:
         """
         Finalize and create a block.
-        CRITICAL: Check for idle BEFORE assigning client!
+        ✅ NEW: Skip creating if time range already covered by preserved block
         """
         actual = _duration_minutes(cur)
         target = max(MIN_BLOCK_DURATION, _round_up_minutes(actual, BLOCK_GRANULARITY))
         if actual < target:
             cur["end"] = cur["start"] + timedelta(minutes=target)
+
+        # ✅ NEW: Don't create if already covered by a preserved block
+        if _is_time_covered_by_preserved_blocks(cur["start"], cur["end"]):
+            log(f"[COMPACT] Skipping block creation - time range already covered by user data")
+            return 0
 
         kwargs: Dict[str, Any] = dict(
             start=cur["start"],
@@ -1018,7 +1046,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         if hasattr(Block, "hints") and isinstance(cur.get("hints"), dict):
             kwargs["hints"] = cur.get("hints")
 
-        # ✅ CRITICAL: Check if this is IDLE activity before assigning client
+        # Check if this is IDLE activity before assigning client
         is_idle = _is_idle_activity(
             app_name=cur.get("app_name"),
             bundle_id=cur.get("bundle_id"),
@@ -1026,31 +1054,25 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         )
         
         if is_idle:
-            # ❌ IDLE blocks get NO CLIENT - never bill for breaks/lunch/sleep
             kwargs["client"] = None
             if hasattr(Block, "app_name"):
                 kwargs["app_name"] = cur.get("app_name") or "idle"
             if hasattr(Block, "bundle_id"):
                 kwargs["bundle_id"] = cur.get("bundle_id") or "__idle__"
         else:
-            # ✅ NON-IDLE blocks: Try to get current client
-            # ✅ NON-IDLE blocks: Get client from stored current_client_id
+            # Get client from stored current_client_id
             current_client = None
-
-            # Use the client_id that was stored when the event was captured
             stored_client_id = cur.get("current_client_id")
             if stored_client_id:
                 try:
                     from tracker.models import Client
                     current_client = Client.objects.get(id=stored_client_id)
                 except Client.DoesNotExist:
-                    pass  # Client was deleted
+                    pass
                                     
-            # Apply client to block (may be None if no client selected)
             if current_client and hasattr(Block, "client"):
                 kwargs["client"] = current_client
             
-            # Store app/bundle info for non-idle blocks too (useful for debugging)
             if hasattr(Block, "app_name"):
                 kwargs["app_name"] = cur.get("app_name") or ""
             if hasattr(Block, "bundle_id"):
@@ -1082,7 +1104,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
 
     for e in events:
         lbl = _label_from_event(e)
-        u_fk = e.user  # FK
+        u_fk = e.user
         h = hostname or getattr(e, "hostname", None) or ""
         et = e.ts_utc
         url = e.url or ""
@@ -1096,7 +1118,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
                 start=et, end=et, title=lbl, window_title=wtitle,
                 url=url, file_path=fpath, user=u_fk, hostname=h,
                 app_name=app_name, bundle_id=bundle_id,
-                current_client_id=getattr(e, "current_client_id", None),  # ← ADD THIS
+                current_client_id=getattr(e, "current_client_id", None),
             )
             _merge_ctx(current, e)
             continue
@@ -1105,7 +1127,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
 
         if gap <= pad and _same_activity(current, lbl, url):
             if timedelta(0) < gap <= sticky_delta:
-                current["end"] += gap  # attribute idle to current
+                current["end"] += gap
             current["end"] = et
             _merge_ctx(current, e)
         else:
@@ -1114,15 +1136,15 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
                 start=et, end=et, title=lbl, window_title=wtitle,
                 url=url, file_path=fpath, user=u_fk, hostname=h,
                 app_name=app_name, bundle_id=bundle_id,
-                current_client_id=getattr(e, "current_client_id", None),  # ← ADD THIS
+                current_client_id=getattr(e, "current_client_id", None),
             )
             _merge_ctx(current, e)
 
     if current:
         created += _finalize_and_create(current, org, user_obj)
 
+    log(f"[COMPACT] Created {created} new blocks, preserved {preserved_count} existing blocks")
     return created
-
 
 
 # -------------------------------------------------------------------
@@ -1489,7 +1511,8 @@ def pre_classify_obvious_categories(block) -> dict:
 def ai_suggestions_today(request):
     """
     Generate AI-powered suggestions for today's blocks.
-    NOW: Auto-saves high-confidence results (>= 0.75 confidence)!
+    ✅ NEW: Skips already-categorized blocks (no wasted AI credits)
+    ✅ NEW: Auto-saves high-confidence results (>= 0.70 confidence)
     """
     # toggles
     username = request.GET.get("user") or None
@@ -1515,9 +1538,56 @@ def ai_suggestions_today(request):
     if org:
         qs = qs.filter(org=org)
 
-    blocks = list(qs)
-    if not blocks:
+    all_blocks = list(qs)
+    if not all_blocks:
         return Response([])
+
+    # ✅ NEW: Filter out blocks that already have categories
+    # Don't waste AI credits re-processing work that's already categorized
+    blocks_needing_ai = []
+    already_categorized = []
+
+    for b in all_blocks:
+        has_categories = (
+            getattr(b, "category_hours", None) 
+            and b.category_hours 
+            and isinstance(b.category_hours, dict) 
+            and len(b.category_hours) > 0
+        )
+        
+        if has_categories:
+            already_categorized.append(b)
+        else:
+            blocks_needing_ai.append(b)
+
+    log(f"[AI] {len(already_categorized)} blocks already categorized, {len(blocks_needing_ai)} need AI")
+
+    # If everything is already categorized, return early with existing data
+    if not blocks_needing_ai:
+        out = []
+        for b in already_categorized:
+            out.append({
+                "block_id": b.id,
+                "start": b.start,
+                "end": b.end,
+                "title": b.title,
+                "ai_suggestion": {
+                    "client": getattr(b.client, "name", None),
+                    "project": getattr(b.project, "name", None),
+                    "categories": b.category_hours or {},
+                    "confidence": 1.0,
+                    "needs_review": False,
+                    "reasoning": "Already categorized",
+                    "source": "existing",
+                    "auto_saved": False,
+                },
+                "current_client": getattr(b.client, "name", None),
+                "current_project": getattr(b.project, "name", None),
+            })
+        return Response(out)
+
+    # ✅ Only process uncategorized blocks from here on
+    blocks = blocks_needing_ai
 
     # trim payload
     def _shorten(s: str, n: int = 180) -> str:
@@ -1549,6 +1619,8 @@ def ai_suggestions_today(request):
             "count": len(trimmed),
             "sample": trimmed[:5],
             "org_context": org_context[:1200] if org_context else "",
+            "already_categorized": len(already_categorized),
+            "needs_ai": len(blocks_needing_ai),
         })
 
     if noai:
@@ -1641,6 +1713,9 @@ def ai_suggestions_today(request):
     )
 
     last_text = None
+    ai_suggestions = []
+    
+    # ✅ FIXED: Move the try/except so the processing code is reachable
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -1657,8 +1732,10 @@ def ai_suggestions_today(request):
         if not isinstance(ai_suggestions, list):
             raise ValueError("Model did not return a JSON array.")
     except Exception as e:
+        log(f"[AI] OpenAI error: {e}")
         if fallback_mode == "rule":
             return suggestions_today(request)
+        # Return fallback response
         out = []
         for b in blocks[:len(trimmed)]:
             out.append({
@@ -1680,97 +1757,116 @@ def ai_suggestions_today(request):
             })
         return Response(out, status=200)
 
-        # ✅ NEW: Auto-save high-confidence classifications
-        out = []
-        N = min(len(blocks), len(ai_suggestions))
-        saved_count = 0
+    # ✅ Process AI suggestions and auto-save high-confidence results
+    out = []
+    N = min(len(blocks), len(ai_suggestions))
+    saved_count = 0
 
-        with transaction.atomic():  # ← Line 1688
-            for i in range(N):  # ← Line 1689 - MUST be indented (4 spaces)
-                b = blocks[i]
-                sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
-                
-                # ✅ NEW: Try pre-classification first (CPA tools, emails, meetings)
-                pre_class = pre_classify_obvious_categories(b)
-                if pre_class:
-                    # Override AI suggestion with obvious classification
-                    sug["categories"] = pre_class.get("categories", sug.get("categories", {}))
-                    # Boost confidence if pre-classified
-                    sug["confidence"] = max(float(sug.get("confidence", 0)), pre_class.get("confidence", 0))
-                    if pre_class.get("reasoning"):
-                        sug["reasoning"] = pre_class["reasoning"]
-                
-                confidence = float(sug.get("confidence", 0.0))
-                needs_review = sug.get("needs_review", True)
-                client_name = (sug.get("client") or "").strip()
-                categories = sug.get("categories", {})
-                
-                # Auto-save if high confidence (lowered to 0.70 for pre-classified items)
-                # Auto-save if high confidence (lowered to 0.70 for pre-classified items)
-                auto_saved = False
-                if confidence >= 0.70 and categories:
-                    try:
-                        # ✅ FIXED: Save categories even if block already has a client
-                        # Only skip if categories are already set
-                        if not getattr(b, "category_hours", None) or not b.category_hours:
+    with transaction.atomic():
+        for i in range(N):
+            b = blocks[i]
+            sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
+            
+            # ✅ Try pre-classification first (CPA tools, emails, meetings)
+            pre_class = pre_classify_obvious_categories(b)
+            if pre_class:
+                # Override AI suggestion with obvious classification
+                sug["categories"] = pre_class.get("categories", sug.get("categories", {}))
+                # Boost confidence if pre-classified
+                sug["confidence"] = max(float(sug.get("confidence", 0)), pre_class.get("confidence", 0))
+                if pre_class.get("reasoning"):
+                    sug["reasoning"] = pre_class["reasoning"]
+            
+            confidence = float(sug.get("confidence", 0.0))
+            needs_review = sug.get("needs_review", True)
+            client_name = (sug.get("client") or "").strip()
+            categories = sug.get("categories", {})
+            
+            # ✅ Auto-save if high confidence (>= 0.70)
+            auto_saved = False
+            if confidence >= 0.70 and categories:
+                try:
+                    # Double-check block doesn't already have categories (shouldn't happen due to filtering)
+                    if not getattr(b, "category_hours", None) or not b.category_hours:
+                        
+                        # Create/get client if provided AND block doesn't have one
+                        if client_name and not b.client:
+                            client_obj, _ = Client.objects.get_or_create(
+                                org=org,
+                                name=client_name,
+                                defaults={"is_active": True}
+                            )
+                            b.client = client_obj
+                        
+                        # Save categories
+                        if categories and isinstance(categories, dict):
+                            # Clean categories (ensure hours are floats)
+                            clean_cats = {}
+                            for k, v in categories.items():
+                                try:
+                                    clean_cats[str(k)] = float(v)
+                                except (ValueError, TypeError):
+                                    pass
                             
-                            # Create/get client if provided AND block doesn't have one
-                            if client_name and not b.client:
-                                client_obj, _ = Client.objects.get_or_create(
-                                    org=org,
-                                    name=client_name,
-                                    defaults={"is_active": True}
-                                )
-                                b.client = client_obj
-                            
-                            # ✅ NEW: Save categories REGARDLESS of whether block has client
-                            if categories and isinstance(categories, dict):
-                                # Clean categories (ensure hours are floats)
-                                clean_cats = {}
-                                for k, v in categories.items():
-                                    try:
-                                        clean_cats[str(k)] = float(v)
-                                    except (ValueError, TypeError):
-                                        pass
+                            if clean_cats:
+                                b.category_hours = clean_cats
                                 
-                                if clean_cats:
-                                    b.category_hours = clean_cats
-                                    
-                                    # Mark as AI-processed (if fields exist)
-                                    if hasattr(b, "ai_processed_at"):
-                                        b.ai_processed_at = timezone.now()
-                                    if hasattr(b, "ai_confidence"):
-                                        b.ai_confidence = confidence
-                                    
-                                    b.save()
-                                    auto_saved = True
-                                    saved_count += 1
-                                    
-                                    # Better logging
-                                    existing_client = getattr(b.client, "name", None)
-                                    log(f"[AI] Auto-saved block {b.id} → Client: {existing_client or client_name or 'none'} | Categories: {list(clean_cats.keys())} ({confidence:.2f})")
-                    
-                    except Exception as e:
-                        log(f"[AI] Failed to auto-save block {b.id}: {e}")
+                                # Mark as AI-processed (if fields exist)
+                                if hasattr(b, "ai_processed_at"):
+                                    b.ai_processed_at = timezone.now()
+                                if hasattr(b, "ai_confidence"):
+                                    b.ai_confidence = confidence
+                                
+                                b.save()
+                                auto_saved = True
+                                saved_count += 1
+                                
+                                # Better logging
+                                existing_client = getattr(b.client, "name", None)
+                                log(f"[AI] Auto-saved block {b.id} → Client: {existing_client or client_name or 'none'} | Categories: {list(clean_cats.keys())} ({confidence:.2f})")
                 
-                out.append({
-                    "block_id": b.id,
-                    "start": b.start,
-                    "end": b.end,
-                    "title": b.title,
-                    "ai_suggestion": {
-                        "client": client_name or None,
-                        "project": sug.get("project"),
-                        "categories": categories,
-                        "confidence": confidence,
-                        "needs_review": needs_review,
-                        "reasoning": sug.get("reasoning", ""),
-                        "source": "ai_with_context",
-                        "auto_saved": auto_saved,
-                    },
-                    "current_client": getattr(b.client, "name", None),
-                    "current_project": getattr(b.project, "name", None),
-                })
+                except Exception as e:
+                    log(f"[AI] Failed to auto-save block {b.id}: {e}")
+            
+            out.append({
+                "block_id": b.id,
+                "start": b.start,
+                "end": b.end,
+                "title": b.title,
+                "ai_suggestion": {
+                    "client": client_name or None,
+                    "project": sug.get("project"),
+                    "categories": categories,
+                    "confidence": confidence,
+                    "needs_review": needs_review,
+                    "reasoning": sug.get("reasoning", ""),
+                    "source": "ai_with_context",
+                    "auto_saved": auto_saved,
+                },
+                "current_client": getattr(b.client, "name", None),
+                "current_project": getattr(b.project, "name", None),
+            })
+
+    # ✅ Add already-categorized blocks to the response
+    for b in already_categorized:
+        out.append({
+            "block_id": b.id,
+            "start": b.start,
+            "end": b.end,
+            "title": b.title,
+            "ai_suggestion": {
+                "client": getattr(b.client, "name", None),
+                "project": getattr(b.project, "name", None),
+                "categories": b.category_hours or {},
+                "confidence": 1.0,
+                "needs_review": False,
+                "reasoning": "Already categorized",
+                "source": "existing",
+                "auto_saved": False,
+            },
+            "current_client": getattr(b.client, "name", None),
+            "current_project": getattr(b.project, "name", None),
+        })
 
     if saved_count > 0:
         log(f"[AI] Auto-saved {saved_count}/{N} high-confidence classifications")

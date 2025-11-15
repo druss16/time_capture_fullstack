@@ -1200,45 +1200,52 @@ def blocks_today(request):
     hostname  = request.GET.get("hostname") or None
     limit_str = request.GET.get("limit") or None
     org       = get_org_or_default(request)
-
+    
+    # ✅ TRIGGER COMPACTION - Turn raw events into blocks
     compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
-
+    
     start_utc, end_utc = _start_end_of_local_day_utc(date_str)
     qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
+    
     if username:
         qs = qs.filter(user__username=username)
     if hostname:
         qs = qs.filter(hostname=hostname)
-
-    # match your dev/prod org scoping used elsewhere
+    
+    # Match your dev/prod org scoping
     if USE_AUTH and org:
         if settings.DEBUG:
             qs = qs.filter(Q(org=org) | Q(org__isnull=True))
         else:
             qs = qs.filter(org=org)
-
+    
     if limit_str:
-        try: qs = qs[: max(1, min(int(limit_str), 1000))]
-        except Exception: pass
-
+        try: 
+            qs = qs[:max(1, min(int(limit_str), 1000))]
+        except Exception: 
+            pass
+    
     def _minutes(b: Block) -> int:
         m = getattr(b, "minutes", None)
         if isinstance(m, (int, float)):
-            try: return int(m)
-            except Exception: pass
+            try: 
+                return int(m)
+            except Exception: 
+                pass
         try:
-            if not b.end or not b.start: return 0
+            if not b.end or not b.start: 
+                return 0
             return max(0, int((b.end - b.start).total_seconds() // 60))
         except Exception:
             return 0
-
+    
     data = []
     for b in qs.select_related("client", "project", "task", "user"):
         idle = _is_idle_block(b)
         win_title = getattr(b, "window_title", "") or ""
         if idle:
-            win_title = "Uncategorized - Idle"  # normalize for UI
-
+            win_title = "Uncategorized - Idle"
+        
         data.append({
             "id": b.id,
             "start": _iso(b.start),
@@ -1257,13 +1264,16 @@ def blocks_today(request):
             "notes": getattr(b, "notes", "") or "",
             "user": b.user.username if b.user_id else None,
             "hostname": b.hostname,
-            # expose app/bundle if you have them (optional but useful)
             "app_name": getattr(b, "app_name", "") or "",
             "bundle_id": getattr(b, "bundle_id", "") or "",
-            "is_idle": _is_idle_block(b),   # <--- reuse your server idle logic
-
+            "is_idle": _is_idle_block(b),
+            
+            # ✅ ADD: Include categorization status (useful for UI)
+            "is_categorized": getattr(b, "is_categorized", False),
+            "categorized_by": getattr(b, "categorized_by", None),
+            "category_hours": getattr(b, "category_hours", {}),
         })
-
+    
     return Response(data)
 
 from django.db.models import Q

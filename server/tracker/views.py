@@ -952,18 +952,20 @@ def _merge_ctx(cur: dict, e: RawEvent):
         if s.get("branch"):     cur["hints"]["branch"]     = s["branch"]
 
 
+# tracker/utils.py (or wherever your compact function lives)
+
 @transaction.atomic
 def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional[str] = None, org=None) -> int:
     """
     Compacts today's RawEvents into Block rows with merging & rounding.
     
-    ✅ NEW: PRESERVES blocks that have user data (categories, manual client assignments)
-    ✅ Only recreates blocks that are "raw" (no user edits)
+    ✅ CRITICAL: NEVER modifies blocks that already have categories!
+    Only creates/updates uncategorized blocks.
     """
     start_utc = _start_of_local_day_utc()
-
     user_obj = user if isinstance(user, User) else _get_user_obj(user)
 
+    # Get all events for today
     ev_qs = RawEvent.objects.filter(ts_utc__gte=start_utc).order_by("ts_utc")
     if user_obj:
         ev_qs = ev_qs.filter(user=user_obj)
@@ -971,61 +973,89 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         ev_qs = ev_qs.filter(hostname=hostname)
     events: List[RawEvent] = list(ev_qs)
 
-    # ✅ CRITICAL FIX: Only delete blocks WITHOUT user data
+    # ✅ Step 1: Get existing blocks (scoped by user/hostname)
     blk_qs = Block.objects.filter(start__gte=start_utc)
     if user_obj:
         blk_qs = blk_qs.filter(user=user_obj)
     if hostname:
         blk_qs = blk_qs.filter(hostname=hostname)
     
-    # ✅ NEW: Preserve blocks with user data (categories or manually set clients)
-    # Only delete "raw" blocks that can be safely recreated
-    blocks_to_preserve = blk_qs.filter(
-        Q(category_hours__isnull=False) |  # Has categories
-        Q(client__isnull=False)  # Has manually assigned client
-    ).exclude(
-        category_hours={}  # Exclude empty category dicts
-    )
+    existing_blocks = list(blk_qs)
     
-    preserved_blocks = list(blocks_to_preserve.values_list('id', 'start', 'end'))
-    preserved_count = len(preserved_blocks)
+    # ✅ Step 2: Separate categorized (protected) from uncategorized (can recreate)
+    categorized_blocks = []
+    uncategorized_blocks = []
+    categorized_time_ranges = []
     
-    # Only delete raw/uncategorized blocks
-    blk_qs.exclude(id__in=[b[0] for b in preserved_blocks]).delete()
+    for b in existing_blocks:
+        if b.is_categorized:  # ✅ Use the flag - that's what it's for!
+            categorized_blocks.append(b)
+            # Track protected time ranges
+            if b.start and b.end:
+                categorized_time_ranges.append((b.start, b.end))
+        else:
+            uncategorized_blocks.append(b)
     
-    log(f"[COMPACT] Preserved {preserved_count} user-categorized blocks")
+    # ✅ Step 3: Delete ONLY uncategorized blocks (safe to recreate)
+    if uncategorized_blocks:
+        uncategorized_ids = [b.id for b in uncategorized_blocks]
+        Block.objects.filter(id__in=uncategorized_ids).delete()
+        log(f"[COMPACT] Deleted {len(uncategorized_ids)} uncategorized blocks for re-compaction")
+    
+    log(f"[COMPACT] Protected {len(categorized_blocks)} categorized blocks")
 
+    # ✅ Step 4: Helper to check overlaps with protected blocks
+    def overlaps_protected_block(start_dt, end_dt) -> bool:
+        """Check if this time range overlaps with any categorized block"""
+        for protected_start, protected_end in categorized_time_ranges:
+            # Check for any overlap
+            if start_dt < protected_end and end_dt > protected_start:
+                return True
+        return False
+    
+    # ✅ Step 5: Filter out events that fall within protected time ranges
+    safe_events = []
+    for e in events:
+        et = e.ts_utc
+        
+        # Check if this event timestamp falls within any protected block
+        overlaps = False
+        for protected_start, protected_end in categorized_time_ranges:
+            if protected_start <= et < protected_end:
+                overlaps = True
+                break
+        
+        if not overlaps:
+            safe_events.append(e)
+    
+    if len(events) != len(safe_events):
+        log(f"[COMPACT] Filtered out {len(events) - len(safe_events)} events overlapping with categorized blocks")
+    
+    events = safe_events
+
+    # ✅ Step 6: Process remaining events into new blocks
     created = 0
     pad = timedelta(minutes=BLOCK_PAD_MINUTES)
     sticky_delta = timedelta(minutes=IDLE_STICKY_MINUTES)
-
     current: Optional[Dict[str, Any]] = None
 
     def _duration_minutes(cur: Dict[str, Any]) -> int:
         return int((cur["end"] - cur["start"]).total_seconds() // 60)
 
-    def _is_time_covered_by_preserved_blocks(start_time, end_time) -> bool:
-        """Check if this time range overlaps with preserved blocks"""
-        for block_id, block_start, block_end in preserved_blocks:
-            # Check for overlap
-            if start_time < block_end and end_time > block_start:
-                return True
-        return False
-
     def _finalize_and_create(cur: Dict[str, Any], org_val, user_obj) -> int:
         """
         Finalize and create a block.
-        ✅ NEW: Skip creating if time range already covered by preserved block
+        ✅ SKIP if this overlaps with a categorized block
         """
+        # Double-check: don't create blocks overlapping protected time
+        if overlaps_protected_block(cur["start"], cur["end"]):
+            log(f"[COMPACT] Skipping block creation - overlaps with categorized block")
+            return 0
+        
         actual = _duration_minutes(cur)
         target = max(MIN_BLOCK_DURATION, _round_up_minutes(actual, BLOCK_GRANULARITY))
         if actual < target:
             cur["end"] = cur["start"] + timedelta(minutes=target)
-
-        # ✅ NEW: Don't create if already covered by a preserved block
-        if _is_time_covered_by_preserved_blocks(cur["start"], cur["end"]):
-            log(f"[COMPACT] Skipping block creation - time range already covered by user data")
-            return 0
 
         kwargs: Dict[str, Any] = dict(
             start=cur["start"],
@@ -1034,6 +1064,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
             url=cur.get("url") or "",
             file_path=cur.get("file_path") or "",
         )
+        
         if hasattr(Block, "window_title"):
             kwargs["window_title"] = cur.get("window_title") or ""
         if hasattr(Block, "user"):
@@ -1042,7 +1073,6 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
             kwargs["hostname"] = cur.get("hostname") or ""
         if hasattr(Block, "minutes"):
             kwargs["minutes"] = int((kwargs["end"] - kwargs["start"]).total_seconds() // 60)
-
         if hasattr(Block, "hints") and isinstance(cur.get("hints"), dict):
             kwargs["hints"] = cur.get("hints")
 
@@ -1060,25 +1090,23 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
             if hasattr(Block, "bundle_id"):
                 kwargs["bundle_id"] = cur.get("bundle_id") or "__idle__"
         else:
-            # Get client from stored current_client_id
-            current_client = None
+            # Use the client_id that was stored when the event was captured
             stored_client_id = cur.get("current_client_id")
             if stored_client_id:
                 try:
                     from tracker.models import Client
                     current_client = Client.objects.get(id=stored_client_id)
+                    if hasattr(Block, "client"):
+                        kwargs["client"] = current_client
                 except Client.DoesNotExist:
                     pass
-                                    
-            if current_client and hasattr(Block, "client"):
-                kwargs["client"] = current_client
             
             if hasattr(Block, "app_name"):
                 kwargs["app_name"] = cur.get("app_name") or ""
             if hasattr(Block, "bundle_id"):
                 kwargs["bundle_id"] = cur.get("bundle_id") or ""
 
-        # org handling
+        # Org handling
         if any(f.name == "org" for f in Block._meta.fields):
             field = Block._meta.get_field("org")
             if not field.null:
@@ -1088,6 +1116,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
             else:
                 kwargs["org"] = org_val
 
+        # ✅ Create the block (will be uncategorized by default)
         Block.objects.create(**kwargs)
         return 1
 
@@ -1102,6 +1131,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
                     return True
         return False
 
+    # Process events into blocks
     for e in events:
         lbl = _label_from_event(e)
         u_fk = e.user
@@ -1140,12 +1170,13 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
             )
             _merge_ctx(current, e)
 
+    # Finalize last block
     if current:
         created += _finalize_and_create(current, org, user_obj)
 
-    log(f"[COMPACT] Created {created} new blocks, preserved {preserved_count} existing blocks")
+    log(f"[COMPACT] Created {created} new uncategorized blocks, preserved {len(categorized_blocks)} categorized blocks")
+    
     return created
-
 
 # -------------------------------------------------------------------
 # UI endpoints (compaction-on-read)
@@ -1170,7 +1201,7 @@ def blocks_today(request):
     limit_str = request.GET.get("limit") or None
     org       = get_org_or_default(request)
 
-    # background compaction as you had...
+    compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
 
     start_utc, end_utc = _start_end_of_local_day_utc(date_str)
     qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
@@ -1493,6 +1524,46 @@ def pre_classify_obvious_categories(block) -> dict:
                 "confidence": tool_config["confidence"] - 0.05,
                 "reasoning": f"{tool_config['category']} content detected"
             }
+
+    # === FILE PATTERN DETECTION (NEW) ===
+    if file_path:
+        file_lower = file_path.lower()
+        
+        # Excel/spreadsheet patterns
+        if any(ext in file_lower for ext in ['.xlsx', '.xls', '.xlsm']):
+            if any(pattern in file_lower for pattern in ['workpaper', 'wp', 'audit', 'schedule']):
+                return {
+                    "categories": {"Audit/Assurance": hours},
+                    "confidence": 0.88,
+                    "reasoning": "Audit workpaper detected from filename"
+                }
+            elif any(pattern in file_lower for pattern in ['trial balance', 'tb', 'reconciliation', 'rec']):
+                return {
+                    "categories": {"Accounting/Bookkeeping": hours},
+                    "confidence": 0.87,
+                    "reasoning": "Accounting file detected"
+                }
+            elif any(pattern in file_lower for pattern in ['depreciation', 'fixed asset', 'fa schedule']):
+                return {
+                    "categories": {"Tax Preparation": hours},
+                    "confidence": 0.86,
+                    "reasoning": "Tax schedule detected"
+                }
+        
+        # PDF patterns
+        if '.pdf' in file_lower:
+            if any(pattern in file_lower for pattern in ['1040', '1120', '1065', 'k-1', 'tax return']):
+                return {
+                    "categories": {"Tax Preparation": hours},
+                    "confidence": 0.92,
+                    "reasoning": "Tax return PDF detected"
+                }
+            elif any(pattern in file_lower for pattern in ['engagement letter', 'signed']):
+                return {
+                    "categories": {"Administration": hours},
+                    "confidence": 0.85,
+                    "reasoning": "Administrative document"
+                }
     
     # === IRS.GOV SPECIAL CASE ===
     if "irs.gov" in url:
@@ -1505,23 +1576,167 @@ def pre_classify_obvious_categories(block) -> dict:
     return {}
 
 
+# tracker/views.py - REPLACE YOUR EXISTING get_seasonal_context
+
+def get_seasonal_context() -> str:
+    """
+    Provide enhanced seasonal context with specific deadlines and patterns.
+    CPAs have VERY different work patterns by season.
+    """
+    from datetime import datetime
+    now = datetime.now()
+    month = now.month
+    day = now.day
+    
+    # Tax Season (January - April 15)
+    if month in (1, 2, 3) or (month == 4 and day <= 15):
+        if month == 1:
+            return (
+                "\n**SEASON: EARLY TAX SEASON (January)**\n"
+                "Tax season just started. Most work will be:\n"
+                "- Organizing client documents and tax organizers\n"
+                "- Early individual returns (1040) for eager clients\n"
+                "- Business returns with fiscal year-ends\n"
+                "- Setting up tax software for the season\n"
+                "- Heavy Email/Communication with clients requesting documents\n"
+                "- Default to 'Tax Preparation' if context unclear\n"
+            )
+        elif month == 2:
+            return (
+                "\n**SEASON: MID TAX SEASON (February)**\n"
+                "Tax season ramping up significantly. Expect:\n"
+                "- Heavy individual tax prep (Form 1040)\n"
+                "- Partnership returns (1065) due 3/15\n"
+                "- S-Corp returns (1120S) due 3/15\n"
+                "- Extension planning for complex returns\n"
+                "- Client meetings about tax situations\n"
+                "- Default to 'Tax Preparation' if context unclear\n"
+            )
+        elif month == 3:
+            return (
+                "\n**SEASON: PEAK TAX SEASON (March)**\n"
+                "Absolute peak of tax season. Expect:\n"
+                "- Maximum volume individual returns (1040)\n"
+                "- Rush on partnership/S-Corp returns (due 3/15)\n"
+                "- Extension filings starting for complex returns\n"
+                "- Partner review backlog\n"
+                "- Long hours, high stress patterns\n"
+                "- Meetings compressed to essentials\n"
+                "- Default to 'Tax Preparation' for almost anything\n"
+            )
+        else:  # April 1-15
+            return (
+                "\n**SEASON: TAX SEASON FINALE (April 1-15)**\n"
+                "Final push to 4/15 deadline. Expect:\n"
+                "- Individual returns (1040) due 4/15\n"
+                "- C-Corp returns (1120) due 4/15\n"
+                "- Last-minute extension filings\n"
+                "- High volume of Email/Communication\n"
+                "- Review and quality control rush\n"
+                "- Default to 'Tax Preparation' or 'Review'\n"
+            )
+    
+    # Post-Tax Season Recovery (April 16-30)
+    elif month == 4 and day > 15:
+        return (
+            "\n**SEASON: POST-TAX SEASON RECOVERY (Late April)**\n"
+            "Tax deadline passed, recovery period. Expect:\n"
+            "- Catching up on correspondence\n"
+            "- Filing extended returns for stragglers\n"
+            "- Administration and cleanup\n"
+            "- Staff time off / vacation\n"
+            "- Planning for extension season\n"
+        )
+    
+    # Quiet Season (May-August)
+    elif month in (5, 6, 7, 8):
+        return (
+            "\n**SEASON: QUIET SEASON (May-Aug)**\n"
+            "Off-season work mix. Expect:\n"
+            "- Advisory and consulting services\n"
+            "- Business accounting/bookkeeping catch-up\n"
+            "- Audit and assurance work\n"
+            "- Tax planning for high-net-worth clients\n"
+            "- Training and CPE\n"
+            "- Practice management and systems work\n"
+        )
+    
+    # Extension Season (September-October 15)
+    elif month in (9) or (month == 10 and day <= 15):
+        return (
+            "\n**SEASON: EXTENSION SEASON (Sep-Oct 15)**\n"
+            "Extended return deadline approaching. Expect:\n"
+            "- Individual extended returns (due 10/15)\n"
+            "- Partnership extensions (due 9/15)\n"
+            "- S-Corp extensions (due 9/15)\n"
+            "- Tax Compliance work\n"
+            "- Client follow-ups for missing documents\n"
+            "- Moderate urgency (not as intense as spring)\n"
+        )
+    
+    # Year-End Planning (November-December)
+    elif month in (11, 12):
+        if month == 11:
+            return (
+                "\n**SEASON: YEAR-END PLANNING BEGINS (November)**\n"
+                "Preparing for year-end. Expect:\n"
+                "- Year-end tax planning meetings\n"
+                "- Estimated tax payment calculations (due 1/15)\n"
+                "- Business year-end close planning\n"
+                "- Advisory services for year-end strategies\n"
+                "- IRA and retirement plan contributions\n"
+            )
+        else:  # December
+            return (
+                "\n**SEASON: YEAR-END CLOSE (December)**\n"
+                "Critical year-end window. Expect:\n"
+                "- Tax Planning for current year strategies\n"
+                "- Financial Statement Prep for calendar-year entities\n"
+                "- Accounting/Bookkeeping year-end close\n"
+                "- Last-minute tax moves (donations, deductions)\n"
+                "- Strategic advisory meetings\n"
+                "- Holiday schedules (reduced availability)\n"
+            )
+    
+    # Fallback
+    return (
+        "\n**SEASON: REGULAR SEASON**\n"
+        "Typical CPA firm work mix:\n"
+        "- Mix of tax, accounting, and advisory services\n"
+        "- Client meetings and consultations\n"
+        "- Regular correspondence and admin\n"
+    )
+
+
+# tracker/views.py - COMPLETE REPLACEMENT
+
+from tracker.services.pattern_learning import PatternLearningService
+
+# tracker/views.py - COMPLETE UPDATED VERSION
+
+from tracker.services.pattern_learning import PatternLearningService
+
 @api_view(["GET"])
 @permission_classes([PermUI])
 @throttle_classes([AIGenerateThrottle])
 def ai_suggestions_today(request):
     """
     Generate AI-powered suggestions for today's blocks.
-    ✅ NEW: Skips already-categorized blocks (no wasted AI credits)
-    ✅ NEW: Auto-saves high-confidence results (>= 0.70 confidence)
+    ✅ Skips already-categorized blocks (no wasted AI credits)
+    ✅ Auto-saves high-confidence results (>= 0.70 confidence)
+    ✅ Uses learned user patterns for better accuracy
+    ✅ Enhanced CPA-specific tool detection
+    ✅ Seasonal awareness for context
+    ✅ Immutability tracking with is_categorized flag
     """
-    # toggles
+    # Toggles
     username = request.GET.get("user") or None
     hostname = request.GET.get("hostname") or None
     limit = int(request.GET.get("limit") or 120)
     limit = max(1, min(limit, 200))
-    timeout_ms = int(request.GET.get("timeout_ms") or 12000)
+    timeout_ms = int(request.GET.get("timeout_ms") or 15000)
     noai = request.GET.get("noai") in ("1", "true", "yes")
-    fallback_mode = request.GET.get("fallback") or ""  # "", "rule"
+    fallback_mode = request.GET.get("fallback") or ""
     debug = request.GET.get("debug") in ("1", "true", "yes")
 
     org = get_org_or_default(request)
@@ -1542,27 +1757,19 @@ def ai_suggestions_today(request):
     if not all_blocks:
         return Response([])
 
-    # ✅ NEW: Filter out blocks that already have categories
-    # Don't waste AI credits re-processing work that's already categorized
+    # ✅ UPDATED: Filter using explicit is_categorized flag
     blocks_needing_ai = []
     already_categorized = []
 
     for b in all_blocks:
-        has_categories = (
-            getattr(b, "category_hours", None) 
-            and b.category_hours 
-            and isinstance(b.category_hours, dict) 
-            and len(b.category_hours) > 0
-        )
-        
-        if has_categories:
+        if b.is_categorized:  # ✅ Use explicit flag - much cleaner!
             already_categorized.append(b)
         else:
             blocks_needing_ai.append(b)
 
     log(f"[AI] {len(already_categorized)} blocks already categorized, {len(blocks_needing_ai)} need AI")
 
-    # If everything is already categorized, return early with existing data
+    # If everything is already categorized, return early
     if not blocks_needing_ai:
         out = []
         for b in already_categorized:
@@ -1586,10 +1793,18 @@ def ai_suggestions_today(request):
             })
         return Response(out)
 
-    # ✅ Only process uncategorized blocks from here on
+    # ✅ Only process uncategorized blocks
     blocks = blocks_needing_ai
 
-    # trim payload
+    # Get user object for pattern learning
+    user_obj = None
+    if username:
+        try:
+            user_obj = User.objects.get(username=username)
+        except User.DoesNotExist:
+            pass
+
+    # Trim payload for AI
     def _shorten(s: str, n: int = 180) -> str:
         s = (s or "").strip()
         return s[:n] + ("…" if len(s) > n else "")
@@ -1599,26 +1814,51 @@ def ai_suggestions_today(request):
     for b in blocks[:MAX_BLOCKS]:
         minutes = int((b.end - b.start).total_seconds() / 60) if b.end else 0
         hints = getattr(b, "hints", {}) or {}
+        
+        # ✅ NEW: Add learned pattern hints to each block
+        pattern_hints = []
+        if user_obj:
+            learned_patterns = PatternLearningService.get_patterns_for_block(b, user_obj)
+            for client_name, category, confidence in learned_patterns:
+                if client_name or category:
+                    pattern_hints.append({
+                        "client": client_name,
+                        "category": category,
+                        "confidence": round(confidence, 2)
+                    })
+        
         trimmed.append({
             "id": str(b.id),
             "title": _shorten(b.title, 160),
             "window_title": _shorten(getattr(b, 'window_title', ''), 160),
             "url": _shorten(b.url, 140),
             "file_path": _shorten(b.file_path, 140),
+            "app_name": _shorten(getattr(b, 'app_name', ''), 80),
+            "bundle_id": _shorten(getattr(b, 'bundle_id', ''), 100),
             "minutes": minutes,
             "attendees": getattr(b, 'attendees', []) or [],
             "description": _shorten(getattr(b, 'description', ''), 220),
             "hints": hints,
+            "learned_patterns": pattern_hints,
         })
 
+    # ✅ Build comprehensive context for AI
     org_context = build_ai_context(org) or ""
+    seasonal_context = get_seasonal_context()
+    
+    # ✅ NEW: Add learned user patterns
+    pattern_context = ""
+    if user_obj:
+        pattern_context = PatternLearningService.build_pattern_context(user_obj, org)
 
     if debug:
         return Response({
             "debug": True,
             "count": len(trimmed),
-            "sample": trimmed[:5],
+            "sample": trimmed[:3],
             "org_context": org_context[:1200] if org_context else "",
+            "seasonal_context": seasonal_context[:500],
+            "pattern_context": pattern_context[:500],
             "already_categorized": len(already_categorized),
             "needs_ai": len(blocks_needing_ai),
         })
@@ -1682,40 +1922,109 @@ def ai_suggestions_today(request):
 
     client = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
 
+    # ✅ ENHANCED: Comprehensive system message with all context
     system_msg = (
-        "You are a time-tracking classifier for a CPA firm. "
-        "Use the organization context and each block's hints to classify time blocks. "
+        "You are an expert time-tracking classifier for a CPA firm. "
+        "Your goal is to accurately categorize every billable minute into the correct client and category. "
         "\n\n"
-        "AVAILABLE CATEGORIES (use these exact names):\n"
-        "- Tax Preparation: Tax returns, forms, calculations\n"
-        "- Accounting/Bookkeeping: General ledger, reconciliations, journal entries\n"
-        "- Audit/Assurance: Audit procedures, testing, working papers\n"
-        "- Tax Research: IRS codes, regulations, research\n"
-        "- Payroll Services: Payroll processing, filings\n"
-        "- Financial Planning: Retirement, investment planning\n"
-        "- Regulatory/Compliance: SEC filings, compliance work\n"
-        "- Document Management: File organization, signatures\n"
-        "- Email/Communication: Client emails, correspondence\n"
-        "- Meetings: Video calls, client meetings\n"
-        "- Administration: Practice management, billing, workflows\n"
-        "- Review: Reviewing work, quality control\n"
+        "=== AVAILABLE CATEGORIES (use these EXACT names) ===\n"
+        "CORE TAX SERVICES:\n"
+        "- Tax Preparation: Preparing returns (1040, 1120, 1065, 990, etc.)\n"
+        "- Tax Planning: Projections, estimated taxes, strategy\n"
+        "- Tax Research: IRC research, regulations, rulings\n"
+        "- Tax Compliance: Extensions, payments, responses to IRS notices\n"
         "\n"
-        "CRITICAL RULES:\n"
-        "1. Use exact category names from the list above\n"
-        "2. Email apps/domains → 'Email/Communication'\n"
-        "3. Zoom/Teams/Meet → 'Meetings'\n"
-        "4. QuickBooks/Xero/Sage → 'Accounting/Bookkeeping'\n"
-        "5. UltraTax/Drake/Lacerte → 'Tax Preparation'\n"
-        "6. Set confidence >= 0.85 for obvious professional tools\n"
+        "ACCOUNTING SERVICES:\n"
+        "- Accounting/Bookkeeping: GL work, reconciliations, JEs\n"
+        "- Financial Statement Prep: Compilations, reviews\n"
+        "- Audit/Assurance: Audit procedures, testing, workpapers\n"
+        "- Payroll Services: Payroll processing, tax filings\n"
         "\n"
-        "Return ONLY a JSON array. Include: client, project, categories, confidence, needs_review, reasoning."
-        "\n\n--- ORG CONTEXT ---\n" + org_context
+        "ADVISORY SERVICES:\n"
+        "- Advisory/Financial Planning: Wealth management, retirement planning\n"
+        "- Valuation/Advisory: Business valuations, M&A support\n"
+        "- Forensic/Fraud Investigation: Fraud exams, litigation support\n"
+        "\n"
+        "COMPLIANCE & REGULATORY:\n"
+        "- SEC/Regulatory Compliance: 10-K, 10-Q, EDGAR filings\n"
+        "- Employee Benefits/ERISA: Form 5500, plan audits\n"
+        "\n"
+        "SPECIALIZED INDUSTRY:\n"
+        "- Real Estate/Property: Rental properties, cost segregation\n"
+        "- Nonprofit/Form 990: Exempt org returns and compliance\n"
+        "- Healthcare/Medical Practice: Medical practice accounting\n"
+        "- Construction/Contractors: Job costing, WIP schedules\n"
+        "\n"
+        "ADMINISTRATIVE:\n"
+        "- Email/Communication: Client correspondence, internal emails\n"
+        "- Meetings: Video calls, client meetings, team meetings\n"
+        "- Administration: Practice management, billing, CPE\n"
+        "- Document Management: Filing, organizing, e-signatures\n"
+        "- Review: Reviewing work, QC, partner review\n"
+        "\n\n"
+        "=== CRITICAL CLASSIFICATION RULES ===\n"
+        "1. **Be Specific**: Use the most specific category that applies\n"
+        "   - \"Form 1040 preparation\" → Tax Preparation (NOT just \"Tax\")\n"
+        "   - \"QuickBooks reconciliation\" → Accounting/Bookkeeping\n"
+        "   - \"Zoom call with client\" → Meetings\n"
+        "\n"
+        "2. **Confidence Scoring**:\n"
+        "   - >= 0.90: Obvious professional tool detected (UltraTax, Xero, etc.)\n"
+        "   - >= 0.80: Clear work pattern (email @clientname.com, specific forms)\n"
+        "   - >= 0.70: Reasonable inference from context\n"
+        "   - < 0.70: Mark needs_review=true\n"
+        "\n"
+        "3. **Use Learned Patterns**: Each block may include 'learned_patterns' from this user's history\n"
+        "   - If learned_patterns shows high confidence for a client/category, weight that heavily\n"
+        "   - Example: If learned_patterns says 'Acme Corp' with 0.85 confidence, strongly consider that\n"
+        "\n"
+        "4. **Client Identification**:\n"
+        "   - Check window titles for client names\n"
+        "   - Check URLs for client domains\n"
+        "   - Check file paths for client folders\n"
+        "   - Match against known client list when provided\n"
+        "   - **Priority: learned_patterns > file_path > window_title > url**\n"
+        "\n"
+        "5. **Time Allocation**:\n"
+        "   - If working on multiple things, split the time proportionally\n"
+        "   - Round to nearest 0.1 hours (6-minute increments)\n"
+        "   - Example: 30 min meeting + 30 min email = {\"Meetings\": 0.5, \"Email/Communication\": 0.5}\n"
+        "\n"
+        "6. **CPA Tool Detection** (CRITICAL - these are HIGH confidence):\n"
+        "   - UltraTax/Drake/Lacerte/ProSeries/ATX → Tax Preparation (0.95+ confidence)\n"
+        "   - QuickBooks/Xero/Sage/FreshBooks → Accounting/Bookkeeping (0.93+ confidence)\n"
+        "   - CaseWare/Teammate/AuditBoard → Audit/Assurance (0.96+ confidence)\n"
+        "   - Checkpoint/Bloomberg Tax/RIA → Tax Research (0.94+ confidence)\n"
+        "   - ADP/Paychex/Gusto → Payroll Services (0.95+ confidence)\n"
+        "   - Zoom/Teams/Meet → Meetings (0.95+ confidence)\n"
+        "   - Gmail/Outlook mail.google.com → Email/Communication (0.90+ confidence)\n"
+        "   - IRS.gov → Tax Research (0.96+ confidence)\n"
+        "   - SEC.gov/EDGAR → SEC/Regulatory Compliance (0.97+ confidence)\n"
+        "\n"
+        "7. **Form Detection** (VERY HIGH confidence):\n"
+        "   - Form 1040/1120/1065/990/W-2/1099/K-1 → Tax Preparation (0.97+ confidence)\n"
+        "   - Form 5500 → Employee Benefits/ERISA (0.92+ confidence)\n"
+        "   - Form 10-K/10-Q/8-K → SEC/Regulatory Compliance (0.97+ confidence)\n"
+        "\n\n"
+        "=== RESPONSE FORMAT ===\n"
+        "Return ONLY a JSON array with one object per block:\n"
+        "{\n"
+        "  \"client\": \"Acme Corp\" | null,\n"
+        "  \"project\": \"2024 Tax Return\" | null,\n"
+        "  \"categories\": {\"Tax Preparation\": 1.5, \"Email/Communication\": 0.3},\n"
+        "  \"confidence\": 0.92,\n"
+        "  \"needs_review\": false,\n"
+        "  \"reasoning\": \"UltraTax detected with Form 1040 in title + learned pattern matches Acme Corp\"\n"
+        "}\n"
+        "\n\n"
+        "=== ORGANIZATION CONTEXT ===\n" + org_context +
+        "\n\n" + seasonal_context +
+        "\n\n" + pattern_context
     )
 
     last_text = None
     ai_suggestions = []
     
-    # ✅ FIXED: Move the try/except so the processing code is reachable
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -1724,7 +2033,7 @@ def ai_suggestions_today(request):
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            max_tokens=3500,
+            max_tokens=4000,
         )
         last_text = (resp.choices[0].message.content or "").strip()
         raw_json = _extract_json(last_text)
@@ -1735,6 +2044,7 @@ def ai_suggestions_today(request):
         log(f"[AI] OpenAI error: {e}")
         if fallback_mode == "rule":
             return suggestions_today(request)
+        
         # Return fallback response
         out = []
         for b in blocks[:len(trimmed)]:
@@ -1786,8 +2096,8 @@ def ai_suggestions_today(request):
             auto_saved = False
             if confidence >= 0.70 and categories:
                 try:
-                    # Double-check block doesn't already have categories (shouldn't happen due to filtering)
-                    if not getattr(b, "category_hours", None) or not b.category_hours:
+                    # ✅ UPDATED: Use is_categorized flag instead of manual check
+                    if not b.is_categorized:
                         
                         # Create/get client if provided AND block doesn't have one
                         if client_name and not b.client:
@@ -1809,9 +2119,13 @@ def ai_suggestions_today(request):
                                     pass
                             
                             if clean_cats:
+                                # ✅ UPDATED: Set all immutability tracking fields
                                 b.category_hours = clean_cats
+                                b.is_categorized = True
+                                b.categorized_at = timezone.now()
+                                b.categorized_by = 'ai'
                                 
-                                # Mark as AI-processed (if fields exist)
+                                # Legacy AI metadata (if fields exist)
                                 if hasattr(b, "ai_processed_at"):
                                     b.ai_processed_at = timezone.now()
                                 if hasattr(b, "ai_confidence"):
@@ -1821,9 +2135,17 @@ def ai_suggestions_today(request):
                                 auto_saved = True
                                 saved_count += 1
                                 
+                                # ✅ Learn from this successful auto-save
+                                if user_obj and confidence >= 0.80:
+                                    try:
+                                        PatternLearningService.learn_from_block(b, user_obj)
+                                        log(f"[PATTERN] Learned from auto-saved block {b.id}")
+                                    except Exception as learn_err:
+                                        log(f"[PATTERN] Learning failed: {learn_err}")
+                                
                                 # Better logging
                                 existing_client = getattr(b.client, "name", None)
-                                log(f"[AI] Auto-saved block {b.id} → Client: {existing_client or client_name or 'none'} | Categories: {list(clean_cats.keys())} ({confidence:.2f})")
+                                log(f"[AI] Auto-saved block {b.id} → Client: {existing_client or client_name or 'none'} | Categories: {list(clean_cats.keys())} ({confidence:.2f}) [LOCKED]")
                 
                 except Exception as e:
                     log(f"[AI] Failed to auto-save block {b.id}: {e}")
@@ -1873,7 +2195,6 @@ def ai_suggestions_today(request):
 
     return Response(out)
 
-    
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def reclassify_day(request):
@@ -2702,47 +3023,91 @@ def _to_float_or_none(v):
     except Exception:
         return None
 
+# tracker/views.py - UPDATED save_block_classification
+
+from tracker.services.pattern_learning import PatternLearningService
+
+# tracker/views.py - UPDATED VERSION
+
+from tracker.services.pattern_learning import PatternLearningService
+
 @api_view(["POST"])
-@permission_classes([PermUI])   # or AllowAny while testing
+@permission_classes([PermUI])
 @transaction.atomic
 def save_block_classification(request, block_id: int):
     """
-    POST: { client?: str, project?: str, task?: str, categories?: {name: hours(float)} }
-    - Creates Client/Project if needed (within org)
-    - Coerces category values to floats (hours)
+    Manual block classification by user.
+    
+    POST: { 
+        client?: str, 
+        project?: str, 
+        task?: str, 
+        categories?: {name: hours(float)} 
+    }
+    
+    ✅ Learns patterns from manual classifications to improve future accuracy
+    ✅ Creates Client/Project if needed (within org)
+    ✅ Coerces category values to floats (hours)
+    ✅ Tracks immutability with is_categorized flag
     """
     b = get_object_or_404(Block, id=block_id)
-
+    
     # Ensure org exists on the block
     org = getattr(b, "org", None)
     if org is None:
         org = get_org_or_default(request)
         try:
-            # only set if Block has org FK field
+            # Only set if Block has org FK field
             if any(f.name == "org" for f in Block._meta.fields):
                 b.org = org
         except Exception:
-            pass  # if no org field, ignore
-
+            pass  # If no org field, ignore
+    
     payload = request.data or {}
     client_name  = (payload.get("client")  or "").strip() or None
     project_name = (payload.get("project") or "").strip() or None
     categories   = payload.get("categories", {})
-
+    
+    # Track what changed for learning
+    original_client = b.client
+    original_categories = getattr(b, "category_hours", None)
+    was_categorized = b.is_categorized  # ✅ Track if already categorized
+    original_source = b.categorized_by   # ✅ Track original source
+    
     # Attach/create Client
     client_obj = None
     if client_name:
-        client_obj, _ = Client.objects.get_or_create(org=org, name=client_name)
+        client_obj, created = Client.objects.get_or_create(
+            org=org, 
+            name=client_name,
+            defaults={"is_active": True}
+        )
         b.client = client_obj
-
+        
+        if created:
+            log(f"[CLASSIFY] Created new client: {client_name}")
+    
     # Attach/create Project (requires client)
     if project_name:
         if client_obj is None:
-            client_obj, _ = Client.objects.get_or_create(org=org, name="(General)")
+            client_obj, _ = Client.objects.get_or_create(
+                org=org, 
+                name="(General)",
+                defaults={"is_active": True}
+            )
             b.client = client_obj
-        proj_obj, _ = Project.objects.get_or_create(org=org, client=client_obj, name=project_name)
+        
+        proj_obj, created = Project.objects.get_or_create(
+            org=org, 
+            client=client_obj, 
+            name=project_name,
+            defaults={"is_active": True}
+        )
         b.project = proj_obj
-
+        
+        if created:
+            log(f"[CLASSIFY] Created new project: {project_name} for {client_name}")
+    
     # Coerce categories (hours)
     clean_categories = {}
     if categories is None or categories == {}:
@@ -2751,39 +3116,131 @@ def save_block_classification(request, block_id: int):
         for k, v in categories.items():
             f = _to_float_or_none(v)
             if f is None or f < 0:
-                # don’t blow up; just skip bad entries
+                # Don't blow up; just skip bad entries
                 continue
             clean_categories[str(k)] = f
     else:
-        raise ValidationError({"categories": "Must be an object mapping {category: hours}."})
-
+        raise ValidationError({
+            "categories": "Must be an object mapping {category: hours}."
+        })
+    
+    # ✅ UPDATED: Set categories and immutability tracking
     if clean_categories:
-        # Make sure Block has JSONField 'category_hours'
         if hasattr(b, "category_hours"):
             b.category_hours = clean_categories
-
+            b.is_categorized = True
+            b.categorized_at = b.categorized_at or timezone.now()  # Keep original if exists
+            
+            # ✅ Track if this is a correction vs manual entry
+            if was_categorized and original_source == 'ai':
+                b.categorized_by = 'correction'  # User corrected AI
+                log(f"[CLASSIFY] User corrected AI classification for block {b.id}")
+            elif was_categorized and original_source in ('pattern', 'import'):
+                b.categorized_by = 'correction'  # User corrected other auto-classification
+                log(f"[CLASSIFY] User corrected {original_source} classification for block {b.id}")
+            elif not was_categorized:
+                b.categorized_by = 'manual'  # First-time manual entry
+                log(f"[CLASSIFY] User manually classified block {b.id}")
+            # else: keep existing categorized_by (already 'manual' or 'correction')
+    
     # Optional task
     task_name = (payload.get("task") or "").strip() or None
     if task_name:
-        # Only if you use tasks per project; otherwise skip
         try:
-            task_obj, _ = Task.objects.get_or_create(org=org, project=b.project, name=task_name)
+            task_obj, created = Task.objects.get_or_create(
+                org=org, 
+                project=b.project, 
+                name=task_name,
+                defaults={"is_active": True}
+            )
             b.task = task_obj
-        except Exception:
-            # If your Task model requires project and it's missing, skip silently
+            
+            if created:
+                log(f"[CLASSIFY] Created new task: {task_name}")
+        except Exception as e:
+            log(f"[CLASSIFY] Could not create task: {e}")
             pass
-
-    b.save()
-
-    return Response({
+    
+    # ✅ Mark as manually reviewed (if fields exist)
+    if hasattr(b, "manually_reviewed"):
+        b.manually_reviewed = True
+    if hasattr(b, "reviewed_at"):
+        b.reviewed_at = timezone.now()
+    if hasattr(b, "reviewed_by"):
+        b.reviewed_by = request.user
+    
+    # ✅ Save with force_update to bypass protection check
+    # (User is intentionally editing, so we allow it)
+    b.save(force_update=True)
+    
+    # ✅ Learn patterns from this manual classification
+    user = request.user if request.user.is_authenticated else None
+    
+    if user and clean_categories:
+        try:
+            # Learn from this confirmed classification
+            PatternLearningService.learn_from_block(b, user)
+            
+            # Log what we learned
+            learned_details = []
+            
+            # File path pattern
+            if getattr(b, 'file_path', None):
+                file_path_short = b.file_path[:50] + "..." if len(b.file_path) > 50 else b.file_path
+                learned_details.append(f"file '{file_path_short}'")
+            
+            # Time pattern
+            if b.start:
+                hour = b.start.hour
+                weekday = b.start.strftime('%A')
+                learned_details.append(f"{weekday} at {hour}:00")
+            
+            if learned_details:
+                category_names = list(clean_categories.keys())
+                log(f"[PATTERN] Learned: {' + '.join(learned_details)} → {client_name or 'no client'} / {category_names}")
+            
+            # ✅ Track AI corrections for accuracy metrics
+            if original_client != b.client and original_client and was_categorized:
+                log(f"[PATTERN] User corrected client: {original_client.name} → {client_name}")
+                # Future: Implement negative feedback loop to downgrade bad patterns
+            
+            if original_categories != clean_categories and was_categorized:
+                log(f"[PATTERN] User corrected categories: {original_categories} → {clean_categories}")
+            
+        except Exception as e:
+            # Don't fail the request if pattern learning fails
+            log(f"[PATTERN] Failed to learn from block {b.id}: {e}")
+    
+    # Build response with helpful context
+    response_data = {
         "ok": True,
         "block_id": b.id,
         "client": getattr(b.client, "name", None),
         "project": getattr(b.project, "name", None),
+        "task": getattr(b.task, "name", None) if hasattr(b, "task") else None,
         "categories": getattr(b, "category_hours", {}),
-    })
-
-
+        "manually_reviewed": getattr(b, "manually_reviewed", None),
+        "is_categorized": b.is_categorized,
+        "categorized_by": b.categorized_by,
+    }
+    
+    # ✅ Add feedback about pattern learning (optional)
+    if user and clean_categories:
+        try:
+            learned_patterns = PatternLearningService.get_patterns_for_block(b, user)
+            if learned_patterns:
+                # Return the top learned pattern for feedback
+                top_client, top_category, top_confidence = learned_patterns[0]
+                response_data["learned_pattern"] = {
+                    "client": top_client,
+                    "category": top_category,
+                    "confidence": round(top_confidence, 2),
+                    "message": f"Future similar work will default to {top_client or top_category} ({int(top_confidence*100)}% confidence)"
+                }
+        except Exception:
+            pass
+    
+    return Response(response_data)
 # -------------------------------------------------------------------
 # Bulk import (clients/projects) for onboarding
 # -------------------------------------------------------------------

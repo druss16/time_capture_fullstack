@@ -193,171 +193,362 @@ MEETING_KEYWORDS = {
 }
 
 # --- CPA-Specific Tools & Categories (NEW) ---
+# --- CPA-Specific Tools & Categories (COMPREHENSIVE VERSION) ---
 CPA_TOOL_DETECTION = {
-    # Tax Preparation Software
-    "tax_prep": {
+    # ==================== TAX PREPARATION ====================
+    "tax_prep_desktop": {
         "category": "Tax Preparation",
         "confidence": 0.95,
         "keywords": [
             "ultratax", "drake tax", "lacerte", "proseries", "atx",
             "taxact", "taxwise", "turbotax", "intuit tax", "proconnect",
             "cch axcess tax", "thomson reuters ultratax", "corptax",
-            "onesource", "taxslayer pro", "crosslink", "gosystem tax"
+            "onesource", "taxslayer pro", "crosslink", "gosystem tax",
+            "safesend returns", "vertafore", "taxcaddy",
         ],
         "domains": [
             "ultratax.com", "drakesoftware.com", "intuit.com/lacerte",
-            "intuit.com/proseries", "cchaxcess.com", "taxact.com"
+            "intuit.com/proseries", "cchaxcess.com", "taxact.com",
+            "taxwise.com", "proconnect.intuit.com"
         ],
+        "urls": []
+    },
+    
+    "tax_forms": {
+        "category": "Tax Preparation",
+        "confidence": 0.97,
+        "keywords": [
+            "form 1040", "form 1120", "form 1065", "form 1120s",
+            "schedule c", "schedule e", "schedule k-1", "form 990",
+            "form 1099", "form w-2", "form 8879", "form 8453",
+            "form 706", "form 709", "form 5471", "form 8938",
+            "form 3520", "form 1116", "form 2555", "schedule d",
+            "schedule b", "form 4562", "form 8829", "form 6251"
+        ],
+        "domains": ["irs.gov", "taxformfinder.com"],
         "urls": [
-            "form 1040", "form 1120", "form 1065", "schedule c",
-            "schedule e", "form 990", "form 1099", "w-2", "k-1"
+            "1040", "1120", "1065", "990", "1099", "w-2", "k-1",
+            "schedule", "tax return", "tax form", "extension"
         ]
     },
     
-    # Accounting/Bookkeeping Software
-    "accounting": {
+    # ==================== ACCOUNTING SOFTWARE ====================
+    "accounting_cloud": {
+        "category": "Accounting/Bookkeeping",
+        "confidence": 0.94,
+        "keywords": [
+            "quickbooks online", "qbo", "xero", "freshbooks", "wave accounting",
+            "zoho books", "sage intacct", "netsuite", "financialforce"
+        ],
+        "domains": [
+            "quickbooks.intuit.com", "qbo.intuit.com", "app.xero.com",
+            "freshbooks.com", "waveapps.com", "zoho.com/books",
+            "sageintacct.com", "netsuite.com"
+        ],
+        "urls": [
+            "dashboard", "reports", "banking", "invoices", "expenses"
+        ]
+    },
+    
+    "accounting_desktop": {
         "category": "Accounting/Bookkeeping",
         "confidence": 0.93,
         "keywords": [
-            "quickbooks", "xero", "sage", "freshbooks", "wave accounting",
-            "netsuite", "zoho books", "bench", "kashoo", "financialforce"
+            "quickbooks desktop", "sage 50", "sage 100", "sage 300",
+            "mas 90", "mas 200", "peachtree", "myob"
         ],
-        "domains": [
-            "quickbooks.intuit.com", "qbo.intuit.com", "xero.com",
-            "sage.com", "freshbooks.com", "waveapps.com", "netsuite.com",
-            "zoho.com/books"
-        ],
+        "domains": [],
+        "urls": []
+    },
+    
+    "bookkeeping_tasks": {
+        "category": "Accounting/Bookkeeping",
+        "confidence": 0.92,
+        "keywords": [],
+        "domains": [],
         "urls": [
             "chart of accounts", "general ledger", "reconciliation",
-            "journal entry", "trial balance", "financial statements"
+            "bank rec", "journal entry", "adjusting entry",
+            "trial balance", "financial statements", "balance sheet",
+            "income statement", "cash flow statement", "p&l", "profit and loss"
         ]
     },
     
-    # Audit & Assurance
-    "audit": {
+    # ==================== AUDIT & ASSURANCE ====================
+    "audit_software": {
         "category": "Audit/Assurance",
-        "confidence": 0.94,
+        "confidence": 0.96,
         "keywords": [
-            "caseware", "idea data analysis", "acl analytics", "teammate audit",
-            "workiva", "auditboard", "cch engagement", "pfx engagement",
-            "audit analytics", "confirmation.com"
+            "caseware", "caseview", "idea data analysis", "acl analytics",
+            "teammate audit", "workiva", "auditboard", "aicpa audit",
+            "cch engagement", "pfx engagement", "audit analytics",
+            "confirmation.com", "auditfile"
         ],
         "domains": [
             "caseware.com", "caseware.cloud", "auditanalytics.com",
             "auditboard.com", "workiva.com", "confirmation.com",
-            "teammate.wolterskluwer.com"
+            "teammate.wolterskluwer.com", "cchaxcess.com/engagement"
         ],
         "urls": [
-            "audit program", "working papers", "lead schedule",
-            "audit procedures", "testing", "substantive procedures"
+            "audit program", "working papers", "workpaper", "lead schedule",
+            "audit procedures", "testing", "substantive test",
+            "controls testing", "walkthrough", "test of details"
         ]
     },
     
-    # Tax Research
-    "research": {
+    "audit_procedures": {
+        "category": "Audit/Assurance",
+        "confidence": 0.93,
+        "keywords": [],
+        "domains": [],
+        "urls": [
+            "pcaob", "gaas", "ssars", "ssae", "audit report",
+            "review report", "compilation", "agreed upon procedures",
+            "audit opinion", "management letter", "internal controls",
+            "sarbanes oxley", "sox", "icfr"
+        ]
+    },
+    
+    # ==================== TAX RESEARCH ====================
+    "research_platforms": {
         "category": "Tax Research",
-        "confidence": 0.92,
+        "confidence": 0.94,
         "keywords": [
             "checkpoint", "intelliconnect", "bloomberg tax", "ria",
-            "tax notes", "bna", "lexis tax", "westlaw", "cch answerconnect"
+            "tax notes", "bna", "lexis tax", "westlaw tax",
+            "cch answerconnect", "thomson reuters checkpoint"
         ],
         "domains": [
             "checkpoint.riag.com", "intelliconnect.cch.com",
             "pro.bloombergtax.com", "news.bloombergtax.com",
-            "taxnotes.com", "irs.gov", "taxfoundation.org"
+            "taxnotes.com", "irs.gov", "taxfoundation.org",
+            "lexisnexis.com", "westlaw.com"
         ],
         "urls": [
-            "irc section", "revenue ruling", "private letter ruling",
-            "treasury regulation", "notice", "publication"
+            "irc section", "treasury regulation", "treas reg",
+            "revenue ruling", "rev rul", "revenue procedure", "rev proc",
+            "private letter ruling", "plr", "technical advice memorandum",
+            "tam", "notice", "publication", "internal revenue code"
         ]
     },
     
-    # Practice Management
-    "practice_mgmt": {
-        "category": "Administration",
-        "confidence": 0.90,
+    "tax_authority_sites": {
+        "category": "Tax Research",
+        "confidence": 0.96,
+        "keywords": [],
+        "domains": [
+            "irs.gov", "treasury.gov", "congress.gov",
+            "tax.ny.gov", "ftb.ca.gov", "revenue.state.*.us"
+        ],
+        "urls": [
+            "guidance", "regulations", "statute", "code section"
+        ]
+    },
+    
+    # ==================== PAYROLL ====================
+    "payroll_platforms": {
+        "category": "Payroll Services",
+        "confidence": 0.95,
         "keywords": [
-            "cch axcess", "thomson reuters cs", "xcm solutions",
+            "adp workforce now", "adp run", "paychex flex", "gusto",
+            "quickbooks payroll", "patriot payroll", "onpay",
+            "surepayroll", "paycor", "namely", "rippling", "zenefits"
+        ],
+        "domains": [
+            "adp.com", "workforcenow.adp.com", "paychex.com",
+            "gusto.com", "payroll.intuit.com", "onpay.com",
+            "surepayroll.com", "paycor.com", "rippling.com"
+        ],
+        "urls": [
+            "payroll", "pay stub", "paystub", "direct deposit",
+            "form 941", "form 940", "unemployment", "workers comp",
+            "wage report", "payroll tax", "fica", "withholding"
+        ]
+    },
+    
+    # ==================== ADVISORY/CONSULTING ====================
+    "financial_planning": {
+        "category": "Advisory/Financial Planning",
+        "confidence": 0.91,
+        "keywords": [
+            "moneyguidepro", "emoney", "rightcapital", "naviplan",
+            "wealthbox", "redtail", "morningstar office"
+        ],
+        "domains": [
+            "moneyguidepro.com", "emoney.com", "rightcapital.com",
+            "naviplan.com", "wealthbox.com", "redtailtechnology.com"
+        ],
+        "urls": [
+            "retirement planning", "investment analysis", "financial plan",
+            "estate planning", "wealth management", "401k", "ira",
+            "roth conversion", "financial projection"
+        ]
+    },
+    
+    "business_valuation": {
+        "category": "Valuation/Advisory",
+        "confidence": 0.92,
+        "keywords": [
+            "bizcomps", "pratt stats", "ibis world", "bvresources"
+        ],
+        "domains": [
+            "bizcomps.com", "bvresources.com", "ibisworld.com"
+        ],
+        "urls": [
+            "business valuation", "valuation report", "dcf model",
+            "market approach", "income approach", "asset approach",
+            "fair market value", "enterprise value"
+        ]
+    },
+    
+    "forensic_fraud": {
+        "category": "Forensic/Fraud Investigation",
+        "confidence": 0.93,
+        "keywords": [
+            "forensic accounting", "fraud investigation", "benford",
+            "data analytics", "fraud detection"
+        ],
+        "domains": [],
+        "urls": [
+            "fraud examination", "forensic analysis", "investigation",
+            "litigation support", "expert witness", "damages calculation"
+        ]
+    },
+    
+    # ==================== COMPLIANCE & REGULATORY ====================
+    "sec_edgar": {
+        "category": "SEC/Regulatory Compliance",
+        "confidence": 0.97,
+        "keywords": [
+            "edgar", "sec filing", "form 10-k", "form 10-q",
+            "form 8-k", "form s-1", "proxy statement", "def 14a"
+        ],
+        "domains": [
+            "sec.gov", "edgar.sec.gov", "edgarfilings.com"
+        ],
+        "urls": [
+            "form 10-k", "form 10-q", "form 8-k", "form s-1",
+            "prospectus", "registration statement", "proxy"
+        ]
+    },
+    
+    "erisa_employee_benefits": {
+        "category": "Employee Benefits/ERISA",
+        "confidence": 0.92,
+        "keywords": [
+            "form 5500", "erisa", "employee benefit plan",
+            "pension plan", "401k audit"
+        ],
+        "domains": ["dol.gov", "efast.dol.gov"],
+        "urls": [
+            "5500", "erisa", "pension", "401k plan", "benefit plan audit"
+        ]
+    },
+    
+    # ==================== PRACTICE MANAGEMENT ====================
+    "practice_management": {
+        "category": "Administration",
+        "confidence": 0.89,
+        "keywords": [
+            "cch axcess practice", "thomson reuters cs", "xcm solutions",
             "karbon", "practice ignition", "canopy", "financial cents",
-            "jetpack workflow", "tax dome"
+            "jetpack workflow", "taxdome", "liscio"
         ],
         "domains": [
             "cchaxcess.com", "cs.thomsonreuters.com", "karbonhq.com",
-            "practiceignition.com", "getcanopy.com", "taxdome.com"
+            "practiceignition.com", "getcanopy.com", "taxdome.com",
+            "liscio.me"
         ],
         "urls": [
-            "client portal", "workflow", "time tracking", "billing",
-            "engagement letter", "client management"
+            "client portal", "workflow", "engagement", "billing",
+            "engagement letter", "client management", "project management"
         ]
     },
     
-    # Document Management
-    "documents": {
+    "time_billing": {
+        "category": "Administration",
+        "confidence": 0.90,
+        "keywords": [
+            "quickbooks time", "bill4time", "timeslips", "billing matters"
+        ],
+        "domains": [
+            "quickbooks.com/time", "bill4time.com", "timeslips.com"
+        ],
+        "urls": [
+            "timesheet", "time entry", "billing", "invoice",
+            "wip", "work in progress", "realization"
+        ]
+    },
+    
+    # ==================== DOCUMENT MANAGEMENT ====================
+    "document_management": {
         "category": "Document Management",
         "confidence": 0.91,
         "keywords": [
             "sharefile", "smartvault", "safesend", "docusign",
-            "adobe sign", "rightfax", "dropbox business"
+            "adobe sign", "rightfax", "dropbox business", "box"
         ],
         "domains": [
             "sharefile.com", "smartvault.com", "safesendreturns.com",
-            "docusign.com", "adobesign.com"
+            "docusign.com", "adobesign.com", "dropbox.com", "box.com"
         ],
         "urls": [
-            "signature", "e-signature", "secure file", "client upload"
+            "signature", "e-signature", "esign", "secure file",
+            "client upload", "file sharing", "document portal"
         ]
     },
     
-    # Payroll Services
-    "payroll": {
-        "category": "Payroll Services",
-        "confidence": 0.93,
-        "keywords": [
-            "adp", "paychex", "gusto", "quickbooks payroll",
-            "patriot payroll", "onpay", "surepayroll", "paycor"
-        ],
-        "domains": [
-            "adp.com", "paychex.com", "gusto.com", "payroll.intuit.com",
-            "onpay.com", "surepayroll.com", "paycor.com"
-        ],
+    # ==================== SPECIALIZED INDUSTRIES ====================
+    "real_estate": {
+        "category": "Real Estate/Property",
+        "confidence": 0.90,
+        "keywords": [],
+        "domains": [],
         "urls": [
-            "payroll", "pay stub", "direct deposit", "941", "940",
-            "unemployment", "workers comp"
+            "rental property", "real estate", "depreciation schedule",
+            "section 1031", "like kind exchange", "cost segregation",
+            "rental income", "schedule e"
         ]
     },
     
-    # Financial Planning
-    "financial_planning": {
-        "category": "Financial Planning",
+    "nonprofit": {
+        "category": "Nonprofit/Form 990",
+        "confidence": 0.94,
+        "keywords": [],
+        "domains": ["guidestar.org", "nonprofitexpert.com"],
+        "urls": [
+            "form 990", "990-n", "990-ez", "990-pf", "nonprofit",
+            "tax exempt", "501c3", "charitable", "exempt organization"
+        ]
+    },
+    
+    "healthcare": {
+        "category": "Healthcare/Medical Practice",
+        "confidence": 0.91,
+        "keywords": [],
+        "domains": [],
+        "urls": [
+            "medical practice", "healthcare", "physician", "dental practice",
+            "practice acquisition", "medical billing", "rcm"
+        ]
+    },
+    
+    "construction": {
+        "category": "Construction/Contractors",
         "confidence": 0.90,
         "keywords": [
-            "moneyguidepro", "emoney", "rightcapital", "naviplan",
-            "wealth management", "financial planning software"
+            "viewpoint", "spectrum", "foundation", "cmicrays",
+            "jonas construction", "procore"
         ],
         "domains": [
-            "moneyguidepro.com", "emoney.com", "rightcapital.com"
+            "viewpoint.com", "procore.com", "cmic.com"
         ],
         "urls": [
-            "retirement planning", "investment analysis", "estate planning"
+            "construction", "contractor", "job costing", "wip schedule",
+            "percentage of completion", "completed contract",
+            "prevailing wage", "certified payroll"
         ]
     },
-    
-    # SEC/Corporate Filings
-    "sec_filings": {
-        "category": "Regulatory/Compliance",
-        "confidence": 0.94,
-        "keywords": [
-            "edgar", "sec filing", "10-k", "10-q", "form s-1",
-            "proxy statement", "8-k"
-        ],
-        "domains": [
-            "sec.gov", "edgar.sec.gov"
-        ],
-        "urls": [
-            "edgar", "form 10-k", "form 10-q", "form 8-k",
-            "prospectus", "registration statement"
-        ]
-    }
 }
 
 

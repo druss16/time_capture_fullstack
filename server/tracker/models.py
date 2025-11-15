@@ -217,6 +217,79 @@ class AgentPairCode(models.Model):
     def __str__(self):
         return f"{self.code} for {self.user.username}"
 
+
+# tracker/models.py - FIX THE UserWorkPattern MODEL
+
+from django.db import models
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+import json
+
+User = get_user_model()
+
+
+class UserWorkPattern(models.Model):
+    """
+    Learns and stores patterns about how each user works.
+    Used to improve AI classification accuracy over time.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='work_patterns')
+    org = models.ForeignKey('auth.Group', on_delete=models.CASCADE, null=True)
+    
+    # Pattern types
+    PATTERN_TYPES = [
+        ('file_path', 'File Path Pattern'),
+        ('time_of_day', 'Time of Day Pattern'),
+        ('day_of_week', 'Day of Week Pattern'),
+        ('app_sequence', 'Application Sequence'),
+        ('tool_usage', 'Tool Usage Pattern'),
+        ('client_folder', 'Client Folder Mapping'),
+    ]
+    pattern_type = models.CharField(max_length=30, choices=PATTERN_TYPES, db_index=True)
+    
+    # Pattern data
+    pattern_key = models.CharField(max_length=500, db_index=True)  # e.g., "/Users/dan/Documents/Clients/Acme/"
+    
+    # What this pattern predicts
+    client = models.ForeignKey('Client', on_delete=models.CASCADE, null=True, blank=True)
+    category = models.CharField(max_length=100, blank=True)  # e.g., "Tax Preparation"
+    
+    # Confidence metrics
+    occurrence_count = models.IntegerField(default=1)
+    correct_predictions = models.IntegerField(default=0)
+    total_predictions = models.IntegerField(default=0)
+    confidence_score = models.FloatField(default=0.5)  # Updated dynamically
+    
+    # Metadata
+    metadata = models.JSONField(default=dict)  # Extra context (time ranges, co-occurring patterns, etc.)
+    
+    # Timestamps
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+    last_confirmed = models.DateTimeField(null=True, blank=True)  # Last time user confirmed this pattern
+    
+    class Meta:
+        db_table = 'tracker_userworkpattern'  # ✅ FIXED: Changed from db_name to db_table
+        indexes = [
+            models.Index(fields=['user', 'pattern_type']),
+            models.Index(fields=['user', 'client']),
+            models.Index(fields=['confidence_score']),
+        ]
+        unique_together = [['user', 'pattern_type', 'pattern_key']]
+    
+    def update_confidence(self, was_correct: bool):
+        """Update confidence score based on prediction accuracy"""
+        self.total_predictions += 1
+        if was_correct:
+            self.correct_predictions += 1
+        
+        # Bayesian update of confidence
+        self.confidence_score = self.correct_predictions / max(1, self.total_predictions)
+        self.save(update_fields=['confidence_score', 'correct_predictions', 'total_predictions'])
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.pattern_type}: {self.pattern_key[:50]}"
+
 # ===========================
 # ======  CORE MODELS  ======
 # ===========================
@@ -273,79 +346,223 @@ class Task(models.Model):
 # ==============================
 # ======  CLASSIFICATION  ======
 # ==============================
+# tracker/models.py - REPLACE YOUR Block MODEL
+
+import hashlib
+from django.db import models
+from django.conf import settings
+from django.contrib.auth.models import Group
+from django.utils import timezone
+
+
 class Block(models.Model):
+    # Core identification
     org = models.ForeignKey(Group, on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     device_id = models.CharField(max_length=64, db_index=True, default="unknown")
     hostname = models.CharField(max_length=120)
+    
+    # Time tracking
     start = models.DateTimeField()
     end = models.DateTimeField()
+    day = models.DateField(db_index=True, null=True, blank=True)
+    minutes = models.IntegerField(null=True, blank=True)
+    
+    # Activity context
     title = models.TextField(blank=True, default="")
     window_title = models.TextField(blank=True, null=True)
     url = models.TextField(blank=True, default="")
     file_path = models.TextField(blank=True, default="")
-    hints = models.JSONField(default=dict, blank=True)
-    
     app_name = models.CharField(max_length=255, blank=True, default="")
     bundle_id = models.CharField(max_length=255, blank=True, default="")
-
-    day = models.DateField(db_index=True, null=True, blank=True)
-    minutes = models.IntegerField(null=True, blank=True)
+    hints = models.JSONField(default=dict, blank=True)
+    
+    # Meeting metadata
     description = models.TextField(blank=True, default="")
     attendees = models.JSONField(default=list, blank=True)
+    
+    # Classification (the valuable data)
     category_hours = models.JSONField(default=dict, blank=True)
-
-    client = models.ForeignKey(Client, null=True, blank=True, on_delete=models.SET_NULL)
-    project = models.ForeignKey(Project, null=True, blank=True, on_delete=models.SET_NULL)
-    task = models.ForeignKey(Task, null=True, blank=True, on_delete=models.SET_NULL)
-
+    client = models.ForeignKey('Client', null=True, blank=True, on_delete=models.SET_NULL)
+    project = models.ForeignKey('Project', null=True, blank=True, on_delete=models.SET_NULL)
+    task = models.ForeignKey('Task', null=True, blank=True, on_delete=models.SET_NULL)
     notes = models.TextField(blank=True, default="")
+    
+    # Legacy lock (keep for backwards compatibility)
     locked = models.BooleanField(default=False)
-
+    
+    # ✅ NEW: Immutability Tracking (Production-Ready)
+    is_categorized = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True once categories are assigned - block becomes immutable"
+    )
+    categorized_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when this block was first categorized"
+    )
+    categorized_by = models.CharField(
+        max_length=20,
+        choices=[
+            ('ai', 'AI Auto-Categorized'),
+            ('manual', 'User Manual Entry'),
+            ('correction', 'User Corrected AI'),
+            ('import', 'Imported Data'),
+            ('pattern', 'Learned Pattern'),
+        ],
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Source of the categorization"
+    )
+    
+    # ✅ NEW: Approval Workflow (Enterprise Feature)
+    approved = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Approved for billing by user/manager"
+    )
+    approved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this block was approved"
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='approved_blocks',
+        help_text="Who approved this block"
+    )
+    
     # AI classification metadata
     ai_extracted_client = models.CharField(max_length=255, blank=True, null=True)
     ai_confidence = models.FloatField(default=0.0)
     ai_category = models.CharField(max_length=100, blank=True, default="")
     ai_processed_at = models.DateTimeField(null=True, blank=True)
-    ai_hash = models.CharField(max_length=64, blank=True, null=True)  # NEW
-    updated_at = models.DateTimeField(auto_now=True)  # NEW
-
+    ai_hash = models.CharField(max_length=64, blank=True, null=True)
+    
+    # Timestamps
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    
     def compute_ai_hash(self):
         """
         Hash title/url/path for quick change detection.
         """
         raw = f"{self.window_title or ''}|{self.url or ''}|{self.file_path or ''}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
+    
     def has_ai_inputs_changed(self):
         """
         Returns True if the hash changed since last save.
         """
         new_hash = self.compute_ai_hash()
         return self.ai_hash != new_hash
-
+    
+    def is_protected(self):
+        """
+        Returns True if this block should not be modified.
+        Protected blocks: categorized, approved, or explicitly locked.
+        """
+        return self.is_categorized or self.approved or self.locked
+    
+    def can_edit(self, user=None):
+        """
+        Check if a user can edit this block.
+        Rules:
+        - Uncategorized blocks: Anyone can edit
+        - AI-categorized blocks: Original user can correct once
+        - Manual/corrected blocks: Need manager approval
+        - Approved blocks: Locked unless manager
+        """
+        if not self.is_categorized:
+            return True
+        
+        if self.approved:
+            # Approved blocks need manager permission (implement as needed)
+            return False
+        
+        if self.categorized_by == 'ai' and user and user == self.user:
+            # User can correct their own AI-categorized blocks
+            return True
+        
+        if self.categorized_by in ('manual', 'correction'):
+            # Already manually reviewed - shouldn't change
+            return False
+        
+        return False
+    
     def save(self, *args, **kwargs):
-        # compute and store hash before save
+        # ✅ Auto-set immutability flags when categories assigned
+        if self.category_hours and not self.is_categorized:
+            self.is_categorized = True
+            self.categorized_at = timezone.now()
+            
+            # Set default categorized_by if not already set
+            if not self.categorized_by:
+                self.categorized_by = 'ai'  # Default assumption
+        
+        # Compute and store hash for change detection
         new_hash = self.compute_ai_hash()
         if not self.ai_hash or self.ai_hash != new_hash:
             self.ai_hash = new_hash
+        
+        # ✅ Prevent modification of protected blocks (safety check)
+        if self.pk:  # Only check on updates, not creates
+            try:
+                old = Block.objects.get(pk=self.pk)
+                if old.is_protected() and not kwargs.pop('force_update', False):
+                    # Allow updates to non-critical fields
+                    protected_fields = {
+                        'category_hours', 'client', 'project', 'task',
+                        'start', 'end', 'minutes'
+                    }
+                    
+                    # Check if any protected field changed
+                    for field in protected_fields:
+                        if getattr(old, field) != getattr(self, field):
+                            raise ValueError(
+                                f"Cannot modify protected block {self.pk}. "
+                                f"Block is {old.categorized_by} and {'approved' if old.approved else 'categorized'}."
+                            )
+            except Block.DoesNotExist:
+                pass  # New block, allow save
+        
         super().save(*args, **kwargs)
-
+    
     class Meta:
         indexes = [
+            # Existing indexes
             models.Index(fields=["org", "user", "day"]),
             models.Index(fields=["org", "start"]),
             models.Index(fields=["org", "client"]),
             models.Index(fields=["org", "project"]),
             models.Index(fields=["org", "task"]),
-            models.Index(fields=["updated_at"]),  # optional
-
+            models.Index(fields=["updated_at"]),
+            
+            # ✅ NEW: Immutability & approval indexes
+            models.Index(fields=["is_categorized", "user", "start"]),
+            models.Index(fields=["categorized_by", "org"]),
+            models.Index(fields=["approved", "user", "day"]),
+            models.Index(fields=["approved", "org", "client"]),
+            
+            # ✅ NEW: Fast uncategorized lookup (critical for AI processing)
+            models.Index(fields=["is_categorized", "org", "day"]),
+            models.Index(fields=["is_categorized", "ai_processed_at"]),
         ]
-
+        
+        # ✅ Optional: Add ordering for consistent results
+        ordering = ['-start']
+    
     def __str__(self):
-        return f"{self.user.username} - {self.ai_category or 'Unclassified'} - {self.day}"
+        status = "✅" if self.is_categorized else "⏳"
+        category = self.ai_category or list(self.category_hours.keys())[0] if self.category_hours else 'Unclassified'
+        return f"{status} {self.user.username} - {category} - {self.day}"
 
-
+        
 class Suggestion(models.Model):
     block = models.ForeignKey(Block, on_delete=models.CASCADE, related_name="suggestions")
     label_type = models.CharField(max_length=20, choices=[("client", "client"), ("project", "project"), ("task", "task")])

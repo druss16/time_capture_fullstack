@@ -1,4 +1,5 @@
 # docker-compose.yml
+# docker-compose.yml
 services:
   api:
     build:
@@ -18,7 +19,7 @@ services:
       redis:
         condition: service_started
     restart: unless-stopped
-
+  
   worker:
     build:
       context: ./server
@@ -26,12 +27,14 @@ services:
     container_name: time_worker
     env_file:
       - ./server/.env
+    volumes:                    # ✅ Separate section (not under env_file)
+      - ./server:/app
     depends_on:
       - api
       - redis
     command: python -m celery -A celery_app worker -l info --concurrency=2
     restart: unless-stopped
-
+  
   beat:
     build:
       context: ./server
@@ -39,12 +42,14 @@ services:
     container_name: time_beat
     env_file:
       - ./server/.env
+    volumes:                    # ✅ Separate section (not under env_file)
+      - ./server:/app
     depends_on:
       - api
       - redis
     command: python -m celery -A celery_app beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     restart: unless-stopped
-
+  
   redis:
     image: redis:7-alpine
     container_name: time_redis
@@ -54,9 +59,9 @@ services:
     ports:
       - "6379:6379"
     restart: unless-stopped
-
+  
   web:
-    platform: linux/amd64  # ← ADD THIS LINE - fixes ARM64/Rollup issue
+    platform: linux/amd64
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -69,7 +74,7 @@ services:
       - VITE_API_BASE=http://localhost:7123
     volumes:
       - ./frontend:/usr/src/app
-      - /usr/src/app/node_modules  # ← ADD THIS LINE - prevents overwriting node_modules
+      - /usr/src/app/node_modules
     command: npm run dev -- --host --port 5173
     depends_on:
       api:

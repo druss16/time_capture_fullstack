@@ -47,7 +47,7 @@ def _needs_classification(b: Block, created: bool) -> bool:
     if created:
         return True
 
-    # Don’t hammer the LLM if we just ran
+    # Don't hammer the LLM if we just ran
     if b.ai_processed_at and timezone.now() - b.ai_processed_at < timedelta(seconds=COOLDOWN_SECONDS):
         return False
 
@@ -65,35 +65,31 @@ def _needs_classification(b: Block, created: bool) -> bool:
     return False
 
 # ────────────────────────────────────────────────────────────────────────────────
+# COMMENTED OUT: classify_block_task doesn't exist yet (needs Celery setup)
+# Using ai_suggestions_today() endpoint for batch classification instead
+# Uncomment when Celery is properly configured
+
 @receiver(post_save, sender=Block, dispatch_uid="tracker.block.auto_classify")
 def _auto_classify_block(sender, instance: Block, created: bool, **kwargs):
     """
-    Automatically classify Blocks (client + task/category) after save.
-
-    - Defers work until transaction commit
-    - Uses a task shim that works with/without Celery
-    - Guarded against recursion and management commands
+    Auto-classify new blocks using simple pattern matching.
+    Runs synchronously on save (fast, no LLM).
     """
     if _running_management_command():
         return
     if _guarded():
         return
-    if not _needs_classification(instance, created):
+    
+    # Only classify new, uncategorized blocks
+    if not created or instance.is_categorized:
         return
-
+    
     def _do():
         try:
-            blk = Block.objects.get(pk=instance.pk)  # re-fetch latest
-            # Import inside the function to avoid import cycles at import time
-            from tracker.tasks import classify_block_task
-            # This .delay works even if Celery is not running (shim falls back to sync)
-            classify_block_task.delay(blk.pk)
+            blk = Block.objects.get(pk=instance.pk)
+            from tracker.tasks import classify_block_task  # ✅ ADD THIS LINE IF MISSING
+            classify_block_task.delay(blk.pk)  # ✅ Calls Celery task
         except Block.DoesNotExist:
-            # Deleted before commit — ignore
             return
-        except Exception as e:
-            capture_exception(e)
-            if getattr(settings, "DEBUG", False):
-                print(f"[signals] classify_block error on Block {getattr(instance, 'pk', '?')}: {e}")
-
+    
     transaction.on_commit(_do)

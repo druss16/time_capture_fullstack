@@ -14,3 +14,7 @@ django-celery-beat>=2.6.0
 gunicorn
 dj-database-url
 whitenoise
+
+# Optional: Flower for monitoring Celery tasks (recommended for production)
+flower>=2.0.0,<3.0.0
+

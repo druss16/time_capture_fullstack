@@ -103,11 +103,9 @@ from tracker.models import (
 from tracker.permissions import AgentKeyPermission, NoAuth, PermUI
 from tracker.rules import apply_rules
 from tracker.serializers import RawEventSerializer
-from tracker.services.classify_block import classify_block
 from tracker.auth import AgentKeyAuthentication
 from tracker.utils import (
     _client_ip,
-    compact_rawevents_into_blocks,
     get_org_or_default,
     infer_task_for_block,
     resolve_agent_user,
@@ -142,7 +140,292 @@ from .models import RawEvent, CurrentClient, Client
 # If you need a User class reference:
 User = get_user_model()
 
+import logging
+logger = logging.getLogger(__name__)
 
+def log(msg: str):
+    """Simple logging helper"""
+    logger.info(msg)
+    print(msg)  # Also print for immediate visibility
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from django.utils import timezone
+from django.db import transaction
+from datetime import timedelta
+
+from tracker.models import Block, Client, UserWorkPattern
+from tracker.services.pattern_learning import PatternLearningService
+
+
+# ============================================================================
+# CONFIGURATION: Available Categories
+# ============================================================================
+
+# ============================================================================
+# UPDATED: Categories for both CPA and Consulting work
+# ============================================================================
+
+CPA_CATEGORIES = [
+    # Core Tax Services
+    "Tax Preparation",
+    "Tax Planning",
+    "Tax Research",
+    "Tax Compliance",
+    
+    # Accounting Services
+    "Accounting/Bookkeeping",
+    "Financial Statement Prep",
+    "Audit/Assurance",
+    "Payroll Services",
+    
+    # Advisory Services
+    "Advisory/Financial Planning",
+    "Valuation/Advisory",
+    "Forensic/Fraud Investigation",
+    
+    # Compliance & Regulatory
+    "SEC/Regulatory Compliance",
+    "Employee Benefits/ERISA",
+    
+    # Specialized Industry
+    "Real Estate/Property",
+    "Nonprofit/Form 990",
+    "Healthcare/Medical Practice",
+    "Construction/Contractors",
+    
+    # ✅ NEW: Consulting/Tech categories
+    "Software Development",
+    "Web Development",
+    "Research/AI Assistance",
+    "Design/Creative",
+    "Documentation",
+    
+    # Administrative
+    "Email/Communication",
+    "Meetings",
+    "Administration",
+    "Document Management",
+    "Review",
+]
+
+
+# ============================================================================
+# UPDATED: Tool detection for both CPA and Consulting work
+# ============================================================================
+
+CPA_TOOL_DETECTION = {
+    # ========================================================================
+    # CPA PROFESSIONAL TOOLS
+    # ========================================================================
+    
+    "ultratax": {
+        "keywords": ["ultratax", "cch axcess", "proseries", "drake", "lacerte", "atx"],
+        "domains": ["cchaxcess.com", "cchtaxoffice.com", "proseries.com"],
+        "urls": [],
+        "category": "Tax Preparation",
+        "confidence": 0.95
+    },
+    
+    "quickbooks": {
+        "keywords": ["quickbooks", "qbo", "quickbooks online"],
+        "domains": ["quickbooks.intuit.com", "qbo.intuit.com"],
+        "urls": ["app.quickbooks.com"],
+        "category": "Accounting/Bookkeeping",
+        "confidence": 0.93
+    },
+    
+    "xero": {
+        "keywords": ["xero"],
+        "domains": ["xero.com", "go.xero.com"],
+        "urls": [],
+        "category": "Accounting/Bookkeeping",
+        "confidence": 0.93
+    },
+    
+    "sage": {
+        "keywords": ["sage", "sage 50", "sage intacct"],
+        "domains": ["sage.com", "intacct.com"],
+        "urls": [],
+        "category": "Accounting/Bookkeeping",
+        "confidence": 0.92
+    },
+    
+    # ========================================================================
+    # DEVELOPMENT TOOLS (High Priority - Check First)
+    # ========================================================================
+    
+    "vscode": {
+        "keywords": [
+            "visual studio code", "vscode", "vs code",
+            "code - ", "● ", "  - visual studio code",  # VSCode window title patterns
+            ".py - ", ".js - ", ".tsx - ", ".jsx - ",  # Code file extensions
+            "tasks.py", "views.py", "models.py", "settings.py",  # Django files
+            "index.tsx", "app.tsx", "component",  # React files
+        ],
+        "domains": [],
+        "urls": [],
+        "category": "Software Development",
+        "confidence": 0.95
+    },
+    
+    "terminal": {
+        "keywords": [
+            "terminal", "iterm", "iterm2",
+            "zsh", "bash", "shell",
+            "docker compose", "python manage.py", "npm run",
+            "git ", "celery -A"
+        ],
+        "domains": [],
+        "urls": [],
+        "category": "Software Development",
+        "confidence": 0.90
+    },
+    
+    "github": {
+        "keywords": ["github", "pull request", "commit", "repository"],
+        "domains": ["github.com"],
+        "urls": [],
+        "category": "Software Development",
+        "confidence": 0.92
+    },
+    
+    "localhost": {
+        "keywords": [
+            "localhost", "127.0.0.1",
+            "localhost:5173", "localhost:7123", "localhost:3000", "localhost:8000",
+            "react", "django", "vite",
+            "hot module replacement", "hmr",
+        ],
+        "domains": ["localhost", "127.0.0.1"],
+        "urls": [],
+        "category": "Software Development",
+        "confidence": 0.88
+    },
+    
+    "deployment": {
+        "keywords": [
+            "deploying", "deployment", "render.com", "vercel", "heroku",
+            "docker", "kubernetes", "aws", "neon.tech",
+            "build", "compile", "bundle"
+        ],
+        "domains": ["render.com", "dashboard.render.com", "vercel.com", "console.neon.tech"],
+        "urls": [],
+        "category": "Software Development",
+        "confidence": 0.90
+    },
+    
+    # ========================================================================
+    # AI & RESEARCH TOOLS
+    # ========================================================================
+    
+    "claude": {
+        "keywords": [
+            "claude", "claude.ai", "anthropic",
+            "ai classification", "prompt", "llm",
+            "document revision", "code review",
+        ],
+        "domains": ["claude.ai"],
+        "urls": [],
+        "category": "Research/AI Assistance",
+        "confidence": 0.92
+    },
+    
+    "chatgpt": {
+        "keywords": ["chatgpt", "openai", "gpt-4", "gpt-3.5"],
+        "domains": ["chat.openai.com", "chatgpt.com"],
+        "urls": [],
+        "category": "Research/AI Assistance",
+        "confidence": 0.92
+    },
+    
+    "stackoverflow": {
+        "keywords": ["stack overflow", "stackoverflow"],
+        "domains": ["stackoverflow.com"],
+        "urls": [],
+        "category": "Research/AI Assistance",
+        "confidence": 0.85
+    },
+    
+    "documentation": {
+        "keywords": [
+            "documentation", "docs", "api reference",
+            "django docs", "react docs", "python docs",
+            "mdn web docs", "developer.mozilla.org"
+        ],
+        "domains": ["docs.python.org", "reactjs.org", "docs.djangoproject.com", "developer.mozilla.org"],
+        "urls": [],
+        "category": "Research/AI Assistance",
+        "confidence": 0.85
+    },
+    
+    # ========================================================================
+    # DESIGN & CREATIVE TOOLS
+    # ========================================================================
+    
+    "figma": {
+        "keywords": ["figma"],
+        "domains": ["figma.com"],
+        "urls": [],
+        "category": "Design/Creative",
+        "confidence": 0.93
+    },
+    
+    "canva": {
+        "keywords": ["canva"],
+        "domains": ["canva.com"],
+        "urls": [],
+        "category": "Design/Creative",
+        "confidence": 0.90
+    },
+    
+    # ========================================================================
+    # COMMUNICATION TOOLS
+    # ========================================================================
+    
+    "zoom": {
+        "keywords": ["zoom", "zoom meeting"],
+        "domains": ["zoom.us", "zoom.com"],
+        "urls": [],
+        "category": "Meetings",
+        "confidence": 0.95
+    },
+    
+    "teams": {
+        "keywords": ["microsoft teams", "teams"],
+        "domains": ["teams.microsoft.com"],
+        "urls": [],
+        "category": "Meetings",
+        "confidence": 0.95
+    },
+    
+    "gmail": {
+        "keywords": ["gmail", "google mail", "inbox"],
+        "domains": ["mail.google.com"],
+        "urls": [],
+        "category": "Email/Communication",
+        "confidence": 0.92
+    },
+    
+    "outlook": {
+        "keywords": ["outlook", "office 365 mail"],
+        "domains": ["outlook.office.com", "outlook.live.com"],
+        "urls": [],
+        "category": "Email/Communication",
+        "confidence": 0.92
+    },
+    
+    "slack": {
+        "keywords": ["slack"],
+        "domains": ["slack.com", "app.slack.com"],
+        "urls": [],
+        "category": "Email/Communication",
+        "confidence": 0.90
+    },
+}
 # -------------------------------------------------------------------
 # Config / constants
 # -------------------------------------------------------------------
@@ -827,14 +1110,35 @@ from django.utils import timezone
 
 from .models import RawEvent
 
-# tracker/views.py
+# tracker/views_raw_events.py
+"""
+UPDATED raw_events endpoint that triggers compaction immediately.
+
+Replace your existing raw_events view with this version.
+"""
+
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.authentication import SessionAuthentication
+from django.utils.dateparse import parse_datetime
+from django.utils import timezone
+
+from tracker.auth import AgentKeyAuthentication
+from tracker.models import RawEvent, CurrentClient, Client
+
+import logging
+logger = logging.getLogger(__name__)
+
+
 @api_view(["POST"])
 @authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def raw_events(request):
     """
     Ingest events from a paired agent.
-    NOW: Auto-tags events with current client if set.
+    NOW: Auto-tags events with current client AND triggers compaction immediately.
     
     - Requires Authorization: DeviceKey <api_key>
     - request.user = linked user from AgentDevice
@@ -842,6 +1146,7 @@ def raw_events(request):
     """
     agent_user = request.user
     device = getattr(request, "agent_device", None)
+    
     if not getattr(agent_user, "is_authenticated", False):
         return Response({"error": "Not authenticated"}, status=403)
     
@@ -867,6 +1172,7 @@ def raw_events(request):
     header_host = (request.headers.get("X-Agent-Host") or "").strip()
     device_host = getattr(device, "hostname", "") if device else ""
     default_host = header_host or device_host or "unknown"
+    
     created, errors = 0, []
     
     for item in payload:
@@ -896,12 +1202,33 @@ def raw_events(request):
                 hostname=hostname,
                 ctx=item.get("ctx", {}) or {},
                 device_id=getattr(device, "device_id", "unknown") if device else "unknown",
-                current_client_id=current_client_id,  # ← NEW: Store current client
+                current_client_id=current_client_id,  # ← Store current client
             )
             
             created += 1
         except Exception as e:
             errors.append({"item": item, "error": str(e)})
+    
+    # ✅ NEW: Trigger compaction immediately after ingesting events
+    if created > 0:
+        try:
+            from tracker.services.compaction import compact_recent_events
+            
+            # Run quick compaction for recent events (last 15 minutes)
+            blocks_created = compact_recent_events(
+                user=agent_user,
+                hostname=hostname,
+                minutes_back=15
+            )
+            
+            logger.info(
+                f"[INGEST] Created {created} events → {blocks_created} blocks "
+                f"for {agent_user.username}@{hostname}"
+            )
+            
+        except Exception as e:
+            logger.error(f"[INGEST] Compaction failed: {e}", exc_info=True)
+            # Don't fail the request if compaction fails
     
     status_code = (
         status.HTTP_201_CREATED if created and not errors
@@ -909,11 +1236,20 @@ def raw_events(request):
         else status.HTTP_400_BAD_REQUEST
     )
     
-    return Response({
+    response = {
         "created": created,
         "errors": errors,
-        "current_client": current_client_name  # Return client name for logging
-    }, status=status_code)
+        "current_client": current_client_name
+    }
+    
+    # Add blocks_created to response if compaction ran
+    if created > 0:
+        try:
+            response["blocks_created"] = blocks_created
+        except NameError:
+            pass
+    
+    return Response(response, status=status_code)
 
 
 # -------------------------------------------------------------------
@@ -983,12 +1319,28 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
     existing_blocks = list(blk_qs)
     
     # ✅ Step 2: Separate categorized (protected) from uncategorized (can recreate)
+    # SAFE: Works whether or not is_categorized field exists
     categorized_blocks = []
     uncategorized_blocks = []
     categorized_time_ranges = []
     
     for b in existing_blocks:
-        if b.is_categorized:  # ✅ Use the flag - that's what it's for!
+        # ✅ SAFE CHECK: Try new field first, fall back to old logic
+        is_cat = getattr(b, 'is_categorized', None)
+        
+        if is_cat is None:
+            # Old logic: Check if category_hours exists
+            has_categories = (
+                getattr(b, "category_hours", None) 
+                and b.category_hours 
+                and isinstance(b.category_hours, dict) 
+                and len(b.category_hours) > 0
+            )
+        else:
+            # New logic: Use the flag
+            has_categories = is_cat
+        
+        if has_categories:
             categorized_blocks.append(b)
             # Track protected time ranges
             if b.start and b.end:
@@ -1007,6 +1359,9 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
     # ✅ Step 4: Helper to check overlaps with protected blocks
     def overlaps_protected_block(start_dt, end_dt) -> bool:
         """Check if this time range overlaps with any categorized block"""
+        if not categorized_time_ranges:  # No protected blocks = no overlaps
+            return False
+        
         for protected_start, protected_end in categorized_time_ranges:
             # Check for any overlap
             if start_dt < protected_end and end_dt > protected_start:
@@ -1014,24 +1369,28 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         return False
     
     # ✅ Step 5: Filter out events that fall within protected time ranges
-    safe_events = []
-    for e in events:
-        et = e.ts_utc
+    # ONLY if there are categorized blocks to protect
+    if categorized_time_ranges:
+        safe_events = []
+        for e in events:
+            et = e.ts_utc
+            
+            # Check if this event timestamp falls within any protected block
+            overlaps = False
+            for protected_start, protected_end in categorized_time_ranges:
+                if protected_start <= et < protected_end:
+                    overlaps = True
+                    break
+            
+            if not overlaps:
+                safe_events.append(e)
         
-        # Check if this event timestamp falls within any protected block
-        overlaps = False
-        for protected_start, protected_end in categorized_time_ranges:
-            if protected_start <= et < protected_end:
-                overlaps = True
-                break
+        if len(events) != len(safe_events):
+            log(f"[COMPACT] Filtered out {len(events) - len(safe_events)} events overlapping with categorized blocks")
         
-        if not overlaps:
-            safe_events.append(e)
-    
-    if len(events) != len(safe_events):
-        log(f"[COMPACT] Filtered out {len(events) - len(safe_events)} events overlapping with categorized blocks")
-    
-    events = safe_events
+        events = safe_events
+    else:
+        log(f"[COMPACT] No categorized blocks to protect - processing all {len(events)} events")
 
     # ✅ Step 6: Process remaining events into new blocks
     created = 0
@@ -1048,7 +1407,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
         ✅ SKIP if this overlaps with a categorized block
         """
         # Double-check: don't create blocks overlapping protected time
-        if overlaps_protected_block(cur["start"], cur["end"]):
+        if categorized_time_ranges and overlaps_protected_block(cur["start"], cur["end"]):
             log(f"[COMPACT] Skipping block creation - overlaps with categorized block")
             return 0
         
@@ -1178,6 +1537,7 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
     
     return created
 
+
 # -------------------------------------------------------------------
 # UI endpoints (compaction-on-read)
 # -------------------------------------------------------------------
@@ -1199,9 +1559,9 @@ def blocks_today(request):
     username  = request.GET.get("user") or None
     hostname  = request.GET.get("hostname") or None
     limit_str = request.GET.get("limit") or None
-    org       = get_org_or_default(request)
     
-    # ✅ TRIGGER COMPACTION - Turn raw events into blocks
+    org = get_org_or_default(request)
+    
     compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
     
     start_utc, end_utc = _start_end_of_local_day_utc(date_str)
@@ -1278,109 +1638,6 @@ def blocks_today(request):
 
 from django.db.models import Q
 
-@api_view(["GET"])
-@permission_classes([PermUI])
-@throttle_classes([UserRateThrottle])
-def suggestions_today(request):
-    date_str = request.GET.get("date") or None
-    username = request.GET.get("user") or None
-    hostname = request.GET.get("hostname") or None
-    org      = get_org_or_default(request)
-
-    # quick compact to improve block edges
-    try:
-        _compact_safe(username, hostname, org, date_str)
-    except Exception:
-        pass
-
-    start_utc, end_utc = _start_end_of_local_day_utc(date_str)
-    qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
-    if username:
-        qs = qs.filter(user__username=username)
-    if hostname:
-        qs = qs.filter(hostname=hostname)
-
-    # mirror /summary org filtering
-    if USE_AUTH and org:
-        if settings.DEBUG:
-            qs = qs.filter(Q(org=org) | Q(org__isnull=True))
-        else:
-            qs = qs.filter(org=org)
-
-    # scope rules to org if available
-    rule_qs = Rule.objects.filter(active=True)
-    try:
-        if org and "org" in {f.name for f in Rule._meta.get_fields()}:
-            rule_qs = rule_qs.filter(org=org)
-    except Exception:
-        pass
-    rules = list(rule_qs)
-
-    out = []
-    with transaction.atomic():
-        for b in qs.select_related("client", "project", "task"):
-            # Clean slate (optional)
-            Suggestion.objects.filter(block=b).delete()
-
-            mins = int(getattr(b, "minutes", 0) or 0)
-            if mins <= 0 and b.start and b.end:
-                mins = max(0, int((b.end - b.start).total_seconds() // 60))
-            hours = round(mins / 60.0, 2)
-
-            # 🔒 IDLE short-circuit
-            if _is_idle_block(b):
-                # store a Suggestion row (optional) for audit trail
-                Suggestion.objects.create(
-                    block=b, label_type="category",
-                    value_text="Uncategorized - Idle",
-                    confidence=1.0, source="idle"
-                )
-                out.append({
-                    "block_id": b.id,
-                    "ai_suggestion": {
-                        "client": None,
-                        "project": None,
-                        "categories": {"Uncategorized - Idle": hours},
-                        "confidence": 1.0,
-                        "needs_review": False,
-                        "reasoning": "Detected system/user idle; not billable.",
-                    }
-                })
-                continue
-
-            # Apply your existing rules (top 3) → we still persist them if you want
-            for field, value_text, conf in list(apply_rules(b, rules))[:3]:
-                Suggestion.objects.create(
-                    block=b, label_type=field, value_text=value_text,
-                    confidence=conf, source="rule"
-                )
-
-            # Heuristic fallback for non-idle
-            host = ""
-            try:
-                if b.url:
-                    host = urllib.parse.urlparse(b.url).hostname or ""
-                    host = host.replace("www.", "")
-            except Exception:
-                pass
-
-            client_guess  = getattr(b.client, "name", None) or (host or None)
-            project_guess = getattr(b.project, "name", None)
-            cats = {"General": hours} if hours > 0 else {}
-
-            out.append({
-                "block_id": b.id,
-                "ai_suggestion": {
-                    "client": client_guess,
-                    "project": project_guess,
-                    "categories": cats,
-                    "confidence": 0.55,
-                    "needs_review": True,
-                    "reasoning": "Rule/URL heuristic.",
-                }
-            })
-
-    return Response(out)
 
 @api_view(["POST"])
 @permission_classes([PermUI])
@@ -1463,12 +1720,21 @@ def label_block(request):
 
 
 # -------------------------------------------------------------------
-# AI-Enhanced Suggestions (context-aware)
+# UPDATED: AI-Enhanced Suggestions (context-aware)
+# Prioritizes Development/Consulting patterns over CPA patterns
 # -------------------------------------------------------------------
 def pre_classify_obvious_categories(block) -> dict:
     """
     Pre-classify obvious patterns before AI runs.
-    Enhanced with CPA-specific tool detection.
+    Enhanced with both CPA-specific and Consulting/Dev tool detection.
+    
+    Priority Order:
+    1. Development tools (VSCode, GitHub, localhost)
+    2. AI/Research tools (Claude, ChatGPT, documentation)
+    3. Meetings & Email
+    4. CPA professional tools
+    5. File patterns
+    
     Returns: {"categories": {...}, "confidence": float, "reasoning": str} or empty dict
     """
     title = (getattr(block, "window_title", "") or block.title or "").lower()
@@ -1484,7 +1750,128 @@ def pre_classify_obvious_categories(block) -> dict:
     
     combined_text = f"{title} {url} {app_name} {file_path}"
     
-    # === EMAIL DETECTION ===
+    # ========================================================================
+    # PRIORITY 1: DEVELOPMENT TOOLS (Check FIRST to avoid misclassification)
+    # ========================================================================
+    
+    # VSCode detection
+    vscode_indicators = [
+        "visual studio code", "vscode", "vs code", "code - ",
+        "● ", "  - visual studio code",  # VSCode window patterns
+        ".py - ", ".js - ", ".tsx - ", ".jsx - ", ".ts - ",  # Code files
+        "tasks.py", "views.py", "models.py", "settings.py",  # Django
+        "component.tsx", "index.tsx", "app.tsx",  # React
+    ]
+    if any(indicator in combined_text for indicator in vscode_indicators):
+        return {
+            "categories": {"Software Development": hours},
+            "confidence": 0.95,
+            "reasoning": "Code editor detected"
+        }
+    
+    # Terminal/Command Line
+    terminal_indicators = [
+        "terminal", "iterm", "iterm2",
+        "docker compose", "python manage.py", "npm run", "celery -A",
+        "git ", "pip install", "yarn", "pnpm"
+    ]
+    if any(indicator in combined_text for indicator in terminal_indicators):
+        return {
+            "categories": {"Software Development": hours},
+            "confidence": 0.90,
+            "reasoning": "Terminal/command line activity"
+        }
+    
+    # GitHub
+    if "github" in combined_text or "github.com" in url:
+        return {
+            "categories": {"Software Development": hours},
+            "confidence": 0.92,
+            "reasoning": "GitHub repository activity"
+        }
+    
+    # Localhost development
+    localhost_indicators = [
+        "localhost", "127.0.0.1",
+        "localhost:5173", "localhost:7123", "localhost:3000", "localhost:8000",
+        "vite", "hot module replacement", "hmr"
+    ]
+    if any(indicator in combined_text for indicator in localhost_indicators):
+        return {
+            "categories": {"Software Development": hours},
+            "confidence": 0.88,
+            "reasoning": "Local development environment"
+        }
+    
+    # Deployment/Infrastructure
+    deployment_indicators = [
+        "deploying", "deployment", "render.com", "dashboard.render.com",
+        "vercel", "heroku", "neon.tech", "console.neon.tech",
+        "docker", "kubernetes"
+    ]
+    if any(indicator in combined_text for indicator in deployment_indicators):
+        return {
+            "categories": {"Software Development": hours},
+            "confidence": 0.90,
+            "reasoning": "Deployment/infrastructure work"
+        }
+    
+    # ========================================================================
+    # PRIORITY 2: AI & RESEARCH TOOLS
+    # ========================================================================
+    
+    # Claude AI
+    claude_indicators = [
+        "claude", "claude.ai", "anthropic",
+        "ai classification", "document revision",
+        "code review", "prompt"
+    ]
+    if any(indicator in combined_text for indicator in claude_indicators):
+        return {
+            "categories": {"Research/AI Assistance": hours},
+            "confidence": 0.92,
+            "reasoning": "Claude AI assistant usage"
+        }
+    
+    # ChatGPT
+    if any(indicator in combined_text for indicator in ["chatgpt", "chat.openai.com", "openai"]):
+        return {
+            "categories": {"Research/AI Assistance": hours},
+            "confidence": 0.92,
+            "reasoning": "ChatGPT usage"
+        }
+    
+    # Stack Overflow & Documentation
+    research_indicators = [
+        "stackoverflow", "stack overflow",
+        "docs.python.org", "reactjs.org", "docs.djangoproject.com",
+        "developer.mozilla.org", "mdn web docs",
+        "documentation", "api reference"
+    ]
+    if any(indicator in combined_text for indicator in research_indicators):
+        return {
+            "categories": {"Research/AI Assistance": hours},
+            "confidence": 0.85,
+            "reasoning": "Technical documentation/research"
+        }
+    
+    # ========================================================================
+    # PRIORITY 3: MEETINGS & EMAIL
+    # ========================================================================
+    
+    # Meeting detection
+    meeting_indicators = [
+        "zoom.us", "zoom meeting", "meet.google.com", "teams.microsoft.com",
+        "webex", "gotomeeting", "join meeting", "video call", "conference"
+    ]
+    if any(indicator in combined_text for indicator in meeting_indicators):
+        return {
+            "categories": {"Meetings": hours},
+            "confidence": 0.95,
+            "reasoning": "Virtual meeting detected"
+        }
+    
+    # Email detection
     email_indicators = [
         "@gmail.com", "@outlook.com", "@yahoo.com", "@hotmail.com",
         "mail.google.com", "outlook.office.com", "inbox",
@@ -1497,19 +1884,19 @@ def pre_classify_obvious_categories(block) -> dict:
             "reasoning": "Email activity detected"
         }
     
-    # === MEETING DETECTION ===
-    meeting_indicators = [
-        "zoom.us", "zoom meeting", "meet.google.com", "teams.microsoft.com",
-        "webex", "gotomeeting", "join meeting", "video call", "conference"
-    ]
-    if any(indicator in combined_text for indicator in meeting_indicators):
+    # ========================================================================
+    # PRIORITY 4: CPA PROFESSIONAL TOOLS
+    # ========================================================================
+    
+    # IRS.GOV special case (high priority for CPAs)
+    if "irs.gov" in url:
         return {
-            "categories": {"Meetings": hours},
-            "confidence": 0.95,
-            "reasoning": "Virtual meeting detected"
+            "categories": {"Tax Research": hours},
+            "confidence": 0.93,
+            "reasoning": "IRS website research"
         }
     
-    # === CPA TOOL DETECTION ===
+    # CPA Tool detection (UltraTax, QuickBooks, etc.)
     for tool_key, tool_config in CPA_TOOL_DETECTION.items():
         # Check keywords
         if any(keyword in combined_text for keyword in tool_config["keywords"]):
@@ -1534,8 +1921,11 @@ def pre_classify_obvious_categories(block) -> dict:
                 "confidence": tool_config["confidence"] - 0.05,
                 "reasoning": f"{tool_config['category']} content detected"
             }
-
-    # === FILE PATTERN DETECTION (NEW) ===
+    
+    # ========================================================================
+    # PRIORITY 5: FILE PATTERN DETECTION
+    # ========================================================================
+    
     if file_path:
         file_lower = file_path.lower()
         
@@ -1575,14 +1965,7 @@ def pre_classify_obvious_categories(block) -> dict:
                     "reasoning": "Administrative document"
                 }
     
-    # === IRS.GOV SPECIAL CASE ===
-    if "irs.gov" in url:
-        return {
-            "categories": {"Tax Research": hours},
-            "confidence": 0.93,
-            "reasoning": "IRS website research"
-        }
-    
+    # No patterns matched
     return {}
 
 
@@ -2129,36 +2512,29 @@ def ai_suggestions_today(request):
                                     pass
                             
                             if clean_cats:
-                                # ✅ UPDATED: Set all immutability tracking fields
+                                # ✅ Set BOTH category_hours (dict) and ai_category (string)
                                 b.category_hours = clean_cats
+                                b.ai_category = list(clean_cats.keys())[0]  # Legacy compatibility
                                 b.is_categorized = True
                                 b.categorized_at = timezone.now()
                                 b.categorized_by = 'ai'
+                                b.ai_processed_at = timezone.now()
+                                b.ai_confidence = confidence
                                 
-                                # Legacy AI metadata (if fields exist)
-                                if hasattr(b, "ai_processed_at"):
-                                    b.ai_processed_at = timezone.now()
-                                if hasattr(b, "ai_confidence"):
-                                    b.ai_confidence = confidence
-                                
-                                b.save()
+                                # ✅ CRITICAL FIX: force_update=True bypasses protection check
+                                b.save(force_update=True)
                                 auto_saved = True
                                 saved_count += 1
                                 
-                                # ✅ Learn from this successful auto-save
-                                if user_obj and confidence >= 0.80:
-                                    try:
-                                        PatternLearningService.learn_from_block(b, user_obj)
-                                        log(f"[PATTERN] Learned from auto-saved block {b.id}")
-                                    except Exception as learn_err:
-                                        log(f"[PATTERN] Learning failed: {learn_err}")
-                                
-                                # Better logging
-                                existing_client = getattr(b.client, "name", None)
-                                log(f"[AI] Auto-saved block {b.id} → Client: {existing_client or client_name or 'none'} | Categories: {list(clean_cats.keys())} ({confidence:.2f}) [LOCKED]")
+                                # ✅ Simple, clear logging
+                                client_name = getattr(b.client, "name", None)
+                                log(f"[AI] ✅ Saved {b.id} → {client_name or 'none'} | {list(clean_cats.keys())} ({confidence:.2f})")
                 
                 except Exception as e:
-                    log(f"[AI] Failed to auto-save block {b.id}: {e}")
+                    log(f"[AI] ❌ Failed to save block {b.id}: {e}")
+                    # ✅ Added stack trace for debugging
+                    import traceback
+                    traceback.print_exc()
             
             out.append({
                 "block_id": b.id,
@@ -2204,342 +2580,6 @@ def ai_suggestions_today(request):
         log(f"[AI] Auto-saved {saved_count}/{N} high-confidence classifications")
 
     return Response(out)
-
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def reclassify_day(request):
-    """
-    Manually trigger AI reclassification for all blocks in a given date.
-    """
-    from tracker.tasks import classify_block_task
-
-    date_str = (request.data.get("date") or "").strip()
-    if not date_str:
-        return Response({"error": "date is required"}, status=400)
-    try:
-        day = datetime.date.fromisoformat(date_str)
-    except ValueError:
-        return Response({"error": "invalid date"}, status=400)
-
-    qs = Block.objects.filter(day=day)
-    for b in qs:
-        classify_block_task.delay(b.pk)
-
-    return Response({"ok": True, "reclassified": qs.count()})
-
-
-# -------------------------------------------------------------------
-# Timecard Generation + Management
-# -------------------------------------------------------------------
-@api_view(["POST"])
-@permission_classes([PermUI])
-# @throttle_classes([UserRateThrottle])
-def generate_timecard(request):
-    """Generate AI-powered timecard for a specific date."""
-    target_date_str = request.data.get('date')
-    if target_date_str:
-        try:
-            target_date = date_type.fromisoformat(target_date_str)
-        except ValueError:
-            raise ValidationError({"date": "Invalid date format. Use YYYY-MM-DD"})
-    else:
-        target_date = timezone.now().date()
-
-    username = request.data.get('user') or request.GET.get('user') or None
-    hostname = request.data.get('hostname') or request.GET.get('hostname') or None
-    org = get_org_or_default(request)
-
-    user_obj = _get_user_obj(username)
-
-    target_dt = timezone.make_aware(datetime.combine(target_date, dt_time.min))
-    start_utc = _start_of_local_day_utc(target_dt)
-    end_utc = start_utc + timedelta(days=1)
-
-    qs = Block.objects.filter(start__gte=start_utc, start__lt=end_utc).order_by("start")
-    if user_obj:
-        qs = qs.filter(user=user_obj)
-    if hostname:
-        qs = qs.filter(hostname=hostname)
-    if org:
-        qs = qs.filter(org=org)
-
-    blocks = list(qs)
-    if not blocks:
-        return Response({
-            'date': target_date_str or str(target_date),
-            'entries': [],
-            'total_hours': 0,
-            'entries_needing_review': 0,
-            'message': 'No blocks found for this date'
-        })
-
-    blocks_data = []
-    existing_assignments = {}
-    for b in blocks:
-        minutes = int((b.end - b.start).total_seconds() / 60)
-        blocks_data.append({
-            'id': b.id,
-            'start': b.start.isoformat(),
-            'end': b.end.isoformat(),
-            'minutes': minutes,
-            'title': b.title,
-            'window_title': getattr(b, 'window_title', ''),
-            'url': b.url or '',
-            'file_path': b.file_path or '',
-        })
-        if b.client or b.project or b.task:
-            existing_assignments[b.id] = {
-                'client': getattr(b.client, 'name', None),
-                'project': getattr(b.project, 'name', None),
-                'task': getattr(b.task, 'name', None),
-            }
-
-    api_key = os.getenv('OPENAI_API_KEY')
-    if not api_key:
-        return Response({"error": "OPENAI_API_KEY not configured"}, status=500)
-
-    from .ai_timecard_service_adapted import TimecardGenerator
-    generator = TimecardGenerator(api_key)
-    try:
-        timecard_entries = asyncio.run(
-            generator.generate_timecard(
-                blocks_data,
-                date=str(target_date),
-                existing_assignments=existing_assignments
-            )
-        )
-    except Exception as e:
-        import traceback
-        return Response({"error": f"Timecard generation failed: {str(e)}", "traceback": traceback.format_exc()}, status=500)
-
-    saved_entries = []
-    needs_review_count = 0
-    with transaction.atomic():
-        # remove drafts/pending for same day/user
-        TimecardEntry.objects.filter(
-            org=org, user=user_obj, date=target_date, status__in=['draft', 'pending']
-        ).delete()
-
-        for entry in timecard_entries:
-            client_obj = None
-            if entry.client_name and entry.client_name != 'Unknown':
-                client_obj, _ = Client.objects.get_or_create(
-                    org=org, name=entry.client_name, defaults={'is_active': True}
-                )
-            t = TimecardEntry.objects.create(
-                org=org,
-                user=user_obj,
-                date=target_date,
-                client=client_obj,
-                project=None,  # optional: wire if you later include it in generator
-                total_hours=entry.total_hours,
-                category_breakdown=entry.category_breakdown,
-                activities_summary=entry.activities_summary,
-                confidence_score=entry.confidence_score,
-                needs_review=entry.needs_review,
-                status='pending' if entry.needs_review else 'draft',
-                block_ids=entry.block_ids or [],
-            )
-            if entry.needs_review:
-                needs_review_count += 1
-            saved_entries.append({
-                'id': t.id,
-                'client_name': entry.client_name,
-                'project_name': entry.project_name,
-                'total_hours': float(entry.total_hours),
-                'category_breakdown': entry.category_breakdown,
-                'activities_summary': entry.activities_summary,
-                'confidence_score': entry.confidence_score,
-                'needs_review': entry.needs_review,
-                'status': t.status,
-                'block_ids': entry.block_ids or [],
-            })
-
-    return Response({
-        'date': str(target_date),
-        'entries': saved_entries,
-        'total_hours': sum(e['total_hours'] for e in saved_entries),
-        'entries_needing_review': needs_review_count
-    })
-
-
-@api_view(["GET"])
-@permission_classes([PermUI])
-def list_timecards(request):
-    """List timecard entries with optional filtering."""
-    org = get_org_or_default(request)
-    qs = TimecardEntry.objects.filter(org=org).select_related("client", "project", "user")
-
-    if date_str := request.GET.get('date'):
-        try:
-            qs = qs.filter(date=date_type.fromisoformat(date_str))
-        except ValueError:
-            raise ValidationError({"date": "Invalid date format"})
-
-    if start_str := request.GET.get('start_date'):
-        try:
-            qs = qs.filter(date__gte=date_type.fromisoformat(start_str))
-        except ValueError:
-            raise ValidationError({"start_date": "Invalid date format"})
-
-    if end_str := request.GET.get('end_date'):
-        try:
-            qs = qs.filter(date__lte=date_type.fromisoformat(end_str))
-        except ValueError:
-            raise ValidationError({"end_date": "Invalid date format"})
-
-    if status_filter := request.GET.get('status'):
-        qs = qs.filter(status=status_filter)
-
-    if user_filter := request.GET.get('user'):
-        qs = qs.filter(user__username=user_filter)
-
-    entries = [{
-        'id': e.id,
-        'date': e.date.isoformat(),
-        'user': e.user.username if e.user_id else None,
-        'client_name': e.client.name if e.client else 'Unknown',
-        'project_name': e.project.name if e.project else None,
-        'total_hours': float(e.total_hours),
-        'category_breakdown': e.category_breakdown,
-        'activities_summary': e.activities_summary,
-        'confidence_score': e.confidence_score,
-        'needs_review': e.needs_review,
-        'status': e.status,
-        'reviewed_at': e.reviewed_at.isoformat() if e.reviewed_at else None,
-        'notes': e.notes,
-        'block_ids': e.block_ids,
-    } for e in qs]
-
-    return Response(entries)
-
-
-@api_view(["POST"])
-@permission_classes([PermUI])
-def approve_timecard(request, timecard_id: int):
-    """Approve a timecard entry."""
-    try:
-        entry = TimecardEntry.objects.get(id=timecard_id)
-    except TimecardEntry.DoesNotExist:
-        raise NotFound("Timecard entry not found")
-    entry.approve(request.data.get('notes', ''))
-    return Response({
-        'id': entry.id,
-        'status': entry.status,
-        'reviewed_at': entry.reviewed_at.isoformat(),
-        'message': 'Timecard entry approved successfully'
-    })
-
-
-@api_view(["POST"])
-@permission_classes([PermUI])
-def reject_timecard(request, timecard_id: int):
-    """Reject a timecard entry."""
-    try:
-        entry = TimecardEntry.objects.get(id=timecard_id)
-    except TimecardEntry.DoesNotExist:
-        raise NotFound("Timecard entry not found")
-    reason = request.data.get('reason', '')
-    if not reason:
-        raise ValidationError({"reason": "Reason is required when rejecting"})
-    entry.reject(reason)
-    return Response({
-        'id': entry.id,
-        'status': entry.status,
-        'reviewed_at': entry.reviewed_at.isoformat(),
-        'message': 'Timecard entry rejected'
-    })
-
-
-@api_view(["GET"])
-@permission_classes([PermUI])
-def timecard_summary(request):
-    """
-    Summary rollup for managers / end-of-day review.
-
-    Query:
-      ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&user=<username>
-
-    Response:
-    {
-      total_hours: float,
-      by_client: [
-        {
-          client: "Client A",
-          total_hours: 4.0,
-          categories: { "Tax Prep": 1.0, "Email/Communication": 0.5, "Research": 1.0, "1040": 1.5 },
-          entries: [<optional lightweight refs>]
-        },
-        ...
-      ],
-      by_status: { approved: x, pending: y, draft: z, rejected: w },
-      entries_count: N,
-      needs_review_count: M
-    }
-    """
-    from django.db.models import Sum
-
-    org = get_org_or_default(request)
-    qs = TimecardEntry.objects.filter(org=org)
-
-    if start_str := request.GET.get('start_date'):
-        qs = qs.filter(date__gte=date_type.fromisoformat(start_str))
-    if end_str := request.GET.get('end_date'):
-        qs = qs.filter(date__lte=date_type.fromisoformat(end_str))
-    if user_filter := request.GET.get('user'):
-        qs = qs.filter(user=user_filter)
-
-    total_hours = float(qs.aggregate(total=Sum('total_hours'))['total'] or 0.0)
-
-    # status buckets
-    def _sum(q, st):
-        return float(q.filter(status=st).aggregate(total=Sum('total_hours'))['total'] or 0.0)
-
-    by_status = {
-        'approved': _sum(qs, 'approved'),
-        'pending': _sum(qs, 'pending'),
-        'draft': _sum(qs, 'draft'),
-        'rejected': _sum(qs, 'rejected'),
-    }
-
-    # merge categories per client
-    rollups = {}  # client_name -> { total_hours, categories{str->float}, entries[] }
-    for e in qs.select_related('client'):
-        cname = e.client.name if e.client else "Unknown"
-        r = rollups.setdefault(cname, {"total_hours": 0.0, "categories": {}, "entries": []})
-        r["total_hours"] += float(e.total_hours or 0.0)
-        # merge JSON category_breakdown {name: hours}
-        if isinstance(e.category_breakdown, dict):
-            for k, v in e.category_breakdown.items():
-                if not k:
-                    continue
-                r["categories"][k] = float(r["categories"].get(k, 0.0)) + float(v or 0.0)
-        # (optional) keep a tiny reference for drill-downs
-        r["entries"].append({
-            "id": e.id,
-            "date": e.date.isoformat(),
-            "hours": float(e.total_hours or 0.0),
-            "status": e.status,
-        })
-
-    by_client = [
-        {
-            "client": cname,
-            "total_hours": round(v["total_hours"], 2),
-            "categories": { k: round(float(h), 2) for k, h in sorted(v["categories"].items()) },
-            "entries": v["entries"],  # keep or remove if you don't want it
-        }
-        for cname, v in rollups.items()
-    ]
-    by_client.sort(key=lambda x: x["total_hours"], reverse=True)
-
-    return Response({
-        "total_hours": round(total_hours, 2),
-        "by_client": by_client,
-        "by_status": by_status,
-        "entries_count": qs.count(),
-        "needs_review_count": qs.filter(needs_review=True, status='draft').count(),
-    })
 
 
 # -------------------------------------------------------------------
@@ -3037,9 +3077,6 @@ def _to_float_or_none(v):
 
 from tracker.services.pattern_learning import PatternLearningService
 
-# tracker/views.py - UPDATED VERSION
-
-from tracker.services.pattern_learning import PatternLearningService
 
 @api_view(["POST"])
 @permission_classes([PermUI])
@@ -3251,6 +3288,7 @@ def save_block_classification(request, block_id: int):
             pass
     
     return Response(response_data)
+
 # -------------------------------------------------------------------
 # Bulk import (clients/projects) for onboarding
 # -------------------------------------------------------------------
@@ -3531,125 +3569,6 @@ from rest_framework.response import Response
 
 from .models import AgentSession  # if you have it; safe to remove if not present
 
-@api_view(["POST", "OPTIONS"])
-@permission_classes([AllowAny])
-def agents_hello(request):
-    """
-    Auto-provision user and upsert AgentSession.
-    Tolerates partial schemas and sets cookies for SPA identity.
-    """
-    # headers first, JSON fallback
-    username = (request.headers.get("X-Agent-User") or "").strip()
-    host     = (request.headers.get("X-Agent-Host") or "").strip()
-    plat     = (request.headers.get("X-Agent-Platform") or "").strip()
-    ver      = (request.headers.get("X-Agent-Version") or "").strip()
-
-    if not (username and host):
-        try:
-            body = request.data if isinstance(request.data, dict) else json.loads(request.body.decode("utf-8"))
-        except Exception:
-            body = {}
-        username = username or (body.get("user") or body.get("os_username") or "").strip()
-        host     = host or (body.get("hostname") or body.get("machine") or "").strip()
-        plat     = plat or (body.get("platform") or "").strip()
-        ver      = ver or (body.get("app_version") or body.get("version") or "").strip()
-
-    username = username or "unknown"
-    host     = host or "unknown"
-    cip      = _client_ip(request)
-
-    grp, _ = Group.objects.get_or_create(name="Time Agents")
-    user, created = User.objects.get_or_create(username=username, defaults={"is_active": True, "email": ""})
-    if created:
-        user.set_unusable_password()
-        user.save()
-    if not user.groups.filter(id=grp.id).exists():
-        user.groups.add(grp)
-
-    sess_fields = {f.name for f in AgentSession._meta.get_fields()}
-    filter_kwargs = {"user": user}
-    if "hostname" in sess_fields:
-        filter_kwargs["hostname"] = host
-
-    defaults = {}
-    if "last_seen" in sess_fields:
-        defaults["last_seen"] = timezone.now()
-    if "platform" in sess_fields and plat:
-        defaults["platform"] = plat
-    if "version" in sess_fields and ver:
-        defaults["version"] = ver
-    if "last_ip" in sess_fields and cip:
-        defaults["last_ip"] = cip
-    if "hostname" in sess_fields and "hostname" not in filter_kwargs:
-        defaults["hostname"] = host
-
-    AgentSession.objects.update_or_create(**filter_kwargs, defaults=defaults)
-
-    try:
-        AgentControl.objects.get_or_create(user=user, host=host)
-    except Exception:
-        pass
-
-    resp = Response({
-        "ok": True,
-        "user_id": user.id,
-        "username": user.username,
-        "host": host,
-        "stop": False,
-        "stop_until": None,
-    })
-    secure = request.is_secure()
-    resp.set_cookie("mavops_username", user.username, samesite="Lax", secure=secure, httponly=False)
-    resp.set_cookie("mavops_host", host, samesite="Lax", secure=secure, httponly=False)
-    return resp
-
-@api_view(["POST", "OPTIONS"])
-@permission_classes([AllowAny])
-def browser_hello(request):
-    """
-    Lightweight browser-only handshake to set a signed identity hint cookie for /whoami.
-    Body: { "username": "dan", "host": "MacBook-Pro" (optional) }
-
-    NOTE: This NO LONGER creates shadow users. It's strictly a client hint.
-    """
-    if request.method == "OPTIONS":
-        return Response(status=200)
-
-    # Parse body safely
-    try:
-        body = request.data if isinstance(request.data, dict) else json.loads(request.body.decode("utf-8") or "{}")
-    except Exception:
-        body = {}
-
-    username = (body.get("username") or "").strip()
-    host = (body.get("host") or "").strip() or "browser"
-
-    if not username:
-        return Response({"ok": False, "error": "missing-username"}, status=400)
-
-    # Build signed bundle cookie (HINT ONLY — not auth)
-    bundle = {"username": username, "host": host, "ts": timezone.now().isoformat()}
-    signed = signing.dumps(bundle)
-
-    resp = Response({"ok": True, "username": username, "host": host, "source": "browser"})
-    secure = request.is_secure()  # ensure True in prod behind HTTPS
-
-    # Preferred: single signed cookie
-    resp.set_cookie(
-        COOKIE_BUNDLE,
-        signed,
-        max_age=60 * 60 * 24 * 14,  # 14 days
-        samesite="Lax",
-        secure=secure,
-        httponly=False,  # SPA can read; it's only a hint
-        path="/",
-    )
-
-    # (Optional) legacy plain cookies — safe to delete later
-    resp.set_cookie(COOKIE_USER_KEY, username, samesite="Lax", secure=secure, httponly=False, path="/")
-    resp.set_cookie(COOKIE_HOST_KEY, host,     samesite="Lax", secure=secure, httponly=False, path="/")
-
-    return resp
 
 # tracker/views.py
 from django.core import signing
@@ -3841,13 +3760,6 @@ def agents_pair_claim(request):
         "username": pc.user.username,
         "hostname": dev.hostname,
     }, status=200)
-
-# views.py (TEMP ONLY FOR DEV!)
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def agents_pair_issue_dev_open(request):
-    code = AgentPairCode.issue(User.objects.first(), ttl_seconds=600)  # pick a test user
-    return Response({"ok": True, "code": code.code, "expires_at": code.expires_at.isoformat(), "ttl_seconds": 600})
 
 
 
@@ -4482,17 +4394,20 @@ def complete_onboarding(request):
     })
 
 
-@api_view(["GET"])  # ← Change from POST to GET
+@api_view(["GET"])
 @authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([PermUI])
 def today_time(request):
     """
     Get today's tracked time organized by client → category.
     Uses union-of-spans to avoid double-counting overlapping blocks.
+    
+    ✅ NO COMPACTION - this is a read-only endpoint!
     """
     from datetime import date
     from collections import defaultdict
     
+    # ✅ Just get user - don't compact on every read!
     user = request.user
     today = date.today()
     
@@ -4544,7 +4459,13 @@ def today_time(request):
     for block in blocks:
         client_name = block.client.name if block.client else 'Unassigned'
         client_id = block.client.id if block.client else None
-        category = block.ai_category or 'Uncategorized'
+        
+        # ✅ Use category_hours (JSONField) instead of ai_category
+        if block.category_hours and isinstance(block.category_hours, dict):
+            categories = list(block.category_hours.keys())
+            category = categories[0] if categories else 'Uncategorized'
+        else:
+            category = 'Uncategorized'
         
         data[client_name]['client_id'] = client_id
         data[client_name]['client_name'] = client_name
@@ -4585,3 +4506,496 @@ def today_time(request):
         })
     
     return Response(result)
+
+# ============================================================================
+# VIEW 1: Get Uncategorized Blocks + Dropdown Options
+# ============================================================================
+# backend/api/views/categorization.py
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from django.utils import timezone
+from django.db import transaction
+from collections import defaultdict
+from urllib.parse import urlparse
+from datetime import timedelta
+from .models import Block, Client
+
+
+
+def normalize_url(url):
+    """Normalize URL to base (remove query params, anchors)"""
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip('/')
+    except:
+        return url
+
+
+def get_activity_signature(block):
+    """Get unique signature for an activity"""
+    # Priority 1: URL (for browser activity)
+    if block.url:
+        normalized = normalize_url(block.url)
+        if normalized:
+            return ('url', normalized)
+    
+    # Priority 2: App + window title
+    app = (block.app_name or "").strip().lower()
+    title = (block.window_title or "").strip().lower()
+    
+    # Special handling for idle
+    if app == "idle" or "idle" in title or "uncategorized" in title:
+        return ('idle', 'idle')
+    
+    # Use app + significant part of title
+    title_key = title[:80] if title else ""
+    return ('app', f"{app}:{title_key}")
+
+
+def group_into_sessions(blocks, max_gap_minutes=15, min_idle_minutes=5):
+    """
+    Group blocks into work sessions.
+    
+    Strategy:
+    1. Group all blocks by their "activity signature" (URL/app/title)
+    2. Within each activity, merge blocks that are within max_gap (even with idle between)
+    3. Only break sessions if there's a real context switch or long idle
+    
+    Args:
+        blocks: List of Block objects
+        max_gap_minutes: Max gap between blocks of same activity to still merge (default 15 min)
+        min_idle_minutes: Min idle duration to show separately (default 5 min)
+    
+    Returns:
+        List of sessions (each session is a list of blocks)
+    """
+    if not blocks:
+        return []
+    
+    # Step 1: Group blocks by activity signature
+    activity_groups = defaultdict(list)
+    for block in blocks:
+        sig = get_activity_signature(block)
+        activity_groups[sig].append(block)
+    
+    # Step 2: Within each activity, create sessions
+    sessions = []
+    
+    for signature, activity_blocks in activity_groups.items():
+        # Skip pure idle blocks (only include long idle periods)
+        if signature == ('idle', 'idle'):
+            for block in activity_blocks:
+                if block.minutes >= min_idle_minutes:
+                    sessions.append([block])
+            continue
+        
+        # Sort blocks by time
+        activity_blocks.sort(key=lambda b: b.start)
+        
+        # Merge blocks within max_gap
+        current_session = [activity_blocks[0]]
+        
+        for i in range(1, len(activity_blocks)):
+            prev_block = current_session[-1]
+            curr_block = activity_blocks[i]
+            
+            gap_minutes = (curr_block.start - prev_block.end).total_seconds() / 60.0
+            
+            # Merge if gap is small enough
+            if gap_minutes <= max_gap_minutes:
+                current_session.append(curr_block)
+            else:
+                # Gap too large, start new session
+                sessions.append(current_session)
+                current_session = [curr_block]
+        
+        # Don't forget last session
+        if current_session:
+            sessions.append(current_session)
+    
+    # Step 3: Sort sessions by start time
+    sessions.sort(key=lambda s: s[0].start)
+    
+    return sessions
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_categorization_data(request):
+    """Get uncategorized blocks for manual categorization"""
+    from datetime import datetime  # ✅ Add this line
+    
+    date_str = request.GET.get('date', timezone.now().date().isoformat())
+    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    
+    # ✅ CRITICAL: Filter for UNCATEGORIZED blocks only
+    blocks = Block.objects.filter(
+        user=request.user,
+        day=target_date,
+        is_categorized=False  # ✅ Add this line if missing!
+    ).order_by('start')
+
+    user = request.user
+    date_str = request.GET.get('date')
+    limit = int(request.GET.get('limit', 500))
+    
+    # Get date
+    if date_str:
+        from django.utils.dateparse import parse_date
+        target_date = parse_date(date_str)
+    else:
+        target_date = timezone.localdate()
+    
+    # Get org
+    org = user.groups.first()
+    if not org:
+        from django.contrib.auth.models import Group
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    # Get uncategorized blocks for the day
+    blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        is_categorized=False
+    ).select_related('client').order_by('start')[:limit]
+    
+    original_count = len(blocks)
+    
+    # Group into sessions with aggressive merging
+    sessions = group_into_sessions(list(blocks), max_gap_minutes=15, min_idle_minutes=5)
+    
+    blocks_data = []
+    for session in sessions:
+        first_block = session[0]
+        last_block = session[-1]
+        total_minutes = sum(b.minutes for b in session)
+        block_ids = [b.id for b in session]
+        
+        # Calculate span (wall clock time)
+        span_minutes = (last_block.end - first_block.start).total_seconds() / 60.0
+        
+        blocks_data.append({
+            'id': first_block.id,
+            'block_ids': block_ids,
+            'block_count': len(session),
+            'start': first_block.start.isoformat(),
+            'end': last_block.end.isoformat(),
+            'duration_minutes': total_minutes,
+            'span_minutes': round(span_minutes, 1),
+            'app_name': first_block.app_name or '',
+            'window_title': first_block.window_title or '',
+            'url': first_block.url or '',
+            'file_path': first_block.file_path or '',
+            'current_client': first_block.client.name if first_block.client else None,
+            'current_client_id': first_block.client.id if first_block.client else None,
+            'suggestions': [],  # No AI for now
+        })
+    
+    # Get list of clients for dropdown
+    clients = Client.objects.filter(
+        org=org,
+        is_active=True
+    ).order_by('name').values('id', 'name', 'code')
+    
+    clients_list = [
+        {
+            'id': c['id'],
+            'name': c['name'],
+            'code': c['code'] or c['name'][:4].upper(),
+        }
+        for c in clients
+    ]
+    
+    return Response({
+        'date': target_date.isoformat(),
+        'blocks': blocks_data,
+        'clients': clients_list,
+        'categories': CPA_CATEGORIES,  # ✅ DON'T SORT - keep your ordering!
+        'stats': {
+            'uncategorized_count': len(blocks_data),
+            'total_minutes': sum(b['duration_minutes'] for b in blocks_data),
+            'original_block_count': original_count,
+            'merge_ratio': f"{original_count} blocks → {len(blocks_data)} sessions"
+        }
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@transaction.atomic
+def save_categorization(request):
+    """
+    Save manual categorization for a block or group of blocks.
+    
+    Body:
+    {
+        "block_id": 123,
+        "block_ids": [123, 124, 125],
+        "client_id": 456,
+        "category": "Tax Preparation",
+        "notes": "Working on returns"
+    }
+    """
+    user = request.user
+    data = request.data
+    
+    # Get block ID(s)
+    block_id = data.get('block_id')
+    block_ids = data.get('block_ids', [block_id] if block_id else [])
+    
+    if not block_ids:
+        return Response(
+            {'error': 'block_id or block_ids is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get org
+    org = user.groups.first()
+    if not org:
+        from django.contrib.auth.models import Group
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    # Get client (if provided)
+    client = None
+    client_id = data.get('client_id')
+    if client_id:
+        try:
+            client = Client.objects.get(id=client_id, org=org)
+        except Client.DoesNotExist:
+            return Response(
+                {'error': f'Client {client_id} not found'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    # Validate category
+    category = data.get('category', '').strip()
+    if not category:
+        return Response(
+            {'error': 'category is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if category not in CPA_CATEGORIES:
+        return Response(
+            {'error': f'Invalid category: {category}', 'valid_categories': CPA_CATEGORIES},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get notes
+    notes = data.get('notes', '').strip()
+    
+    # Apply categorization to all blocks in the group
+    # In tracker/views.py, update save_categorization:
+
+    # Apply categorization to all blocks in the group
+    updated_blocks = []
+    skipped_blocks = []
+    
+    for bid in block_ids:
+        try:
+            block = Block.objects.select_for_update().get(id=bid, user=user)
+            
+            if block.is_categorized:
+                skipped_blocks.append(bid)
+                continue  # Skip already categorized
+            
+            # Calculate hours
+            hours = round(block.minutes / 60.0, 2)
+            
+            # Update block
+            block.client = client
+            block.category_hours = {category: hours}
+            block.is_categorized = True
+            block.categorized_at = timezone.now()
+            block.categorized_by = 'manual'
+            
+            if notes:
+                block.notes = notes
+            
+            # ✅ CRITICAL: Add force_update=True to bypass protection
+            block.save(force_update=True)
+            updated_blocks.append(block)
+                    
+        except Block.DoesNotExist:
+            skipped_blocks.append(bid)
+
+    # ✅ Better response handling
+    if not updated_blocks and skipped_blocks:
+        return Response({
+            'success': True,
+            'message': f'All {len(skipped_blocks)} block(s) already categorized',
+            'updated_count': 0,
+            'skipped_count': len(skipped_blocks),
+            'already_categorized': True
+        })
+
+    if not updated_blocks:
+        return Response(
+            {'error': 'No blocks found or updated'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    return Response({
+        'success': True,
+        'message': f'Categorized {len(updated_blocks)} block(s) successfully',
+        'updated_count': len(updated_blocks),
+        'skipped_count': len(skipped_blocks),
+        'block': {
+            'client': client.name if client else None,
+            'category': category,
+            'total_hours': round(sum(b.minutes for b in updated_blocks) / 60.0, 2),
+        }
+    })
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@transaction.atomic
+def bulk_categorize(request):
+    """
+    Categorize multiple blocks at once.
+    
+    Body:
+    {
+        "blocks": [
+            {"block_id": 123, "client_id": 456, "category": "Tax Preparation"},
+            {"block_id": 124, "client_id": 456, "category": "Email/Communication"}
+        ]
+    }
+    """
+    user = request.user
+    blocks_data = request.data.get('blocks', [])
+    
+    if not blocks_data or not isinstance(blocks_data, list):
+        return Response(
+            {'error': 'blocks array is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get org
+    org = user.groups.first()
+    if not org:
+        from django.contrib.auth.models import Group
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    results = {
+        'success_count': 0,
+        'error_count': 0,
+        'errors': []
+    }
+    
+    for item in blocks_data:
+        try:
+            block_id = item.get('block_id')
+            if not block_id:
+                results['errors'].append({'block_id': None, 'error': 'block_id missing'})
+                results['error_count'] += 1
+                continue
+            
+            # Get block
+            block = Block.objects.select_for_update().get(
+                id=block_id,
+                user=user,
+                is_categorized=False
+            )
+            
+            # Set client
+            client_id = item.get('client_id')
+            if client_id:
+                client = Client.objects.get(id=client_id, org=org)
+                block.client = client
+            
+            # Set category
+            category = item.get('category', '').strip()
+            if not category:
+                results['errors'].append({'block_id': block_id, 'error': 'category missing'})
+                results['error_count'] += 1
+                continue
+            
+            if category not in CPA_CATEGORIES:
+                results['errors'].append({'block_id': block_id, 'error': f'invalid category: {category}'})
+                results['error_count'] += 1
+                continue
+            
+            # Calculate hours
+            hours = round(block.minutes / 60.0, 2)
+            
+            # Save
+            block.category_hours = {category: hours}
+            block.is_categorized = True
+            block.categorized_at = timezone.now()
+            block.categorized_by = 'manual'
+            block.save()
+            
+            results['success_count'] += 1
+            
+        except Block.DoesNotExist:
+            results['errors'].append({'block_id': block_id, 'error': 'block not found or already categorized'})
+            results['error_count'] += 1
+        except Client.DoesNotExist:
+            results['errors'].append({'block_id': block_id, 'error': f'client {client_id} not found'})
+            results['error_count'] += 1
+        except Exception as e:
+            results['errors'].append({'block_id': block_id, 'error': str(e)})
+            results['error_count'] += 1
+    
+    return Response({
+        'success': results['success_count'] > 0,
+        'message': f"Categorized {results['success_count']} blocks, {results['error_count']} errors",
+        'results': results
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def category_stats(request):
+    """
+    Get category usage statistics for the user.
+    Shows which categories are used most often.
+    
+    Query params:
+    - days: lookback period (default 30)
+    """
+    user = request.user
+    days = int(request.GET.get('days', 30))
+    
+    cutoff = timezone.now() - timedelta(days=days)
+    
+    # Get categorized blocks
+    blocks = Block.objects.filter(
+        user=user,
+        start__gte=cutoff,
+        is_categorized=True
+    ).select_related('client')
+    
+    # Calculate stats
+    by_category = defaultdict(lambda: {'count': 0, 'hours': 0.0, 'clients': set()})
+    
+    for block in blocks:
+        if block.category_hours:
+            for category, hours in block.category_hours.items():
+                by_category[category]['count'] += 1
+                by_category[category]['hours'] += float(hours)
+                if block.client:
+                    by_category[category]['clients'].add(block.client.name)
+    
+    # Format results
+    stats = []
+    for category, data in sorted(by_category.items(), key=lambda x: x[1]['hours'], reverse=True):
+        stats.append({
+            'category': category,
+            'block_count': data['count'],
+            'total_hours': round(data['hours'], 2),
+            'avg_hours_per_block': round(data['hours'] / data['count'], 2) if data['count'] > 0 else 0,
+            'clients_using': list(data['clients']),
+        })
+    
+    return Response({
+        'period_days': days,
+        'total_categories': len(stats),
+        'stats': stats
+    })

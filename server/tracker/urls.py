@@ -24,6 +24,13 @@ urlpatterns = [
     path("context/reject", views.context_reject, name="context_reject"),
     # path('bulk-assign/', views.dbulk_assign_current_client, name='bulk_assign_current_client'),
 
+    # Manual categorization endpoints
+    path("categorization/data/", views.get_categorization_data, name='categorization-data'),
+    path("categorization/save/", views.save_categorization, name='categorization-save'),
+    path("categorization/bulk/", views.bulk_categorize, name='categorization-bulk'),
+    path("categorization/stats/", views.category_stats, name='categorization-stats'),
+ 
+
     # === END NEW ROUTES ===
 
     # 👇 ADD THESE NEW ROUTES:
@@ -34,8 +41,6 @@ urlpatterns = [
 
     path("today-time/", views.today_time, name="today_time"),
 
-    # Optional: browser hint for SPA identity (non-auth)
-    path("browser/hello/", views.browser_hello, name="browser_hello"),
 
     # Device management (web UI)
     path("devices/", views.my_devices, name="my_devices"),
@@ -50,7 +55,6 @@ urlpatterns = [
     # -------------------------------
     path("blocks-today/", views.blocks_today, name="blocks_today"),
     path("blocks/suggestions/", views.ai_suggestions_today, name="ai_suggestions_today"),
-    path("blocks/suggestions/rule-based/", views.suggestions_today, name="suggestions_today"),
     path("blocks/<int:block_id>/classify/", views.save_block_classification, name="save_block_classification"),
     path("recent-blocks/", views.recent_classified_blocks, name="recent_classified_blocks"),
     path("label-block/", views.label_block, name="label_block"),
@@ -58,12 +62,8 @@ urlpatterns = [
     # -------------------------------
     # Timecards
     # -------------------------------
-    path("timecards/generate/", views.generate_timecard, name="generate_timecard"),
-    path("timecards/", views.list_timecards, name="list_timecards"),
-    path("timecards/summary/", views.timecard_summary, name="timecard_summary"),
     path("timecards/summary/day/", views.timecards_summary_day, name="timecards_summary_day"),
-    path("timecards/<int:timecard_id>/approve/", views.approve_timecard, name="approve_timecard"),
-    path("timecards/<int:timecard_id>/reject/", views.reject_timecard, name="reject_timecard"),
+
 
     # -------------------------------
     # Organization / Settings

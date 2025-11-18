@@ -1,262 +1,436 @@
-import { useMemo, useState } from "react";
-import { BlockDto } from "../types";
-import { labelBlock } from "../api/blocks";
+/**
+ * BlockCard.tsx - Individual block categorization card with session span info
+ * Place in: frontend/src/components/BlockCard.tsx
+ */
 
-// ----- helpers (mirror DailyReview) -----
-function isIdle(b: BlockDto) {
-  const t = (b.window_title || (b as any).title || "").trim();
-  return (b as any).bundle_id === "__idle__" || (b as any).app_name === "Idle" || t === "Uncategorized - Idle";
-}
-function isIdleOnlyCats(cats?: Record<string, number> | null) {
-  if (!cats) return false;
-  const keys = Object.keys(cats);
-  return keys.length === 1 && keys[0].trim().toLowerCase() === "uncategorized - idle";
-}
-function cleanName(v?: string | null) {
-  if (!v) return "";
-  const t = String(v).trim();
-  if (!t) return "";
-  const BAD = new Set(["none", "unassigned", "—", "-", "(none)"]);
-  if (BAD.has(t.toLowerCase())) return "";
-  return t.slice(0, 120);
-}
-function sanitizeCategories(obj: Record<string, any> | undefined | null) {
-  const out: Record<string, number> = {};
-  if (!obj) return out;
-  for (const [k, v] of Object.entries(obj)) {
-    if (v == null) continue;
-    const s = String(v).toLowerCase().replace(/h(rs)?$/i, "").trim();
-    const num = Number(s);
-    if (Number.isFinite(num) && num >= 0) out[String(k).trim()] = num;
-  }
-  return out;
+import { useState } from 'react';
+import { Clock, CheckCircle2, AlertCircle, Edit3, Save, X, Timer } from 'lucide-react';
+
+interface Suggestion {
+  client: string;
+  category: string;
+  confidence: number;
 }
 
-// simple UI helpers for a tiny categories editor
-function stringifyCats(cats?: Record<string, number>) {
-  if (!cats) return "";
-  return Object.entries(cats).map(([k, v]) => `${k}=${v}`).join(", ");
-}
-function parseCats(input: string) {
-  const out: Record<string, number> = {};
-  input.split(",").forEach(part => {
-    const [kRaw, vRaw] = part.split("=").map(s => (s || "").trim());
-    if (!kRaw) return;
-    const num = Number((vRaw || "0").toLowerCase().replace(/h(rs)?$/i, ""));
-    if (Number.isFinite(num) && num >= 0) out[kRaw] = num;
-  });
-  return out;
+interface Block {
+  id: number;
+  block_ids?: number[];
+  block_count?: number;
+  span_minutes?: number;  // Total wall-clock time
+  start: string;
+  end: string;
+  duration_minutes: number;  // Active time
+  app_name: string;
+  window_title: string;
+  url: string;
+  file_path: string;
+  current_client: string | null;
+  current_client_id: number | null;
+  suggestions?: Suggestion[];
 }
 
-type Props = {
-  block: BlockDto & {
-    client_name?: string | null;
-    project_name?: string | null;
-    categories?: Record<string, number>;
-    ai_confidence?: number;
-    ai_suggestion?: any;
-  };
-  onLabeled: (updatedData: any, originalSuggestion?: any) => void;
-};
+interface Client {
+  id: number;
+  name: string;
+  code: string;
+}
 
-export default function BlockCard({ block, onLabeled }: Props) {
+interface BlockCardProps {
+  block: Block;
+  clients: Client[];
+  categories: string[];
+  onCategorize: (
+    blockId: number, 
+    blockIds: number[], 
+    clientId: number | null, 
+    category: string, 
+    notes?: string
+  ) => Promise<any>;
+}
+
+const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps) => {
   const [isEditing, setIsEditing] = useState(false);
+  const [selectedClient, setSelectedClient] = useState<string>(block.current_client_id?.toString() || '');
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [notes, setNotes] = useState<string>('');
+  const [saving, setSaving] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
 
-  // seed from normalized fields first
-  const [client, setClient] = useState(block.client_name || block.client || "");
-  const [project, setProject] = useState(block.project_name || block.project || "");
-  const [notes, setNotes] = useState((block as any).notes || "");
-  const [catsStr, setCatsStr] = useState(stringifyCats(block.categories));
+  const blockIds = block.block_ids || [block.id];
+  const isMerged = (block.block_count || 1) > 1;
+  
+  // Check if there's a significant span (gaps/idle between blocks)
+  const hasSignificantSpan = block.span_minutes && 
+    block.span_minutes > block.duration_minutes * 1.2; // 20% difference
 
-  const [busy, setBusy] = useState(false);
-
-  const urlDomain = useMemo(() => {
-    if (!block.url) return null;
-    try { return new URL(block.url).hostname; } catch { return null; }
-  }, [block.url]);
-
-  const displayTitle = block.window_title || (block as any).title || "Unknown Activity";
-  const idleLike = isIdle(block) || isIdleOnlyCats(block.categories);
-
-  const confidenceColor =
-    !block.ai_confidence ? "border-gray-200" :
-    block.ai_confidence >= 0.8 ? "border-green-200 bg-green-50" :
-    block.ai_confidence >= 0.5 ? "border-yellow-200 bg-yellow-50" :
-    "border-red-200 bg-red-50";
-
-  const handleConfirm = async () => {
-    // skip sending idle-only to backend
-    const cats = sanitizeCategories(parseCats(catsStr));
-    const isIdleCats = isIdleOnlyCats(cats) || idleLike;
-
-    // build payload expected by backend label_block
-    const payload: any = { block_id: block.id };
-    const c = cleanName(client);
-    const p = cleanName(project);
-
-    if (c) payload.client = c;
-    if (p) payload.project = p;
-    if (Object.keys(cats).length > 0) payload.categories = cats;
-    if (notes) payload.notes = notes;
-
-    // If it's purely idle, don't POST; just bubble up so UI updates
-    if (isIdleCats) {
-      onLabeled(
-        { client_name: "", project_name: "", category_hours: { "Uncategorized - Idle": (block.minutes || 0) / 60 } },
-        block.ai_suggestion || null
-      );
+  const handleQuickSave = async () => {
+    if (!selectedCategory) {
+      setLocalError('Please select a category');
       return;
     }
 
-    setBusy(true);
+    setSaving(true);
+    setLocalError(null);
+
     try {
-      await labelBlock(payload); // must hit /api/label-block/
-      onLabeled(
-        { client_name: c || "", project_name: p || "", category_hours: cats },
-        block.ai_suggestion || null
+      await onCategorize(
+        block.id,
+        blockIds,
+        selectedClient ? parseInt(selectedClient) : null,
+        selectedCategory,
+        notes || undefined
       );
+      // Success - parent will refresh
+    } catch (error: any) {
+      setLocalError(error.message || 'Failed to save categorization');
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   };
 
-  const handleSave = async () => {
-    await handleConfirm();
-    setIsEditing(false);
+  const handleEditSave = async () => {
+    await handleQuickSave();
+    if (!localError) {
+      setIsEditing(false);
+    }
   };
 
+  const handleUseSuggestion = (suggestion: Suggestion) => {
+    if (suggestion.client) {
+      const client = clients.find(c => c.name === suggestion.client);
+      if (client) {
+        setSelectedClient(client.id.toString());
+      }
+    }
+    if (suggestion.category) {
+      setSelectedCategory(suggestion.category);
+    }
+  };
+
+  const formatTime = (dateStr: string) => {
+    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const urlDomain = block.url ? (() => {
+    try {
+      return new URL(block.url).hostname;
+    } catch {
+      return null;
+    }
+  })() : null;
+
+  // Check if this is an idle block
+  const isIdle = block.app_name?.toLowerCase() === 'idle' || 
+                 block.window_title?.toLowerCase().includes('idle');
+
   return (
-    <div className={`border rounded-lg p-4 space-y-3 ${confidenceColor}`}>
-      {/* Header: Time + Duration */}
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-gray-900">
-          {new Date(block.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{" – "}
-          {new Date(block.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-        </h3>
-        <div className="text-sm font-medium text-gray-600">{block.minutes} min</div>
-      </div>
-
-      {/* Activity */}
-      <div className="text-base font-medium text-gray-800">{displayTitle}</div>
-
-      {/* Domain/URL */}
-      {urlDomain && <div className="text-sm text-gray-600">🌐 {urlDomain}</div>}
-      {block.url && (
-        <a href={block.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline truncate block">
-          {block.url}
-        </a>
-      )}
-      {(block as any).file_path && (
-        <div className="text-xs text-gray-500 font-mono">📄 {(block as any).file_path}</div>
-      )}
-
-      {/* Idle badge */}
-      {idleLike && (
-        <div className="inline-flex items-center gap-2 px-2 py-1 rounded-full border border-gray-300 text-xs text-gray-700 bg-gray-50">
-          💤 Idle/Away
+    <div className={`border rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow ${
+      isIdle ? 'border-gray-300 bg-gray-50' : 'border-border bg-card'
+    }`}>
+      {/* Time info header */}
+      <div className="flex justify-between items-start mb-4 pb-4 border-b border-border">
+        <div className="flex-1">
+          <div className="text-sm text-muted-foreground flex items-center gap-2 flex-wrap">
+            <Clock className="w-4 h-4" />
+            <span>{formatTime(block.start)} - {formatTime(block.end)}</span>
+            
+            {isMerged && (
+              <span className="px-2 py-0.5 bg-primary/20 text-primary text-xs font-semibold rounded">
+                {block.block_count} blocks merged
+              </span>
+            )}
+            
+            {isIdle && (
+              <span className="px-2 py-0.5 bg-gray-300 text-gray-700 text-xs font-semibold rounded">
+                💤 Idle
+              </span>
+            )}
+          </div>
+          
+          <div className="text-xs text-muted-foreground mt-2 space-y-1">
+            <div className="flex items-center gap-2">
+              <Timer className="w-3 h-3" />
+              <span className="font-semibold">{block.duration_minutes} minutes active</span>
+            </div>
+            
+            {hasSignificantSpan && (
+              <div className="flex items-center gap-2 text-yellow-600">
+                <Clock className="w-3 h-3" />
+                <span>
+                  Spanning {Math.round(block.span_minutes!)} min total 
+                  <span className="text-xs ml-1">
+                    (includes breaks/idle)
+                  </span>
+                </span>
+              </div>
+            )}
+          </div>
         </div>
-      )}
-
-      {/* Display pills */}
-      {!isEditing && (client || project || (block.categories && Object.keys(block.categories).length > 0)) && (
-        <div className="flex flex-wrap gap-2 items-center pt-2">
-          {client && <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">👤 {client}</span>}
-          {project && <span className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">📁 {project}</span>}
-          {block.categories && Object.entries(block.categories).map(([k, v]) => (
-            <span key={k} className="px-2 py-1 bg-gray-100 text-gray-800 rounded-full text-xs font-medium">
-              {k}: {Number(v).toFixed(2)}h
-            </span>
-          ))}
-          {block.ai_confidence! > 0 && (
-            <span className="text-xs text-gray-500">{Math.round((block.ai_confidence || 0) * 100)}% confident</span>
+        
+        <div className="text-right ml-4">
+          <div className="text-2xl font-bold text-primary">
+            {(block.duration_minutes / 60).toFixed(2)}h
+          </div>
+          {hasSignificantSpan && (
+            <div className="text-xs text-muted-foreground mt-1">
+              {(block.span_minutes! / 60).toFixed(1)}h span
+            </div>
           )}
         </div>
-      )}
+      </div>
 
-      {/* Edit Mode */}
-      {isEditing && (
-        <div className="space-y-3 pt-3 border-t">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-gray-700 block mb-1">Client</label>
-              <input
-                value={client}
-                onChange={(e) => setClient(e.target.value)}
-                placeholder="Client name"
-                className="w-full border rounded px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-700 block mb-1">Project</label>
-              <input
-                value={project}
-                onChange={(e) => setProject(e.target.value)}
-                placeholder="Project name"
-                className="w-full border rounded px-3 py-2 text-sm"
-              />
-            </div>
+      {/* Activity details */}
+      <div className="mb-4 space-y-2">
+        {block.app_name && (
+          <div className="text-sm flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[60px]">App:</span>
+            <span className="text-foreground font-medium">{block.app_name}</span>
           </div>
-
-          <div>
-            <label className="text-xs font-medium text-gray-700 block mb-1">Categories (Name=Hours, comma separated)</label>
-            <input
-              value={catsStr}
-              onChange={(e) => setCatsStr(e.target.value)}
-              placeholder='Email=0.5, Meetings=1.25'
-              className="w-full border rounded px-3 py-2 text-sm"
-            />
+        )}
+        {block.window_title && (
+          <div className="text-sm flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[60px]">Title:</span>
+            <span className="text-foreground">{block.window_title}</span>
           </div>
+        )}
+        {urlDomain && (
+          <div className="text-sm flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[60px]">Domain:</span>
+            <span className="text-foreground">🌐 {urlDomain}</span>
+          </div>
+        )}
+        {block.url && !urlDomain && (
+          <div className="text-sm flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[60px]">URL:</span>
+            <a 
+              href={block.url} 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-primary hover:underline break-all text-xs"
+            >
+              {block.url}
+            </a>
+          </div>
+        )}
+        {block.file_path && (
+          <div className="text-sm flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[60px]">File:</span>
+            <span className="text-foreground break-all font-mono text-xs">📄 {block.file_path}</span>
+          </div>
+        )}
+      </div>
 
-          <div>
-            <label className="text-xs font-medium text-gray-700 block mb-1">Notes</label>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Add notes..."
-              className="w-full border rounded px-3 py-2 text-sm"
-              rows={2}
-            />
+      {/* AI Suggestions */}
+      {block.suggestions && block.suggestions.length > 0 && (
+        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <div className="text-sm font-semibold text-yellow-900 mb-2 flex items-center gap-2">
+            💡 AI Suggestions
+          </div>
+          <div className="space-y-2">
+            {block.suggestions.map((suggestion, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleUseSuggestion(suggestion)}
+                disabled={saving}
+                className="text-sm text-left w-full hover:bg-yellow-100 p-2 rounded transition-colors flex items-center justify-between disabled:opacity-50"
+              >
+                <div>
+                  {suggestion.client && <span className="font-semibold text-yellow-900">{suggestion.client}</span>}
+                  {suggestion.category && <span className="text-yellow-800"> → {suggestion.category}</span>}
+                </div>
+                <span className="text-xs text-yellow-600 font-medium">
+                  {(suggestion.confidence * 100).toFixed(0)}% confident
+                </span>
+              </button>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Action Buttons */}
-      <div className="flex gap-2 pt-3">
-        {!isEditing ? (
-          <>
+      {/* Local Error */}
+      {localError && (
+        <div className="mb-4 bg-destructive/10 border border-destructive/30 rounded-lg p-3 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
+          <span className="text-sm text-destructive">{localError}</span>
+        </div>
+      )}
+
+      {/* Categorization form */}
+      {!isEditing ? (
+        // Quick categorization mode
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Client selector */}
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                Client <span className="text-muted-foreground font-normal">(Optional)</span>
+              </label>
+              <select
+                value={selectedClient}
+                onChange={(e) => setSelectedClient(e.target.value)}
+                className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                disabled={saving}
+              >
+                <option value="">-- Select Client --</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.name} {client.code && `(${client.code})`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Category selector */}
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                Category <span className="text-destructive">*</span>
+              </label>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                required
+                disabled={saving}
+              >
+                <option value="">-- Select Category --</option>
+                {categories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex gap-3">
             <button
-              onClick={handleConfirm}
-              disabled={busy}
-              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-medium rounded-lg px-4 py-2 text-sm"
+              onClick={handleQuickSave}
+              disabled={!selectedCategory || saving}
+              className={`flex-1 px-6 py-3 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
+                selectedCategory && !saving
+                  ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm hover:shadow-md'
+                  : 'bg-muted text-muted-foreground cursor-not-allowed'
+              }`}
             >
-              {busy ? "Saving..." : idleLike ? "✓ Confirm (Idle only)" : "✓ Confirm"}
+              {saving ? (
+                <>
+                  <Clock className="w-5 h-5 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-5 h-5" />
+                  ✓ Confirm
+                </>
+              )}
             </button>
             <button
               onClick={() => setIsEditing(true)}
-              className="px-4 py-2 border border-gray-300 hover:bg-gray-50 rounded-lg text-sm font-medium"
+              disabled={saving}
+              className="px-6 py-3 border border-border rounded-lg font-semibold hover:bg-accent transition-colors flex items-center gap-2"
             >
-              ✏️ Edit
+              <Edit3 className="w-4 h-4" />
+              Edit
             </button>
-          </>
-        ) : (
-          <>
+          </div>
+        </div>
+      ) : (
+        // Edit mode with notes
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Client selector */}
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                Client <span className="text-muted-foreground font-normal">(Optional)</span>
+              </label>
+              <select
+                value={selectedClient}
+                onChange={(e) => setSelectedClient(e.target.value)}
+                className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                disabled={saving}
+              >
+                <option value="">-- Select Client --</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.name} {client.code && `(${client.code})`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Category selector */}
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                Category <span className="text-destructive">*</span>
+              </label>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                required
+                disabled={saving}
+              >
+                <option value="">-- Select Category --</option>
+                {categories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Notes field */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Notes <span className="text-muted-foreground font-normal">(Optional)</span>
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Add any notes about this time block..."
+              className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary min-h-[80px]"
+              disabled={saving}
+            />
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex gap-3">
             <button
-              onClick={handleSave}
-              disabled={busy}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium rounded-lg px-4 py-2 text-sm"
+              onClick={handleEditSave}
+              disabled={!selectedCategory || saving}
+              className={`flex-1 px-6 py-3 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
+                selectedCategory && !saving
+                  ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm hover:shadow-md'
+                  : 'bg-muted text-muted-foreground cursor-not-allowed'
+              }`}
             >
-              {busy ? "Saving..." : "Save Changes"}
+              {saving ? (
+                <>
+                  <Clock className="w-5 h-5 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="w-5 h-5" />
+                  Save Changes
+                </>
+              )}
             </button>
             <button
               onClick={() => setIsEditing(false)}
-              disabled={busy}
-              className="px-4 py-2 border border-gray-300 hover:bg-gray-50 rounded-lg text-sm font-medium"
+              disabled={saving}
+              className="px-6 py-3 border border-border rounded-lg font-semibold hover:bg-accent transition-colors flex items-center gap-2"
             >
+              <X className="w-4 h-4" />
               Cancel
             </button>
-          </>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
+};
+
+export default BlockCard;

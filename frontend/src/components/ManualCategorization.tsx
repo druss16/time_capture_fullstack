@@ -1,6 +1,5 @@
 /**
- * ManualCategorization.tsx - Manual time block categorization interface
- * Complete working version with local timezone date handling
+ * ManualCategorization.tsx - Compact manual time block categorization interface
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -9,8 +8,6 @@ import BlockCard from './BlockCard';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
-
-console.log('🔵 API_BASE:', API_BASE);
 
 interface Suggestion {
   client: string;
@@ -57,13 +54,11 @@ interface ManualCategorizationProps {
   onComplete?: () => void;
 }
 
-// Helper to get CSRF token
 const getCsrfToken = (): string => {
   const token = document.cookie
     .split('; ')
     .find(row => row.startsWith('csrftoken='))
     ?.split('=')[1];
-  console.log('🔵 CSRF Token:', token ? 'Found' : 'NOT FOUND');
   return token || '';
 };
 
@@ -73,10 +68,9 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // ✅ Fixed: Use local timezone for today's date (not UTC)
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
-    return today.toLocaleDateString('en-CA'); // YYYY-MM-DD format in local timezone
+    return today.toLocaleDateString('en-CA');
   });
   
   const [error, setError] = useState<string | null>(null);
@@ -88,31 +82,22 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
       setError(null);
       
       const url = `${API_BASE}/categorization/data/?date=${selectedDate}`;
-      console.log('🔵 Fetching categorization data from:', url);
-      
       const response = await fetch(url, {
         credentials: 'include',
       });
-      
-      console.log('🔵 Categorization data response status:', response.status);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
 
       const data: CategorizationData = await response.json();
-      console.log('🔵 Categorization data received:', {
-        blocks: data.blocks?.length,
-        clients: data.clients?.length,
-        categories: data.categories?.length
-      });
       
       setBlocks(data.blocks || []);
       setClients(data.clients || []);
       setCategories(data.categories || []);
       setStats(data.stats || null);
     } catch (error: any) {
-      console.error('🔴 Failed to load data:', error);
+      console.error('Failed to load data:', error);
       setError(error.message || 'Failed to load blocks');
     } finally {
       setLoading(false);
@@ -130,14 +115,6 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
     category: string, 
     notes?: string
   ) => {
-    console.log('🔵 categorizeBlock CALLED:', {
-      blockId,
-      blockIds,
-      clientId,
-      category,
-      notes
-    });
-
     try {
       const url = `${API_BASE}/categorization/save/`;
       const csrfToken = getCsrfToken();
@@ -150,13 +127,6 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
         notes: notes || undefined,
       };
       
-      console.log('🔵 About to POST to:', url);
-      console.log('🔵 Payload:', payload);
-      console.log('🔵 Headers:', {
-        'Content-Type': 'application/json',
-        'X-CSRFToken': csrfToken ? 'present' : 'MISSING'
-      });
-      
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -167,13 +137,8 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
         body: JSON.stringify(payload)
       });
 
-      console.log('🔵 Response status:', response.status);
-      console.log('🔵 Response ok:', response.ok);
-
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('🔴 Error response:', errorText);
-        
         let errorData;
         try {
           errorData = JSON.parse(errorText);
@@ -184,19 +149,16 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
       }
 
       const result = await response.json();
-      console.log('✅ Categorization successful:', result);
       
-      // Refresh data
       await fetchCategorizationData();
       
-      // Notify parent
       if (onComplete) {
         onComplete();
       }
       
       return result;
     } catch (error: any) {
-      console.error('🔴 categorizeBlock ERROR:', error);
+      console.error('categorizeBlock ERROR:', error);
       setError(error.message || 'Failed to save categorization');
       throw error;
     }
@@ -206,52 +168,52 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <RefreshCw className="w-8 h-8 text-primary animate-spin mr-3" />
-        <span className="text-muted-foreground">Loading blocks...</span>
+      <div className="flex items-center justify-center py-12">
+        <RefreshCw className="w-6 h-6 text-primary animate-spin mr-2" />
+        <span className="text-sm text-muted-foreground">Loading blocks...</span>
       </div>
     );
   }
 
   return (
     <div className="max-w-6xl mx-auto">
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center gap-4 mb-4">
+      {/* Compact Header */}
+      <div className="mb-4">
+        <div className="flex items-center gap-3 mb-3">
           <div className="flex-1">
-            <label className="block text-sm font-medium text-muted-foreground mb-2">
+            <label className="block text-xs font-medium text-muted-foreground mb-1">
               Select Date:
             </label>
             <input
               type="date"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="w-full max-w-xs border border-border rounded-lg px-4 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full max-w-xs border border-border rounded px-3 py-1.5 bg-card text-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
           <button
             onClick={fetchCategorizationData}
             disabled={loading}
-            className="mt-6 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
+            className="mt-5 px-3 py-1.5 bg-primary text-primary-foreground rounded text-sm hover:bg-primary/90 transition-colors flex items-center gap-1.5"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
 
-        {/* Stats */}
-        <div className="bg-gradient-to-r from-primary/10 to-accent/10 border border-primary/30 rounded-lg p-4">
+        {/* Compact Stats */}
+        <div className="bg-gradient-to-r from-primary/10 to-accent/10 border border-primary/30 rounded-lg p-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Clock className="w-6 h-6 text-primary" />
+            <div className="flex items-center gap-2">
+              <Clock className="w-5 h-5 text-primary" />
               <div>
-                <div className="text-2xl font-bold text-foreground">
+                <div className="text-lg font-bold text-foreground">
                   {blocks.length} group{blocks.length !== 1 ? 's' : ''} to categorize
                 </div>
-                <div className="text-sm text-muted-foreground">
+                <div className="text-xs text-muted-foreground">
                   {totalHours} hours total
                   {stats?.original_block_count && stats.original_block_count > blocks.length && (
-                    <span className="ml-2">
+                    <span className="ml-1">
                       ({stats.original_block_count} blocks merged)
                     </span>
                   )}
@@ -260,8 +222,8 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
             </div>
             {blocks.length > 0 && stats && (
               <div className="text-right">
-                <div className="text-sm text-muted-foreground">Average duration</div>
-                <div className="text-lg font-semibold text-primary">
+                <div className="text-xs text-muted-foreground">Avg duration</div>
+                <div className="text-base font-semibold text-primary">
                   {(stats.total_minutes / blocks.length).toFixed(0)} min
                 </div>
               </div>
@@ -272,15 +234,15 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
 
       {/* Error Banner */}
       {error && (
-        <div className="mb-6 bg-destructive/10 border border-destructive/30 rounded-lg p-4 flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0" />
-          <div>
-            <div className="font-semibold text-destructive">Error</div>
-            <div className="text-sm text-destructive/80">{error}</div>
+        <div className="mb-4 bg-destructive/10 border border-destructive/30 rounded p-3 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
+          <div className="flex-1">
+            <div className="font-semibold text-destructive text-sm">Error</div>
+            <div className="text-xs text-destructive/80">{error}</div>
           </div>
           <button
             onClick={() => setError(null)}
-            className="ml-auto text-destructive hover:text-destructive/80"
+            className="text-destructive hover:text-destructive/80 text-lg leading-none"
           >
             ✕
           </button>
@@ -289,19 +251,19 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
 
       {/* Blocks */}
       {blocks.length === 0 ? (
-        <div className="text-center py-16 bg-card border border-border rounded-lg shadow-sm">
-          <div className="w-16 h-16 bg-success/20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <CheckCircle2 className="w-8 h-8 text-success" />
+        <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
+          <div className="w-12 h-12 bg-success/20 rounded-full flex items-center justify-center mx-auto mb-3">
+            <CheckCircle2 className="w-6 h-6 text-success" />
           </div>
-          <p className="text-xl font-semibold text-foreground mb-2">
+          <p className="text-base font-semibold text-foreground mb-1">
             ✨ All blocks categorized!
           </p>
           <p className="text-sm text-muted-foreground">
-            All time blocks for {selectedDate} have been properly categorized.
+            All time blocks for {selectedDate} have been categorized.
           </p>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {blocks.map((block) => (
             <BlockCard
               key={block.id}

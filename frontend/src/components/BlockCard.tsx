@@ -1,5 +1,5 @@
 /**
- * BlockCard.tsx - Individual block categorization card with session span info
+ * BlockCard.tsx - Compact individual block categorization card
  * Place in: frontend/src/components/BlockCard.tsx
  */
 
@@ -16,10 +16,10 @@ interface Block {
   id: number;
   block_ids?: number[];
   block_count?: number;
-  span_minutes?: number;  // Total wall-clock time
+  span_minutes?: number;
   start: string;
   end: string;
-  duration_minutes: number;  // Active time
+  duration_minutes: number;
   app_name: string;
   window_title: string;
   url: string;
@@ -58,10 +58,8 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
 
   const blockIds = block.block_ids || [block.id];
   const isMerged = (block.block_count || 1) > 1;
-  
-  // Check if there's a significant span (gaps/idle between blocks)
   const hasSignificantSpan = block.span_minutes && 
-    block.span_minutes > block.duration_minutes * 1.2; // 20% difference
+    block.span_minutes > block.duration_minutes * 1.2;
 
   const handleQuickSave = async () => {
     if (!selectedCategory) {
@@ -80,7 +78,6 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
         selectedCategory,
         notes || undefined
       );
-      // Success - parent will refresh
     } catch (error: any) {
       setLocalError(error.message || 'Failed to save categorization');
     } finally {
@@ -119,127 +116,103 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
     }
   })() : null;
 
-  // Check if this is an idle block
   const isIdle = block.app_name?.toLowerCase() === 'idle' || 
                  block.window_title?.toLowerCase().includes('idle');
 
   return (
-    <div className={`border rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow ${
+    <div className={`border rounded-lg p-3 shadow-sm hover:shadow transition-shadow ${
       isIdle ? 'border-gray-300 bg-gray-50' : 'border-border bg-card'
     }`}>
-      {/* Time info header */}
-      <div className="flex justify-between items-start mb-4 pb-4 border-b border-border">
+      {/* Compact header with time and duration */}
+      <div className="flex justify-between items-start mb-2 pb-2 border-b border-border">
         <div className="flex-1">
-          <div className="text-sm text-muted-foreground flex items-center gap-2 flex-wrap">
-            <Clock className="w-4 h-4" />
-            <span>{formatTime(block.start)} - {formatTime(block.end)}</span>
+          <div className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
+            <Clock className="w-3 h-3" />
+            <span className="font-medium">{formatTime(block.start)} - {formatTime(block.end)}</span>
             
             {isMerged && (
-              <span className="px-2 py-0.5 bg-primary/20 text-primary text-xs font-semibold rounded">
-                {block.block_count} blocks merged
+              <span className="px-1.5 py-0.5 bg-primary/20 text-primary text-xs font-semibold rounded">
+                {block.block_count} merged
               </span>
             )}
             
             {isIdle && (
-              <span className="px-2 py-0.5 bg-gray-300 text-gray-700 text-xs font-semibold rounded">
+              <span className="px-1.5 py-0.5 bg-gray-300 text-gray-700 text-xs font-semibold rounded">
                 💤 Idle
               </span>
             )}
           </div>
           
-          <div className="text-xs text-muted-foreground mt-2 space-y-1">
-            <div className="flex items-center gap-2">
+          <div className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
+            <span className="flex items-center gap-1">
               <Timer className="w-3 h-3" />
-              <span className="font-semibold">{block.duration_minutes} minutes active</span>
-            </div>
+              <span className="font-medium">{block.duration_minutes} min</span>
+            </span>
             
             {hasSignificantSpan && (
-              <div className="flex items-center gap-2 text-yellow-600">
+              <span className="text-yellow-600 flex items-center gap-1">
                 <Clock className="w-3 h-3" />
-                <span>
-                  Spanning {Math.round(block.span_minutes!)} min total 
-                  <span className="text-xs ml-1">
-                    (includes breaks/idle)
-                  </span>
-                </span>
-              </div>
+                {Math.round(block.span_minutes!)} min span
+              </span>
             )}
           </div>
         </div>
         
-        <div className="text-right ml-4">
-          <div className="text-2xl font-bold text-primary">
+        <div className="text-right ml-3">
+          <div className="text-xl font-bold text-primary">
             {(block.duration_minutes / 60).toFixed(2)}h
           </div>
-          {hasSignificantSpan && (
-            <div className="text-xs text-muted-foreground mt-1">
-              {(block.span_minutes! / 60).toFixed(1)}h span
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Activity details */}
-      <div className="mb-4 space-y-2">
+      {/* Compact activity details */}
+      <div className="mb-2 space-y-1">
         {block.app_name && (
-          <div className="text-sm flex items-start gap-2">
-            <span className="font-medium text-muted-foreground min-w-[60px]">App:</span>
-            <span className="text-foreground font-medium">{block.app_name}</span>
+          <div className="text-xs flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[50px]">App:</span>
+            <span className="text-foreground font-medium truncate">{block.app_name}</span>
           </div>
         )}
         {block.window_title && (
-          <div className="text-sm flex items-start gap-2">
-            <span className="font-medium text-muted-foreground min-w-[60px]">Title:</span>
-            <span className="text-foreground">{block.window_title}</span>
+          <div className="text-xs flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[50px]">Title:</span>
+            <span className="text-foreground truncate">{block.window_title}</span>
           </div>
         )}
         {urlDomain && (
-          <div className="text-sm flex items-start gap-2">
-            <span className="font-medium text-muted-foreground min-w-[60px]">Domain:</span>
+          <div className="text-xs flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[50px]">Domain:</span>
             <span className="text-foreground">🌐 {urlDomain}</span>
           </div>
         )}
-        {block.url && !urlDomain && (
-          <div className="text-sm flex items-start gap-2">
-            <span className="font-medium text-muted-foreground min-w-[60px]">URL:</span>
-            <a 
-              href={block.url} 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="text-primary hover:underline break-all text-xs"
-            >
-              {block.url}
-            </a>
-          </div>
-        )}
         {block.file_path && (
-          <div className="text-sm flex items-start gap-2">
-            <span className="font-medium text-muted-foreground min-w-[60px]">File:</span>
-            <span className="text-foreground break-all font-mono text-xs">📄 {block.file_path}</span>
+          <div className="text-xs flex items-start gap-2">
+            <span className="font-medium text-muted-foreground min-w-[50px]">File:</span>
+            <span className="text-foreground font-mono text-xs truncate">📄 {block.file_path}</span>
           </div>
         )}
       </div>
 
-      {/* AI Suggestions */}
+      {/* Compact AI Suggestions */}
       {block.suggestions && block.suggestions.length > 0 && (
-        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <div className="text-sm font-semibold text-yellow-900 mb-2 flex items-center gap-2">
-            💡 AI Suggestions
+        <div className="mb-2 p-2 bg-yellow-50 border border-yellow-200 rounded">
+          <div className="text-xs font-semibold text-yellow-900 mb-1 flex items-center gap-1">
+            💡 Suggestions
           </div>
-          <div className="space-y-2">
+          <div className="space-y-1">
             {block.suggestions.map((suggestion, idx) => (
               <button
                 key={idx}
                 onClick={() => handleUseSuggestion(suggestion)}
                 disabled={saving}
-                className="text-sm text-left w-full hover:bg-yellow-100 p-2 rounded transition-colors flex items-center justify-between disabled:opacity-50"
+                className="text-xs text-left w-full hover:bg-yellow-100 p-1.5 rounded transition-colors flex items-center justify-between disabled:opacity-50"
               >
-                <div>
+                <div className="truncate">
                   {suggestion.client && <span className="font-semibold text-yellow-900">{suggestion.client}</span>}
                   {suggestion.category && <span className="text-yellow-800"> → {suggestion.category}</span>}
                 </div>
-                <span className="text-xs text-yellow-600 font-medium">
-                  {(suggestion.confidence * 100).toFixed(0)}% confident
+                <span className="text-xs text-yellow-600 font-medium ml-2 flex-shrink-0">
+                  {(suggestion.confidence * 100).toFixed(0)}%
                 </span>
               </button>
             ))}
@@ -249,29 +222,27 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
 
       {/* Local Error */}
       {localError && (
-        <div className="mb-4 bg-destructive/10 border border-destructive/30 rounded-lg p-3 flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
-          <span className="text-sm text-destructive">{localError}</span>
+        <div className="mb-2 bg-destructive/10 border border-destructive/30 rounded p-2 flex items-center gap-2">
+          <AlertCircle className="w-3 h-3 text-destructive flex-shrink-0" />
+          <span className="text-xs text-destructive">{localError}</span>
         </div>
       )}
 
-      {/* Categorization form */}
+      {/* Compact categorization form */}
       {!isEditing ? (
-        // Quick categorization mode
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Client selector */}
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block text-sm font-semibold text-foreground mb-2">
+              <label className="block text-xs font-medium text-foreground mb-1">
                 Client <span className="text-muted-foreground font-normal">(Optional)</span>
               </label>
               <select
                 value={selectedClient}
                 onChange={(e) => setSelectedClient(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full border border-border rounded px-2 py-1.5 bg-card text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                 disabled={saving}
               >
-                <option value="">-- Select Client --</option>
+                <option value="">-- Select --</option>
                 {clients.map((client) => (
                   <option key={client.id} value={client.id}>
                     {client.name} {client.code && `(${client.code})`}
@@ -280,19 +251,18 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
               </select>
             </div>
 
-            {/* Category selector */}
             <div>
-              <label className="block text-sm font-semibold text-foreground mb-2">
+              <label className="block text-xs font-medium text-foreground mb-1">
                 Category <span className="text-destructive">*</span>
               </label>
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full border border-border rounded px-2 py-1.5 bg-card text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                 required
                 disabled={saving}
               >
-                <option value="">-- Select Category --</option>
+                <option value="">-- Select --</option>
                 {categories.map((category) => (
                   <option key={category} value={category}>
                     {category}
@@ -302,55 +272,52 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
             </div>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex gap-3">
+          <div className="flex gap-2">
             <button
               onClick={handleQuickSave}
               disabled={!selectedCategory || saving}
-              className={`flex-1 px-6 py-3 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
+              className={`flex-1 px-3 py-1.5 rounded font-medium text-xs transition-all flex items-center justify-center gap-1.5 ${
                 selectedCategory && !saving
-                  ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm hover:shadow-md'
+                  ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm'
                   : 'bg-muted text-muted-foreground cursor-not-allowed'
               }`}
             >
               {saving ? (
                 <>
-                  <Clock className="w-5 h-5 animate-spin" />
+                  <Clock className="w-3 h-3 animate-spin" />
                   Saving...
                 </>
               ) : (
                 <>
-                  <CheckCircle2 className="w-5 h-5" />
-                  ✓ Confirm
+                  <CheckCircle2 className="w-3 h-3" />
+                  Confirm
                 </>
               )}
             </button>
             <button
               onClick={() => setIsEditing(true)}
               disabled={saving}
-              className="px-6 py-3 border border-border rounded-lg font-semibold hover:bg-accent transition-colors flex items-center gap-2"
+              className="px-3 py-1.5 border border-border rounded font-medium text-xs hover:bg-accent transition-colors flex items-center gap-1.5"
             >
-              <Edit3 className="w-4 h-4" />
+              <Edit3 className="w-3 h-3" />
               Edit
             </button>
           </div>
         </div>
       ) : (
-        // Edit mode with notes
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Client selector */}
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block text-sm font-semibold text-foreground mb-2">
+              <label className="block text-xs font-medium text-foreground mb-1">
                 Client <span className="text-muted-foreground font-normal">(Optional)</span>
               </label>
               <select
                 value={selectedClient}
                 onChange={(e) => setSelectedClient(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full border border-border rounded px-2 py-1.5 bg-card text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                 disabled={saving}
               >
-                <option value="">-- Select Client --</option>
+                <option value="">-- Select --</option>
                 {clients.map((client) => (
                   <option key={client.id} value={client.id}>
                     {client.name} {client.code && `(${client.code})`}
@@ -359,19 +326,18 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
               </select>
             </div>
 
-            {/* Category selector */}
             <div>
-              <label className="block text-sm font-semibold text-foreground mb-2">
+              <label className="block text-xs font-medium text-foreground mb-1">
                 Category <span className="text-destructive">*</span>
               </label>
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full border border-border rounded px-2 py-1.5 bg-card text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                 required
                 disabled={saving}
               >
-                <option value="">-- Select Category --</option>
+                <option value="">-- Select --</option>
                 {categories.map((category) => (
                   <option key={category} value={category}>
                     {category}
@@ -381,49 +347,47 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
             </div>
           </div>
 
-          {/* Notes field */}
           <div>
-            <label className="block text-sm font-semibold text-foreground mb-2">
+            <label className="block text-xs font-medium text-foreground mb-1">
               Notes <span className="text-muted-foreground font-normal">(Optional)</span>
             </label>
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Add any notes about this time block..."
-              className="w-full border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary min-h-[80px]"
+              placeholder="Add notes..."
+              className="w-full border border-border rounded px-2 py-1.5 bg-card text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-primary min-h-[60px]"
               disabled={saving}
             />
           </div>
 
-          {/* Action buttons */}
-          <div className="flex gap-3">
+          <div className="flex gap-2">
             <button
               onClick={handleEditSave}
               disabled={!selectedCategory || saving}
-              className={`flex-1 px-6 py-3 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
+              className={`flex-1 px-3 py-1.5 rounded font-medium text-xs transition-all flex items-center justify-center gap-1.5 ${
                 selectedCategory && !saving
-                  ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm hover:shadow-md'
+                  ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm'
                   : 'bg-muted text-muted-foreground cursor-not-allowed'
               }`}
             >
               {saving ? (
                 <>
-                  <Clock className="w-5 h-5 animate-spin" />
+                  <Clock className="w-3 h-3 animate-spin" />
                   Saving...
                 </>
               ) : (
                 <>
-                  <Save className="w-5 h-5" />
-                  Save Changes
+                  <Save className="w-3 h-3" />
+                  Save
                 </>
               )}
             </button>
             <button
               onClick={() => setIsEditing(false)}
               disabled={saving}
-              className="px-6 py-3 border border-border rounded-lg font-semibold hover:bg-accent transition-colors flex items-center gap-2"
+              className="px-3 py-1.5 border border-border rounded font-medium text-xs hover:bg-accent transition-colors flex items-center gap-1.5"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3 h-3" />
               Cancel
             </button>
           </div>

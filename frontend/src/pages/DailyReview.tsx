@@ -114,12 +114,13 @@ export default function DailyReview() {
     return () => clearTimeout(t);
   }, [loadTimeSummary, loadUncategorizedCount]);
 
-  // Auto-refresh every 5 minutes
+
+  // Auto-refresh every 2 minutes (instead of 5)
   useEffect(() => {
     const interval = setInterval(() => {
       loadTimeSummary();
       loadUncategorizedCount();
-    }, 5 * 60 * 1000);
+    }, 2 * 60 * 1000);  // ✅ Changed: 5 → 2 minutes
 
     return () => clearInterval(interval);
   }, [loadTimeSummary, loadUncategorizedCount]);

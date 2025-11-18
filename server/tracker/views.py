@@ -175,6 +175,7 @@ CPA_CATEGORIES = [
     "Tax Planning",
     "Tax Research",
     "Tax Compliance",
+    "Idle",  # ✅ Add this at the top
     
     # Accounting Services
     "Accounting/Bookkeeping",
@@ -1729,9 +1730,10 @@ def pre_classify_obvious_categories(block) -> dict:
     Enhanced with both CPA-specific and Consulting/Dev tool detection.
     
     Priority Order:
+    0. **Meetings & Calls** (HIGHEST - even with low mouse activity)
     1. Development tools (VSCode, GitHub, localhost)
     2. AI/Research tools (Claude, ChatGPT, documentation)
-    3. Meetings & Email
+    3. Email & Communication
     4. CPA professional tools
     5. File patterns
     
@@ -1745,13 +1747,48 @@ def pre_classify_obvious_categories(block) -> dict:
     # Calculate block duration in hours
     if block.end and block.start:
         hours = round((block.end - block.start).total_seconds() / 3600, 2)
+    elif hasattr(block, 'minutes') and block.minutes:
+        hours = round(block.minutes / 60.0, 2)
     else:
         hours = 0.1  # fallback
     
     combined_text = f"{title} {url} {app_name} {file_path}"
     
     # ========================================================================
-    # PRIORITY 1: DEVELOPMENT TOOLS (Check FIRST to avoid misclassification)
+    # PRIORITY 0: MEETINGS & CALLS (HIGHEST PRIORITY)
+    # People on video calls often don't move their mouse - never mark as idle!
+    # ========================================================================
+    
+    meeting_apps = ['zoom', 'teams', 'meet', 'slack', 'webex', 'discord', 'skype', 'bluejeans', 'gotomeeting']
+    meeting_keywords = ['meeting', 'zoom meeting', 'teams meeting', 'call with', 'video call', 'conference call']
+    meeting_domains = ['zoom.us', 'meet.google.com', 'teams.microsoft.com']
+    
+    # Check app name first (most reliable)
+    if any(app in app_name for app in meeting_apps):
+        return {
+            'categories': {'Meetings': hours},
+            'confidence': 0.90,
+            'reasoning': f'Video call/meeting app detected: {app_name}'
+        }
+    
+    # Check URL (for web-based meetings)
+    if any(domain in url for domain in meeting_domains):
+        return {
+            'categories': {'Meetings': hours},
+            'confidence': 0.85,
+            'reasoning': 'Meeting URL detected'
+        }
+    
+    # Check window title (for scheduled meetings)
+    if any(keyword in title for keyword in meeting_keywords):  # ✅ Fixed: use 'title' not 'window_title'
+        return {
+            'categories': {'Meetings': hours},
+            'confidence': 0.80,
+            'reasoning': 'Meeting keyword in window title'
+        }
+    
+    # ========================================================================
+    # PRIORITY 1: DEVELOPMENT TOOLS (Check BEFORE CPA tools)
     # ========================================================================
     
     # VSCode detection
@@ -1856,20 +1893,8 @@ def pre_classify_obvious_categories(block) -> dict:
         }
     
     # ========================================================================
-    # PRIORITY 3: MEETINGS & EMAIL
+    # PRIORITY 3: EMAIL & COMMUNICATION (non-meeting)
     # ========================================================================
-    
-    # Meeting detection
-    meeting_indicators = [
-        "zoom.us", "zoom meeting", "meet.google.com", "teams.microsoft.com",
-        "webex", "gotomeeting", "join meeting", "video call", "conference"
-    ]
-    if any(indicator in combined_text for indicator in meeting_indicators):
-        return {
-            "categories": {"Meetings": hours},
-            "confidence": 0.95,
-            "reasoning": "Virtual meeting detected"
-        }
     
     # Email detection
     email_indicators = [
@@ -1878,11 +1903,13 @@ def pre_classify_obvious_categories(block) -> dict:
         "compose", "draft", "sent mail", "email", "message"
     ]
     if any(indicator in combined_text for indicator in email_indicators):
-        return {
-            "categories": {"Email/Communication": hours},
-            "confidence": 0.90,
-            "reasoning": "Email activity detected"
-        }
+        # Make sure it's not a meeting (already caught above)
+        if "meet" not in combined_text and "zoom" not in combined_text:
+            return {
+                "categories": {"Email/Communication": hours},
+                "confidence": 0.90,
+                "reasoning": "Email activity detected"
+            }
     
     # ========================================================================
     # PRIORITY 4: CPA PROFESSIONAL TOOLS
@@ -1965,7 +1992,7 @@ def pre_classify_obvious_categories(block) -> dict:
                     "reasoning": "Administrative document"
                 }
     
-    # No patterns matched
+    # No patterns matched - return empty dict for AI to decide
     return {}
 
 
@@ -4627,19 +4654,12 @@ def group_into_sessions(blocks, max_gap_minutes=15, min_idle_minutes=5):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_categorization_data(request):
-    """Get uncategorized blocks for manual categorization"""
-    from datetime import datetime  # ✅ Add this line
+    """
+    Get uncategorized blocks for manual categorization.
+    Only returns blocks older than 15 minutes to allow time for auto-classification.
+    """
+    from datetime import timedelta
     
-    date_str = request.GET.get('date', timezone.now().date().isoformat())
-    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-    
-    # ✅ CRITICAL: Filter for UNCATEGORIZED blocks only
-    blocks = Block.objects.filter(
-        user=request.user,
-        day=target_date,
-        is_categorized=False  # ✅ Add this line if missing!
-    ).order_by('start')
-
     user = request.user
     date_str = request.GET.get('date')
     limit = int(request.GET.get('limit', 500))
@@ -4657,11 +4677,15 @@ def get_categorization_data(request):
         from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
+    # ✅ Only show blocks older than 15 minutes (gives time for auto-classification)
+    cutoff_time = timezone.now() - timedelta(minutes=10)
+    
     # Get uncategorized blocks for the day
     blocks = Block.objects.filter(
         user=user,
         day=target_date,
-        is_categorized=False
+        is_categorized=False,
+        start__lt=cutoff_time  # ✅ Added: exclude very recent blocks
     ).select_related('client').order_by('start')[:limit]
     
     original_count = len(blocks)
@@ -4715,7 +4739,7 @@ def get_categorization_data(request):
         'date': target_date.isoformat(),
         'blocks': blocks_data,
         'clients': clients_list,
-        'categories': CPA_CATEGORIES,  # ✅ DON'T SORT - keep your ordering!
+        'categories': CPA_CATEGORIES,
         'stats': {
             'uncategorized_count': len(blocks_data),
             'total_minutes': sum(b['duration_minutes'] for b in blocks_data),
@@ -4731,16 +4755,11 @@ def get_categorization_data(request):
 def save_categorization(request):
     """
     Save manual categorization for a block or group of blocks.
-    
-    Body:
-    {
-        "block_id": 123,
-        "block_ids": [123, 124, 125],
-        "client_id": 456,
-        "category": "Tax Preparation",
-        "notes": "Working on returns"
-    }
+    Learns patterns from manual categorization to improve future AI suggestions.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     user = request.user
     data = request.data
     
@@ -4790,9 +4809,6 @@ def save_categorization(request):
     notes = data.get('notes', '').strip()
     
     # Apply categorization to all blocks in the group
-    # In tracker/views.py, update save_categorization:
-
-    # Apply categorization to all blocks in the group
     updated_blocks = []
     skipped_blocks = []
     
@@ -4817,14 +4833,23 @@ def save_categorization(request):
             if notes:
                 block.notes = notes
             
-            # ✅ CRITICAL: Add force_update=True to bypass protection
+            # Save with force_update to bypass protection
             block.save(force_update=True)
             updated_blocks.append(block)
+            
+            # ✅ Learn from this manual categorization
+            try:
+                from tracker.services.pattern_learning import PatternLearningService
+                PatternLearningService.learn_from_block(block, user)
+                logger.info(f"[LEARNING] Learned patterns from block {block.id}")
+            except Exception as e:
+                # Don't fail the save if learning fails
+                logger.warning(f"[LEARNING] Failed to learn from block {block.id}: {e}")
                     
         except Block.DoesNotExist:
             skipped_blocks.append(bid)
-
-    # ✅ Better response handling
+    
+    # Better response handling
     if not updated_blocks and skipped_blocks:
         return Response({
             'success': True,
@@ -4833,13 +4858,13 @@ def save_categorization(request):
             'skipped_count': len(skipped_blocks),
             'already_categorized': True
         })
-
+    
     if not updated_blocks:
         return Response(
             {'error': 'No blocks found or updated'},
             status=status.HTTP_400_BAD_REQUEST
         )
-
+    
     return Response({
         'success': True,
         'message': f'Categorized {len(updated_blocks)} block(s) successfully',

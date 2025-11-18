@@ -8,13 +8,105 @@ from django.utils import timezone
 from tracker.models import Block, RawEvent, Client, KnownEntity, CurrentClient
 
 # ============================================================================
+# HELPER: Detect Communication/Meeting Apps
+# ============================================================================
+COMMUNICATION_APPS = {
+    'zoom', 'zoom.us', 'zoomus',
+    'microsoft teams', 'teams',
+    'slack',
+    'google meet', 'meet',
+    'webex', 'cisco webex',
+    'skype',
+    'discord',
+    'google chat',
+    'ringcentral',
+    'bluejeans',
+    'goto meeting', 'gotomeeting',
+}
+
+COMMUNICATION_KEYWORDS = {
+    'zoom meeting',
+    'teams meeting',
+    'google meet',
+    'meeting with',
+    'video call',
+    'conference call',
+    'meet.google.com',
+    'zoom.us',
+    'teams.microsoft.com',
+    'slack call',
+    'discord call',
+}
+
+def is_communication_activity(app_name=None, window_title=None, url=None):
+    """
+    Detect if activity is from a communication/meeting app.
+    These should NEVER be marked as idle, even with low mouse activity.
+    
+    Args:
+        app_name: Application name
+        window_title: Window title text
+        url: URL if available
+    
+    Returns:
+        True if this is a communication app (meeting/call)
+    """
+    # Check app name
+    if app_name:
+        app_lower = app_name.lower()
+        if any(comm_app in app_lower for comm_app in COMMUNICATION_APPS):
+            return True
+    
+    # Check window title
+    if window_title:
+        title_lower = window_title.lower()
+        if any(keyword in title_lower for keyword in COMMUNICATION_KEYWORDS):
+            return True
+    
+    # Check URL
+    if url:
+        url_lower = url.lower()
+        communication_domains = [
+            'zoom.us',
+            'meet.google.com',
+            'teams.microsoft.com',
+            'slack.com',
+            'discord.com',
+            'webex.com',
+            'bluejeans.com',
+            'gotomeeting.com',
+        ]
+        if any(domain in url_lower for domain in communication_domains):
+            return True
+    
+    return False
+
+
+# ============================================================================
 # HELPER: Detect Idle Blocks
 # ============================================================================
-def is_idle_activity(app_name=None, bundle_id=None, window_title=None):
+def is_idle_activity(app_name=None, bundle_id=None, window_title=None, url=None):
     """
     Detect if activity represents idle/AFK time.
+    
+    ✅ UPDATED: Never marks communication apps as idle (Zoom, Teams, Meet, etc.)
+    
     Idle blocks should NEVER be assigned to a client.
+    
+    Args:
+        app_name: Application name
+        bundle_id: macOS bundle identifier
+        window_title: Window title text
+        url: URL if available
+    
+    Returns:
+        True if this should be marked as idle
     """
+    # ✅ CHECK COMMUNICATION FIRST - these are NEVER idle
+    # People on video calls often don't move their mouse!
+    if is_communication_activity(app_name, window_title, url):
+        return False
+    
     # Check bundle_id
     if bundle_id == "__idle__":
         return True
@@ -163,6 +255,8 @@ def compact_rawevents_into_blocks(
     Minimal "compaction" that creates blocks from raw events.
     NOW: Automatically applies current client from CurrentClient table.
     
+    ✅ UPDATED: Never marks communication apps (Zoom, Teams, Meet) as idle
+    
     Args:
         user: Username or User instance
         hostname: Device hostname
@@ -207,11 +301,12 @@ def compact_rawevents_into_blocks(
     # BUT: Don't assign client to idle blocks!
     current_client = None
     
-    # Check if this is idle activity
+    # Check if this is idle activity (✅ now passes url parameter)
     is_idle = is_idle_activity(
         app_name=last.app_name,
         bundle_id=last.bundle_id,
-        window_title=last.window_title
+        window_title=last.window_title,
+        url=last.url  # ✅ Added: Pass URL for meeting detection
     )
     
     # Only get current client for NON-IDLE blocks

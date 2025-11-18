@@ -26,23 +26,23 @@ app.autodiscover_tasks()
 # ============================================================================
 
 app.conf.beat_schedule = {
-    # ✅ AUTO-COMPACT: Every 10 minutes
+    # ✅ AUTO-COMPACT: Every 5 minutes ⚡
     # Creates blocks from raw events automatically
-    'auto-compact-every-10-minutes': {
+    'auto-compact-every-5-minutes': {
         'task': 'tracker.auto_compact_recent_events',
-        'schedule': crontab(minute='*/10'),  # Every 10 minutes
+        'schedule': crontab(minute='*/5'),  # ✅ Changed: 10 → 5 minutes
         'options': {
-            'expires': 600,  # Task expires after 10 minutes
+            'expires': 300,  # ✅ Changed: 600 → 300 seconds
         }
     },
     
-    # ✅ AI CLASSIFICATION: Every 15 minutes
+    # ✅ AI CLASSIFICATION: Every 5 minutes ⚡
     # Learns patterns and auto-categorizes high-confidence blocks
-    'ai-classify-every-15-minutes': {
+    'ai-classify-every-5-minutes': {
         'task': 'tracker.ai_classify_uncategorized_blocks',
-        'schedule': crontab(minute='*/15'),  # Every 15 minutes
+        'schedule': crontab(minute='*/5'),  # ✅ Changed: 15 → 5 minutes
         'options': {
-            'expires': 900,  # Task expires after 15 minutes
+            'expires': 300,  # ✅ Changed: 900 → 300 seconds
         }
     },
     

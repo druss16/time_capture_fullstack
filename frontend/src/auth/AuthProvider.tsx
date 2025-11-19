@@ -37,10 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      // Get fresh CSRF token
-      await primeCsrf();
-      
-      // Read CSRF token from cookie
+      // Try to call backend logout (might fail, that's ok)
       const csrftoken = document.cookie
         .split('; ')
         .find(row => row.startsWith('csrftoken='))
@@ -53,12 +50,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           "X-CSRFToken": csrftoken,
           "Content-Type": "application/json",
         },
-      });
-    } catch (error) {
-      console.error('Logout error:', error);
-    }
+      }).catch(() => {});
+    } catch {}
     
-    // Always clear local state, even if API call fails
+    // FORCE clear all cookies (nuclear option)
+    document.cookie.split(";").forEach((c) => {
+      const name = c.trim().split("=")[0];
+      // Clear for all possible domains/paths
+      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.onrender.com;`;
+      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=timetracker-api-k375.onrender.com;`;
+    });
+    
+    // Clear local state
     clearWhoAmICache();
     setMe({ is_authenticated: false, auth_source: "unknown", username: "" });
   }, []);

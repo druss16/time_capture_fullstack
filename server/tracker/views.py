@@ -3603,6 +3603,8 @@ from django.utils import timezone
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@ensure_csrf_cookie
+@csrf_protect
 def auth_login(request):
     """
     JSON login endpoint for SPA frontend.

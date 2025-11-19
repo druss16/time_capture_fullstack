@@ -32,6 +32,9 @@ const Login = lazy(() => import("./Login"));
 const Signup = lazy(() => import("./Signup"));
 const NotFound = lazy(() => import("./NotFound"));
 
+import { safeFetchJson, API_BASE } from '@/api/api';
+
+
 // --------- ENV / helpers ---------
 const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
 
@@ -66,6 +69,10 @@ function ScrollToTop() {
 }
 
 // 👇 NEW: Check if user needs onboarding
+// Find the OnboardingCheck component (around line 42-66)
+// Replace the checkOnboarding function:
+
+
 function OnboardingCheck({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -80,17 +87,12 @@ function OnboardingCheck({ children }: { children: React.ReactNode }) {
     // Check onboarding status
     const checkOnboarding = async () => {
       try {
-        const response = await fetch('/api/profile/', {
-          credentials: 'include',
-        });
+        // ✅ FIXED: Use safeFetchJson with API_BASE
+        const data = await safeFetchJson(`${API_BASE}/profile/`);
         
-        if (response.ok) {
-          const data = await response.json();
-          
-          // Redirect to onboarding if not completed
-          if (!data.onboarding_completed) {
-            navigate('/onboarding');
-          }
+        // Redirect to onboarding if not completed
+        if (!data.onboarding_completed) {
+          navigate('/onboarding');
         }
       } catch (error) {
         console.error('Error checking onboarding:', error);

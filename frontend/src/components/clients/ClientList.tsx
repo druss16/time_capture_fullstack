@@ -7,6 +7,9 @@ import { Search, Plus, Upload, Pencil, Trash2 } from 'lucide-react';
 import { API_BASE } from '@/lib/api';
 import { postJson } from '@/lib/csrf';
 
+import { safeFetchJson, API_BASE } from '@/api/api';
+
+
 interface Client {
   id: number;
   name: string;
@@ -26,17 +29,12 @@ export function ClientList() {
     fetchClients();
   }, []);
 
+  // Replace the fetchClients function (around line 27-42):
   const fetchClients = async () => {
     try {
-      // Use your existing endpoint
-      const response = await fetch('/api/clients/list', {
-        credentials: 'include',
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setClients(data);
-      }
+      // ✅ FIXED: Use safeFetchJson
+      const data = await safeFetchJson(`${API_BASE}/clients/list`);
+      setClients(data);
     } catch (error) {
       console.error('Error fetching clients:', error);
     } finally {

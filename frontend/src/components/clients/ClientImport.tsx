@@ -4,13 +4,15 @@ import { useState } from 'react';
 import { uploadClientCSV } from '../api/clients';
 import { API_BASE } from '@/lib/api';
 import { postJson } from '@/lib/csrf';
+import { API_BASE } from '@/api/api';
+
 
 export function ClientImport() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<any>(null);
 
-
+  // Replace handleUpload function (around line 13-33):
   const handleUpload = async () => {
     if (!file) return;
     
@@ -19,7 +21,8 @@ export function ClientImport() {
       const formData = new FormData();
       formData.append('file', file);
       
-      const response = await fetch('/api/import-clients-csv/', {
+      // ✅ FIXED: Use API_BASE
+      const response = await fetch(`${API_BASE}/import-clients-csv/`, {
         method: 'POST',
         body: formData,
         credentials: 'include',

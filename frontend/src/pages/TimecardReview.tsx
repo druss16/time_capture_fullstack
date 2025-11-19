@@ -38,7 +38,7 @@ interface SummaryData {
 }
 
 // API functions
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 
 const fetchTimecards = async (date?: string): Promise<TimecardEntry[]> => {
   const params = new URLSearchParams();

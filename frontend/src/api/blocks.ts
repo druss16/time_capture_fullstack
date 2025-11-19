@@ -2,7 +2,7 @@
 import api, { API_ROUTES } from "./client";
 import { BlockDto } from "../types";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:7123/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 
 // --- helpers ---
 function fullUrlOrRoute(route: string | undefined, fallbackPath: string) {

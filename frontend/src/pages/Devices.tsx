@@ -1,5 +1,7 @@
 import PairDeviceCard from "@/components/PairDeviceCard";
 import { useEffect, useState } from "react";
+import { safeFetchJson, API_BASE } from '@/api/api';
+
 
 type Device = {
   device_id: string;
@@ -15,15 +17,13 @@ export default function Devices() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
 
+  // Replace fetchDevices function (around line 16-30):
   async function fetchDevices() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/devices/", {
-        credentials: "include",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to load devices");
+      // ✅ FIXED: Use safeFetchJson
+      const data = await safeFetchJson(`${API_BASE}/devices/`);
       setDevices(data.devices || []);
     } catch (e: any) {
       setError(e.message);

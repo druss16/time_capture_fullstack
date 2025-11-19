@@ -3626,7 +3626,6 @@ from django.core import signing
 from django.utils import timezone
 
 from django.views.decorators.csrf import csrf_exempt
-from django.middleware.csrf import _compare_masked_tokens
 
 from django.views.decorators.csrf import csrf_exempt
 

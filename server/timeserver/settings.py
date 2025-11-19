@@ -197,8 +197,8 @@ else:
 
 # Cookie settings (common to both)
 CSRF_COOKIE_HTTPONLY = False  # JS needs to read csrftoken
-CSRF_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "None"
+SESSION_COOKIE_SAMESITE = "None"
 CSRF_COOKIE_NAME = "csrftoken"
 
 # -----------------------------------------------------

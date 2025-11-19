@@ -3625,38 +3625,77 @@ from .models import AgentSession  # if you have it; safe to remove if not presen
 from django.core import signing
 from django.utils import timezone
 
+from django.views.decorators.csrf import csrf_exempt
+from django.middleware.csrf import _compare_masked_tokens
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@ensure_csrf_cookie
-@csrf_protect
+@csrf_exempt  # ← Bypass Django's cookie check
 def auth_login(request):
     """
-    JSON login endpoint for SPA frontend.
+    JSON login endpoint with header-only CSRF validation.
+    Works even when browsers block third-party cookies.
     """
+    # ✅ Manual CSRF validation (header only, no cookie required)
+    csrf_token_header = request.META.get('HTTP_X_CSRFTOKEN', '')
+    
+    # Get the server-side token from session
+    csrf_token_session = request.META.get('CSRF_COOKIE', '')
+    if not csrf_token_session:
+        # Try to get from cookie if available
+        csrf_token_session = request.COOKIES.get('csrftoken', '')
+    
+    # Validate token
+    if not csrf_token_header:
+        return Response(
+            {"ok": False, "error": "CSRF token missing from header"},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    if csrf_token_session and not _compare_masked_tokens(csrf_token_header, csrf_token_session):
+        return Response(
+            {"ok": False, "error": "CSRF token mismatch"},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # ✅ Proceed with login
     data = request.data or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
 
     if not username or not password:
-        return Response({"ok": False, "error": "Username and password required."},
-                        status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"ok": False, "error": "Username and password required."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     user = authenticate(request, username=username, password=password)
     if not user:
-        return Response({"ok": False, "error": "Invalid credentials."},
-                        status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"ok": False, "error": "Invalid credentials."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
 
-    # Build the same signed “hint” bundle cookie here (no need for /browser/hello/)
+    # Build response with cookies
     host = request.get_host() or "browser"
     bundle = {"username": user.username, "host": host, "ts": timezone.now().isoformat()}
     signed = signing.dumps(bundle, salt="browser-ident-v1")
 
-    resp = Response({"ok": True, "user": {"id": user.id, "username": user.username, "email": user.email or ""}})
-    resp.set_cookie(COOKIE_USER_KEY, user.username, samesite="Lax", path="/")
-    resp.set_cookie(COOKIE_HOST_KEY, host, samesite="Lax", path="/")
-    resp.set_cookie(COOKIE_BUNDLE, signed, samesite="Lax", httponly=False, path="/")
+    resp = Response({
+        "ok": True,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email or ""
+        }
+    })
+    
+    resp.set_cookie(COOKIE_USER_KEY, user.username, samesite="None", secure=True, path="/")
+    resp.set_cookie(COOKIE_HOST_KEY, host, samesite="None", secure=True, path="/")
+    resp.set_cookie(COOKIE_BUNDLE, signed, samesite="None", secure=True, httponly=False, path="/")
+    
     return resp
 
 

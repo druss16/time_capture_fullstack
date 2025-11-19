@@ -17,7 +17,7 @@ export default function Login() {
   const [err, setErr] = useState<string | null>(null);
   const [showPw, setShowPw] = useState(false);
 
-  // If already logged in, hop to next; otherwise prime CSRF cookie
+  // If already logged in, hop to next
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -32,7 +32,6 @@ export default function Login() {
       } catch {
         /* not logged in / server warming up */
       }
-      try { await primeCsrf(); } catch {}
     })();
     return () => { alive = false; };
   }, [nav, next]);
@@ -45,13 +44,12 @@ export default function Login() {
     console.log("Submitting login", form.username);
 
     try {
-      try {
-        await primeCsrf();
-      } catch (e) {
-        console.warn("primeCsrf failed", e);
-      }
-
-      const res = await safeFetchJson<{ ok: boolean; error?: string }>(
+      const res = await safeFetchJson<{ 
+        ok: boolean; 
+        error?: string;
+        token?: string;  // ✅ Token from backend
+        user?: any;
+      }>(
         API_ENDPOINTS.authLogin,
         {
           method: "POST",
@@ -64,17 +62,32 @@ export default function Login() {
 
       if (!res?.ok) throw new Error(res?.error || "Login failed");
 
+      // ✅ Store token in localStorage
+      if (res.token) {
+        localStorage.setItem('auth_token', res.token);
+        console.log("✅ Token stored in localStorage");
+      }
+
+      // ✅ Verify authentication
       try {
         const who = await refreshWhoAmI();
         console.log("whoami after login", who);
+        
+        if (!who?.is_authenticated) {
+          throw new Error("Authentication verification failed");
+        }
       } catch (e) {
-        console.warn("refreshWhoAmI failed", e);
+        console.error("refreshWhoAmI failed", e);
+        throw new Error("Login succeeded but verification failed");
       }
 
+      // ✅ Success! Redirect
       nav(next, { replace: true });
     } catch (e: any) {
       console.error("Login error", e);
       setErr(e?.message || "Login failed");
+      // Clear any partial token on error
+      localStorage.removeItem('auth_token');
     } finally {
       setBusy(false);
     }

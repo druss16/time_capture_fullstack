@@ -4365,39 +4365,58 @@ def import_clients_csv(request):
     })
 
 
-@api_view(["GET"])  # ← Change from POST to GET
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
-@permission_classes([PermUI])
+# ============================================================================
+# BACKEND FIX: tracker/views.py (around line 4390)
+# ============================================================================
+# This fix handles anonymous users gracefully in the user_profile endpoint
+# 
+# INSTRUCTIONS:
+# 1. Open tracker/views.py in your Django backend
+# 2. Find the user_profile function (around line 4390)
+# 3. Replace the entire function with the code below
+# ============================================================================
+
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+
+@api_view(['GET'])
 def user_profile(request):
     """
-    Get current user profile with onboarding status.
+    Get user profile information.
+    Returns authentication status and profile data.
     
-    Returns: {
-      "id": int,
-      "email": str,
-      "username": str,
-      "onboarding_completed": bool,
-      "organization": {...}
-    }
+    ✅ FIXED: Now handles anonymous users gracefully
     """
     user = request.user
     
-    # Get org
-    org = user.groups.first()
+    # ✅ Check if user is authenticated BEFORE accessing user attributes
+    if not user.is_authenticated:
+        return Response({
+            "authenticated": False,
+            "onboarding_completed": False
+        })
     
-    return Response({
-        "id": user.id,
-        "email": user.email,
-        "username": user.username,
-        "first_name": user.first_name,
-        "last_name": user.last_name,
-        # Check if user has onboarding_completed field, default to True for existing users
-        "onboarding_completed": getattr(user, 'onboarding_completed', True),
-        "organization": {
-            "id": org.id if org else None,
-            "name": org.name if org else None,
-        }
-    })
+    # User is authenticated - return full profile
+    try:
+        return Response({
+            "authenticated": True,
+            "email": user.email,
+            "onboarding_completed": getattr(user.profile, 'onboarding_completed', False),
+            # Add any other profile fields you need:
+            # "first_name": user.first_name,
+            # "last_name": user.last_name,
+            # "company": getattr(user.profile, 'company', None),
+            # etc.
+        })
+    except Exception as e:
+        # Gracefully handle any profile access errors
+        return Response({
+            "authenticated": True,
+            "email": user.email,
+            "onboarding_completed": False,
+            "error": "Profile access error"
+        }, status=200)  # Still return 200 to prevent frontend crashes
 
 
 @api_view(["POST"])

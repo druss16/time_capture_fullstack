@@ -1,4 +1,5 @@
 // frontend/src/components/OnboardingWizard.tsx
+import { useState } from 'react';
 
 export function OnboardingWizard() {
   const [step, setStep] = useState(1);

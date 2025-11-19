@@ -35,6 +35,7 @@ const NotFound = lazy(() => import("./NotFound"));
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
 
+
 // --------- ENV / helpers ---------
 const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
 
@@ -72,38 +73,10 @@ function ScrollToTop() {
 // Find the OnboardingCheck component (around line 42-66)
 // Replace the checkOnboarding function:
 
-
-function OnboardingCheck({ children }: { children: React.ReactNode }) {
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  useEffect(() => {
-    // Skip check on login, signup, and onboarding pages
-    const skipPaths = ['/login', '/signup', '/onboarding'];
-    if (skipPaths.includes(location.pathname)) {
-      return;
-    }
-
-    // Check onboarding status
-    const checkOnboarding = async () => {
-      try {
-        // ✅ FIXED: Use safeFetchJson with API_BASE
-        const data = await safeFetchJson(`${API_BASE}/profile/`);
-        
-        // Redirect to onboarding if not completed
-        if (!data.onboarding_completed) {
-          navigate('/onboarding');
-        }
-      } catch (error) {
-        console.error('Error checking onboarding:', error);
-      }
-    };
-
-    checkOnboarding();
-  }, [navigate, location.pathname]);
-
-  return <>{children}</>;
+interface OnboardingCheckProps {
+  children: React.ReactNode;
 }
+
 
 // Wrap ProtectedRoute, but bypass if AUTH is disabled (useful in dev)
 function MaybeProtected({ children }: { children: React.ReactNode }) {
@@ -131,8 +104,6 @@ export default function App() {
           <BrowserRouter>
             <ScrollToTop />
             {/* 👇 NEW: Add onboarding check globally */}
-            <OnboardingCheck>
-              {/* Globally-mounted pairing modal so any page can open it */}
               <PairDeviceModal />
 
               <Suspense fallback={<div className="p-6 text-blue-800">Loading…</div>}>
@@ -145,15 +116,6 @@ export default function App() {
                   {!AUTH_DISABLED && <Route path="/signup" element={<Signup />} />}
                   {!AUTH_DISABLED && <Route path="/logout" element={<Logout />} />}
 
-                  {/* 👇 NEW: Onboarding route (no AppLayout - full screen) */}
-                  <Route
-                    path="/onboarding"
-                    element={
-                      <MaybeProtected>
-                        <OnboardingWizard />
-                      </MaybeProtected>
-                    }
-                  />
 
                   {/* Protected pages (wrapped in AppLayout) */}
                   <Route
@@ -243,7 +205,6 @@ export default function App() {
                   <Route path="*" element={<NotFound />} />
                 </Routes>
               </Suspense>
-            </OnboardingCheck>
           </BrowserRouter>
         </AuthProvider>
       </TooltipProvider>

@@ -3484,9 +3484,32 @@ from rest_framework.response import Response
 @api_view(["GET"])
 @permission_classes([AllowAny])
 @cache_control(private=True, max_age=300)
-@vary_on_headers("Cookie")
+@vary_on_headers("Cookie", "Authorization")
 def whoami(request):
-    # 1) Agent header
+    # 1) Check Authorization header for token
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]  # Remove "Bearer " prefix
+        
+        # Validate token against session
+        session_token = request.session.get("auth_token")
+        user_id = request.session.get("user_id")
+        
+        if session_token == token and user_id:
+            try:
+                user = User.objects.get(id=user_id)
+                return Response({
+                    "is_authenticated": True,
+                    "auth_source": "token",
+                    "username": user.username,
+                    "user_id": user.id,
+                    "host": None,
+                    "device_id": None,
+                })
+            except User.DoesNotExist:
+                pass
+    
+    # 2) Agent header
     agent_key = (
         request.headers.get("X-Agent-Key")
         or request.headers.get("Agent-Key")
@@ -3505,8 +3528,8 @@ def whoami(request):
                 "host": (device.hostname or None),
                 "device_id": device.device_id,
             })
-
-    # 2) Django session
+    
+    # 3) Django session
     if getattr(request.user, "is_authenticated", False):
         u = request.user
         return Response({
@@ -3517,56 +3540,8 @@ def whoami(request):
             "host": None,
             "device_id": None,
         })
-
-    # 3) Signed cookie (NOT a login)
-    bundle = _signed_cookie_get(request, COOKIE_BUNDLE)
-    if bundle and isinstance(bundle, dict):
-        username = (bundle.get("username") or "").strip()
-        host = (bundle.get("host") or "").strip() or None
-        if username:
-            return Response({
-                "is_authenticated": False,        # <- important
-                "auth_source": "cookie",
-                "username": username,
-                "user_id": None,
-                "host": host,
-                "device_id": None,
-            })
-    else:
-        u = (request.COOKIES.get(COOKIE_USER_KEY) or "").strip()
-        h = (request.COOKIES.get(COOKIE_HOST_KEY) or "").strip()
-        if u:
-            return Response({
-                "is_authenticated": False,        # <- important
-                "auth_source": "cookie_legacy",
-                "username": u,
-                "user_id": None,
-                "host": (h or None),
-                "device_id": None,
-            })
-
-    # 4) AgentSession by IP (NOT a login)
-    ip = _client_ip(request)
-    if ip:
-        sess = (
-            AgentSession.objects
-            .filter(last_ip=ip)
-            .select_related("user")
-            .order_by("-last_seen")
-            .only("hostname", "user__username", "user__id")
-            .first()
-        )
-        if sess and getattr(sess, "user", None):
-            return Response({
-                "is_authenticated": False,        # <- important
-                "auth_source": "ip",
-                "username": (sess.user.username or "").strip(),
-                "user_id": sess.user_id,
-                "host": (getattr(sess, "hostname", None) or None),
-                "device_id": None,
-            })
-
-    # 5) Unknown
+    
+    # 4) Unknown
     return Response({
         "is_authenticated": False,
         "auth_source": "unknown",

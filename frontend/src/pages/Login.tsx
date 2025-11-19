@@ -42,24 +42,38 @@ export default function Login() {
     setBusy(true);
     setErr(null);
 
-    try {
-      // Ensure csrftoken is set
-      try { await primeCsrf(); } catch {}
+    console.log("Submitting login", form.username);
 
-      // Attempt login
-      const res = await safeFetchJson<{ ok: boolean; error?: string }>(API_ENDPOINTS.authLogin, {
-        method: "POST",
-        credentials: "include",
-        body: JSON.stringify(form),
-      });
+    try {
+      try {
+        await primeCsrf();
+      } catch (e) {
+        console.warn("primeCsrf failed", e);
+      }
+
+      const res = await safeFetchJson<{ ok: boolean; error?: string }>(
+        API_ENDPOINTS.authLogin,
+        {
+          method: "POST",
+          credentials: "include",
+          body: JSON.stringify(form),
+        }
+      );
+
+      console.log("login response", res);
+
       if (!res?.ok) throw new Error(res?.error || "Login failed");
 
-      // Refresh whoami so protected routes see the session immediately
-      try { await refreshWhoAmI(); } catch {}
+      try {
+        const who = await refreshWhoAmI();
+        console.log("whoami after login", who);
+      } catch (e) {
+        console.warn("refreshWhoAmI failed", e);
+      }
 
-      // Redirect
       nav(next, { replace: true });
     } catch (e: any) {
+      console.error("Login error", e);
       setErr(e?.message || "Login failed");
     } finally {
       setBusy(false);
@@ -117,7 +131,7 @@ export default function Login() {
 
         <p className="text-sm text-center mt-3">
           No account?{" "}
-          <Link className="underline" to={`/signup?next=${encodeURIComponent(next)}`}>
+          <Link className="underline" to={`/signup?next=${encodeURIComponent(next)}`}>  
             Sign up
           </Link>
         </p>

@@ -37,22 +37,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      // Ensure csrftoken cookie exists
-      await primeCsrf(API_BASE);
-      const token = getCookie("csrftoken") || "";
-
+      // Get fresh CSRF token
+      await primeCsrf();
+      
+      // Read CSRF token from cookie
+      const csrftoken = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('csrftoken='))
+        ?.split('=')[1] || '';
+      
       await fetch(`${API_BASE}/auth/logout/`, {
         method: "POST",
         credentials: "include",
         headers: {
-          "X-Requested-With": "XMLHttpRequest",
-          "X-CSRFToken": token,
+          "X-CSRFToken": csrftoken,
           "Content-Type": "application/json",
         },
       });
-    } catch {
-      // ignore network hiccups
+    } catch (error) {
+      console.error('Logout error:', error);
     }
+    
+    // Always clear local state, even if API call fails
     clearWhoAmICache();
     setMe({ is_authenticated: false, auth_source: "unknown", username: "" });
   }, []);

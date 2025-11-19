@@ -3485,35 +3485,33 @@ from rest_framework.response import Response
 @permission_classes([AllowAny])
 def whoami(request):
     """
-    Check authentication via:
-    1. Authorization Bearer token (for browsers that block cookies)
-    2. Agent API key
-    3. Django session
-    4. Fallback to unknown
+    Check authentication via multiple methods.
+    NO @authentication_classes - we manually check everything.
     """
     # 1) Check Authorization header for Bearer token
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header.replace("Bearer ", "", 1).strip()
         
-        # Validate token against session
-        if token and request.session.get("auth_token") == token:
-            user_id = request.session.get("user_id")
-            if user_id:
-                try:
-                    user = User.objects.get(id=user_id)
-                    return Response({
-                        "is_authenticated": True,
-                        "auth_source": "token",
-                        "username": user.username,
-                        "user_id": user.id,
-                        "host": None,
-                        "device_id": None,
-                    })
-                except User.DoesNotExist:
-                    pass
+        # Validate against session
+        session_token = request.session.get("auth_token")
+        user_id = request.session.get("user_id")
+        
+        if token and session_token == token and user_id:
+            try:
+                user = User.objects.get(id=user_id)
+                return Response({
+                    "is_authenticated": True,
+                    "auth_source": "token",
+                    "username": user.username,
+                    "user_id": user.id,
+                    "host": None,
+                    "device_id": None,
+                })
+            except User.DoesNotExist:
+                pass
     
-    # 2) Agent API key
+    # 2) Agent API key (manual check, no middleware)
     agent_key = (
         request.headers.get("X-Agent-Key")
         or request.headers.get("Agent-Key")
@@ -3524,12 +3522,11 @@ def whoami(request):
         try:
             device = AgentDevice.objects.filter(api_key=agent_key, is_active=True).select_related("user").first()
             if device and device.user_id:
-                u = device.user
                 return Response({
                     "is_authenticated": True,
                     "auth_source": "agent",
-                    "username": u.username,
-                    "user_id": u.pk,
+                    "username": device.user.username,
+                    "user_id": device.user.pk,
                     "host": device.hostname or None,
                     "device_id": device.device_id,
                 })
@@ -3538,12 +3535,11 @@ def whoami(request):
     
     # 3) Django session
     if getattr(request.user, "is_authenticated", False):
-        u = request.user
         return Response({
             "is_authenticated": True,
             "auth_source": "session",
-            "username": u.username,
-            "user_id": u.pk,
+            "username": request.user.username,
+            "user_id": request.user.pk,
             "host": None,
             "device_id": None,
         })
@@ -3557,6 +3553,7 @@ def whoami(request):
         "host": None,
         "device_id": None,
     })
+    
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response

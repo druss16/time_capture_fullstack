@@ -3482,11 +3482,12 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 @api_view(["GET"])
+@authentication_classes([])  # ✅ Disable all authentication checks
 @permission_classes([AllowAny])
 def whoami(request):
     """
     Check authentication via multiple methods.
-    NO @authentication_classes - we manually check everything.
+    Authentication is manual - we don't use DRF's authentication classes.
     """
     # 1) Check Authorization header for Bearer token
     auth_header = request.headers.get("Authorization", "")
@@ -3511,7 +3512,7 @@ def whoami(request):
             except User.DoesNotExist:
                 pass
     
-    # 2) Agent API key (manual check, no middleware)
+    # 2) Agent API key (manual check)
     agent_key = (
         request.headers.get("X-Agent-Key")
         or request.headers.get("Agent-Key")
@@ -3544,7 +3545,7 @@ def whoami(request):
             "device_id": None,
         })
     
-    # 4) Unknown
+    # 4) Unknown (not an error - just not authenticated)
     return Response({
         "is_authenticated": False,
         "auth_source": "unknown",
@@ -3553,7 +3554,7 @@ def whoami(request):
         "host": None,
         "device_id": None,
     })
-    
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response

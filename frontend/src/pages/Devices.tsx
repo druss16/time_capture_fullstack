@@ -1,6 +1,6 @@
 import PairDeviceCard from "@/components/PairDeviceCard";
 import { useEffect, useState } from "react";
-import { safeFetchJson, API_BASE } from '@/api/api';
+import { safeFetchJson, API_BASE } from '@/lib/api';
 
 
 type Device = {

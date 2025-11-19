@@ -431,7 +431,6 @@ class ClientManagementWindow(NSWindow):
 
     def onClose_(self, _sender):
         self.orderOut_(None)
-        NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
 
 # ------------------------------------------------------------
@@ -513,17 +512,11 @@ class TodayTimeWindow(NSWindow):
         close_btn.setAction_("onClose:")
         content.addSubview_(close_btn)
 
-    def show_and_refresh(self):
-        NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
-        self.makeKeyAndOrderFront_(None)
-        NSApp.activateIgnoringOtherApps_(True)
-        self.onRefresh_(None)
-
     def onRefresh_(self, _sender):
         if self.api_callback:
             self.time_data = self.api_callback()
             self.table_view.reloadData()
-            total_hours = sum(entry.get("hours", 0) for entry in self.time_data)
+            total_hours = sum(entry.get("total_hours", 0) for entry in self.time_data)
             self.total_label.setStringValue_(f"Total: {total_hours:.1f} hours")
 
     # DataSource
@@ -536,12 +529,191 @@ class TodayTimeWindow(NSWindow):
         if identifier == "client":
             return entry.get("client", "Unknown")
         elif identifier == "time":
-            return f"{entry.get('hours', 0):.2f}"
+            return f"{entry.get('total_hours', 0):.2f}"
         return ""
 
     def onClose_(self, _sender):
+        # ✅ FIXED: Just hide - don't change activation policy!
         self.orderOut_(None)
-        NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+
+
+# ------------------------------------------------------------
+# CPA Tools Reference Window
+# ------------------------------------------------------------
+class CPAToolsWindow(NSWindow):
+    """Window showing CPA tool detection patterns"""
+
+    def initWithToolData_(self, tool_data):
+        frame = NSMakeRect(100, 100, 700, 500)
+        self = objc.super(CPAToolsWindow, self).initWithContentRect_styleMask_backing_defer_(
+            frame,
+            NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable,
+            NSBackingStoreBuffered,
+            False
+        )
+        if self is None:
+            return None
+
+        self.tool_data = tool_data or {}
+        self.filtered_data = []
+
+        self.setTitle_("CPA Tools Detection Reference")
+        self.setMinSize_(NSMakeSize(700, 500))
+
+        self._setup_ui()
+        self._refresh_table()
+        return self
+
+    def _setup_ui(self):
+        content = self.contentView()
+
+        # Search field
+        search_label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 460, 60, 24))
+        search_label.setStringValue_("Search:")
+        search_label.setBezeled_(False)
+        search_label.setDrawsBackground_(False)
+        search_label.setEditable_(False)
+        content.addSubview_(search_label)
+
+        self.search_field = NSTextField.alloc().initWithFrame_(NSMakeRect(85, 460, 300, 24))
+        self.search_field.setPlaceholderString_("Filter by category, keyword, or domain...")
+        self.search_field.setTarget_(self)
+        self.search_field.setAction_("onSearch:")
+        content.addSubview_(self.search_field)
+
+        # Clear button
+        clear_btn = NSButton.alloc().initWithFrame_(NSMakeRect(395, 460, 80, 24))
+        clear_btn.setTitle_("Clear")
+        clear_btn.setBezelStyle_(1)
+        clear_btn.setTarget_(self)
+        clear_btn.setAction_("onClear:")
+        content.addSubview_(clear_btn)
+
+        # Results count
+        self.count_label = NSTextField.alloc().initWithFrame_(NSMakeRect(500, 460, 180, 24))
+        self.count_label.setStringValue_("")
+        self.count_label.setBezeled_(False)
+        self.count_label.setDrawsBackground_(False)
+        self.count_label.setEditable_(False)
+        self.count_label.setAlignment_(2)  # Right align
+        content.addSubview_(self.count_label)
+
+        # Table view
+        scroll_view = NSScrollView.alloc().initWithFrame_(NSMakeRect(20, 80, 660, 370))
+        scroll_view.setHasVerticalScroller_(True)
+        scroll_view.setAutohidesScrollers_(True)
+        scroll_view.setBorderType_(1)
+
+        self.table_view = NSTableView.alloc().initWithFrame_(scroll_view.bounds())
+        self.table_view.setDelegate_(self)
+        self.table_view.setDataSource_(self)
+
+        # Columns
+        col1 = NSTableColumn.alloc().initWithIdentifier_("category")
+        col1.setTitle_("Category")
+        col1.setWidth_(180)
+        self.table_view.addTableColumn_(col1)
+
+        col2 = NSTableColumn.alloc().initWithIdentifier_("confidence")
+        col2.setTitle_("Conf")
+        col2.setWidth_(50)
+        self.table_view.addTableColumn_(col2)
+
+        col3 = NSTableColumn.alloc().initWithIdentifier_("patterns")
+        col3.setTitle_("Detection Patterns (Keywords/Domains)")
+        col3.setWidth_(420)
+        self.table_view.addTableColumn_(col3)
+
+        scroll_view.setDocumentView_(self.table_view)
+        content.addSubview_(scroll_view)
+
+        # Info label
+        info_label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 50, 660, 20))
+        info_label.setStringValue_("💡 These patterns are used to auto-classify your activity")
+        info_label.setBezeled_(False)
+        info_label.setDrawsBackground_(False)
+        info_label.setEditable_(False)
+        info_label.setSelectable_(False)
+        content.addSubview_(info_label)
+
+        # Close button
+        close_btn = NSButton.alloc().initWithFrame_(NSMakeRect(580, 10, 100, 32))
+        close_btn.setTitle_("Close")
+        close_btn.setBezelStyle_(1)
+        close_btn.setTarget_(self)
+        close_btn.setAction_("onClose:")
+        content.addSubview_(close_btn)
+
+    def _refresh_table(self, search_term=""):
+        """Refresh table data with optional search filter"""
+        self.filtered_data = []
+        
+        search_lower = search_term.lower().strip()
+        
+        for tool_key, tool_config in sorted(self.tool_data.items()):
+            category = tool_config.get("category", "Unknown")
+            confidence = tool_config.get("confidence", 0)
+            keywords = tool_config.get("keywords", [])
+            domains = tool_config.get("domains", [])
+            
+            # Create pattern summary
+            patterns = []
+            if keywords:
+                patterns.extend(keywords[:3])  # First 3 keywords
+            if domains:
+                patterns.extend(domains[:2])   # First 2 domains
+            
+            pattern_str = ", ".join(patterns)
+            if len(keywords) + len(domains) > 5:
+                pattern_str += f" (+{len(keywords) + len(domains) - 5} more)"
+            
+            # Search filter
+            if search_lower:
+                searchable = f"{category} {pattern_str}".lower()
+                if search_lower not in searchable:
+                    continue
+            
+            self.filtered_data.append({
+                "category": category,
+                "confidence": f"{int(confidence * 100)}%",
+                "patterns": pattern_str or "(no patterns)",
+            })
+        
+        # Update count label
+        total = len(self.tool_data)
+        shown = len(self.filtered_data)
+        if search_lower:
+            self.count_label.setStringValue_(f"Showing {shown} of {total} tools")
+        else:
+            self.count_label.setStringValue_(f"{total} tools")
+        
+        if hasattr(self, 'table_view'):
+            self.table_view.reloadData()
+
+    # Search handlers
+    def onSearch_(self, sender):
+        search_term = str(self.search_field.stringValue())
+        self._refresh_table(search_term)
+
+    def onClear_(self, _sender):
+        self.search_field.setStringValue_("")
+        self._refresh_table()
+
+    # DataSource
+    def numberOfRowsInTableView_(self, _table_view):
+        return len(self.filtered_data)
+
+    def tableView_objectValueForTableColumn_row_(self, _table_view, table_column, row):
+        if row >= len(self.filtered_data):
+            return ""
+        
+        entry = self.filtered_data[row]
+        identifier = table_column.identifier()
+        return entry.get(identifier, "")
+
+    def onClose_(self, _sender):
+        # ✅ FIXED: Just hide - don't change activation policy!
+        self.orderOut_(None)
 
 
 # ------------------------------------------------------------
@@ -629,11 +801,16 @@ class TimeTrackerMenuBar(NSObject):
         self.client_mgr = ClientManager()
         self.state = GUIState()
 
+        self.open_windows = []
+
         # External callbacks (set by run_gui_app)
         self.on_client_confirmed_callback = None
         self.on_client_rejected_callback = None
         self.get_today_time_callback = None
         self.get_ai_guess_callback = None
+
+        # Initialize CPA tools data early
+        self.cpa_tools_data = {}
 
         self._setup_menu_bar()
         self._setup_windows()
@@ -648,6 +825,12 @@ class TimeTrackerMenuBar(NSObject):
         )
 
         return self
+
+    def refresh_cpa_tools_window(self):
+        """Refresh CPA tools window with new data"""
+        if hasattr(self, 'cpa_tools_window') and self.cpa_tools_window:
+            self.cpa_tools_window.tool_data = self.cpa_tools_data or {}
+            self.cpa_tools_window._refresh_table()
 
     def _setup_menu_bar(self):
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
@@ -687,6 +870,14 @@ class TimeTrackerMenuBar(NSObject):
 
         self.menu.addItem_(NSMenuItem.separatorItem())
 
+        tools_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "CPA Tools Reference...", "onCPATools:", ""
+        )
+        tools_item.setTarget_(self)
+        self.menu.addItem_(tools_item)
+        
+        self.menu.addItem_(NSMenuItem.separatorItem())
+
         quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Quit", "terminate:", ""
         )
@@ -696,16 +887,13 @@ class TimeTrackerMenuBar(NSObject):
         self._update_switch_submenu()
 
     def _setup_windows(self):
-        self.prompt_window = FloatingPromptWindow.alloc().initWithClientManager_state_callback_(
-            self.client_mgr, self.state, self._on_prompt_response
-        )
-        self.client_mgmt_window = ClientManagementWindow.alloc().initWithClientManager_callback_(
-            self.client_mgr, self._on_clients_changed
-        )
-        self.today_time_window = TodayTimeWindow.alloc().initWithApiCallback_(
-            self._get_today_time
-        )
-
+        """Initialize window references to None - create on demand"""
+        self.prompt_window = None
+        self.client_mgmt_window = None
+        self.today_time_window = None
+        self.cpa_tools_window = None
+        
+        # Smart controller setup
         def _get_ai_guess():
             if hasattr(self, "get_ai_guess_callback") and self.get_ai_guess_callback:
                 try:
@@ -762,7 +950,6 @@ class TimeTrackerMenuBar(NSObject):
         if client_id == 0:
             self.state.set_client(None, "No Client")
             print(f"[GUI] Client cleared locally")
-            # Sync to backend
             if self.set_current_client_callback:
                 try:
                     self.set_current_client_callback(0)
@@ -774,7 +961,6 @@ class TimeTrackerMenuBar(NSObject):
             if client:
                 self.state.set_client(client["id"], client["name"])
                 print(f"[GUI] Switched to client: {client['name']}")
-                # Sync to backend
                 if self.set_current_client_callback:
                     try:
                         success = self.set_current_client_callback(client_id)
@@ -787,21 +973,52 @@ class TimeTrackerMenuBar(NSObject):
         self.updateMenu_(None)
 
     def onManageClients_(self, _sender):
-        NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
-        self.client_mgmt_window.makeKeyAndOrderFront_(None)
-        NSApp.activateIgnoringOtherApps_(True)
+        """Show client management - RECREATE every time"""
+        window = ClientManagementWindow.alloc().initWithClientManager_callback_(
+            self.client_mgr, self._on_clients_changed
+        )
+        self.open_windows.append(window)  # ✅ Keep alive
+        window.center()
+        window.makeKeyAndOrderFront_(None)
+        NSApp.activateIgnoringOtherApps_(True)  # ✅ Force to front
 
     def onTodayTime_(self, _sender):
-        self.today_time_window.show_and_refresh()
+        window = TodayTimeWindow.alloc().initWithApiCallback_(self._get_today_time)
+        self.open_windows.append(window)  # ✅ Keep alive
+        window.center()
+        window.makeKeyAndOrderFront_(None)
+        NSApp.activateIgnoringOtherApps_(True)  # ✅ Force to front
+        window.onRefresh_(None)
+
+    def onCPATools_(self, _sender):
+        """Show CPA tools - RECREATE every time"""
+        window = CPAToolsWindow.alloc().initWithToolData_(
+            getattr(self, 'cpa_tools_data', {})
+        )
+        self.open_windows.append(window)  # ✅ Keep alive
+        window.center()
+        window.makeKeyAndOrderFront_(None)
+        NSApp.activateIgnoringOtherApps_(True)  # ✅ Force to front
+
+    def show_client_prompt(self, client_id: int, client_name: str,
+                           confidence: float, prompt_data: dict):
+        """Show prompt window - RECREATE every time"""
+        window = FloatingPromptWindow.alloc().initWithClientManager_state_callback_(
+            self.client_mgr, self.state, self._on_prompt_response
+        )
+        self.open_windows.append(window)  # ✅ Keep alive
+        args = (client_id, client_name, confidence, prompt_data)
+        window.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "showPromptInternal:", args, True
+        )
+        NSApp.activateIgnoringOtherApps_(True)  # ✅ Force to front
+    
 
     def _on_clients_changed(self):
         self._update_switch_submenu()
-        if self.prompt_window.isVisible():
-            self.prompt_window._update_dropdown()
 
     def _on_prompt_response(self, confirmed: bool, client_id: Optional[int],
                             client_name: Optional[str], prompt_data: dict):
-        print(f"[DEBUG] _on_prompt_response: confirmed={confirmed}, id={client_id}, name={client_name}")
         if confirmed and client_id and client_name:
             self.state.set_client(client_id, client_name)
             print(f"[GUI] Client confirmed: {client_name}")
@@ -817,12 +1034,12 @@ class TimeTrackerMenuBar(NSObject):
             return self.get_today_time_callback()
         return []
 
-    def show_client_prompt(self, client_id: int, client_name: str,
-                           confidence: float, prompt_data: dict):
-        args = (client_id, client_name, confidence, prompt_data)
-        self.prompt_window.performSelectorOnMainThread_withObject_waitUntilDone_(
-            "showPromptInternal:", args, True
-        )
+    # def show_client_prompt(self, client_id: int, client_name: str,
+    #                        confidence: float, prompt_data: dict):
+    #     args = (client_id, client_name, confidence, prompt_data)
+    #     self.prompt_window.performSelectorOnMainThread_withObject_waitUntilDone_(
+    #         "showPromptInternal:", args, True
+    #     )
 
 
 # ------------------------------------------------------------
@@ -832,19 +1049,20 @@ def run_gui_app(on_client_confirmed: Callable,
                 on_client_rejected: Callable,
                 get_today_time: Callable,
                 get_ai_guess: Callable = None,
-                # NEW: Backend sync callbacks
                 fetch_clients: Callable = None,
                 set_current_client: Callable = None,
-                get_current_client: Callable = None):
+                get_current_client: Callable = None,
+                cpa_tools_data: dict = None):
     """
-    MODIFIED: Now accepts backend sync callbacks
+    Initialize and run the GUI menu bar app.
     """
     if not GUI_AVAILABLE:
         print("[GUI] GUI components not available")
         return None
 
     app = NSApplication.sharedApplication()
-    app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    # ✅ FIXED: Stay in Regular mode - windows need this to render properly
+    app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
 
     menu_bar = TimeTrackerMenuBar.alloc().init()
     menu_bar.on_client_confirmed_callback = on_client_confirmed
@@ -852,13 +1070,15 @@ def run_gui_app(on_client_confirmed: Callable,
     menu_bar.get_today_time_callback = get_today_time
     menu_bar.get_ai_guess_callback = get_ai_guess
     
-    # NEW: Set backend sync callbacks
+    # Backend sync callbacks
     menu_bar.fetch_clients_callback = fetch_clients
     menu_bar.set_current_client_callback = set_current_client
     menu_bar.get_current_client_callback = get_current_client
+    
+    # Set CPA tools data and refresh window
+    menu_bar.cpa_tools_data = cpa_tools_data or {}
+    menu_bar.refresh_cpa_tools_window()
 
-
-    # ✅ ADD THESE 3 LINES:
     if fetch_clients:
         menu_bar.client_mgr.load(fetch_clients)
         menu_bar._update_switch_submenu()
@@ -881,12 +1101,11 @@ if __name__ == "__main__":
 
     def test_get_today():
         return [
-            {"client": "Acme Corp", "hours": 3.5},
-            {"client": "Beta Industries", "hours": 2.0},
-            {"client": "Gamma LLC", "hours": 1.25},
+            {"client": "Acme Corp", "total_hours": 3.5},
+            {"client": "Beta Industries", "total_hours": 2.0},
+            {"client": "Gamma LLC", "total_hours": 1.25},
         ]
 
-    # Simple AI stub (suggests Beta sometimes)
     def test_ai_guess():
         if random.random() < 0.40:
             return {
@@ -900,7 +1119,6 @@ if __name__ == "__main__":
     menu_bar = run_gui_app(test_confirmed, test_rejected, test_get_today, get_ai_guess=test_ai_guess)
 
     if menu_bar:
-        # Manual test prompt after 3s
         def show_test_prompt():
             time.sleep(3)
             menu_bar.show_client_prompt(

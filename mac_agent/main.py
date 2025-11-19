@@ -38,6 +38,8 @@ from Quartz import (
     kCGEventMouseMoved,
 )
 
+
+
 # Notifications (PyObjC)
 try:
     import objc
@@ -49,6 +51,17 @@ try:
     NOTIF_AVAILABLE = True
 except Exception:
     NOTIF_AVAILABLE = False
+
+# ✅ ADD THIS:
+try:
+    import AppKit
+    info = AppKit.NSBundle.mainBundle().infoDictionary()
+    info["LSUIElement"] = "1"
+except Exception:
+    pass
+
+info = AppKit.NSBundle.mainBundle().infoDictionary()
+info["LSUIElement"] = "1"
 
 
 # ---------------- Config ----------------
@@ -105,6 +118,10 @@ EXCLUDE_BUNDLES   = set(_get("exclude_bundles", os.getenv("AGENT_EXCLUDE_BUNDLES
 DB_PATH           = _get("db_path", os.getenv("MAC_AGENT_DB")) or DB_PATH_DEFAULT
 CONTEXT_PORT      = int(_get("context_port", os.getenv("AGENT_CONTEXT_PORT")) or 7321)
 CONTROL_POLL_S    = int(_get("agent_control_poll_seconds", 10))
+
+# ✅ ADD THIS: Exclude Python itself to avoid tracking the GUI
+EXCLUDE_BUNDLES.add("org.python.python")
+EXCLUDE_BUNDLES.add("com.apple.python3")
 
 # Optional: preset pair_code for headless pairing (config/env)
 PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
@@ -1046,8 +1063,37 @@ def http_get_json(url: str, headers: dict, timeout=6) -> dict:
         log(f"[CTRL] HTTP {e.code} from control: {body[:200]}")
         return {}
     except Exception as e:
-        log(f"[CTRL] get error: {e}")
+        # Only log every 60 seconds to avoid spam during Docker restarts
+        if not hasattr(http_get_json, '_last_error_log'):
+            http_get_json._last_error_log = 0
+        now = time.time()
+        if now - http_get_json._last_error_log > 60:
+            log(f"[CTRL] get error: {e}")
+            http_get_json._last_error_log = now
         return {}
+
+def should_stop(control_url: str, user: str, host: str) -> bool:
+    global _last_control_check
+    now = time.time()
+    if now - _last_control_check < CONTROL_POLL_S:
+        return False
+    _last_control_check = now
+    
+    qs = f"?host={host}"
+    headers = api_headers(user, host)
+    
+    # Retry up to 2 times with short delay
+    for attempt in range(2):
+        data = http_get_json(control_url + qs, headers, timeout=3)
+        if data:  # Success
+            break
+        if attempt == 0:  # First retry
+            time.sleep(0.5)
+    
+    stop = bool(data.get("stop"))
+    if stop:
+        log(f"[CTRL] Stop received from server: reason={data.get('reason','')}")
+    return stop
 
 def looks_toolish(bundle_id: Optional[str], url: Optional[str]) -> tuple[bool, str, str]:
     """Return (toolish, reason, host)."""
@@ -1708,19 +1754,24 @@ def fetch_today_time():
     """Fetch today's time for GUI display"""
     api_key = config.get("api_key") or API_KEY
     if not api_key or not API_BASE:
+        print("[GUI] No API key or API_BASE configured")
         return []
     
     url = f"{API_BASE}/today-time/"
     req = urllib.request.Request(url, method="GET")
-    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Authorization", f"DeviceKey {api_key}")  # ✅ Fixed!
     req.add_header("Content-Type", "application/json")
     
     try:
         with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read())
+            print(f"[GUI] Today's time data: {len(data)} entries")  # Debug
             if isinstance(data, list):
                 return data
             return []
+    except urllib.error.HTTPError as e:
+        print(f"[GUI] HTTP {e.code} fetching today's time")
+        return []
     except Exception as e:
         print(f"[GUI] Failed to fetch today's time: {e}")
         return []
@@ -1775,7 +1826,9 @@ def run_agent():
                 get_today_time=fetch_today_time,
                 fetch_clients=lambda: fetch_clients_from_backend(API_BASE, API_KEY),  # ✅ Add this!
                 set_current_client=lambda client_id: set_current_client_backend(API_BASE, API_KEY, client_id),  # ✅ Add this!
-                get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY)  # ✅ Add this!
+                get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY),  # ✅ Add this!
+                cpa_tools_data=CPA_TOOL_DETECTION  # ✅ NEW: Pass the dictionary
+
             )
             log("[GUI] Menu bar initialized")
         except Exception as e:

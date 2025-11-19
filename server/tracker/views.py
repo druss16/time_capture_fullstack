@@ -681,9 +681,31 @@ def get_org_or_default(request):
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
-@ensure_csrf_cookie
 def get_csrf(request):
-    return Response({"ok": True})
+    """
+    Explicitly set CSRF cookie with proper cross-origin attributes.
+    """
+    from django.middleware.csrf import get_token
+    from django.conf import settings
+    
+    # Force Django to generate a CSRF token
+    csrf_token = get_token(request)
+    
+    resp = Response({"ok": True, "csrfToken": csrf_token})
+    
+    # Explicitly set the cookie with all required attributes
+    resp.set_cookie(
+        key='csrftoken',
+        value=csrf_token,
+        max_age=31449600,  # 1 year
+        secure=settings.CSRF_COOKIE_SECURE,  # True in production
+        httponly=False,  # Must be False so JS can read it
+        samesite='None',  # Required for cross-origin
+        domain=None,  # Let browser set it
+        path='/',
+    )
+    
+    return resp
 
 def _get_user_obj(username: Optional[str]):
     if not username:

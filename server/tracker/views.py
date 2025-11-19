@@ -3631,11 +3631,11 @@ from django.views.decorators.csrf import csrf_exempt
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@csrf_exempt  # ✅ No CSRF needed - username/password is already secure
+@csrf_exempt
 def auth_login(request):
     """
     JSON login endpoint for SPA frontend.
-    CSRF exempted because username/password authentication provides sufficient security.
+    CSRF exempted because username/password provides sufficient security.
     """
     data = request.data or {}
     username = (data.get("username") or "").strip()
@@ -3656,7 +3656,6 @@ def auth_login(request):
 
     perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
 
-    # Build the signed bundle cookie
     host = request.get_host() or "browser"
     bundle = {"username": user.username, "host": host, "ts": timezone.now().isoformat()}
     signed = signing.dumps(bundle, salt="browser-ident-v1")

@@ -3629,13 +3629,15 @@ from django.views.decorators.csrf import csrf_exempt
 
 from django.views.decorators.csrf import csrf_exempt
 
+import secrets
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @csrf_exempt
 def auth_login(request):
     """
-    JSON login endpoint for SPA frontend.
-    CSRF exempted because username/password provides sufficient security.
+    JSON login endpoint - returns auth token in response body.
+    No cookies needed (works even when browsers block third-party cookies).
     """
     data = request.data or {}
     username = (data.get("username") or "").strip()
@@ -3654,26 +3656,24 @@ def auth_login(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
+    # Generate auth token
+    token = secrets.token_urlsafe(32)
+    
+    # Store token in user session (or create a Token model)
+    request.session['auth_token'] = token
+    request.session['user_id'] = user.id
+    
     perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
 
-    host = request.get_host() or "browser"
-    bundle = {"username": user.username, "host": host, "ts": timezone.now().isoformat()}
-    signed = signing.dumps(bundle, salt="browser-ident-v1")
-
-    resp = Response({
+    return Response({
         "ok": True,
+        "token": token,  # ✅ Return token in response
         "user": {
             "id": user.id,
             "username": user.username,
             "email": user.email or ""
         }
     })
-    
-    resp.set_cookie(COOKIE_USER_KEY, user.username, samesite="None", secure=True, path="/")
-    resp.set_cookie(COOKIE_HOST_KEY, host, samesite="None", secure=True, path="/")
-    resp.set_cookie(COOKIE_BUNDLE, signed, samesite="None", secure=True, httponly=False, path="/")
-    
-    return resp
 
 
 from django.views.decorators.csrf import csrf_exempt

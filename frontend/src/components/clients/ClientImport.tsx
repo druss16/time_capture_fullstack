@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { uploadClientCSV } from '../api/clients';
 import { API_BASE } from '@/lib/api';
 import { postJson } from '@/lib/csrf';
-import { API_BASE } from '@/api/api';
 
 
 export function ClientImport() {

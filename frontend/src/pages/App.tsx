@@ -32,7 +32,7 @@ const Login = lazy(() => import("./Login"));
 const Signup = lazy(() => import("./Signup"));
 const NotFound = lazy(() => import("./NotFound"));
 
-import { safeFetchJson, API_BASE } from '@/api/api';
+import { safeFetchJson, API_BASE } from "@/lib/api";
 
 
 // --------- ENV / helpers ---------

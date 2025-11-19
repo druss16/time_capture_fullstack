@@ -7,7 +7,6 @@ import { Search, Plus, Upload, Pencil, Trash2 } from 'lucide-react';
 import { API_BASE } from '@/lib/api';
 import { postJson } from '@/lib/csrf';
 
-import { safeFetchJson, API_BASE } from '@/api/api';
 
 
 interface Client {

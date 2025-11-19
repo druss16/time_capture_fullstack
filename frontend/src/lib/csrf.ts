@@ -1,30 +1,45 @@
 // src/lib/csrf.ts
-// Resolve API base locally (no external imports to avoid circular deps)
 const DEFAULT_API_BASE = (() => {
   const raw = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123";
   const base = raw.replace(/\/+$/, "");
   return base.endsWith("/api") ? base : `${base}/api`;
 })();
 
-/** Hit /api/get-csrf/ so Django sets the csrftoken cookie */
-/** Hit /api/get-csrf/ so Django sets the csrftoken cookie */
+/** Hit /api/get-csrf/ and store token in sessionStorage */
 export async function primeCsrf(apiBase?: string) {
   const base = (apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
   try {
-    await fetch(`${base}/get-csrf/`, {  // ✅ FIXED: Backtick in correct position
+    const response = await fetch(`${base}/get-csrf/`, {
       credentials: "include",
       headers: { "X-Requested-With": "XMLHttpRequest" },
     });
+    
+    const data = await response.json();
+    
+    // ✅ Store token in sessionStorage (fallback for blocked cookies)
+    if (data.csrfToken) {
+      sessionStorage.setItem('csrfToken', data.csrfToken);
+    }
   } catch {
     // swallow; we'll retry on 403 during POST
   }
 }
 
 export function getCookie(name: string) {
-  return document.cookie
+  // Try cookie first
+  const cookieValue = document.cookie
     .split("; ")
     .find((row) => row.startsWith(name + "="))
     ?.split("=")[1];
+  
+  if (cookieValue) return cookieValue;
+  
+  // ✅ Fallback to sessionStorage if cookie blocked
+  if (name === 'csrftoken') {
+    return sessionStorage.getItem('csrfToken') || undefined;
+  }
+  
+  return undefined;
 }
 
 /** Small helper used by callers. Retries once after priming CSRF. */

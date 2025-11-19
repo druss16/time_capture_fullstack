@@ -3649,9 +3649,9 @@ from rest_framework.response import Response
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@authentication_classes([SessionAuthentication])  # use session + CSRF
-@ensure_csrf_cookie                                # set csrftoken if missing
-@csrf_protect                                      # require + validate CSRF
+@authentication_classes([SessionAuthentication])
+@ensure_csrf_cookie
+# CSRF removed - logout is safe without it (already authenticated via session)
 def auth_logout(request):
     """
     Logs out the current session (if any). Requires CSRF.

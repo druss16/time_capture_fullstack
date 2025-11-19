@@ -683,25 +683,26 @@ def get_org_or_default(request):
 @permission_classes([AllowAny])
 def get_csrf(request):
     """
-    Explicitly set CSRF cookie with proper cross-origin attributes.
+    Return CSRF token in response body (for browsers that block cookies).
     """
     from django.middleware.csrf import get_token
-    from django.conf import settings
     
-    # Force Django to generate a CSRF token
+    # Generate token
     csrf_token = get_token(request)
     
-    resp = Response({"ok": True, "csrfToken": csrf_token})
+    resp = Response({
+        "ok": True,
+        "csrfToken": csrf_token  # ← Return in body
+    })
     
-    # Explicitly set the cookie with all required attributes
+    # Still try to set cookie (for browsers that allow it)
     resp.set_cookie(
         key='csrftoken',
         value=csrf_token,
-        max_age=31449600,  # 1 year
-        secure=settings.CSRF_COOKIE_SECURE,  # True in production
-        httponly=False,  # Must be False so JS can read it
-        samesite='None',  # Required for cross-origin
-        domain=None,  # Let browser set it
+        max_age=31449600,
+        secure=True,
+        httponly=False,
+        samesite='None',
         path='/',
     )
     

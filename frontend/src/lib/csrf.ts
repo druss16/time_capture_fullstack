@@ -7,12 +7,11 @@ const DEFAULT_API_BASE = (() => {
 })();
 
 /** Hit /api/get-csrf/ so Django sets the csrftoken cookie */
+/** Hit /api/get-csrf/ so Django sets the csrftoken cookie */
 export async function primeCsrf(apiBase?: string) {
   const base = (apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
   try {
-    // ❌ BUG WAS HERE - fetch`...` is wrong syntax
-    // ✅ FIXED: Should be fetch(`...`)
-    await fetch(`${base}/get-csrf/`, {
+    await fetch(`${base}/get-csrf/`, {  // ✅ FIXED: Backtick in correct position
       credentials: "include",
       headers: { "X-Requested-With": "XMLHttpRequest" },
     });

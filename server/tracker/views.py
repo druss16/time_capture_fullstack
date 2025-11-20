@@ -4450,6 +4450,7 @@ def complete_onboarding(request):
 @permission_classes([IsAuthenticated])
 def today_time(request):
     """Get today's tracked time organized by client → category."""
+    from datetime import datetime, timedelta
     from collections import defaultdict
     
     user = request.user
@@ -4460,14 +4461,26 @@ def today_time(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
     
-    # ✅ Use the same date range logic
-    start_utc, end_utc = _start_end_of_local_day_utc(None)  # None = today
+    # Get today's date range
+    target_date = timezone.localdate()
+    tz = timezone.get_current_timezone()
+    start_local = timezone.make_aware(
+        datetime.combine(target_date, datetime.min.time()), 
+        tz
+    )
+    end_local = start_local + timedelta(days=1)
+    
+    # Convert to UTC
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
     
     blocks = Block.objects.filter(
         user=user,
-        start__gte=start_utc,  # ✅ CHANGED
-        start__lt=end_utc      # ✅ CHANGED
+        start__gte=start_utc,
+        start__lt=end_utc
     ).select_related('client').order_by('start')
+    
+    # ... rest stays the same
     
     # Helper: union of time spans (avoid overlaps)
     def union_minutes(spans):
@@ -4680,7 +4693,7 @@ def group_into_sessions(blocks, max_gap_minutes=15, min_idle_minutes=5):
 @permission_classes([IsAuthenticated])
 def get_categorization_data(request):
     """Get uncategorized blocks for manual categorization."""
-    from datetime import timedelta
+    from datetime import datetime, timedelta
     from django.utils.dateparse import parse_date
     
     user = request.user
@@ -4693,20 +4706,37 @@ def get_categorization_data(request):
         from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
-    # ✅ Use the same date range logic as blocks_today
-    start_utc, end_utc = _start_end_of_local_day_utc(date_str)
+    # Parse target date
+    if date_str:
+        target_date = parse_date(date_str)
+    else:
+        target_date = timezone.localdate()
+    
+    # Build datetime range for the day (in user's timezone)
+    tz = timezone.get_current_timezone()
+    start_local = timezone.make_aware(
+        datetime.combine(target_date, datetime.min.time()), 
+        tz
+    )
+    end_local = start_local + timedelta(days=1)
+    
+    # Convert to UTC
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
     
     # Only show blocks older than 10 minutes
     cutoff_time = timezone.now() - timedelta(minutes=10)
     
-    # Get uncategorized blocks for the day
+    # Get uncategorized blocks
     blocks = Block.objects.filter(
         user=user,
-        start__gte=start_utc,  # ✅ CHANGED
-        start__lt=end_utc,     # ✅ CHANGED
+        start__gte=start_utc,
+        start__lt=end_utc,
         is_categorized=False,
         start__lt=cutoff_time
     ).select_related('client').order_by('start')[:limit]
+    
+    # ... rest of function stays the same
     
     original_count = len(blocks)
     

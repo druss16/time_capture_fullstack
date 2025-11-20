@@ -4447,25 +4447,26 @@ def complete_onboarding(request):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])  # ✅ Changed from PermUI
+@permission_classes([IsAuthenticated])
 def today_time(request):
-    """
-    Get today's tracked time organized by client → category.
-    Uses union-of-spans to avoid double-counting overlapping blocks.
-    
-    ✅ NO COMPACTION - this is a read-only endpoint!
-    """
+    """Get today's tracked time organized by client → category."""
     from datetime import date
     from collections import defaultdict
     
-    # ✅ Just get user - don't compact on every read!
     user = request.user
+    
+    if not user.is_authenticated:
+        return Response(
+            {"error": "Authentication required"},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+    
     today = date.today()
     
-    # Get ALL blocks for today
+    # ✅ FIXED: Use start__date instead of day
     blocks = Block.objects.filter(
         user=user,
-        day=today
+        start__date=today  # ✅ CHANGED: day → start__date
     ).select_related('client').order_by('start')
     
     # Helper: union of time spans (avoid overlaps)

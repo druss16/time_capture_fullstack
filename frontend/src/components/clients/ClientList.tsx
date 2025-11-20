@@ -33,7 +33,7 @@ export function ClientList() {
   // Replace the fetchClients function (around line 27-42):
   const fetchClients = async () => {
     try {
-      const data = await safeFetchJson<Client[]>(`${API_BASE}/clients/`);
+      const data = await safeFetchJson<Client[]>(`${API_BASE}/clients/list/`);
       setClients(data);
     } catch (error) {
       console.error('Error fetching clients:', error);

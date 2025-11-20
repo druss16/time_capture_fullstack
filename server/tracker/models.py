@@ -290,6 +290,22 @@ class UserWorkPattern(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.pattern_type}: {self.pattern_key[:50]}"
 
+
+class AuthToken(models.Model):
+    """
+    Authentication token (used when cookies are blocked).
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='auth_tokens')
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    
+    class Meta:
+        db_table = "tracker_authtoken"  # ✅ Fixed: db_table, not db_name
+    
+    def is_valid(self):
+        return timezone.now() < self.expires_at
+
 # ===========================
 # ======  CORE MODELS  ======
 # ===========================
@@ -562,7 +578,7 @@ class Block(models.Model):
         category = self.ai_category or list(self.category_hours.keys())[0] if self.category_hours else 'Unclassified'
         return f"{status} {self.user.username} - {category} - {self.day}"
 
-        
+
 class Suggestion(models.Model):
     block = models.ForeignKey(Block, on_delete=models.CASCADE, related_name="suggestions")
     label_type = models.CharField(max_length=20, choices=[("client", "client"), ("project", "project"), ("task", "task")])

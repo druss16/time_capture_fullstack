@@ -3482,37 +3482,32 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 @api_view(["GET"])
-@authentication_classes([])  # ✅ Disable all authentication checks
+@authentication_classes([])
 @permission_classes([AllowAny])
 def whoami(request):
-    """
-    Check authentication via multiple methods.
-    Authentication is manual - we don't use DRF's authentication classes.
-    """
-    # 1) Check Authorization header for Bearer token
+    """Check authentication via token in database."""
+    from tracker.models import AuthToken
+    
+    # 1) Check Authorization header
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header.replace("Bearer ", "", 1).strip()
         
-        # Validate against session
-        session_token = request.session.get("auth_token")
-        user_id = request.session.get("user_id")
-        
-        if token and session_token == token and user_id:
-            try:
-                user = User.objects.get(id=user_id)
+        try:
+            auth_token = AuthToken.objects.select_related('user').get(token=token)
+            if auth_token.is_valid():
                 return Response({
                     "is_authenticated": True,
                     "auth_source": "token",
-                    "username": user.username,
-                    "user_id": user.id,
+                    "username": auth_token.user.username,
+                    "user_id": auth_token.user.id,
                     "host": None,
                     "device_id": None,
                 })
-            except User.DoesNotExist:
-                pass
+        except AuthToken.DoesNotExist:
+            pass
     
-    # 2) Agent API key (manual check)
+    # 2) Agent API key
     agent_key = (
         request.headers.get("X-Agent-Key")
         or request.headers.get("Agent-Key")
@@ -3545,7 +3540,7 @@ def whoami(request):
             "device_id": None,
         })
     
-    # 4) Unknown (not an error - just not authenticated)
+    # 4) Unknown
     return Response({
         "is_authenticated": False,
         "auth_source": "unknown",
@@ -3610,14 +3605,14 @@ from django.views.decorators.csrf import csrf_exempt
 
 import secrets
 
+import secrets
+from datetime import timedelta
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @csrf_exempt
 def auth_login(request):
-    """
-    JSON login endpoint - returns auth token in response body.
-    No cookies needed (works even when browsers block third-party cookies).
-    """
+    """JSON login endpoint - returns token stored in database."""
     data = request.data or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -3635,18 +3630,21 @@ def auth_login(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # Generate auth token
-    token = secrets.token_urlsafe(32)
+    # Generate token and store in database
+    from tracker.models import AuthToken
     
-    # Store token in user session (or create a Token model)
-    request.session['auth_token'] = token
-    request.session['user_id'] = user.id
+    token_value = secrets.token_urlsafe(32)
+    expires_at = timezone.now() + timedelta(days=14)  # 2 weeks
     
-    perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
+    AuthToken.objects.create(
+        user=user,
+        token=token_value,
+        expires_at=expires_at
+    )
 
     return Response({
         "ok": True,
-        "token": token,  # ✅ Return token in response
+        "token": token_value,
         "user": {
             "id": user.id,
             "username": user.username,

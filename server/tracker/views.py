@@ -4451,6 +4451,7 @@ def complete_onboarding(request):
 def today_time(request):
     """Get today's tracked time organized by client → category."""
     from datetime import datetime, timedelta
+    from datetime import timezone as dt_timezone  # ✅ ADD THIS
     from collections import defaultdict
     
     user = request.user
@@ -4469,6 +4470,18 @@ def today_time(request):
         tz
     )
     end_local = start_local + timedelta(days=1)
+    
+    # Convert to UTC
+    start_utc = start_local.astimezone(dt_timezone.utc)  # ✅ CHANGED
+    end_utc = end_local.astimezone(dt_timezone.utc)      # ✅ CHANGED
+    
+    blocks = Block.objects.filter(
+        user=user,
+        start__gte=start_utc,
+        start__lt=end_utc
+    ).select_related('client').order_by('start')
+    
+    # ... rest stays the same
     
     # Convert to UTC
     start_utc = start_local.astimezone(timezone.utc)

@@ -73,15 +73,8 @@ export default function DailyReview() {
     setBusy(true);
     setErr(null);
     try {
-      const res = await fetch(`${API_BASE}/today-time/`, {
-        credentials: 'include'
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setTimeSummary(json);
-      } else {
-        throw new Error(`HTTP ${res.status}`);
-      }
+      const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/`);
+      setTimeSummary(json);
     } catch (err: any) {
       console.error('Failed to load time summary:', err);
       setErr(err?.message || 'Failed to load time summary');
@@ -90,16 +83,11 @@ export default function DailyReview() {
     }
   }, []);
 
-  // Fetch uncategorized count
+  // Replace loadUncategorizedCount:
   const loadUncategorizedCount = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/categorization/data/?date=${date}`, {
-        credentials: 'include'
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setUncategorizedCount(data.blocks?.length || 0);
-      }
+      const data = await safeFetchJson<{blocks: any[]}>(`${API_BASE}/categorization/data/?date=${date}`);
+      setUncategorizedCount(data.blocks?.length || 0);
     } catch (err) {
       console.error('Failed to fetch uncategorized count:', err);
     }

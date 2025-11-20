@@ -4447,7 +4447,7 @@ def complete_onboarding(request):
 
 
 @api_view(["GET"])
-@permission_classes([PermUI])
+@permission_classes([IsAuthenticated])  # ✅ Changed from PermUI
 def today_time(request):
     """
     Get today's tracked time organized by client → category.

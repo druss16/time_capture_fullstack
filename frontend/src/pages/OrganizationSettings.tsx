@@ -4,6 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { safeFetchJson } from '@/lib/api';
+
 
 interface OrgSettings {
   company_name: string;
@@ -56,13 +58,10 @@ export default function OrganizationSettings() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [settingsRes, entitiesRes] = await Promise.all([
-        fetch(`${API_BASE}/settings/organization/`),
-        fetch(`${API_BASE}/settings/entities/`),
+      const [settingsData, entitiesData] = await Promise.all([
+        safeFetchJson<OrgSettings>(`${API_BASE}/settings/organization/`),
+        safeFetchJson<KnownEntity[]>(`${API_BASE}/settings/entities/`),
       ]);
-      
-      const settingsData = await settingsRes.json();
-      const entitiesData = await entitiesRes.json();
       
       setSettings(settingsData);
       setEntities(entitiesData);
@@ -77,18 +76,13 @@ export default function OrganizationSettings() {
   const saveSettings = async () => {
     setSaveStatus('Saving...');
     try {
-      const response = await fetch(`${API_BASE}/settings/organization/`, {
+      await safeFetchJson(`${API_BASE}/settings/organization/`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
       });
       
-      if (response.ok) {
-        setSaveStatus('✓ Saved successfully!');
-        setTimeout(() => setSaveStatus(null), 3000);
-      } else {
-        setSaveStatus('❌ Failed to save');
-      }
+      setSaveStatus('✓ Saved successfully!');
+      setTimeout(() => setSaveStatus(null), 3000);
     } catch (error) {
       console.error('Failed to save settings:', error);
       setSaveStatus('❌ Failed to save');
@@ -122,27 +116,21 @@ export default function OrganizationSettings() {
     }
     
     try {
-      const response = await fetch(`${API_BASE}/settings/entities/`, {
+      await safeFetchJson(`${API_BASE}/settings/entities/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newEntity),
       });
       
-      if (response.ok) {
-        await loadData();
-        // Reset form for next entity
-        setNewEntity({
-          entity_type: 'client',
-          name: '',
-          aliases: [],
-          description: '',
-          is_internal: false,
-        });
-        setNewAlias('');
-        alert(`✅ ${newEntity.name} added successfully! Add another or scroll down to see your list.`);
-      } else {
-        alert('Failed to add entity. Check console for errors.');
-      }
+      await loadData();
+      setNewEntity({
+        entity_type: 'client',
+        name: '',
+        aliases: [],
+        description: '',
+        is_internal: false,
+      });
+      setNewAlias('');
+      alert(`✅ ${newEntity.name} added successfully!`);
     } catch (error) {
       console.error('Failed to add entity:', error);
       alert('Failed to add entity. Check console for errors.');
@@ -154,7 +142,7 @@ export default function OrganizationSettings() {
     if (!confirm('Delete this entity?')) return;
     
     try {
-      await fetch(`${API_BASE}/settings/entities/${id}/`, {
+      await safeFetchJson(`${API_BASE}/settings/entities/${id}/`, {
         method: 'DELETE',
       });
       await loadData();

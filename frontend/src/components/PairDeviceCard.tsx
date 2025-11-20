@@ -1,5 +1,6 @@
 // src/components/PairDeviceCard.tsx
 import { useEffect, useState } from "react";
+import { safeFetchJson } from '@/lib/api';
 
 const RAW = (import.meta.env.VITE_API_BASE_URL || "http://localhost:7123").replace(/\/+$/, "");
 const API_BASE = RAW.endsWith("/api") ? RAW : `${RAW}/api`;
@@ -22,25 +23,16 @@ export default function PairDeviceCard() {
     setErr("");
     setLoading(true);
     try {
-      // make sure CSRF cookie exists (your app already calls /api/get-csrf/ at startup via AuthProvider)
-      const csrftoken = getCookie("csrftoken") || "";
-
-      const res = await fetch(`${API_BASE}/agents/pair/issue/`, {
+      const data = await safeFetchJson<PairResp>(`${API_BASE}/agents/pair/issue/`, {
         method: "POST",
-        credentials: "include",                  // send session cookie
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": csrftoken,              // required for Django session-auth POST
-        },
         body: JSON.stringify({ ttl_seconds: 600 }),
       });
-
-      const data = (await res.json()) as Partial<PairResp>;
-      if (!res.ok || !data?.code) {
-        throw new Error((data as any)?.error || "Failed to issue code");
+      
+      if (!data?.code) {
+        throw new Error("Failed to issue code");
       }
-      setCode(data.code!);
-      setExpiresAt(new Date(data.expires_at!));
+      setCode(data.code);
+      setExpiresAt(new Date(data.expires_at));
     } catch (e: any) {
       setErr(e.message || "Error issuing code");
     } finally {

@@ -254,6 +254,7 @@ CSRF_EXEMPT_URLS = ["/tracker/raw-events/"]
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "tracker.auth.AgentKeyAuthentication",
+        "tracker.auth.BearerTokenAuthentication",  # ✅ Add this first
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],

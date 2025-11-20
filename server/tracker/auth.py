@@ -40,7 +40,7 @@ class AgentKeyAuthentication(BaseAuthentication):
 
         request.agent_device = dev
         return (dev.user, None)
-        
+
 
 class AgentKeyPermission(BasePermission):
     """
@@ -60,5 +60,31 @@ class NoAuth(BaseAuthentication):
     def authenticate(self, request):
         return None
 
+# Add to tracker/auth.py
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.exceptions import AuthenticationFailed
+from tracker.models import AuthToken
 
-__all__ = ["AgentKeyAuthentication", "AgentKeyPermission", "NoAuth"]
+class BearerTokenAuthentication(BaseAuthentication):
+    """
+    Token authentication for browsers that block cookies.
+    """
+    def authenticate(self, request):
+        auth_header = request.headers.get('Authorization', '')
+        
+        if not auth_header.startswith('Bearer '):
+            return None  # Not a bearer token, try next auth method
+        
+        token = auth_header.replace('Bearer ', '', 1).strip()
+        
+        try:
+            auth_token = AuthToken.objects.select_related('user').get(token=token)
+            if auth_token.is_valid():
+                return (auth_token.user, None)
+        except AuthToken.DoesNotExist:
+            pass
+        
+        return None  # Invalid token, try next auth method
+
+
+__all__ = ["AgentKeyAuthentication", "AgentKeyPermission", "NoAuth", "BearerTokenAuthentication"]

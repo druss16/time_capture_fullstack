@@ -19,8 +19,7 @@ class AgentKeyAuthentication(BaseAuthentication):
             auth = (request.headers.get("Authorization") or "").strip()
             if auth.startswith("DeviceKey "):
                 key = auth[len("DeviceKey "):].strip()
-            elif auth.startswith("Bearer "):  # legacy fallback
-                key = auth[len("Bearer "):].strip()
+            # ✅ REMOVED: Bearer fallback (conflicts with BearerTokenAuthentication)
 
         if not key:
             return None  # allow other authenticators to try
@@ -31,7 +30,7 @@ class AgentKeyAuthentication(BaseAuthentication):
                 .get(api_key=key, is_active=True)
             )
         except AgentDevice.DoesNotExist:
-            raise AuthenticationFailed("Invalid agent key")
+            return None  # ✅ CHANGED: Return None instead of raising (let other auth try)
 
         if not dev.user_id:
             raise AuthenticationFailed("Unlinked device")

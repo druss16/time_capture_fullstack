@@ -4689,8 +4689,8 @@ def group_into_sessions(blocks, max_gap_minutes=15, min_idle_minutes=5):
     return sessions
 
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])  # ← Will use global auth (includes tokens)
 def get_categorization_data(request):
     """
     Get uncategorized blocks for manual categorization.

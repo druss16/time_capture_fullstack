@@ -5,6 +5,8 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.permissions import BasePermission
 from rest_framework.exceptions import AuthenticationFailed
 from .models import AgentDevice
+from tracker.models import AuthToken  # ✅ Add this import
+
 
 User = get_user_model()
 

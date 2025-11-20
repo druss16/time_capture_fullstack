@@ -135,6 +135,10 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
 
   const totalHours = stats ? (stats.total_minutes / 60).toFixed(1) : '0.0';
 
+  useEffect(() => {
+    fetchCategorizationData();
+  }, [fetchCategorizationData]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">

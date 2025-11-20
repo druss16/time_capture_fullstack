@@ -4712,7 +4712,7 @@ def get_categorization_data(request):
     else:
         target_date = timezone.localdate()
     
-    # Build datetime range for the day (in user's timezone)
+    # Build datetime range for the day
     tz = timezone.get_current_timezone()
     start_local = timezone.make_aware(
         datetime.combine(target_date, datetime.min.time()), 
@@ -4727,20 +4727,20 @@ def get_categorization_data(request):
     # Only show blocks older than 10 minutes
     cutoff_time = timezone.now() - timedelta(minutes=10)
     
+    # ✅ FIX: Use the more restrictive end time (earlier of the two)
+    effective_end = min(end_utc, cutoff_time)
+    
     # Get uncategorized blocks
     blocks = Block.objects.filter(
         user=user,
         start__gte=start_utc,
-        start__lt=end_utc,
-        is_categorized=False,
-        start__lt=cutoff_time
+        start__lt=effective_end,  # ✅ FIXED: Only ONE start__lt
+        is_categorized=False
     ).select_related('client').order_by('start')[:limit]
-    
-    # ... rest of function stays the same
     
     original_count = len(blocks)
     
-    # Group into sessions with aggressive merging
+    # Group into sessions
     sessions = group_into_sessions(list(blocks), max_gap_minutes=15, min_idle_minutes=5)
     
     blocks_data = []
@@ -4750,7 +4750,6 @@ def get_categorization_data(request):
         total_minutes = sum(b.minutes for b in session)
         block_ids = [b.id for b in session]
         
-        # Calculate span (wall clock time)
         span_minutes = (last_block.end - first_block.start).total_seconds() / 60.0
         
         blocks_data.append({
@@ -4767,10 +4766,10 @@ def get_categorization_data(request):
             'file_path': first_block.file_path or '',
             'current_client': first_block.client.name if first_block.client else None,
             'current_client_id': first_block.client.id if first_block.client else None,
-            'suggestions': [],  # No AI for now
+            'suggestions': [],
         })
     
-    # Get list of clients for dropdown
+    # Get clients
     clients = Client.objects.filter(
         org=org,
         is_active=True
@@ -4794,7 +4793,6 @@ def get_categorization_data(request):
             'uncategorized_count': len(blocks_data),
             'total_minutes': sum(b['duration_minutes'] for b in blocks_data),
             'original_block_count': original_count,
-            'merge_ratio': f"{original_count} blocks → {len(blocks_data)} sessions"
         }
     })
 

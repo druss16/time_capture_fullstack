@@ -25,7 +25,8 @@ interface KnownEntity {
   is_internal: boolean;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
+const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
+const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
 export default function OrganizationSettings() {
   const [settings, setSettings] = useState<OrgSettings>({

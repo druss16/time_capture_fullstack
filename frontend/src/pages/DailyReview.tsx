@@ -15,6 +15,8 @@ import { todayIso } from "@/lib/utils/date";
 import { primeCsrf } from "@/lib/csrf";
 import { useWhoAmI } from "@/lib/useWhoAmI";
 import ManualCategorization from "@/components/ManualCategorization";
+import { safeFetchJson } from "@/lib/api";  // ✅ ADD THIS LINE
+
 
 // ---------- ENV ----------
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";

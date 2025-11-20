@@ -4484,8 +4484,8 @@ def today_time(request):
     # ... rest stays the same
     
     # Convert to UTC
-    start_utc = start_local.astimezone(timezone.utc)
-    end_utc = end_local.astimezone(timezone.utc)
+    start_utc = start_local..astimezone(dt_timezone.utc)
+    end_utc = end_local..astimezone(dt_timezone.utc)
     
     blocks = Block.objects.filter(
         user=user,
@@ -4734,8 +4734,8 @@ def get_categorization_data(request):
     end_local = start_local + timedelta(days=1)
     
     # Convert to UTC
-    start_utc = start_local.astimezone(timezone.utc)
-    end_utc = end_local.astimezone(timezone.utc)
+    start_utc = start_local..astimezone(dt_timezone.utc)
+    end_utc = end_local..astimezone(dt_timezone.utc)
     
     # Only show blocks older than 10 minutes
     cutoff_time = timezone.now() - timedelta(minutes=10)

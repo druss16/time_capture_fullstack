@@ -4,30 +4,29 @@ function resolveApiBase() {
   const noTrail = raw.replace(/\/+$/, "");
   return noTrail.endsWith("/api") ? noTrail : `${noTrail}/api`;
 }
+
 const API_BASE = resolveApiBase();
 
 export type WhoAmI = {
   username?: string;
   is_authenticated: boolean;
-  auth_source?: "agent" | "session" | "cookie" | "cookie_legacy" | "ip" | "unknown";
+  auth_source?: "agent" | "session" | "cookie" | "cookie_legacy" | "ip" | "token" | "unknown";
   [k: string]: any;
 };
 
 let cached: WhoAmI | null = null;
 let inflight: Promise<WhoAmI> | null = null;
 
-// small helper
 async function tryFetch(url: string, init: RequestInit, retries = 2): Promise<Response> {
   for (let i = 0; i <= retries; i++) {
     try {
       const r = await fetch(url, init);
       return r;
     } catch (e) {
-      if (i === retries) throw e;               // bubble last one
-      await new Promise(r => setTimeout(r, 250)); // tiny backoff
+      if (i === retries) throw e;
+      await new Promise(r => setTimeout(r, 250));
     }
   }
-  // ts appeasement
   return new Response(null, { status: 599 });
 }
 
@@ -35,9 +34,21 @@ export async function fetchWhoAmI(force = false): Promise<WhoAmI> {
   if (cached && !force) return cached;
   if (inflight) return inflight;
 
-  inflight = tryFetch(`${API_BASE}/whoami/`, {
+  // ✅ Get token from localStorage
+  const token = localStorage.getItem('auth_token');
+  
+  // ✅ Build headers with Authorization
+  const headers: Record<string, string> = {
+    "X-Requested-With": "XMLHttpRequest"
+  };
+  
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  inflight = tryFetch(`${API_BASE}/whoami/`, {  // ✅ Fixed syntax
     credentials: "include",
-    headers: { "X-Requested-With": "XMLHttpRequest" },
+    headers,  // ✅ Include Authorization header
   })
     .then(async (r) => (r.ok ? ((await r.json()) as WhoAmI) : ({ is_authenticated: false } as WhoAmI)))
     .catch(() => ({ is_authenticated: false } as WhoAmI))
@@ -47,18 +58,23 @@ export async function fetchWhoAmI(force = false): Promise<WhoAmI> {
       return cached!;
     })
     .finally(() => { inflight = null; });
-
+    
   return inflight;
 }
 
-export function primeWhoAmIFromCache() { return cached; }
-export function clearWhoAmICache() { cached = null; inflight = null; }
+export function primeWhoAmIFromCache() { 
+  return cached; 
+}
 
-// src/lib/whoami.ts (or wherever it lives)
+export function clearWhoAmICache() { 
+  cached = null; 
+  inflight = null; 
+}
+
 export function isTrulyAuthenticated(me?: { is_authenticated?: boolean; auth_source?: string } | null) {
   if (!me) return false;
-  // Only session or agent count as a login
+  // ✅ Token auth now counts as authenticated!
   if (me.is_authenticated === true) return true;
-  if (me.auth_source === "session" || me.auth_source === "agent") return true;
+  if (me.auth_source === "session" || me.auth_source === "agent" || me.auth_source === "token") return true;
   return false;
 }

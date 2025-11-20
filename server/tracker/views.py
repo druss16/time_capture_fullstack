@@ -4676,26 +4676,14 @@ def group_into_sessions(blocks, max_gap_minutes=15, min_idle_minutes=5):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])  # ← Will use global auth (includes tokens)
+@permission_classes([IsAuthenticated])
 def get_categorization_data(request):
-    """
-    Get uncategorized blocks for manual categorization.
-    Only returns blocks older than 15 minutes to allow time for auto-classification.
-    """
+    """Get uncategorized blocks for manual categorization."""
     from datetime import timedelta
     
     user = request.user
-
-            # ✅ Add explicit auth check
-    if not user.is_authenticated:
-        return Response(
-            {"error": "Authentication required"},
-            status=status.HTTP_401_UNAUTHORIZED
-        )
-        
     date_str = request.GET.get('date')
     limit = int(request.GET.get('limit', 500))
-
     
     # Get date
     if date_str:
@@ -4710,15 +4698,16 @@ def get_categorization_data(request):
         from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
-    # ✅ Only show blocks older than 15 minutes (gives time for auto-classification)
+    # ✅ FIXED: Use start__date instead of day
+    # Only show blocks older than 10 minutes (gives time for auto-classification)
     cutoff_time = timezone.now() - timedelta(minutes=10)
     
     # Get uncategorized blocks for the day
     blocks = Block.objects.filter(
         user=user,
-        day=target_date,
+        start__date=target_date,  # ✅ CHANGED: day → start__date
         is_categorized=False,
-        start__lt=cutoff_time  # ✅ Added: exclude very recent blocks
+        start__lt=cutoff_time
     ).select_related('client').order_by('start')[:limit]
     
     original_count = len(blocks)

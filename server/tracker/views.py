@@ -979,7 +979,6 @@ import json
 # NEW: paired hello (device-key)
 # NEW: paired hello (device-key)
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def agents_hello2(request):
     """
@@ -1157,7 +1156,6 @@ logger = logging.getLogger(__name__)
 
 
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def raw_events(request):
     """
@@ -3482,7 +3480,6 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 @api_view(["GET"])
-@authentication_classes([])
 @permission_classes([AllowAny])
 def whoami(request):
     """Check authentication via token in database."""
@@ -3668,7 +3665,6 @@ from rest_framework.response import Response
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@authentication_classes([SessionAuthentication])
 @ensure_csrf_cookie
 # CSRF removed - logout is safe without it (already authenticated via session)
 def auth_logout(request):
@@ -3824,7 +3820,6 @@ from .models import Client, CurrentClient, Block
 # ==============================================================================
 
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def set_current_client(request):
     """
@@ -3912,7 +3907,6 @@ def set_current_client(request):
 
 
 @api_view(["GET"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def get_current_client(request):
     """
@@ -3950,7 +3944,6 @@ def get_current_client(request):
 
 
 @api_view(["GET"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def list_clients(request):
     """
@@ -3980,7 +3973,6 @@ def list_clients(request):
 
 
 @api_view(["GET"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def context_guess(request):
     """
@@ -4115,7 +4107,6 @@ def context_guess(request):
 
 
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def context_confirm(request):
     """
@@ -4184,7 +4175,6 @@ def context_confirm(request):
 
 
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([IsAuthenticated])
 def context_reject(request):
     """
@@ -4242,7 +4232,6 @@ def context_reject(request):
 # ==============================================================================
 
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([PermUI])  # ← Use this instead
 def create_client(request):
     """
@@ -4302,7 +4291,6 @@ def create_client(request):
 
 
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([PermUI])  # ← Use this instead
 def import_clients_csv(request):
     """
@@ -4439,7 +4427,6 @@ def user_profile(request):
 
 
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([PermUI])  # ← Use this instead
 def complete_onboarding(request):
     """
@@ -4460,7 +4447,6 @@ def complete_onboarding(request):
 
 
 @api_view(["GET"])
-@authentication_classes([SessionAuthentication, AgentKeyAuthentication])
 @permission_classes([PermUI])
 def today_time(request):
     """

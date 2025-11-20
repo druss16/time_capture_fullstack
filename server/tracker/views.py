@@ -4450,7 +4450,6 @@ def complete_onboarding(request):
 @permission_classes([IsAuthenticated])
 def today_time(request):
     """Get today's tracked time organized by client → category."""
-    from datetime import date
     from collections import defaultdict
     
     user = request.user
@@ -4461,12 +4460,13 @@ def today_time(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
     
-    today = date.today()
+    # ✅ Use the same date range logic
+    start_utc, end_utc = _start_end_of_local_day_utc(None)  # None = today
     
-    # ✅ FIXED: Use start__date instead of day
     blocks = Block.objects.filter(
         user=user,
-        start__date=today  # ✅ CHANGED: day → start__date
+        start__gte=start_utc,  # ✅ CHANGED
+        start__lt=end_utc      # ✅ CHANGED
     ).select_related('client').order_by('start')
     
     # Helper: union of time spans (avoid overlaps)
@@ -4681,17 +4681,11 @@ def group_into_sessions(blocks, max_gap_minutes=15, min_idle_minutes=5):
 def get_categorization_data(request):
     """Get uncategorized blocks for manual categorization."""
     from datetime import timedelta
+    from django.utils.dateparse import parse_date
     
     user = request.user
     date_str = request.GET.get('date')
     limit = int(request.GET.get('limit', 500))
-    
-    # Get date
-    if date_str:
-        from django.utils.dateparse import parse_date
-        target_date = parse_date(date_str)
-    else:
-        target_date = timezone.localdate()
     
     # Get org
     org = user.groups.first()
@@ -4699,14 +4693,17 @@ def get_categorization_data(request):
         from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
-    # ✅ FIXED: Use start__date instead of day
-    # Only show blocks older than 10 minutes (gives time for auto-classification)
+    # ✅ Use the same date range logic as blocks_today
+    start_utc, end_utc = _start_end_of_local_day_utc(date_str)
+    
+    # Only show blocks older than 10 minutes
     cutoff_time = timezone.now() - timedelta(minutes=10)
     
     # Get uncategorized blocks for the day
     blocks = Block.objects.filter(
         user=user,
-        start__date=target_date,  # ✅ CHANGED: day → start__date
+        start__gte=start_utc,  # ✅ CHANGED
+        start__lt=end_utc,     # ✅ CHANGED
         is_categorized=False,
         start__lt=cutoff_time
     ).select_related('client').order_by('start')[:limit]

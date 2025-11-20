@@ -76,16 +76,19 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
       setLoading(true);
       setError(null);
       
-      const data = await safeFetchJson<CategorizationData>(
-        `${API_BASE}/categorization/data/?date=${selectedDate}`
-      );
+      const url = `${API_BASE}/categorization/data/?date=${selectedDate}`;
+      console.log('🔍 Fetching:', url);  // ✅ ADD THIS
+      
+      const data = await safeFetchJson<CategorizationData>(url);
+      
+      console.log('✅ Got data:', data);  // ✅ ADD THIS
       
       setBlocks(data.blocks || []);
       setClients(data.clients || []);
       setCategories(data.categories || []);
       setStats(data.stats || null);
     } catch (error: any) {
-      console.error('Failed to load data:', error);
+      console.error('❌ Failed to load data:', error);
       setError(error.message || 'Failed to load blocks');
     } finally {
       setLoading(false);

@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
-import { primeCsrf } from "@/lib/csrf";
 import { useAuth } from "@/auth/AuthProvider";
 
 export default function Login() {
@@ -17,17 +16,17 @@ export default function Login() {
   const [err, setErr] = useState<string | null>(null);
   const [showPw, setShowPw] = useState(false);
 
-  // If already logged in, hop to next
+  // If already logged in, redirect
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const j = await safeFetchJson<{ is_authenticated?: boolean }>(API_ENDPOINTS.whoami, {
-          credentials: "include",
-        });
+        const j = await safeFetchJson<{ is_authenticated?: boolean }>(
+          API_ENDPOINTS.whoami,
+          { credentials: "include" }
+        );
         if (alive && j?.is_authenticated === true) {
           nav(next, { replace: true });
-          return;
         }
       } catch {
         /* not logged in / server warming up */
@@ -41,12 +40,15 @@ export default function Login() {
     setBusy(true);
     setErr(null);
 
+    console.log("🔐 Submitting login for:", form.username);
+
     try {
+      // Step 1: Call login endpoint
       const res = await safeFetchJson<{ 
         ok: boolean; 
         error?: string;
         token?: string;
-        user?: any;
+        user?: { id: number; username: string; email: string };
       }>(
         API_ENDPOINTS.authLogin,
         {
@@ -55,33 +57,40 @@ export default function Login() {
         }
       );
 
-      if (!res?.ok) throw new Error(res?.error || "Login failed");
+      console.log("📥 Login response:", res);
 
-      // ✅ Store token FIRST
-      if (res.token) {
-        localStorage.setItem('auth_token', res.token);
-        console.log("✅ Token stored:", res.token);
+      if (!res?.ok) {
+        throw new Error(res?.error || "Login failed");
       }
 
-      // ✅ Verify with explicit token header (bypass safeFetchJson timing issue)
-      const whoamiResp = await fetch(API_ENDPOINTS.whoami, {
-        headers: {
-          'Authorization': `Bearer ${res.token}`
-        }
-      });
+      // Step 2: Store token in localStorage
+      if (!res.token) {
+        throw new Error("No token received from server");
+      }
+
+      localStorage.setItem('auth_token', res.token);
+      console.log("✅ Token stored in localStorage");
+
+      // Step 3: Small delay to ensure localStorage is synced
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Step 4: Refresh auth state (will use the token we just stored)
+      console.log("🔄 Refreshing auth state...");
+      const who = await refreshWhoAmI();
+      console.log("👤 Auth state:", who);
       
-      const whoamiData = await whoamiResp.json();
-      console.log("whoami response:", whoamiData);
-      
-      if (!whoamiData?.is_authenticated) {
+      if (!who?.is_authenticated) {
         throw new Error("Authentication verification failed");
       }
 
-      // ✅ Success! Redirect
+      // Step 5: Success! Redirect
+      console.log("✅ Login successful, redirecting to:", next);
       nav(next, { replace: true });
+
     } catch (e: any) {
-      console.error("Login error", e);
+      console.error("❌ Login error:", e);
       setErr(e?.message || "Login failed");
+      // Clean up on error
       localStorage.removeItem('auth_token');
     } finally {
       setBusy(false);
@@ -92,7 +101,12 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-background">
       <div className="w-full max-w-md bg-card rounded-xl p-6 shadow">
         <h1 className="text-2xl font-bold mb-2">Log in</h1>
-        {err && <div className="text-red-600 text-sm mb-2 break-words">{err}</div>}
+        
+        {err && (
+          <div className="text-red-600 text-sm mb-2 break-words">
+            {err}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <input
@@ -131,7 +145,7 @@ export default function Login() {
           <button
             type="submit"
             disabled={busy}
-            className="w-full bg-primary text-white py-2 rounded-md font-semibold"
+            className="w-full bg-primary text-white py-2 rounded-md font-semibold hover:bg-primary/90 disabled:opacity-50"
           >
             {busy ? "Signing in…" : "Log in"}
           </button>
@@ -139,7 +153,10 @@ export default function Login() {
 
         <p className="text-sm text-center mt-3">
           No account?{" "}
-          <Link className="underline" to={`/signup?next=${encodeURIComponent(next)}`}>  
+          <Link 
+            className="underline hover:text-primary" 
+            to={`/signup?next=${encodeURIComponent(next)}`}
+          >  
             Sign up
           </Link>
         </p>

@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshWhoAmI = useCallback(async () => {
     setLoading(true);
-    try { setMe(await fetchWhoAmI(true)); }
+    try { setMe(await fetchWhoAmI(true)); }  // ← Sets state but returns nothing!
     finally { setLoading(false); }
   }, []);
 

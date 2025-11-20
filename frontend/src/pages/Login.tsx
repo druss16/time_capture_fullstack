@@ -17,23 +17,34 @@ export default function Login() {
   const [showPw, setShowPw] = useState(false);
 
   // If already logged in, redirect
+  // If already logged in, redirect
   useEffect(() => {
     let alive = true;
+    let mounted = true;
+    
     (async () => {
+      if (!mounted) return;
+      
       try {
         const j = await safeFetchJson<{ is_authenticated?: boolean }>(
           API_ENDPOINTS.whoami,
           { credentials: "include" }
         );
+        
         if (alive && j?.is_authenticated === true) {
           nav(next, { replace: true });
         }
-      } catch {
-        /* not logged in / server warming up */
+      } catch (err) {
+        // Not logged in or server down - stay on login page
+        console.log("Not authenticated, staying on login page");
       }
     })();
-    return () => { alive = false; };
-  }, [nav, next]);
+    
+    return () => { 
+      alive = false;
+      mounted = false;
+    };
+  }, []); // ✅ Empty deps - only run once on mount
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

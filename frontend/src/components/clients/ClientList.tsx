@@ -4,10 +4,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Plus, Upload, Pencil, Trash2 } from 'lucide-react';
-import { API_BASE } from '@/lib/api';
 import { postJson } from '@/lib/csrf';
 
+import { safeFetchJson } from '@/lib/api';
 
+const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
+const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
 interface Client {
   id: number;
@@ -31,8 +33,7 @@ export function ClientList() {
   // Replace the fetchClients function (around line 27-42):
   const fetchClients = async () => {
     try {
-      // ✅ FIXED: Use safeFetchJson
-      const data = await safeFetchJson(`${API_BASE}/clients/list`);
+      const data = await safeFetchJson<Client[]>(`${API_BASE}/clients/`);
       setClients(data);
     } catch (error) {
       console.error('Error fetching clients:', error);

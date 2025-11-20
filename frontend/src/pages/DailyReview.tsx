@@ -75,7 +75,7 @@ export default function DailyReview() {
     setBusy(true);
     setErr(null);
     try {
-      const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/`);
+      const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/?date=${date}`);  // ✅ ADD ?date=${date}
       setTimeSummary(json);
     } catch (err: any) {
       console.error('Failed to load time summary:', err);
@@ -83,7 +83,7 @@ export default function DailyReview() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [date]);  // ✅ ADD date dependency
 
   // Replace loadUncategorizedCount:
   const loadUncategorizedCount = useCallback(async () => {

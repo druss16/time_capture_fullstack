@@ -4449,10 +4449,11 @@ def complete_onboarding(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def today_time(request):
-    """Get today's tracked time organized by client → category."""
+    """Get tracked time organized by client → category."""
     from datetime import datetime, timedelta
-    from datetime import timezone as dt_timezone  # ✅ ADD THIS
+    from datetime import timezone as dt_timezone
     from collections import defaultdict
+    from django.utils.dateparse import parse_date
     
     user = request.user
     
@@ -4462,26 +4463,20 @@ def today_time(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
     
-    # Get today's date range
-    target_date = timezone.localdate()
+    # ✅ Get date from query param, default to today
+    date_str = request.GET.get('date')
+    if date_str:
+        target_date = parse_date(date_str)
+    else:
+        target_date = timezone.localdate()
+    
+    # Get date range
     tz = timezone.get_current_timezone()
     start_local = timezone.make_aware(
         datetime.combine(target_date, datetime.min.time()), 
         tz
     )
     end_local = start_local + timedelta(days=1)
-    
-    # Convert to UTC
-    start_utc = start_local.astimezone(dt_timezone.utc)  # ✅ CHANGED
-    end_utc = end_local.astimezone(dt_timezone.utc)      # ✅ CHANGED
-    
-    blocks = Block.objects.filter(
-        user=user,
-        start__gte=start_utc,
-        start__lt=end_utc
-    ).select_related('client').order_by('start')
-    
-    # ... rest stays the same
     
     # Convert to UTC
     start_utc = start_local.astimezone(dt_timezone.utc)
@@ -4493,7 +4488,7 @@ def today_time(request):
         start__lt=end_utc
     ).select_related('client').order_by('start')
     
-    # ... rest stays the same
+    # ... rest of function stays the same
     
     # Helper: union of time spans (avoid overlaps)
     def union_minutes(spans):

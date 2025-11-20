@@ -41,44 +41,40 @@ export default function Login() {
     setBusy(true);
     setErr(null);
 
-    console.log("Submitting login", form.username);
-
     try {
       const res = await safeFetchJson<{ 
         ok: boolean; 
         error?: string;
-        token?: string;  // ✅ Token from backend
+        token?: string;
         user?: any;
       }>(
         API_ENDPOINTS.authLogin,
         {
           method: "POST",
-          credentials: "include",
           body: JSON.stringify(form),
         }
       );
 
-      console.log("login response", res);
-
       if (!res?.ok) throw new Error(res?.error || "Login failed");
 
-      // ✅ Store token in localStorage
+      // ✅ Store token FIRST
       if (res.token) {
         localStorage.setItem('auth_token', res.token);
-        console.log("✅ Token stored in localStorage");
+        console.log("✅ Token stored:", res.token);
       }
 
-      // ✅ Verify authentication
-      try {
-        const who = await refreshWhoAmI();
-        console.log("whoami after login", who);
-        
-        if (!who?.is_authenticated) {
-          throw new Error("Authentication verification failed");
+      // ✅ Verify with explicit token header (bypass safeFetchJson timing issue)
+      const whoamiResp = await fetch(API_ENDPOINTS.whoami, {
+        headers: {
+          'Authorization': `Bearer ${res.token}`
         }
-      } catch (e) {
-        console.error("refreshWhoAmI failed", e);
-        throw new Error("Login succeeded but verification failed");
+      });
+      
+      const whoamiData = await whoamiResp.json();
+      console.log("whoami response:", whoamiData);
+      
+      if (!whoamiData?.is_authenticated) {
+        throw new Error("Authentication verification failed");
       }
 
       // ✅ Success! Redirect
@@ -86,7 +82,6 @@ export default function Login() {
     } catch (e: any) {
       console.error("Login error", e);
       setErr(e?.message || "Login failed");
-      // Clear any partial token on error
       localStorage.removeItem('auth_token');
     } finally {
       setBusy(false);

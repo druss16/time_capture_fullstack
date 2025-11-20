@@ -6,6 +6,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Clock, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
 import BlockCard from './BlockCard';
 
+import { safeFetchJson } from "@/lib/api";  // ✅ ADD THIS
+
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
@@ -54,13 +56,6 @@ interface ManualCategorizationProps {
   onComplete?: () => void;
 }
 
-const getCsrfToken = (): string => {
-  const token = document.cookie
-    .split('; ')
-    .find(row => row.startsWith('csrftoken='))
-    ?.split('=')[1];
-  return token || '';
-};
 
 const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -81,16 +76,9 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
       setLoading(true);
       setError(null);
       
-      const url = `${API_BASE}/categorization/data/?date=${selectedDate}`;
-      const response = await fetch(url, {
-        credentials: 'include',
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data: CategorizationData = await response.json();
+      const data = await safeFetchJson<CategorizationData>(
+        `${API_BASE}/categorization/data/?date=${selectedDate}`
+      );
       
       setBlocks(data.blocks || []);
       setClients(data.clients || []);
@@ -104,10 +92,6 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
     }
   }, [selectedDate]);
 
-  useEffect(() => {
-    fetchCategorizationData();
-  }, [fetchCategorizationData]);
-
   const categorizeBlock = useCallback(async (
     blockId: number, 
     blockIds: number[],
@@ -116,9 +100,6 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
     notes?: string
   ) => {
     try {
-      const url = `${API_BASE}/categorization/save/`;
-      const csrfToken = getCsrfToken();
-      
       const payload = {
         block_id: blockId,
         block_ids: blockIds,
@@ -127,29 +108,14 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
         notes: notes || undefined,
       };
       
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRFToken': csrfToken,
-        },
-        credentials: 'include',
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorData;
-        try {
-          errorData = JSON.parse(errorText);
-        } catch {
-          throw new Error(`HTTP ${response.status}: ${errorText.substring(0, 200)}`);
+      const result = await safeFetchJson(
+        `${API_BASE}/categorization/save/`,
+        {
+          method: 'POST',
+          body: JSON.stringify(payload)
         }
-        throw new Error(errorData.error || 'Failed to save');
-      }
+      );
 
-      const result = await response.json();
-      
       await fetchCategorizationData();
       
       if (onComplete) {

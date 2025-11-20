@@ -4685,8 +4685,17 @@ def get_categorization_data(request):
     from datetime import timedelta
     
     user = request.user
+
+            # ✅ Add explicit auth check
+    if not user.is_authenticated:
+        return Response(
+            {"error": "Authentication required"},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+        
     date_str = request.GET.get('date')
     limit = int(request.GET.get('limit', 500))
+
     
     # Get date
     if date_str:

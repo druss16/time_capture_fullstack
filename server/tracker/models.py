@@ -406,7 +406,8 @@ class Block(models.Model):
     
     # Legacy lock (keep for backwards compatibility)
     locked = models.BooleanField(default=False)
-    
+
+
     # ✅ NEW: Immutability Tracking (Production-Ready)
     is_categorized = models.BooleanField(
         default=False,
@@ -451,6 +452,16 @@ class Block(models.Model):
         on_delete=models.SET_NULL,
         related_name='approved_blocks',
         help_text="Who approved this block"
+    )
+
+    # ✅ NEW: Firm-wide task type (for hybrid categorization)
+    task_type = models.ForeignKey(
+        'TaskType',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='blocks',
+        help_text="Firm-wide activity type (Tax Prep, Research, etc.)"
     )
     
     # AI classification metadata
@@ -657,6 +668,61 @@ class TimecardEntry(models.Model):
         self.notes = reason
         self.save()
 
+
+# tracker/models.py - ADD THIS NEW MODEL (after Client, before Project)
+
+class TaskType(models.Model):
+    """
+    Firm-wide task/activity categories.
+    Examples: "Tax Preparation", "Email/Communication", "Research", "Bookkeeping"
+    These apply across ALL clients and projects.
+    """
+    org = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="task_types")
+    name = models.CharField(max_length=100)  # "Tax Preparation", "Research"
+    code = models.CharField(max_length=20, blank=True, default='')  # "TAX", "RES"
+    
+    # Billing
+    is_billable = models.BooleanField(default=True)
+    default_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    
+    # UI
+    color = models.CharField(max_length=7, default='#3B82F6')  # Hex color for charts
+    icon = models.CharField(max_length=50, blank=True, default='')  # Optional icon name
+    sort_order = models.IntegerField(default=0)
+    
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = [['org', 'name']]
+        ordering = ['sort_order', 'name']
+        indexes = [
+            models.Index(fields=['org', 'is_active']),
+        ]
+    
+    def save(self, *args, **kwargs):
+        if not self.code and self.name:
+            self.code = self.name[:6].upper().replace(' ', '')
+        super().save(*args, **kwargs)
+    
+    def __str__(self):
+        return self.name
+
+
+# Default task types to seed for new CPA firms
+DEFAULT_CPA_TASK_TYPES = [
+    {'name': 'Tax Preparation', 'code': 'TAX', 'color': '#10B981', 'is_billable': True},
+    {'name': 'Tax Planning', 'code': 'TAXPL', 'color': '#059669', 'is_billable': True},
+    {'name': 'Audit & Assurance', 'code': 'AUDIT', 'color': '#6366F1', 'is_billable': True},
+    {'name': 'Bookkeeping', 'code': 'BOOK', 'color': '#8B5CF6', 'is_billable': True},
+    {'name': 'Payroll', 'code': 'PAY', 'color': '#A855F7', 'is_billable': True},
+    {'name': 'Advisory/Consulting', 'code': 'ADV', 'color': '#EC4899', 'is_billable': True},
+    {'name': 'Client Communication', 'code': 'COMM', 'color': '#F59E0B', 'is_billable': True},
+    {'name': 'Research', 'code': 'RES', 'color': '#3B82F6', 'is_billable': True},
+    {'name': 'Document Review', 'code': 'DOC', 'color': '#06B6D4', 'is_billable': True},
+    {'name': 'Admin/Internal', 'code': 'ADMIN', 'color': '#6B7280', 'is_billable': False},
+    {'name': 'Training', 'code': 'TRAIN', 'color': '#F97316', 'is_billable': False},
+]
 
 # ===============================
 # ======  AI + ORG CONFIG  ======

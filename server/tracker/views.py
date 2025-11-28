@@ -5080,3 +5080,222 @@ def category_stats(request):
         'total_categories': len(stats),
         'stats': stats
     })
+
+# tracker/views.py - ADD these new view functions
+
+from rest_framework import viewsets, status
+from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.utils import timezone
+from datetime import timedelta
+
+from .models import TaskType, Block, Client, Project
+from .serializers import (
+    TaskTypeSerializer, TaskTypeListSerializer,
+    ClientListSerializer, ProjectListSerializer,
+    BlockSerializer, BlockCategorizationSerializer, BulkCategorizationSerializer,
+    GroupedBlocksSerializer,
+)
+
+
+# ========================================
+# ========== DROPDOWN OPTIONS ============
+# ========================================
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def client_options(request):
+    """Get clients for dropdown"""
+    org = request.user.groups.first()
+    clients = Client.objects.filter(org=org, is_active=True).order_by('name')
+    return Response(ClientListSerializer(clients, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def project_options(request):
+    """Get all projects for dropdown"""
+    org = request.user.groups.first()
+    projects = Project.objects.filter(org=org, is_active=True).select_related('client').order_by('client__name', 'name')
+    return Response(ProjectListSerializer(projects, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def project_options_by_client(request, client_id):
+    """Get projects filtered by client (for cascading dropdown)"""
+    org = request.user.groups.first()
+    projects = Project.objects.filter(
+        org=org, 
+        client_id=client_id, 
+        is_active=True
+    ).order_by('name')
+    return Response(ProjectListSerializer(projects, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def task_type_options(request):
+    """Get task types for dropdown"""
+    org = request.user.groups.first()
+    task_types = TaskType.objects.filter(org=org, is_active=True).order_by('sort_order', 'name')
+    return Response(TaskTypeListSerializer(task_types, many=True).data)
+
+
+# ========================================
+# ========== GROUPED BLOCKS VIEW =========
+# ========================================
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def blocks_grouped(request):
+    """
+    Get blocks grouped by Client → Project → TaskType
+    For the hybrid categorization UI
+    
+    Query params:
+        days: Number of days to look back (default 7)
+        include_uncategorized: Include uncategorized blocks (default true)
+    """
+    org = request.user.groups.first()
+    days = int(request.query_params.get('days', 7))
+    include_uncategorized = request.query_params.get('include_uncategorized', 'true').lower() == 'true'
+    
+    start_date = timezone.now() - timedelta(days=days)
+    
+    queryset = Block.objects.filter(
+        org=org,
+        user=request.user,
+        start__gte=start_date,
+    ).select_related('client', 'project', 'task_type').order_by('-start')
+    
+    if not include_uncategorized:
+        queryset = queryset.filter(is_categorized=True)
+    
+    serializer = GroupedBlocksSerializer()
+    grouped_data = serializer.to_representation(queryset)
+    
+    # Add summary stats
+    total_minutes = sum(c['total_minutes'] for c in grouped_data)
+    categorized_count = queryset.filter(is_categorized=True).count()
+    uncategorized_count = queryset.filter(is_categorized=False).count()
+    
+    return Response({
+        'summary': {
+            'total_hours': round(total_minutes / 60, 1),
+            'total_blocks': queryset.count(),
+            'categorized': categorized_count,
+            'uncategorized': uncategorized_count,
+            'date_range': {
+                'start': start_date.date().isoformat(),
+                'end': timezone.now().date().isoformat(),
+            }
+        },
+        'clients': grouped_data,
+    })
+
+
+# ========================================
+# ========== TASK TYPE VIEWSET ===========
+# ========================================
+class TaskTypeViewSet(viewsets.ModelViewSet):
+    """CRUD for firm-wide task types"""
+    serializer_class = TaskTypeSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        org = self.request.user.groups.first()
+        return TaskType.objects.filter(org=org).order_by('sort_order', 'name')
+    
+    def perform_create(self, serializer):
+        org = self.request.user.groups.first()
+        serializer.save(org=org)
+
+
+# ========================================
+# ========== BLOCK CATEGORIZATION ========
+# ========================================
+class BlockCategorizationViewSet(viewsets.ViewSet):
+    """Endpoints for categorizing time blocks"""
+    permission_classes = [IsAuthenticated]
+    
+    @action(detail=False, methods=['get'])
+    def uncategorized(self, request):
+        """Get blocks that need categorization"""
+        org = request.user.groups.first()
+        
+        blocks = Block.objects.filter(
+            org=org,
+            user=request.user,
+            is_categorized=False,
+        ).select_related('client', 'project', 'task_type').order_by('-start')[:100]
+        
+        return Response(BlockSerializer(blocks, many=True).data)
+    
+    @action(detail=True, methods=['patch'], url_path='categorize')
+    def categorize(self, request, pk=None):
+        """Categorize a single block"""
+        try:
+            block = Block.objects.get(pk=pk, user=request.user)
+        except Block.DoesNotExist:
+            return Response({'error': 'Block not found'}, status=404)
+        
+        serializer = BlockCategorizationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+        
+        data = serializer.validated_data
+        
+        if 'client_id' in data and data['client_id']:
+            block.client_id = data['client_id']
+        if 'project_id' in data and data['project_id']:
+            block.project_id = data['project_id']
+        if 'task_type_id' in data and data['task_type_id']:
+            block.task_type_id = data['task_type_id']
+        if data.get('notes'):
+            block.notes = data['notes']
+        
+        # Mark as categorized
+        if not block.is_categorized:
+            block.is_categorized = True
+            block.categorized_by = 'manual'
+            block.categorized_at = timezone.now()
+        else:
+            block.categorized_by = 'correction'
+        
+        block.save(force_update=True)
+        
+        return Response(BlockSerializer(block).data)
+    
+    @action(detail=False, methods=['post'], url_path='bulk')
+    def bulk_categorize(self, request):
+        """Categorize multiple blocks at once"""
+        serializer = BulkCategorizationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+        
+        data = serializer.validated_data
+        block_ids = data['block_ids']
+        
+        update_fields = {
+            'is_categorized': True,
+            'categorized_by': 'manual',
+            'categorized_at': timezone.now(),
+        }
+        
+        if data.get('client_id'):
+            update_fields['client_id'] = data['client_id']
+        if data.get('project_id'):
+            update_fields['project_id'] = data['project_id']
+        if data.get('task_type_id'):
+            update_fields['task_type_id'] = data['task_type_id']
+        
+        updated = Block.objects.filter(
+            id__in=block_ids,
+            user=request.user,
+            is_categorized=False,
+        ).update(**update_fields)
+        
+        return Response({
+            'updated': updated,
+            'requested': len(block_ids),
+        })

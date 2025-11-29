@@ -83,6 +83,8 @@ urlpatterns = [
     # -------------------------------
     path("today-time/", views.today_time, name="today_time"),
 
+    path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),
+
     # -------------------------------
     # Device Management
     # -------------------------------

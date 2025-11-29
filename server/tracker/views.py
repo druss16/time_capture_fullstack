@@ -4549,11 +4549,12 @@ def today_time(request):
         cat_data['count'] += 1
         
         # Sample activities (max 3)
+        # Sample activities (max 3) - include block ID for drag-drop
         if len(cat_data['samples']) < 3:
             title = block.window_title or block.url or block.app_name or 'Unknown'
             if len(title) > 60:
                 title = title[:57] + '...'
-            cat_data['samples'].append(title)
+            cat_data['samples'].append(f"[id:{block.id}] {title}")
     
     # Calculate union minutes for each category
     result = []
@@ -5748,4 +5749,45 @@ def recategorize_block(request, block_id):
         "new_category": category,
         "hours": old_hours,
         "client_id": block.client_id if block.client else None,
+    })
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def recategorize_block(request, block_id):
+    """Move a block to a different category."""
+    try:
+        block = Block.objects.get(id=block_id, user=request.user)
+    except Block.DoesNotExist:
+        return Response({"error": "Block not found"}, status=404)
+    
+    new_category = request.data.get('category')
+    new_client_id = request.data.get('client_id')
+    
+    if not new_category:
+        return Response({"error": "category required"}, status=400)
+    
+    # Update category_hours to new category
+    old_category = None
+    if block.category_hours:
+        old_category = list(block.category_hours.keys())[0] if block.category_hours else None
+    
+    # Set new category with the block's duration
+    duration = (block.end - block.start).total_seconds() / 3600 if block.end and block.start else 0
+    block.category_hours = {new_category: round(duration, 2)}
+    
+    # Optionally update client
+    if new_client_id:
+        from tracker.models import Client
+        try:
+            block.client = Client.objects.get(id=new_client_id)
+        except Client.DoesNotExist:
+            pass
+    
+    block.save()
+    
+    return Response({
+        "success": True,
+        "block_id": block.id,
+        "old_category": old_category,
+        "new_category": new_category
     })

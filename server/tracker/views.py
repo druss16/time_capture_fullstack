@@ -4550,6 +4550,7 @@ def today_time(request):
         
         # Sample activities (max 3)
         # Sample activities (max 3) - include block ID for drag-drop
+        # Sample activities (max 3) - include block ID for drag-drop
         if len(cat_data['samples']) < 3:
             title = block.window_title or block.url or block.app_name or 'Unknown'
             if len(title) > 60:

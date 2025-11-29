@@ -76,8 +76,19 @@ export default function DailyReview() {
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  // Available categories
-  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
+  // Available categories - start with defaults
+  const [availableCategories, setAvailableCategories] = useState<string[]>([
+    'Tax Preparation',
+    'Audit/Assurance',
+    'Bookkeeping',
+    'Advisory/Consulting',
+    'Research/AI Assistance',
+    'Email/Communication',
+    'Admin/Internal',
+    'Software Development',
+    'Meeting/Call',
+    'Training',
+  ]);
 
   useEffect(() => {
     if (!user && whoami) setUser(whoami);
@@ -106,22 +117,32 @@ export default function DailyReview() {
     return { blockId: null, title: activity, raw: activity };
   };
 
+  // Default categories for CPA firms
+  const DEFAULT_CATEGORIES = [
+    'Tax Preparation',
+    'Audit/Assurance',
+    'Bookkeeping',
+    'Advisory/Consulting',
+    'Research/AI Assistance',
+    'Email/Communication',
+    'Admin/Internal',
+    'Software Development',
+    'Meeting/Call',
+    'Training',
+  ];
+
   // Load available categories (task types)
   const loadCategories = useCallback(async () => {
     try {
       const data = await safeFetchJson<{ id: number; name: string }[]>(`${API_BASE}/options/task-types/`);
-      setAvailableCategories(data.map(t => t.name));
+      if (data && Array.isArray(data) && data.length > 0) {
+        setAvailableCategories(data.map(t => t.name));
+      } else {
+        setAvailableCategories(DEFAULT_CATEGORIES);
+      }
     } catch (err) {
       console.error('Failed to load categories:', err);
-      setAvailableCategories([
-        'Tax Preparation',
-        'Audit/Assurance',
-        'Bookkeeping',
-        'Advisory/Consulting',
-        'Research/AI Assistance',
-        'Email/Communication',
-        'Admin/Internal',
-      ]);
+      setAvailableCategories(DEFAULT_CATEGORIES);
     }
   }, []);
 

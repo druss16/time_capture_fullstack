@@ -1,13 +1,13 @@
 /**
  * DailyReview.tsx — Clean time summary view with categorization
  * - Shows organized time by client → category
- * - Simple, focused interface
+ * - CLICK TO EDIT: Click pencil icon to recategorize blocks
  * - Excludes uncategorized, idle time, and unassigned client from billable totals
  * - Includes manual categorization tab for uncategorized blocks
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { Clock, User, RefreshCw, Edit3, BarChart3, ChevronDown, ChevronRight } from "lucide-react";
+import { Clock, User, RefreshCw, Edit3, BarChart3, ChevronDown, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { Header } from "@/components/common/Header";
 import { DESIGN_SYSTEM } from "@/lib/design-system";
 import { FilterBar, ErrorBanner } from "@/components/timecard";
@@ -15,8 +15,7 @@ import { todayIso } from "@/lib/utils/date";
 import { primeCsrf } from "@/lib/csrf";
 import { useWhoAmI } from "@/lib/useWhoAmI";
 import ManualCategorization from "@/components/ManualCategorization";
-import { safeFetchJson } from "@/lib/api";  // ✅ ADD THIS LINE
-
+import { safeFetchJson } from "@/lib/api";
 
 // ---------- ENV ----------
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -35,6 +34,13 @@ type ClientTime = {
   client: string;
   total_hours: number;
   categories: Category[];
+};
+
+// Parsed activity with block ID
+type ParsedActivity = {
+  blockId: number | null;
+  title: string;
+  raw: string;
 };
 
 // =====================================================================================
@@ -62,6 +68,17 @@ export default function DailyReview() {
   // Track which clients are collapsed (default all expanded)
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
 
+  // Edit state
+  const [editingBlock, setEditingBlock] = useState<{blockId: number; currentCategory: string} | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  // Toast notification state
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Available categories
+  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
+
   useEffect(() => {
     if (!user && whoami) setUser(whoami);
   }, [whoami, user]);
@@ -70,22 +87,61 @@ export default function DailyReview() {
     (async () => { try { await primeCsrf(API_BASE); } catch {} })();
   }, []);
 
+  // Show toast notification
+  const showToast = (message: string, type: 'success' | 'error') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Parse activity string to extract block ID
+  const parseActivity = (activity: string): ParsedActivity => {
+    const match = activity.match(/\[id:(\d+)\]\s*/);
+    if (match) {
+      return {
+        blockId: parseInt(match[1]),
+        title: activity.replace(/\[id:\d+\]\s*/, '').trim(),
+        raw: activity
+      };
+    }
+    return { blockId: null, title: activity, raw: activity };
+  };
+
+  // Load available categories (task types)
+  const loadCategories = useCallback(async () => {
+    try {
+      const data = await safeFetchJson<{ id: number; name: string }[]>(`${API_BASE}/options/task-types/`);
+      setAvailableCategories(data.map(t => t.name));
+    } catch (err) {
+      console.error('Failed to load categories:', err);
+      setAvailableCategories([
+        'Tax Preparation',
+        'Audit/Assurance',
+        'Bookkeeping',
+        'Advisory/Consulting',
+        'Research/AI Assistance',
+        'Email/Communication',
+        'Admin/Internal',
+      ]);
+    }
+  }, []);
+
   // Load time summary
   const loadTimeSummary = useCallback(async () => {
     setBusy(true);
     setErr(null);
     try {
-      const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/?date=${date}`);  // ✅ ADD ?date=${date}
-      setTimeSummary(json);
+      const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/?date=${date}`);
+      setTimeSummary(Array.isArray(json) ? json : []);
     } catch (err: any) {
       console.error('Failed to load time summary:', err);
       setErr(err?.message || 'Failed to load time summary');
+      setTimeSummary([]);
     } finally {
       setBusy(false);
     }
-  }, [date]);  // ✅ ADD date dependency
+  }, [date]);
 
-  // Replace loadUncategorizedCount:
+  // Load uncategorized count
   const loadUncategorizedCount = useCallback(async () => {
     try {
       const data = await safeFetchJson<{blocks: any[]}>(`${API_BASE}/categorization/data/?date=${date}`);
@@ -95,90 +151,105 @@ export default function DailyReview() {
     }
   }, [date]);
 
-  // Auto-load on mount and when date/user changes
+  // Auto-load on mount
   useEffect(() => {
     const t = setTimeout(() => {
       loadTimeSummary();
       loadUncategorizedCount();
+      loadCategories();
     }, 200);
     return () => clearTimeout(t);
-  }, [loadTimeSummary, loadUncategorizedCount]);
+  }, [loadTimeSummary, loadUncategorizedCount, loadCategories]);
 
-
-  // Auto-refresh every 2 minutes (instead of 5)
+  // Auto-refresh every 2 minutes
   useEffect(() => {
     const interval = setInterval(() => {
       loadTimeSummary();
       loadUncategorizedCount();
-    }, 2 * 60 * 1000);  // ✅ Changed: 5 → 2 minutes
-
+    }, 2 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadTimeSummary, loadUncategorizedCount]);
 
-  // Refresh handler that updates both summary and count
+  // Refresh handler
   const handleRefresh = useCallback(() => {
     loadTimeSummary();
     loadUncategorizedCount();
   }, [loadTimeSummary, loadUncategorizedCount]);
 
-  // When categorization is complete, refresh and switch to summary
+  // When categorization is complete
   const handleCategorizationComplete = useCallback(() => {
     loadTimeSummary();
     loadUncategorizedCount();
   }, [loadTimeSummary, loadUncategorizedCount]);
 
+  // Handle edit click
+  const handleEditClick = (blockId: number, currentCategory: string) => {
+    setEditingBlock({ blockId, currentCategory });
+    setSelectedCategory(currentCategory);
+  };
+
+  // Handle save category change
+  const handleSaveCategory = async () => {
+    if (!editingBlock || !selectedCategory || selectedCategory === editingBlock.currentCategory) {
+      setEditingBlock(null);
+      return;
+    }
+
+    setIsUpdating(true);
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${editingBlock.blockId}/recategorize/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: selectedCategory }),
+      });
+      
+      showToast(`Moved to ${selectedCategory}`, 'success');
+      setEditingBlock(null);
+      await loadTimeSummary();
+    } catch (err: any) {
+      console.error('Failed to recategorize:', err);
+      showToast(err?.message || 'Failed to update category', 'error');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  // Cancel edit
+  const handleCancelEdit = () => {
+    setEditingBlock(null);
+    setSelectedCategory("");
+  };
+
   const headerUser = useMemo(() => {
     return user?.trim() ? user.trim() : whoami?.trim() ? whoami : "All Users";
   }, [user, whoami]);
 
-  // Filter logic: exclude idle, uncategorized categories and entire "Unassigned" client
-  const isIdleCategory = (catName: string) => {
-    const lower = catName.toLowerCase();
-    return lower.includes('idle');
-  };
+  // Filter logic
+  const isIdleCategory = (catName: string) => catName.toLowerCase().includes('idle');
+  const isUncategorizedCategory = (catName: string) => catName.toLowerCase().includes('uncategorized');
+  const isUnassignedClient = (clientName: string) => clientName.toLowerCase() === 'unassigned';
+  const isNonBillableCategory = (catName: string) => isIdleCategory(catName) || isUncategorizedCategory(catName);
 
-  const isUncategorizedCategory = (catName: string) => {
-    const lower = catName.toLowerCase();
-    return lower.includes('uncategorized');
-  };
-
-  const isUnassignedClient = (clientName: string) => {
-    return clientName.toLowerCase() === 'unassigned';
-  };
-
-  const isNonBillableCategory = (catName: string) => {
-    return isIdleCategory(catName) || isUncategorizedCategory(catName);
-  };
-
-  // Calculate total hours excluding idle, uncategorized, and unassigned client
+  // Calculate total hours
   const summaryTotalHours = timeSummary.reduce((sum, client) => {
-    // Skip entire Unassigned client
-    if (isUnassignedClient(client.client)) {
-      return sum;
-    }
-    
+    if (isUnassignedClient(client.client)) return sum;
     const clientBillableHours = client.categories
       .filter(cat => !isNonBillableCategory(cat.name))
       .reduce((catSum, cat) => catSum + cat.hours, 0);
     return sum + clientBillableHours;
   }, 0);
 
-  // Helper to get client's billable hours (excluding idle and uncategorized)
   const getClientBillableHours = (client: ClientTime) => {
     return client.categories
       .filter(cat => !isNonBillableCategory(cat.name))
       .reduce((sum, cat) => sum + cat.hours, 0);
   };
 
-  // Toggle client collapse state
   const toggleClientCollapse = (clientKey: string) => {
     setCollapsedClients(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(clientKey)) {
-        newSet.delete(clientKey);
-      } else {
-        newSet.add(clientKey);
-      }
+      if (newSet.has(clientKey)) newSet.delete(clientKey);
+      else newSet.add(clientKey);
       return newSet;
     });
   };
@@ -198,6 +269,16 @@ export default function DailyReview() {
           )
         }
       />
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-in slide-in-from-right ${
+          toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+        }`}>
+          {toast.type === 'success' ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
+          <span className="text-sm font-medium">{toast.message}</span>
+        </div>
+      )}
 
       <div className={DESIGN_SYSTEM.spacing.container + " py-4"}>
         {/* Tab Navigation */}
@@ -240,9 +321,7 @@ export default function DailyReview() {
                 <p className="font-semibold text-yellow-900 text-sm">
                   {uncategorizedCount} block{uncategorizedCount !== 1 ? 's' : ''} need{uncategorizedCount === 1 ? 's' : ''} categorization
                 </p>
-                <p className="text-xs text-yellow-700">
-                  Categorize to see accurate billable hours
-                </p>
+                <p className="text-xs text-yellow-700">Categorize to see accurate billable hours</p>
               </div>
             </div>
             <button
@@ -254,10 +333,8 @@ export default function DailyReview() {
           </div>
         )}
 
-        {/* Show active tab content */}
         {activeTab === 'summary' ? (
           <>
-            {/* Controls */}
             <FilterBar
               date={date}
               user={user}
@@ -267,7 +344,7 @@ export default function DailyReview() {
               onRefresh={handleRefresh}
               onDraft={undefined as any}
               onSubmit={undefined as any}
-              isLoading={busy}
+              isLoading={busy || isUpdating}
             />
 
             {err && <ErrorBanner message={err} />}
@@ -285,12 +362,8 @@ export default function DailyReview() {
                       <button
                         onClick={() => {
                           if (collapsedClients.size === 0) {
-                            // Collapse all
-                            setCollapsedClients(new Set(
-                              timeSummary.map(c => `${c.client_id || 'null'}-${c.client}`)
-                            ));
+                            setCollapsedClients(new Set(timeSummary.map(c => `${c.client_id || 'null'}-${c.client}`)));
                           } else {
-                            // Expand all
                             setCollapsedClients(new Set());
                           }
                         }}
@@ -318,7 +391,7 @@ export default function DailyReview() {
                         key={client.client_id || client.client} 
                         className={`border border-border rounded-lg overflow-hidden shadow-sm hover:shadow transition-shadow ${isUnassigned ? 'opacity-60' : ''}`}
                       >
-                        {/* Client Header - Now Clickable */}
+                        {/* Client Header */}
                         <button
                           onClick={() => toggleClientCollapse(clientKey)}
                           className="w-full bg-gradient-to-r from-primary/10 to-accent/10 px-4 py-2.5 flex items-center justify-between hover:from-primary/15 hover:to-accent/15 transition-colors"
@@ -333,9 +406,7 @@ export default function DailyReview() {
                               {client.client}
                             </h4>
                             {isUnassigned && (
-                              <span className="text-xs px-1.5 py-0.5 bg-muted rounded text-muted-foreground">
-                                non-billable
-                              </span>
+                              <span className="text-xs px-1.5 py-0.5 bg-muted rounded text-muted-foreground">non-billable</span>
                             )}
                             <span className="text-xs text-muted-foreground ml-2">
                               {client.categories.length} {client.categories.length === 1 ? 'category' : 'categories'}
@@ -346,14 +417,12 @@ export default function DailyReview() {
                               {isUnassigned ? client.total_hours.toFixed(2) : billableHours.toFixed(2)}h
                             </span>
                             {!isUnassigned && billableHours !== client.total_hours && (
-                              <span className="text-xs text-muted-foreground">
-                                ({client.total_hours.toFixed(2)}h total)
-                              </span>
+                              <span className="text-xs text-muted-foreground">({client.total_hours.toFixed(2)}h total)</span>
                             )}
                           </div>
                         </button>
                         
-                        {/* Categories - Collapsible */}
+                        {/* Categories */}
                         {!isCollapsed && (
                           <div className="divide-y divide-border bg-white">
                             {client.categories.map((cat) => {
@@ -370,9 +439,7 @@ export default function DailyReview() {
                                         {cat.name}
                                       </span>
                                       {isNonBillable && (
-                                        <span className="text-xs px-1.5 py-0.5 bg-muted rounded text-muted-foreground">
-                                          needs review
-                                        </span>
+                                        <span className="text-xs px-1.5 py-0.5 bg-muted rounded text-muted-foreground">needs review</span>
                                       )}
                                     </div>
                                     <div className="flex items-center gap-3">
@@ -385,14 +452,62 @@ export default function DailyReview() {
                                     </div>
                                   </div>
                                   
+                                  {/* Activities with edit buttons */}
                                   {cat.sample_activities && cat.sample_activities.length > 0 && (
-                                    <ul className="mt-2 ml-1 space-y-1">
-                                      {cat.sample_activities.map((activity, idx) => (
-                                        <li key={idx} className="text-xs text-muted-foreground flex gap-1.5 items-start">
-                                          <span className="text-muted-foreground/50 mt-0.5">→</span>
-                                          <span className="flex-1">{activity}</span>
-                                        </li>
-                                      ))}
+                                    <ul className="mt-2 ml-1 space-y-1.5">
+                                      {cat.sample_activities.map((activity, idx) => {
+                                        const parsed = parseActivity(activity);
+                                        const isEditing = editingBlock?.blockId === parsed.blockId;
+                                        
+                                        return (
+                                          <li key={idx} className="text-xs text-muted-foreground flex items-center gap-1.5 group">
+                                            <span className="text-muted-foreground/50">→</span>
+                                            
+                                            {isEditing ? (
+                                              // Edit mode
+                                              <div className="flex items-center gap-2 flex-1">
+                                                <select
+                                                  value={selectedCategory}
+                                                  onChange={(e) => setSelectedCategory(e.target.value)}
+                                                  className="text-xs border border-primary rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary"
+                                                  autoFocus
+                                                >
+                                                  {availableCategories.map(catName => (
+                                                    <option key={catName} value={catName}>{catName}</option>
+                                                  ))}
+                                                </select>
+                                                <button
+                                                  onClick={handleSaveCategory}
+                                                  disabled={isUpdating}
+                                                  className="p-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50"
+                                                >
+                                                  <Check className="w-3 h-3" />
+                                                </button>
+                                                <button
+                                                  onClick={handleCancelEdit}
+                                                  className="p-1 bg-gray-400 text-white rounded hover:bg-gray-500"
+                                                >
+                                                  <X className="w-3 h-3" />
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              // Display mode
+                                              <>
+                                                <span className="flex-1">{parsed.title}</span>
+                                                {parsed.blockId && (
+                                                  <button
+                                                    onClick={() => handleEditClick(parsed.blockId!, cat.name)}
+                                                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-primary/10 rounded transition-opacity"
+                                                    title="Change category"
+                                                  >
+                                                    <Pencil className="w-3 h-3 text-primary" />
+                                                  </button>
+                                                )}
+                                              </>
+                                            )}
+                                          </li>
+                                        );
+                                      })}
                                     </ul>
                                   )}
                                 </div>
@@ -427,7 +542,6 @@ export default function DailyReview() {
             )}
           </>
         ) : (
-          /* Categorization Tab */
           <ManualCategorization onComplete={handleCategorizationComplete} />
         )}
       </div>

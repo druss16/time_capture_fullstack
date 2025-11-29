@@ -107,7 +107,7 @@ urlpatterns = [
     # ✅ NEW: Grouped blocks view (for hybrid UI)
     path("blocks/grouped/", views.blocks_grouped, name="blocks_grouped"),
 
-    path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block")
+    path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),
 
     # -------------------------------
     # Timecards

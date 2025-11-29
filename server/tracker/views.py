@@ -28,7 +28,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import localtime
 from django.views.decorators.csrf import csrf_exempt  # only if used
 from django.contrib.auth.models import Group
-
+from django.views.decorators.http import require_http_methods
 
 
 
@@ -5872,6 +5872,3 @@ def today_time(request):
     
     return JsonResponse(result, safe=False)
 
-
-# URL to add to tracker/urls.py:
-# path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),

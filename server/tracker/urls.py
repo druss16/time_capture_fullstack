@@ -42,17 +42,35 @@ urlpatterns = [
     path("categorization/bulk/", views.bulk_categorize, name='categorization-bulk'),
     path("categorization/stats/", views.category_stats, name='categorization-stats'),
 
+
+
+    # -------------------------------
+    # Multi-tenant / org management
+    # -------------------------------
+    path("firm-signup/", views.firm_signup, name="firm_signup"),
+    path("invite/", views.invite_team_member, name="invite_team_member"),
+    path("invite/<str:token>/accept/", views.accept_invitation, name="accept_invitation"),
+
     # -------------------------------
     # Client & Project Management
     # -------------------------------
     path("clients/", views.create_client, name="create_client"),
     path("import-clients-csv/", views.import_clients_csv, name="import_clients_csv"),
+
+    path("clients/<int:client_id>/", views.delete_client, name="delete_client"),
+
     
     # ✅ NEW: Dropdown data endpoints
     path("options/clients/", views.client_options, name="client_options"),
     path("options/projects/", views.project_options, name="project_options"),
     path("options/projects/<int:client_id>/", views.project_options_by_client, name="project_options_by_client"),
     path("options/task-types/", views.task_type_options, name="task_type_options"),
+
+
+    path("projects/", views.list_projects, name="list_projects"),
+    path("projects/create/", views.create_project, name="create_project"),
+    path("projects/<int:project_id>/", views.update_project, name="update_project"),
+    path("projects/<int:project_id>/delete/", views.delete_project, name="delete_project"),
 
     # -------------------------------
     # User Profile & Onboarding
@@ -88,6 +106,8 @@ urlpatterns = [
     
     # ✅ NEW: Grouped blocks view (for hybrid UI)
     path("blocks/grouped/", views.blocks_grouped, name="blocks_grouped"),
+
+    path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block")
 
     # -------------------------------
     # Timecards

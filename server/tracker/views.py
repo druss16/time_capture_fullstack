@@ -27,6 +27,8 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import localtime
 from django.views.decorators.csrf import csrf_exempt  # only if used
+from django.contrib.auth.models import Group
+
 
 
 
@@ -3708,6 +3710,10 @@ def auth_signup(request):
         )
 
     user = User.objects.create_user(username=username, email=email or None, password=password)
+
+    default_org, _ = Group.objects.get_or_create(name="default-org")
+    user.groups.add(default_org)
+
     perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
 
     resp = Response(
@@ -3843,7 +3849,6 @@ def set_current_client(request):
     # Get org
     org = user.groups.first()
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
     # Handle clearing current client
@@ -3959,7 +3964,6 @@ def list_clients(request):
     org = user.groups.first()
     
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
     clients = Client.objects.filter(org=org, is_active=True).order_by('name')
@@ -4009,7 +4013,6 @@ def context_guess(request):
     # Get user's clients
     org = user.groups.first()
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
     clients = list(Client.objects.filter(org=org, is_active=True))
@@ -4260,7 +4263,6 @@ def create_client(request):
     # Get org
     org = user.groups.first()
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
     # Check if client already exists
@@ -4320,7 +4322,6 @@ def import_clients_csv(request):
     # Get org
     org = user.groups.first()
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
     # Parse CSV
@@ -4711,7 +4712,6 @@ def get_categorization_data(request):
     # Get org
     org = user.groups.first()
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
     # Parse target date
@@ -4832,7 +4832,6 @@ def save_categorization(request):
     # Get org
     org = user.groups.first()
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
     # Get client (if provided)
@@ -4960,7 +4959,6 @@ def bulk_categorize(request):
     # Get org
     org = user.groups.first()
     if not org:
-        from django.contrib.auth.models import Group
         org, _ = Group.objects.get_or_create(name="default-org")
     
     results = {
@@ -5299,3 +5297,581 @@ class BlockCategorizationViewSet(viewsets.ViewSet):
             'updated': updated,
             'requested': len(block_ids),
         })
+
+
+# tracker/views.py
+
+from django.utils.text import slugify
+import uuid
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def firm_signup(request):
+    """
+    New CPA firm signs up - creates org + owner user
+    """
+    # Validate input
+    firm_name = request.data.get('firm_name')  # "Smith & Associates CPA"
+    email = request.data.get('email')
+    password = request.data.get('password')
+    owner_name = request.data.get('name')  # "John Smith"
+    
+    if not all([firm_name, email, password]):
+        return Response({'error': 'Missing required fields'}, status=400)
+    
+    # Check email not taken
+    if User.objects.filter(email=email).exists():
+        return Response({'error': 'Email already registered'}, status=400)
+    
+    # Create everything in a transaction
+    from django.db import transaction
+    
+    with transaction.atomic():
+        # 1. Create the organization
+        base_slug = slugify(firm_name)[:40]
+        slug = base_slug
+        counter = 1
+        while Organization.objects.filter(slug=slug).exists():
+            slug = f"{base_slug}-{counter}"
+            counter += 1
+        
+        org = Organization.objects.create(
+            name=firm_name,
+            slug=slug,
+            plan='trial',
+            trial_ends_at=timezone.now() + timedelta(days=14),
+        )
+        
+        # 2. Create the Django Group (for backward compatibility)
+        group = Group.objects.create(name=f"org-{org.id}")
+        
+        # 3. Create the owner user
+        username = email.split('@')[0][:30]
+        if User.objects.filter(username=username).exists():
+            username = f"{username}-{uuid.uuid4().hex[:6]}"
+        
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            first_name=owner_name.split()[0] if owner_name else '',
+            last_name=' '.join(owner_name.split()[1:]) if owner_name else '',
+        )
+        
+        # 4. Add user to group
+        user.groups.add(group)
+        
+        # 5. Create membership with owner role
+        OrganizationMembership.objects.create(
+            user=user,
+            organization=org,
+            role='owner',
+        )
+        
+        # 6. Seed default TaskTypes for this org
+        from tracker.models import TaskType, DEFAULT_CPA_TASK_TYPES
+        for idx, tt_data in enumerate(DEFAULT_CPA_TASK_TYPES):
+            TaskType.objects.create(
+                org=group,
+                name=tt_data['name'],
+                code=tt_data['code'],
+                color=tt_data['color'],
+                is_billable=tt_data['is_billable'],
+                sort_order=idx,
+            )
+    
+    # Log them in
+    from django.contrib.auth import login
+    login(request, user)
+    
+    return Response({
+        'success': True,
+        'user': {
+            'id': user.id,
+            'email': user.email,
+            'username': user.username,
+        },
+        'organization': {
+            'id': org.id,
+            'name': org.name,
+            'slug': org.slug,
+            'plan': org.plan,
+        }
+    })
+
+# tracker/views.py
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def invite_team_member(request):
+    """Owner/Admin invites a team member"""
+    email = request.data.get('email')
+    role = request.data.get('role', 'member')
+    
+    # Get user's org
+    membership = request.user.memberships.first()
+    if not membership or membership.role not in ['owner', 'admin']:
+        return Response({'error': 'Not authorized to invite'}, status=403)
+    
+    org = membership.organization
+    
+    # Create invitation
+    invite = Invitation.create_invite(org, email, role, request.user)
+    
+    # Send email (implement with your email service)
+    invite_url = f"https://yourapp.com/invite/{invite.token}"
+    # send_invite_email(email, invite_url, org.name, request.user.get_full_name())
+    
+    return Response({
+        'success': True,
+        'invite_url': invite_url,  # For testing - remove in production
+    })
+
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def accept_invitation(request, token):
+    """New user accepts invitation and creates account"""
+    try:
+        invite = Invitation.objects.get(
+            token=token,
+            accepted_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        )
+    except Invitation.DoesNotExist:
+        return Response({'error': 'Invalid or expired invitation'}, status=400)
+    
+    password = request.data.get('password')
+    name = request.data.get('name', '')
+    
+    with transaction.atomic():
+        # Create user
+        username = invite.email.split('@')[0][:30]
+        if User.objects.filter(username=username).exists():
+            username = f"{username}-{uuid.uuid4().hex[:6]}"
+        
+        user = User.objects.create_user(
+            username=username,
+            email=invite.email,
+            password=password,
+            first_name=name.split()[0] if name else '',
+        )
+        
+        # Add to org's group
+        group = Group.objects.get(name=f"org-{invite.organization.id}")
+        user.groups.add(group)
+        
+        # Create membership
+        OrganizationMembership.objects.create(
+            user=user,
+            organization=invite.organization,
+            role=invite.role,
+            invited_by=invite.invited_by,
+        )
+        
+        # Mark invitation as used
+        invite.accepted_at = timezone.now()
+        invite.save()
+    
+    login(request, user)
+    
+    return Response({
+        'success': True,
+        'organization': invite.organization.name,
+    })
+
+
+# tracker/views.py
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_client(request, client_id):
+    """
+    Delete (or deactivate) a client.
+    Only owners/admins can delete clients.
+    """
+    user = request.user
+    org = user.groups.first()
+    
+    if not org:
+        return Response({'error': 'No organization found'}, status=400)
+    
+    # Check permissions (optional - implement role check)
+    membership = getattr(user, 'memberships', None)
+    if membership:
+        membership = membership.first()
+        if membership and membership.role not in ['owner', 'admin']:
+            return Response({'error': 'Not authorized to delete clients'}, status=403)
+    
+    try:
+        client = Client.objects.get(id=client_id, org=org)
+    except Client.DoesNotExist:
+        return Response({'error': 'Client not found'}, status=404)
+    
+    # Check if client has blocks (soft delete if so)
+    has_blocks = Block.objects.filter(client=client).exists()
+    
+    if has_blocks:
+        # Soft delete - just deactivate
+        client.is_active = False
+        client.save()
+        return Response({
+            'ok': True,
+            'action': 'deactivated',
+            'message': f"Client '{client.name}' deactivated (has associated time blocks)"
+        })
+    else:
+        # Hard delete - no associated data
+        client_name = client.name
+        client.delete()
+        return Response({
+            'ok': True,
+            'action': 'deleted',
+            'message': f"Client '{client_name}' permanently deleted"
+        })
+
+
+#############
+#
+# PROJECT MANAGEMENT UI
+#
+#############
+
+# tracker/views.py
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_projects(request):
+    """List all projects, optionally filtered by client"""
+    org = request.user.groups.first()
+    client_id = request.GET.get('client_id')
+    
+    qs = Project.objects.filter(org=org, is_active=True).select_related('client')
+    
+    if client_id:
+        qs = qs.filter(client_id=client_id)
+    
+    return Response([{
+        'id': p.id,
+        'name': p.name,
+        'client_id': p.client_id,
+        'client_name': p.client.name,
+        'is_active': p.is_active,
+    } for p in qs.order_by('client__name', 'name')])
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_project(request):
+    """Create a new project/engagement for a client"""
+    org = request.user.groups.first()
+    data = request.data
+    
+    client_id = data.get('client_id')
+    name = data.get('name', '').strip()
+    
+    if not client_id:
+        return Response({'error': 'client_id is required'}, status=400)
+    if not name:
+        return Response({'error': 'name is required'}, status=400)
+    
+    # Verify client belongs to this org
+    try:
+        client = Client.objects.get(id=client_id, org=org)
+    except Client.DoesNotExist:
+        return Response({'error': 'Client not found'}, status=404)
+    
+    # Check for duplicate
+    if Project.objects.filter(org=org, client=client, name=name).exists():
+        return Response({'error': f"Project '{name}' already exists for this client"}, status=400)
+    
+    project = Project.objects.create(
+        org=org,
+        client=client,
+        name=name,
+        is_active=True,
+    )
+    
+    return Response({
+        'ok': True,
+        'project': {
+            'id': project.id,
+            'name': project.name,
+            'client_id': client.id,
+            'client_name': client.name,
+        }
+    }, status=201)
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def update_project(request, project_id):
+    """Update a project"""
+    org = request.user.groups.first()
+    
+    try:
+        project = Project.objects.get(id=project_id, org=org)
+    except Project.DoesNotExist:
+        return Response({'error': 'Project not found'}, status=404)
+    
+    data = request.data
+    
+    if 'name' in data:
+        project.name = data['name'].strip()
+    if 'is_active' in data:
+        project.is_active = data['is_active']
+    
+    project.save()
+    
+    return Response({
+        'ok': True,
+        'project': {
+            'id': project.id,
+            'name': project.name,
+            'client_id': project.client_id,
+            'is_active': project.is_active,
+        }
+    })
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_project(request, project_id):
+    """Delete or deactivate a project"""
+    org = request.user.groups.first()
+    
+    try:
+        project = Project.objects.get(id=project_id, org=org)
+    except Project.DoesNotExist:
+        return Response({'error': 'Project not found'}, status=404)
+    
+    # Check if project has blocks
+    has_blocks = Block.objects.filter(project=project).exists()
+    
+    if has_blocks:
+        project.is_active = False
+        project.save()
+        return Response({
+            'ok': True,
+            'action': 'deactivated',
+            'message': f"Project '{project.name}' deactivated (has time entries)"
+        })
+    else:
+        project_name = project.name
+        project.delete()
+        return Response({
+            'ok': True,
+            'action': 'deleted',
+            'message': f"Project '{project_name}' permanently deleted"
+        })
+
+
+
+# Add this view to your tracker/views.py file
+# This enables drag-and-drop recategorization in DailyReview
+
+@login_required
+@require_http_methods(["PATCH"])
+def recategorize_block(request, block_id):
+    """
+    PATCH /api/blocks/{block_id}/recategorize/
+    
+    Move a block to a different category (and optionally client).
+    Used by drag-and-drop in DailyReview.tsx.
+    
+    Request body:
+    {
+        "category": "Tax Preparation",
+        "client_id": 123  // optional - if moving to different client
+    }
+    """
+    import json
+    
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    
+    category = data.get("category")
+    client_id = data.get("client_id")
+    
+    if not category:
+        return JsonResponse({"error": "category is required"}, status=400)
+    
+    # Get the block
+    try:
+        block = ActivityBlock.objects.get(
+            pk=block_id,
+            user__groups__in=request.user.groups.all()
+        )
+    except ActivityBlock.DoesNotExist:
+        return JsonResponse({"error": "Block not found"}, status=404)
+    
+    # Update the category in category_hours JSON field
+    # The category_hours field stores {"Category Name": hours}
+    old_category = None
+    old_hours = 0
+    
+    # Find old category if any
+    if block.category_hours:
+        for cat_name, hours in block.category_hours.items():
+            if hours > 0:
+                old_category = cat_name
+                old_hours = hours
+                break
+    
+    # If no hours tracked, use total duration
+    if old_hours == 0:
+        old_hours = block.duration.total_seconds() / 3600 if block.duration else 0
+    
+    # Update to new category
+    block.category_hours = {category: old_hours}
+    
+    # Update client if provided
+    if client_id is not None:
+        try:
+            new_client = Client.objects.get(
+                pk=client_id,
+                group__in=request.user.groups.all()
+            )
+            block.client = new_client
+        except Client.DoesNotExist:
+            return JsonResponse({"error": "Client not found"}, status=404)
+    
+    block.save()
+    
+    return JsonResponse({
+        "success": True,
+        "block_id": block.id,
+        "old_category": old_category,
+        "new_category": category,
+        "hours": old_hours,
+        "client_id": block.client_id if block.client else None,
+    })
+
+
+# Also add include_blocks support to today_time view
+# Update your today_time view to include this:
+
+@login_required
+def today_time(request):
+    """
+    GET /api/today-time/?date=YYYY-MM-DD&include_blocks=true
+    
+    Returns time summary grouped by client -> category.
+    If include_blocks=true, includes block IDs for drag-and-drop support.
+    """
+    from django.db.models import Sum
+    from collections import defaultdict
+    
+    date_str = request.GET.get("date", timezone.now().date().isoformat())
+    include_blocks = request.GET.get("include_blocks", "").lower() == "true"
+    
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        target_date = timezone.now().date()
+    
+    # Get blocks for the user's org
+    blocks = ActivityBlock.objects.filter(
+        user__groups__in=request.user.groups.all(),
+        start_time__date=target_date,
+    ).select_related('client')
+    
+    # Group by client -> category
+    client_data = defaultdict(lambda: {
+        "client_id": None,
+        "client": "Unassigned",
+        "total_hours": 0,
+        "categories": defaultdict(lambda: {
+            "hours": 0,
+            "block_count": 0,
+            "sample_activities": [],
+            "blocks": [] if include_blocks else None,
+        })
+    })
+    
+    for block in blocks:
+        client_name = block.client.name if block.client else "Unassigned"
+        client_id = block.client.id if block.client else None
+        
+        client_data[client_name]["client_id"] = client_id
+        client_data[client_name]["client"] = client_name
+        
+        # Get duration in hours
+        duration_hours = block.duration.total_seconds() / 3600 if block.duration else 0
+        client_data[client_name]["total_hours"] += duration_hours
+        
+        # Get categories from category_hours or default to "Uncategorized"
+        if block.category_hours:
+            for cat_name, cat_hours in block.category_hours.items():
+                if cat_hours > 0:
+                    cat_data = client_data[client_name]["categories"][cat_name]
+                    cat_data["hours"] += cat_hours
+                    cat_data["block_count"] += 1
+                    
+                    # Add sample activity (with block ID for drag-drop)
+                    title = block.description or block.window_title or "Unknown activity"
+                    if len(cat_data["sample_activities"]) < 5:
+                        # Include block ID in the format [id:123] for drag-drop
+                        cat_data["sample_activities"].append(f"[id:{block.id}] {title[:60]}")
+                    
+                    if include_blocks and cat_data["blocks"] is not None:
+                        cat_data["blocks"].append({
+                            "id": block.id,
+                            "title": title[:60],
+                            "duration_hours": cat_hours,
+                            "category": cat_name,
+                        })
+        else:
+            # Uncategorized block
+            cat_data = client_data[client_name]["categories"]["Uncategorized"]
+            cat_data["hours"] += duration_hours
+            cat_data["block_count"] += 1
+            
+            title = block.description or block.window_title or "Unknown activity"
+            if len(cat_data["sample_activities"]) < 5:
+                cat_data["sample_activities"].append(f"[id:{block.id}] {title[:60]}")
+            
+            if include_blocks and cat_data["blocks"] is not None:
+                cat_data["blocks"].append({
+                    "id": block.id,
+                    "title": title[:60],
+                    "duration_hours": duration_hours,
+                    "category": "Uncategorized",
+                })
+    
+    # Convert to list format
+    result = []
+    for client_name, data in client_data.items():
+        categories = []
+        for cat_name, cat_data in data["categories"].items():
+            cat_entry = {
+                "name": cat_name,
+                "hours": round(cat_data["hours"], 2),
+                "block_count": cat_data["block_count"],
+                "sample_activities": cat_data["sample_activities"],
+            }
+            if include_blocks and cat_data["blocks"]:
+                cat_entry["blocks"] = cat_data["blocks"]
+            categories.append(cat_entry)
+        
+        # Sort categories by hours (descending)
+        categories.sort(key=lambda x: x["hours"], reverse=True)
+        
+        result.append({
+            "client_id": data["client_id"],
+            "client": client_name,
+            "total_hours": round(data["total_hours"], 2),
+            "categories": categories,
+        })
+    
+    # Sort clients by total hours (descending)
+    result.sort(key=lambda x: x["total_hours"], reverse=True)
+    
+    return JsonResponse(result, safe=False)
+
+
+# URL to add to tracker/urls.py:
+# path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),

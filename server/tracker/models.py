@@ -359,6 +359,107 @@ class Task(models.Model):
         return f"{self.name}"
 
 
+# ===========================
+# ======  ORG MODELS  ======
+# ===========================
+# tracker/models.py - Add this new model (or enhance Group)
+
+class Organization(models.Model):
+    """
+    Represents a CPA firm - the tenant in multi-tenant setup.
+    Each org has completely isolated data.
+    """
+    name = models.CharField(max_length=200)  # "Smith & Associates CPA"
+    slug = models.SlugField(unique=True)      # "smith-associates"
+    
+    # Subscription/billing
+    plan = models.CharField(max_length=20, choices=[
+        ('trial', 'Trial'),
+        ('starter', 'Starter'),
+        ('professional', 'Professional'),
+        ('enterprise', 'Enterprise'),
+    ], default='trial')
+    trial_ends_at = models.DateTimeField(null=True, blank=True)
+    stripe_customer_id = models.CharField(max_length=100, blank=True)
+    
+    # Settings
+    timezone = models.CharField(max_length=50, default='America/New_York')
+    billing_rate_default = models.DecimalField(max_digits=8, decimal_places=2, default=150.00)
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "Organization"
+        verbose_name_plural = "Organizations"
+    
+    def __str__(self):
+        return self.name
+
+
+class OrganizationMembership(models.Model):
+    """
+    Links users to organizations with roles.
+    A user can belong to multiple orgs (rare but possible).
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='memberships'
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='memberships'
+    )
+    role = models.CharField(max_length=20, choices=[
+        ('owner', 'Owner'),         # Full control, billing
+        ('admin', 'Admin'),         # Manage users, settings
+        ('manager', 'Manager'),     # Approve timecards
+        ('member', 'Member'),       # Track time only
+    ], default='member')
+    
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='invites_sent'
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['user', 'organization']
+    
+    def __str__(self):
+        return f"{self.user.username} @ {self.organization.name} ({self.role})"
+
+
+ # tracker/models.py
+
+class Invitation(models.Model):
+    """Pending invitation to join an org"""
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    email = models.EmailField()
+    role = models.CharField(max_length=20, default='member')
+    token = models.CharField(max_length=64, unique=True)
+    invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    
+    @classmethod
+    def create_invite(cls, org, email, role, invited_by):
+        import secrets
+        return cls.objects.create(
+            organization=org,
+            email=email,
+            role=role,
+            invited_by=invited_by,
+            token=secrets.token_urlsafe(32),
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
 # ==============================
 # ======  CLASSIFICATION  ======
 # ==============================

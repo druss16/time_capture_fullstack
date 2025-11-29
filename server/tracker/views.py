@@ -5762,17 +5762,27 @@ def recategorize_block(request, block_id):
         return Response({"error": "Block not found"}, status=404)
     
     new_category = request.data.get('category')
+    new_client_id = request.data.get('client_id')
+    
     if not new_category:
         return Response({"error": "category required"}, status=400)
     
-    # Get old category
+    # Update category_hours
     old_category = None
     if block.category_hours:
         old_category = list(block.category_hours.keys())[0] if block.category_hours else None
     
-    # Calculate duration and set new category
+    # Set new category with duration
     duration = (block.end - block.start).total_seconds() / 3600 if block.end and block.start else 0
     block.category_hours = {new_category: round(duration, 2)}
+    
+    # Optionally update client
+    if new_client_id:
+        try:
+            block.client = Client.objects.get(id=new_client_id)
+        except Client.DoesNotExist:
+            pass
+    
     block.save()
     
     return Response({

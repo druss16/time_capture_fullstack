@@ -1,13 +1,13 @@
 /**
  * DailyReview.tsx — Clean time summary view with categorization
  * - Shows organized time by client → category
- * - DRAG & DROP: Move blocks between categories by dragging
+ * - Simple, focused interface
  * - Excludes uncategorized, idle time, and unassigned client from billable totals
  * - Includes manual categorization tab for uncategorized blocks
  */
 
-import { useEffect, useMemo, useState, useCallback, DragEvent } from "react";
-import { Clock, User, RefreshCw, Edit3, BarChart3, ChevronDown, ChevronRight, GripVertical, Check, X } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { Clock, User, RefreshCw, Edit3, BarChart3, ChevronDown, ChevronRight } from "lucide-react";
 import { Header } from "@/components/common/Header";
 import { DESIGN_SYSTEM } from "@/lib/design-system";
 import { FilterBar, ErrorBanner } from "@/components/timecard";
@@ -15,7 +15,8 @@ import { todayIso } from "@/lib/utils/date";
 import { primeCsrf } from "@/lib/csrf";
 import { useWhoAmI } from "@/lib/useWhoAmI";
 import ManualCategorization from "@/components/ManualCategorization";
-import { safeFetchJson } from "@/lib/api";
+import { safeFetchJson } from "@/lib/api";  // ✅ ADD THIS LINE
+
 
 // ---------- ENV ----------
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -27,15 +28,6 @@ type Category = {
   hours: number;
   block_count: number;
   sample_activities: string[];
-  // Extended: we'll need block IDs for drag-drop
-  blocks?: BlockInfo[];
-};
-
-type BlockInfo = {
-  id: number;
-  title: string;
-  duration_hours: number;
-  category: string;
 };
 
 type ClientTime = {
@@ -44,14 +36,6 @@ type ClientTime = {
   total_hours: number;
   categories: Category[];
 };
-
-// Drag data interface
-interface DragData {
-  blockId: number;
-  blockTitle: string;
-  sourceCategory: string;
-  sourceClientId: number | null;
-}
 
 // =====================================================================================
 // Component
@@ -78,17 +62,6 @@ export default function DailyReview() {
   // Track which clients are collapsed (default all expanded)
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
 
-  // Drag-drop state
-  const [draggedBlock, setDraggedBlock] = useState<DragData | null>(null);
-  const [dropTarget, setDropTarget] = useState<string | null>(null);
-  const [isUpdating, setIsUpdating] = useState(false);
-
-  // Toast notification state
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-
-  // Available categories for the dropdown/drag targets
-  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
-
   useEffect(() => {
     if (!user && whoami) setUser(whoami);
   }, [whoami, user]);
@@ -97,56 +70,22 @@ export default function DailyReview() {
     (async () => { try { await primeCsrf(API_BASE); } catch {} })();
   }, []);
 
-  // Show toast notification
-  const showToast = (message: string, type: 'success' | 'error') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
-  };
-
-  // Load available categories (task types)
-  const loadCategories = useCallback(async () => {
-    try {
-      const data = await safeFetchJson<{ id: number; name: string }[]>(`${API_BASE}/options/task-types/`);
-      setAvailableCategories(data.map(t => t.name));
-    } catch (err) {
-      console.error('Failed to load categories:', err);
-      // Fallback to common categories
-      setAvailableCategories([
-        'Tax Preparation',
-        'Audit/Assurance',
-        'Bookkeeping',
-        'Advisory/Consulting',
-        'Research/AI Assistance',
-        'Email/Communication',
-        'Admin/Internal',
-        'Software Development',
-      ]);
-    }
-  }, []);
-
-  // Load time summary with block details
+  // Load time summary
   const loadTimeSummary = useCallback(async () => {
     setBusy(true);
     setErr(null);
     try {
-      // Try to get detailed blocks first for drag-drop support
-      const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/?date=${date}&include_blocks=true`);
+      const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/?date=${date}`);  // ✅ ADD ?date=${date}
       setTimeSummary(json);
     } catch (err: any) {
-      // Fallback to regular endpoint
-      try {
-        const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/?date=${date}`);
-        setTimeSummary(json);
-      } catch (fallbackErr: any) {
-        console.error('Failed to load time summary:', fallbackErr);
-        setErr(fallbackErr?.message || 'Failed to load time summary');
-      }
+      console.error('Failed to load time summary:', err);
+      setErr(err?.message || 'Failed to load time summary');
     } finally {
       setBusy(false);
     }
-  }, [date]);
+  }, [date]);  // ✅ ADD date dependency
 
-  // Load uncategorized count
+  // Replace loadUncategorizedCount:
   const loadUncategorizedCount = useCallback(async () => {
     try {
       const data = await safeFetchJson<{blocks: any[]}>(`${API_BASE}/categorization/data/?date=${date}`);
@@ -161,21 +100,22 @@ export default function DailyReview() {
     const t = setTimeout(() => {
       loadTimeSummary();
       loadUncategorizedCount();
-      loadCategories();
     }, 200);
     return () => clearTimeout(t);
-  }, [loadTimeSummary, loadUncategorizedCount, loadCategories]);
+  }, [loadTimeSummary, loadUncategorizedCount]);
 
-  // Auto-refresh every 2 minutes
+
+  // Auto-refresh every 2 minutes (instead of 5)
   useEffect(() => {
     const interval = setInterval(() => {
       loadTimeSummary();
       loadUncategorizedCount();
-    }, 2 * 60 * 1000);
+    }, 2 * 60 * 1000);  // ✅ Changed: 5 → 2 minutes
+
     return () => clearInterval(interval);
   }, [loadTimeSummary, loadUncategorizedCount]);
 
-  // Refresh handler
+  // Refresh handler that updates both summary and count
   const handleRefresh = useCallback(() => {
     loadTimeSummary();
     loadUncategorizedCount();
@@ -191,83 +131,7 @@ export default function DailyReview() {
     return user?.trim() ? user.trim() : whoami?.trim() ? whoami : "All Users";
   }, [user, whoami]);
 
-  // ==================== DRAG & DROP HANDLERS ====================
-  
-  const handleDragStart = (e: DragEvent<HTMLDivElement>, block: BlockInfo, clientId: number | null) => {
-    const dragData: DragData = {
-      blockId: block.id,
-      blockTitle: block.title,
-      sourceCategory: block.category,
-      sourceClientId: clientId,
-    };
-    setDraggedBlock(dragData);
-    e.dataTransfer.setData('application/json', JSON.stringify(dragData));
-    e.dataTransfer.effectAllowed = 'move';
-    
-    // Add visual feedback
-    if (e.currentTarget) {
-      e.currentTarget.style.opacity = '0.5';
-    }
-  };
-
-  const handleDragEnd = (e: DragEvent<HTMLDivElement>) => {
-    setDraggedBlock(null);
-    setDropTarget(null);
-    if (e.currentTarget) {
-      e.currentTarget.style.opacity = '1';
-    }
-  };
-
-  const handleDragOver = (e: DragEvent<HTMLDivElement>, categoryName: string) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    setDropTarget(categoryName);
-  };
-
-  const handleDragLeave = () => {
-    setDropTarget(null);
-  };
-
-  const handleDrop = async (e: DragEvent<HTMLDivElement>, targetCategory: string, targetClientId: number | null) => {
-    e.preventDefault();
-    setDropTarget(null);
-
-    try {
-      const data = JSON.parse(e.dataTransfer.getData('application/json')) as DragData;
-      
-      // Don't do anything if dropping on same category
-      if (data.sourceCategory === targetCategory) {
-        return;
-      }
-
-      setIsUpdating(true);
-
-      // Call API to update the block's category
-      await safeFetchJson(`${API_BASE}/blocks/${data.blockId}/recategorize/`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          category: targetCategory,
-          client_id: targetClientId,
-        }),
-      });
-
-      showToast(`Moved "${data.blockTitle}" to ${targetCategory}`, 'success');
-      
-      // Refresh data
-      await loadTimeSummary();
-      await loadUncategorizedCount();
-
-    } catch (err: any) {
-      console.error('Failed to move block:', err);
-      showToast(err?.message || 'Failed to move block', 'error');
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  // ==================== FILTER LOGIC ====================
-
+  // Filter logic: exclude idle, uncategorized categories and entire "Unassigned" client
   const isIdleCategory = (catName: string) => {
     const lower = catName.toLowerCase();
     return lower.includes('idle');
@@ -288,16 +152,18 @@ export default function DailyReview() {
 
   // Calculate total hours excluding idle, uncategorized, and unassigned client
   const summaryTotalHours = timeSummary.reduce((sum, client) => {
+    // Skip entire Unassigned client
     if (isUnassignedClient(client.client)) {
       return sum;
     }
+    
     const clientBillableHours = client.categories
       .filter(cat => !isNonBillableCategory(cat.name))
       .reduce((catSum, cat) => catSum + cat.hours, 0);
     return sum + clientBillableHours;
   }, 0);
 
-  // Helper to get client's billable hours
+  // Helper to get client's billable hours (excluding idle and uncategorized)
   const getClientBillableHours = (client: ClientTime) => {
     return client.categories
       .filter(cat => !isNonBillableCategory(cat.name))
@@ -333,22 +199,6 @@ export default function DailyReview() {
         }
       />
 
-      {/* Toast Notification */}
-      {toast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-in slide-in-from-right ${
-          toast.type === 'success' 
-            ? 'bg-green-600 text-white' 
-            : 'bg-red-600 text-white'
-        }`}>
-          {toast.type === 'success' ? (
-            <Check className="w-4 h-4" />
-          ) : (
-            <X className="w-4 h-4" />
-          )}
-          <span className="text-sm font-medium">{toast.message}</span>
-        </div>
-      )}
-
       <div className={DESIGN_SYSTEM.spacing.container + " py-4"}>
         {/* Tab Navigation */}
         <div className="flex gap-2 mb-4">
@@ -380,16 +230,6 @@ export default function DailyReview() {
             )}
           </button>
         </div>
-
-        {/* Drag & Drop Instructions Banner */}
-        {activeTab === 'summary' && timeSummary.length > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 flex items-center gap-3">
-            <GripVertical className="w-5 h-5 text-blue-500" />
-            <p className="text-sm text-blue-800">
-              <strong>Tip:</strong> Drag activities between categories to re-categorize them
-            </p>
-          </div>
-        )}
 
         {/* Alert Banner for Uncategorized Blocks */}
         {activeTab === 'summary' && uncategorizedCount > 0 && (
@@ -427,7 +267,7 @@ export default function DailyReview() {
               onRefresh={handleRefresh}
               onDraft={undefined as any}
               onSubmit={undefined as any}
-              isLoading={busy || isUpdating}
+              isLoading={busy}
             />
 
             {err && <ErrorBanner message={err} />}
@@ -445,10 +285,12 @@ export default function DailyReview() {
                       <button
                         onClick={() => {
                           if (collapsedClients.size === 0) {
+                            // Collapse all
                             setCollapsedClients(new Set(
                               timeSummary.map(c => `${c.client_id || 'null'}-${c.client}`)
                             ));
                           } else {
+                            // Expand all
                             setCollapsedClients(new Set());
                           }
                         }}
@@ -511,24 +353,16 @@ export default function DailyReview() {
                           </div>
                         </button>
                         
-                        {/* Categories - Collapsible with Drag-Drop */}
+                        {/* Categories - Collapsible */}
                         {!isCollapsed && (
                           <div className="divide-y divide-border bg-white">
                             {client.categories.map((cat) => {
                               const isNonBillable = isNonBillableCategory(cat.name);
-                              const isDropping = dropTarget === `${client.client_id}-${cat.name}`;
                               
                               return (
                                 <div 
-                                  key={cat.name}
-                                  onDragOver={(e) => handleDragOver(e, `${client.client_id}-${cat.name}`)}
-                                  onDragLeave={handleDragLeave}
-                                  onDrop={(e) => handleDrop(e, cat.name, client.client_id)}
-                                  className={`px-4 py-2.5 transition-all ${isNonBillable ? 'opacity-60' : ''} ${
-                                    isDropping 
-                                      ? 'bg-primary/10 border-2 border-dashed border-primary' 
-                                      : 'hover:bg-accent/30'
-                                  }`}
+                                  key={cat.name} 
+                                  className={`px-4 py-2.5 hover:bg-accent/30 transition-colors ${isNonBillable ? 'opacity-60' : ''}`}
                                 >
                                   <div className="flex items-center justify-between mb-1.5">
                                     <div className="flex items-center gap-2">
@@ -538,11 +372,6 @@ export default function DailyReview() {
                                       {isNonBillable && (
                                         <span className="text-xs px-1.5 py-0.5 bg-muted rounded text-muted-foreground">
                                           needs review
-                                        </span>
-                                      )}
-                                      {isDropping && (
-                                        <span className="text-xs px-2 py-0.5 bg-primary text-white rounded animate-pulse">
-                                          Drop here
                                         </span>
                                       )}
                                     </div>
@@ -556,62 +385,12 @@ export default function DailyReview() {
                                     </div>
                                   </div>
                                   
-                                  {/* Activities - Now Draggable */}
                                   {cat.sample_activities && cat.sample_activities.length > 0 && (
                                     <ul className="mt-2 ml-1 space-y-1">
-                                      {cat.sample_activities.map((activity, idx) => {
-                                        // Try to extract block info if available (format: "[id:123] Activity title")
-                                        const blockMatch = activity.match(/\[id:(\d+)\]/);
-                                        const blockId = blockMatch ? parseInt(blockMatch[1]) : null;
-                                        const displayTitle = activity.replace(/\[id:\d+\]\s*/, '').trim();
-                                        
-                                        const blockInfo: BlockInfo = {
-                                          id: blockId || idx,
-                                          title: displayTitle,
-                                          duration_hours: 0,
-                                          category: cat.name,
-                                        };
-                                        
-                                        const isDraggable = blockId !== null || (cat.blocks && cat.blocks[idx]);
-                                        
-                                        return (
-                                          <li 
-                                            key={idx}
-                                            draggable={isDraggable}
-                                            onDragStart={(e) => isDraggable && handleDragStart(e as any, cat.blocks?.[idx] || blockInfo, client.client_id)}
-                                            onDragEnd={handleDragEnd as any}
-                                            className={`text-xs text-muted-foreground flex gap-1.5 items-start group ${
-                                              isDraggable
-                                                ? 'cursor-grab active:cursor-grabbing hover:bg-accent/50 rounded px-1 py-0.5 -ml-1'
-                                                : ''
-                                            }`}
-                                          >
-                                            {isDraggable && (
-                                              <GripVertical className="w-3 h-3 text-muted-foreground/40 group-hover:text-primary mt-0.5 flex-shrink-0" />
-                                            )}
-                                            <span className="text-muted-foreground/50 mt-0.5">→</span>
-                                            <span className="flex-1">{displayTitle}</span>
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
-                                  )}
-                                  
-                                  {/* Blocks with full drag support if available */}
-                                  {cat.blocks && cat.blocks.length > 0 && !cat.sample_activities?.length && (
-                                    <ul className="mt-2 ml-1 space-y-1">
-                                      {cat.blocks.map((block) => (
-                                        <li 
-                                          key={block.id}
-                                          draggable
-                                          onDragStart={(e) => handleDragStart(e as any, block, client.client_id)}
-                                          onDragEnd={handleDragEnd as any}
-                                          className="text-xs text-muted-foreground flex gap-1.5 items-start group cursor-grab active:cursor-grabbing hover:bg-accent/50 rounded px-1 py-0.5 -ml-1"
-                                        >
-                                          <GripVertical className="w-3 h-3 text-muted-foreground/40 group-hover:text-primary mt-0.5 flex-shrink-0" />
+                                      {cat.sample_activities.map((activity, idx) => (
+                                        <li key={idx} className="text-xs text-muted-foreground flex gap-1.5 items-start">
                                           <span className="text-muted-foreground/50 mt-0.5">→</span>
-                                          <span className="flex-1">{block.title}</span>
-                                          <span className="text-muted-foreground/60">{block.duration_hours.toFixed(2)}h</span>
+                                          <span className="flex-1">{activity}</span>
                                         </li>
                                       ))}
                                     </ul>
@@ -619,37 +398,6 @@ export default function DailyReview() {
                                 </div>
                               );
                             })}
-                            
-                            {/* Drop zone for "Other Categories" - allows moving to a new category */}
-                            {draggedBlock && (
-                              <div className="border-t border-dashed border-primary/30 bg-primary/5 p-3">
-                                <p className="text-xs text-muted-foreground mb-2 font-medium">Move to different category:</p>
-                                <div className="flex flex-wrap gap-2">
-                                  {availableCategories
-                                    .filter(catName => 
-                                      !client.categories.some(c => c.name === catName) &&
-                                      catName !== draggedBlock.sourceCategory
-                                    )
-                                    .slice(0, 6)
-                                    .map(catName => (
-                                      <div
-                                        key={catName}
-                                        onDragOver={(e) => handleDragOver(e, `${client.client_id}-${catName}`)}
-                                        onDragLeave={handleDragLeave}
-                                        onDrop={(e) => handleDrop(e, catName, client.client_id)}
-                                        className={`px-3 py-1.5 text-xs rounded border transition-all cursor-pointer ${
-                                          dropTarget === `${client.client_id}-${catName}`
-                                            ? 'bg-primary text-white border-primary'
-                                            : 'bg-white border-border hover:border-primary hover:bg-primary/5'
-                                        }`}
-                                      >
-                                        {catName}
-                                      </div>
-                                    ))
-                                  }
-                                </div>
-                              </div>
-                            )}
                           </div>
                         )}
                       </div>

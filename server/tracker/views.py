@@ -5673,7 +5673,6 @@ def delete_project(request, project_id):
 # Add this view to your tracker/views.py file
 # This enables drag-and-drop recategorization in DailyReview
 
-
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
 def recategorize_block(request, block_id):
@@ -5689,14 +5688,18 @@ def recategorize_block(request, block_id):
     if not new_category:
         return Response({"error": "category required"}, status=400)
     
-    # Update category_hours
+    # Track old category
     old_category = None
     if block.category_hours:
         old_category = list(block.category_hours.keys())[0] if block.category_hours else None
     
-    # Set new category with duration
+    # Calculate duration
     duration = (block.end - block.start).total_seconds() / 3600 if block.end and block.start else 0
     block.category_hours = {new_category: round(duration, 2)}
+    
+    # Mark as user correction
+    block.categorized_by = 'correction'
+    block.categorized_at = timezone.now()
     
     # Optionally update client
     if new_client_id:
@@ -5705,7 +5708,8 @@ def recategorize_block(request, block_id):
         except Client.DoesNotExist:
             pass
     
-    block.save()
+    # ✅ CRITICAL: force_update=True bypasses immutability protection
+    block.save(force_update=True)
     
     return Response({
         "success": True,

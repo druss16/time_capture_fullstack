@@ -214,9 +214,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://127.0.0.1:8080",
     # Production
-    "https://timetracker.mavops.ai",
-    "https://timetracker-api-k375.onrender.com",
-    "https://time-capture-fullstack-frontend.onrender.com",
+    "https://timetracker-frontend-9y52.onrender.com",  # ← ADD THIS
+    "https://timetracker.mavops.ai",  # ← ADD THIS TOO for custom domain
+
 ]
 
 CORS_ALLOW_HEADERS = list(default_headers) + [

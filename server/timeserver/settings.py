@@ -241,8 +241,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8080",
     # Production
     "https://timetracker.mavops.ai",
-    "https://timetracker-api-k375.onrender.com",
-    "https://time-capture-fullstack-frontend.onrender.com",
+    "https://timetracker-frontend-9y52.onrender.com",  # ← ADD
+    "https://timetracker-api-k375.onrender.com",        # ← ADD (API itself)
 ]
 
 # Optional: URLs that should be exempt from CSRF (like raw agent events)

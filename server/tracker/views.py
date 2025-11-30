@@ -5717,3 +5717,111 @@ def recategorize_block(request, block_id):
         "old_category": old_category,
         "new_category": new_category
     })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_manual_time_entry(request):
+    """
+    Create a manual time entry.
+    
+    Body: {
+        "client_id": int (required),
+        "category": str (required),
+        "date": "YYYY-MM-DD" (required),
+        "hours": float (required) - e.g., 1.5 for 1 hour 30 min,
+        "start_time": "HH:MM" (optional) - defaults to 09:00,
+        "notes": str (optional)
+    }
+    """
+    user = request.user
+    data = request.data
+    
+    # Validate required fields
+    client_id = data.get('client_id')
+    category = data.get('category', '').strip()
+    date_str = data.get('date')
+    hours = data.get('hours')
+    
+    if not client_id:
+        return Response({"error": "client_id is required"}, status=400)
+    if not category:
+        return Response({"error": "category is required"}, status=400)
+    if not date_str:
+        return Response({"error": "date is required"}, status=400)
+    if not hours:
+        return Response({"error": "hours is required"}, status=400)
+    
+    try:
+        hours = float(hours)
+        if hours <= 0 or hours > 24:
+            return Response({"error": "hours must be between 0 and 24"}, status=400)
+    except (ValueError, TypeError):
+        return Response({"error": "hours must be a number"}, status=400)
+    
+    # Get org
+    org = user.groups.first()
+    if not org:
+        org, _ = Group.objects.get_or_create(name="default-org")
+    
+    # Get client
+    try:
+        client = Client.objects.get(id=client_id, org=org)
+    except Client.DoesNotExist:
+        return Response({"error": "Client not found"}, status=404)
+    
+    # Parse date and time
+    try:
+        entry_date = parse_date(date_str)
+        if not entry_date:
+            raise ValueError("Invalid date")
+    except Exception:
+        return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
+    
+    # Parse start time or default to 9am
+    start_time_str = data.get('start_time', '09:00')
+    try:
+        hour, minute = map(int, start_time_str.split(':'))
+        start_time = dt_time(hour, minute)
+    except Exception:
+        start_time = dt_time(9, 0)
+    
+    # Calculate start and end datetime
+    tz = timezone.get_current_timezone()
+    start_dt = timezone.make_aware(dt.combine(entry_date, start_time), tz)
+    
+    # Calculate end time based on hours
+    minutes = int(hours * 60)
+    end_dt = start_dt + timedelta(minutes=minutes)
+    
+    # Get notes
+    notes = data.get('notes', '').strip()
+    
+    # Create the block
+    block = Block.objects.create(
+        user=user,
+        org=org,
+        client=client,
+        start=start_dt,
+        end=end_dt,
+        minutes=minutes,
+        title=f"Manual: {category}",
+        window_title=f"Manual entry - {client.name}",
+        category_hours={category: round(hours, 2)},
+        is_categorized=True,
+        categorized_at=timezone.now(),
+        categorized_by='manual',
+        notes=notes,
+        app_name='manual_entry',
+    )
+    
+    return Response({
+        "success": True,
+        "block_id": block.id,
+        "client": client.name,
+        "category": category,
+        "hours": round(hours, 2),
+        "date": entry_date.isoformat(),
+        "start": start_dt.isoformat(),
+        "end": end_dt.isoformat(),
+    }, status=201)

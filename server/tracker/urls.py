@@ -85,6 +85,8 @@ urlpatterns = [
 
     path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),
 
+    path("time-entries/manual/", views.create_manual_time_entry, name="create_manual_time_entry"),
+
     # -------------------------------
     # Device Management
     # -------------------------------

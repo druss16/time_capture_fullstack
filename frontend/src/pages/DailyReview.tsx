@@ -16,6 +16,7 @@ import { primeCsrf } from "@/lib/csrf";
 import { useWhoAmI } from "@/lib/useWhoAmI";
 import ManualCategorization from "@/components/ManualCategorization";
 import { safeFetchJson } from "@/lib/api";
+import ManualTimeEntry from "@/components/ManualTimeEntry";
 
 // ---------- ENV ----------
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -47,6 +48,7 @@ type ParsedActivity = {
   title: string;
   raw: string;
 };
+
 
 // =====================================================================================
 // Component
@@ -478,6 +480,12 @@ export default function DailyReview() {
                     Today's Summary
                   </h3>
                   <div className="flex items-center gap-3">
+                    {/* Manual Time Entry Button */}
+                    <ManualTimeEntry 
+                      defaultDate={date} 
+                      onSuccess={handleRefresh} 
+                    />
+                    
                     {timeSummary.length > 1 && (
                       <button
                         onClick={() => {

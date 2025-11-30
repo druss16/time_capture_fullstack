@@ -1,7 +1,7 @@
 /**
  * DailyReview.tsx — Clean time summary view with categorization
  * - Shows organized time by client → category
- * - CLICK TO EDIT: Click pencil icon to recategorize blocks
+ * - CLICK TO EDIT: Click pencil icon to change client AND/OR category
  * - Excludes uncategorized, idle time, and unassigned client from billable totals
  * - Includes manual categorization tab for uncategorized blocks
  */
@@ -34,6 +34,11 @@ type ClientTime = {
   client: string;
   total_hours: number;
   categories: Category[];
+};
+
+type ClientOption = {
+  id: number;
+  name: string;
 };
 
 // Parsed activity with block ID
@@ -69,8 +74,13 @@ export default function DailyReview() {
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
 
   // Edit state
-  const [editingBlock, setEditingBlock] = useState<{blockId: number; currentCategory: string} | null>(null);
+  const [editingBlock, setEditingBlock] = useState<{
+    blockId: number; 
+    currentCategory: string;
+    currentClientId: number | null;
+  } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
   // Toast notification state
@@ -89,6 +99,9 @@ export default function DailyReview() {
     'Meeting/Call',
     'Training',
   ]);
+
+  // Available clients
+  const [availableClients, setAvailableClients] = useState<ClientOption[]>([]);
 
   useEffect(() => {
     if (!user && whoami) setUser(whoami);
@@ -146,6 +159,58 @@ export default function DailyReview() {
     }
   }, []);
 
+  // Load available clients - try multiple endpoints with fallback
+  const loadClients = useCallback(async () => {
+    // Try options/clients/ endpoint first (from urls.py)
+    try {
+      const data = await safeFetchJson<ClientOption[]>(`${API_BASE}/options/clients/`);
+      if (data && Array.isArray(data) && data.length > 0) {
+        setAvailableClients(data);
+        console.log('Loaded clients from /options/clients/', data);
+        return;
+      }
+    } catch (err) {
+      console.warn('Failed to load from /options/clients/', err);
+    }
+    
+    // Try clients/list endpoint (no trailing slash - from urls.py)
+    try {
+      const data = await safeFetchJson<ClientOption[]>(`${API_BASE}/clients/list`);
+      if (data && Array.isArray(data) && data.length > 0) {
+        setAvailableClients(data);
+        console.log('Loaded clients from /clients/list', data);
+        return;
+      }
+    } catch (err) {
+      console.warn('Failed to load from /clients/list', err);
+    }
+    
+    // Try with trailing slash just in case
+    try {
+      const data = await safeFetchJson<ClientOption[]>(`${API_BASE}/clients/list/`);
+      if (data && Array.isArray(data) && data.length > 0) {
+        setAvailableClients(data);
+        console.log('Loaded clients from /clients/list/', data);
+        return;
+      }
+    } catch (err) {
+      console.warn('Failed to load from /clients/list/', err);
+    }
+  }, []);
+  
+  // Fallback: Extract clients from time summary when it loads
+  useEffect(() => {
+    if (availableClients.length === 0 && timeSummary.length > 0) {
+      const clientsFromSummary = timeSummary
+        .filter(c => c.client_id && c.client.toLowerCase() !== 'unassigned')
+        .map(c => ({ id: c.client_id!, name: c.client }));
+      
+      if (clientsFromSummary.length > 0) {
+        setAvailableClients(clientsFromSummary);
+      }
+    }
+  }, [timeSummary, availableClients.length]);
+
   // Load time summary
   const loadTimeSummary = useCallback(async () => {
     setBusy(true);
@@ -178,9 +243,10 @@ export default function DailyReview() {
       loadTimeSummary();
       loadUncategorizedCount();
       loadCategories();
+      loadClients();
     }, 200);
     return () => clearTimeout(t);
-  }, [loadTimeSummary, loadUncategorizedCount, loadCategories]);
+  }, [loadTimeSummary, loadUncategorizedCount, loadCategories, loadClients]);
 
   // Auto-refresh every 2 minutes
   useEffect(() => {
@@ -203,33 +269,65 @@ export default function DailyReview() {
     loadUncategorizedCount();
   }, [loadTimeSummary, loadUncategorizedCount]);
 
-  // Handle edit click
-  const handleEditClick = (blockId: number, currentCategory: string) => {
-    setEditingBlock({ blockId, currentCategory });
+  // Handle edit click - now includes client ID
+  const handleEditClick = (blockId: number, currentCategory: string, currentClientId: number | null) => {
+    setEditingBlock({ blockId, currentCategory, currentClientId });
     setSelectedCategory(currentCategory);
+    setSelectedClientId(currentClientId);
   };
 
-  // Handle save category change
+  // Handle save - both category and client
   const handleSaveCategory = async () => {
-    if (!editingBlock || !selectedCategory || selectedCategory === editingBlock.currentCategory) {
+    if (!editingBlock) {
+      setEditingBlock(null);
+      return;
+    }
+
+    // Check if anything changed
+    const categoryChanged = selectedCategory !== editingBlock.currentCategory;
+    const clientChanged = selectedClientId !== editingBlock.currentClientId;
+    
+    if (!categoryChanged && !clientChanged) {
       setEditingBlock(null);
       return;
     }
 
     setIsUpdating(true);
     try {
+      const payload: Record<string, any> = {};
+      
+      // Always include category
+      payload.category = selectedCategory;
+      
+      // Include client_id if changed
+      if (clientChanged && selectedClientId) {
+        payload.client_id = selectedClientId;
+      }
+      
       await safeFetchJson(`${API_BASE}/blocks/${editingBlock.blockId}/recategorize/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category: selectedCategory }),
+        body: JSON.stringify(payload),
       });
       
-      showToast(`Moved to ${selectedCategory}`, 'success');
+      // Build success message
+      const changes: string[] = [];
+      if (clientChanged && selectedClientId) {
+        const newClient = availableClients.find(c => c.id === selectedClientId);
+        changes.push(`Client: ${newClient?.name || 'Updated'}`);
+      }
+      if (categoryChanged) {
+        changes.push(`Category: ${selectedCategory}`);
+      }
+      
+      showToast(changes.join(' • ') || 'Updated successfully', 'success');
       setEditingBlock(null);
+      setSelectedClientId(null);
+      setSelectedCategory("");
       await loadTimeSummary();
     } catch (err: any) {
       console.error('Failed to recategorize:', err);
-      showToast(err?.message || 'Failed to update category', 'error');
+      showToast(err?.message || 'Failed to update', 'error');
     } finally {
       setIsUpdating(false);
     }
@@ -239,6 +337,7 @@ export default function DailyReview() {
   const handleCancelEdit = () => {
     setEditingBlock(null);
     setSelectedCategory("");
+    setSelectedClientId(null);
   };
 
   const headerUser = useMemo(() => {
@@ -485,30 +584,48 @@ export default function DailyReview() {
                                             <span className="text-muted-foreground/50">→</span>
                                             
                                             {isEditing ? (
-                                              // Edit mode
-                                              <div className="flex items-center gap-2 flex-1">
+                                              // Edit mode - Client + Category dropdowns
+                                              <div className="flex items-center gap-2 flex-1 flex-wrap py-1">
+                                                {/* Client Dropdown */}
+                                                <select
+                                                  value={selectedClientId || ''}
+                                                  onChange={(e) => setSelectedClientId(e.target.value ? parseInt(e.target.value) : null)}
+                                                  className="text-xs border border-blue-400 rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[120px]"
+                                                >
+                                                  <option value="">— Client —</option>
+                                                  {availableClients.map(c => (
+                                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                                  ))}
+                                                </select>
+                                                
+                                                {/* Category Dropdown */}
                                                 <select
                                                   value={selectedCategory}
                                                   onChange={(e) => setSelectedCategory(e.target.value)}
-                                                  className="text-xs border border-primary rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary"
-                                                  autoFocus
+                                                  className="text-xs border border-primary rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary min-w-[140px]"
                                                 >
                                                   {availableCategories.map(catName => (
                                                     <option key={catName} value={catName}>{catName}</option>
                                                   ))}
                                                 </select>
+                                                
+                                                {/* Save button */}
                                                 <button
                                                   onClick={handleSaveCategory}
                                                   disabled={isUpdating}
-                                                  className="p-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50"
+                                                  className="p-1.5 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 transition-colors"
+                                                  title="Save changes"
                                                 >
-                                                  <Check className="w-3 h-3" />
+                                                  <Check className="w-3.5 h-3.5" />
                                                 </button>
+                                                
+                                                {/* Cancel button */}
                                                 <button
                                                   onClick={handleCancelEdit}
-                                                  className="p-1 bg-gray-400 text-white rounded hover:bg-gray-500"
+                                                  className="p-1.5 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors"
+                                                  title="Cancel"
                                                 >
-                                                  <X className="w-3 h-3" />
+                                                  <X className="w-3.5 h-3.5" />
                                                 </button>
                                               </div>
                                             ) : (
@@ -517,9 +634,9 @@ export default function DailyReview() {
                                                 <span className="flex-1">{parsed.title}</span>
                                                 {parsed.blockId && (
                                                   <button
-                                                    onClick={() => handleEditClick(parsed.blockId!, cat.name)}
+                                                    onClick={() => handleEditClick(parsed.blockId!, cat.name, client.client_id)}
                                                     className="opacity-0 group-hover:opacity-100 p-1 hover:bg-primary/10 rounded transition-opacity"
-                                                    title="Change category"
+                                                    title="Edit client/category"
                                                   >
                                                     <Pencil className="w-3 h-3 text-primary" />
                                                   </button>

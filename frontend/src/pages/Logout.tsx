@@ -1,41 +1,48 @@
 // src/pages/Logout.tsx
 import { useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
-import { API_ENDPOINTS, safeFetchJson, primeCsrf } from "@/lib/api";
-import { useAuth } from "@/auth/AuthProvider"; // if you have this
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/auth/AuthProvider";
 
 export default function Logout() {
   const nav = useNavigate();
-  const loc = useLocation();
-  const { setAuthenticated } = useAuth?.() ?? { setAuthenticated: undefined };
-
-  // helper: clear the non-HttpOnly browser identity cookies you set in /browser/hello/
-  function clearBrowserIdentityCookies() {
-    const opts = "path=/; samesite=Lax";
-    document.cookie = `mavops_username=; expires=Thu, 01 Jan 1970 00:00:00 GMT; ${opts}`;
-    document.cookie = `mavops_host=; expires=Thu, 01 Jan 1970 00:00:00 GMT; ${opts}`;
-  }
+  const { logout } = useAuth();
 
   useEffect(() => {
-    (async () => {
-      try {
-        // 1) make sure csrftoken exists so POST /auth/logout/ succeeds
-        await primeCsrf();
-        // 2) tell the server to end the session
-        await safeFetchJson(API_ENDPOINTS.authLogout, { method: "POST" });
-      } catch {
-        // ignore — even if already logged out
-      } finally {
-        // 3) local cleanup
-        clearBrowserIdentityCookies();
-        if (typeof setAuthenticated === "function") setAuthenticated(false);
+    let mounted = true;
 
-        // 4) send them to login with a next= hint
-        const next = (loc.state as any)?.next || (loc.pathname + loc.search) || "/";
-        nav(`/login?next=${encodeURIComponent(next)}`, { replace: true });
+    (async () => {
+      // 1. Call the logout function (clears token, cookies, state)
+      await logout();
+
+      // 2. Double-check localStorage is cleared
+      localStorage.removeItem('auth_token');
+      sessionStorage.clear();
+
+      // 3. Clear any identity cookies
+      const cookieOpts = "path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+      document.cookie = `mavops_username=; ${cookieOpts}`;
+      document.cookie = `mavops_host=; ${cookieOpts}`;
+      document.cookie = `mavops_ident=; ${cookieOpts}`;
+
+      // 4. Small delay to ensure everything is cleared
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // 5. Redirect to login
+      if (mounted) {
+        nav('/login', { replace: true });
       }
     })();
-  }, [nav, loc, setAuthenticated]);
 
-  return <div className="p-6 text-center text-muted-foreground">Logging out…</div>;
+    return () => {
+      mounted = false;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="text-center text-muted-foreground">
+        Logging out…
+      </div>
+    </div>
+  );
 }

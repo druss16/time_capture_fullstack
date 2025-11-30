@@ -107,6 +107,7 @@ urlpatterns = [
     path("blocks/<int:block_id>/classify/", views.save_block_classification, name="save_block_classification"),
     path("recent-blocks/", views.recent_classified_blocks, name="recent_classified_blocks"),
     path("label-block/", views.label_block, name="label_block"),
+    path("blocks/<int:block_id>/delete/", views.delete_block, name="delete_block"),
     
     # ✅ NEW: Grouped blocks view (for hybrid UI)
     path("blocks/grouped/", views.blocks_grouped, name="blocks_grouped"),

@@ -2,12 +2,13 @@
  * DailyReview.tsx — Clean time summary view with categorization
  * - Shows organized time by client → category
  * - CLICK TO EDIT: Click pencil icon to change client AND/OR category
+ * - DELETE: Click trash icon to delete a time block
  * - Excludes uncategorized, idle time, and unassigned client from billable totals
  * - Includes manual categorization tab for uncategorized blocks
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { Clock, User, RefreshCw, Edit3, BarChart3, ChevronDown, ChevronRight, Pencil, Check, X } from "lucide-react";
+import { Clock, User, RefreshCw, Edit3, BarChart3, ChevronDown, ChevronRight, Pencil, Check, X, Trash2 } from "lucide-react";
 import { Header } from "@/components/common/Header";
 import { DESIGN_SYSTEM } from "@/lib/design-system";
 import { FilterBar, ErrorBanner } from "@/components/timecard";
@@ -84,6 +85,9 @@ export default function DailyReview() {
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+
+  // Delete state
+  const [deletingBlockId, setDeletingBlockId] = useState<number | null>(null);
 
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -342,6 +346,27 @@ export default function DailyReview() {
     setSelectedClientId(null);
   };
 
+  // Delete block
+  const handleDeleteBlock = async (blockId: number, title: string) => {
+    if (!confirm(`Delete this time entry?\n\n"${title}"\n\nThis cannot be undone.`)) {
+      return;
+    }
+    
+    setDeletingBlockId(blockId);
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${blockId}/delete/`, {
+        method: 'DELETE',
+      });
+      showToast('Block deleted', 'success');
+      await loadTimeSummary();
+    } catch (err: any) {
+      console.error('Failed to delete block:', err);
+      showToast(err?.message || 'Failed to delete', 'error');
+    } finally {
+      setDeletingBlockId(null);
+    }
+  };
+
   const headerUser = useMemo(() => {
     return user?.trim() ? user.trim() : whoami?.trim() ? whoami : "All Users";
   }, [user, whoami]);
@@ -580,7 +605,7 @@ export default function DailyReview() {
                                     </div>
                                   </div>
                                   
-                                  {/* Activities with edit buttons */}
+                                  {/* Activities with edit and delete buttons */}
                                   {cat.sample_activities && cat.sample_activities.length > 0 && (
                                     <ul className="mt-2 ml-1 space-y-1.5">
                                       {cat.sample_activities.map((activity, idx) => {
@@ -641,13 +666,23 @@ export default function DailyReview() {
                                               <>
                                                 <span className="flex-1">{parsed.title}</span>
                                                 {parsed.blockId && (
-                                                  <button
-                                                    onClick={() => handleEditClick(parsed.blockId!, cat.name, client.client_id)}
-                                                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-primary/10 rounded transition-opacity"
-                                                    title="Edit client/category"
-                                                  >
-                                                    <Pencil className="w-3 h-3 text-primary" />
-                                                  </button>
+                                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button
+                                                      onClick={() => handleEditClick(parsed.blockId!, cat.name, client.client_id)}
+                                                      className="p-1 hover:bg-primary/10 rounded"
+                                                      title="Edit client/category"
+                                                    >
+                                                      <Pencil className="w-3 h-3 text-primary" />
+                                                    </button>
+                                                    <button
+                                                      onClick={() => handleDeleteBlock(parsed.blockId!, parsed.title)}
+                                                      disabled={deletingBlockId === parsed.blockId}
+                                                      className="p-1 hover:bg-red-100 rounded disabled:opacity-50"
+                                                      title="Delete block"
+                                                    >
+                                                      <Trash2 className="w-3 h-3 text-red-500" />
+                                                    </button>
+                                                  </div>
                                                 )}
                                               </>
                                             )}

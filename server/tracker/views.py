@@ -5825,3 +5825,36 @@ def create_manual_time_entry(request):
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
     }, status=201)
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def delete_block(request, block_id):
+    """
+    Delete a time block.
+    
+    Only allows deleting blocks that belong to the user.
+    """
+    user = request.user
+    
+    try:
+        block = Block.objects.get(id=block_id, user=user)
+    except Block.DoesNotExist:
+        return Response({"error": "Block not found"}, status=404)
+    
+    # Store info for response
+    block_info = {
+        "block_id": block.id,
+        "title": block.title,
+        "minutes": block.minutes,
+        "client": block.client.name if block.client else "Unassigned",
+    }
+    
+    # Delete the block
+    block.delete()
+    
+    return Response({
+        "success": True,
+        "message": "Block deleted successfully",
+        **block_info
+    })

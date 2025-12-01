@@ -1901,6 +1901,10 @@ def run_agent():
     Main agent function with GUI integration.
     Starts tracking in background thread, runs GUI in main thread.
     """
+
+    # ✅ ADD THIS LINE RIGHT HERE AT THE TOP
+    global API_KEY
+
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
@@ -1965,7 +1969,6 @@ def run_agent():
             key = register_with_org_token(mdm_config, hostname)
             if key:
                 # Update global
-                global API_KEY
                 API_KEY = key
         
         # === FALLBACK TO INTERACTIVE PAIRING ===

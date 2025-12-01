@@ -84,6 +84,15 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 
 from django.db import transaction
 
+from django.contrib.auth.models import User, Group
+from django.core.mail import send_mail
+from django.conf import settings
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.utils import timezone
+import secrets
+
 # --- Local apps ---
 from tracker.models import (
     AgentControl,
@@ -101,6 +110,10 @@ from tracker.models import (
     Suggestion,
     Task,
     TimecardEntry,
+    AgentRegistration, 
+    OrgInstallToken,
+    OrgProfile,
+
 )
 from tracker.permissions import AgentKeyPermission, NoAuth, PermUI
 from tracker.rules import apply_rules
@@ -972,7 +985,6 @@ from .models import AgentDevice  # adjust import
 
 # views.py (DRF)
 from django.utils import timezone
-from django.contrib.auth.models import User, Group
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response

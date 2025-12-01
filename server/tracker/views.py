@@ -486,22 +486,93 @@ IDLE_APPS = {
 }
 
 # Add this class right after imports, before your view functions
+# Replace IsOrgAdmin in tracker/views.py
+# This uses your existing OrganizationMembership model
+
+from tracker.models import OrganizationMembership
+
 class IsOrgAdmin(BasePermission):
     """
-    Permission that checks if user is an admin of their organization.
+    Check if user is owner/admin of their organization.
+    Uses existing OrganizationMembership model.
     """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
         
-        # Superusers and staff are always admins
-        if request.user.is_superuser or request.user.is_staff:
+        # Superusers can access everything
+        if request.user.is_superuser:
             return True
         
-        # Check if user has admin role in their org
-        # For now, only staff/superuser are admins
-        # Later you can add a proper OrgMembership model with roles
+        # Get user's organization
+        user_org = get_user_org(request.user)
+        if not user_org:
+            return False
+        
+        # Check OrganizationMembership role
+        try:
+            membership = OrganizationMembership.objects.get(
+                user=request.user,
+                organization=user_org
+            )
+            # Owner, admin, or manager can access settings
+            return membership.role in ['owner', 'admin', 'manager']
+        except OrganizationMembership.DoesNotExist:
+            # Fallback for backward compatibility
+            return request.user.is_staff
+
+
+# Update helper functions:
+
+def get_user_role(user, organization):
+    """Get user's role in an organization"""
+    if user.is_superuser:
+        return 'owner'
+    
+    try:
+        membership = OrganizationMembership.objects.get(
+            user=user,
+            organization=organization
+        )
+        return membership.role
+    except OrganizationMembership.DoesNotExist:
+        if user.is_staff:
+            return 'admin'
+        return 'member'
+
+
+def is_org_owner(user, organization):
+    """Check if user is owner of the org"""
+    if user.is_superuser:
+        return True
+    
+    try:
+        membership = OrganizationMembership.objects.get(
+            user=user,
+            organization=organization
+        )
+        return membership.role == 'owner'
+    except OrganizationMembership.DoesNotExist:
         return False
+
+
+def is_org_admin_or_owner(user, organization):
+    """Check if user is owner or admin (for most settings access)"""
+    if user.is_superuser:
+        return True
+    
+    try:
+        membership = OrganizationMembership.objects.get(
+            user=user,
+            organization=organization
+        )
+        return membership.role in ['owner', 'admin']
+    except OrganizationMembership.DoesNotExist:
+        return False
+
+######
+# AFTER ORG ADMIN
+######
 
 def _iso(dt):
     return dt.isoformat() if dt else None
@@ -6092,17 +6163,20 @@ def settings_team_list(request):
     return Response(result)
 
 
+# Update settings_team_invite in tracker/views.py
+# This uses your existing OrganizationMembership model
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_team_invite(request):
     """
     Invite a new team member by email.
-    Creates a user account and sends invitation email.
+    Creates user, OrganizationMembership, and sends invitation email.
     """
     import logging
     logger = logging.getLogger(__name__)
     
-    org = get_user_org(request.user)
+    org = get_user_org(request.user)  # This should return Organization object
     if not org:
         return Response({"error": "No organization found"}, status=404)
     
@@ -6115,10 +6189,18 @@ def settings_team_invite(request):
     # Check if user already exists
     existing = User.objects.filter(email=email).first()
     if existing:
-        # Add to org if not already
-        if org in existing.groups.all():
+        # Check if already in this org
+        if OrganizationMembership.objects.filter(user=existing, organization=org).exists():
             return Response({"error": "User is already a team member"}, status=400)
-        existing.groups.add(org)
+        
+        # Add to org with member role
+        OrganizationMembership.objects.create(
+            user=existing,
+            organization=org,
+            role='member',
+            invited_by=request.user
+        )
+        
         return Response({
             "success": True,
             "message": "Existing user added to team",
@@ -6127,7 +6209,6 @@ def settings_team_invite(request):
     
     # Create new user
     username = email.split("@")[0].lower()
-    # Ensure unique username
     base_username = username
     counter = 1
     while User.objects.filter(username=username).exists():
@@ -6143,8 +6224,16 @@ def settings_team_invite(request):
         password=temp_password,
         is_active=True,
     )
-    user.groups.add(org)
     logger.info(f"[INVITE] Created user: {username}")
+    
+    # Create OrganizationMembership with member role
+    OrganizationMembership.objects.create(
+        user=user,
+        organization=org,
+        role='member',
+        invited_by=request.user
+    )
+    logger.info(f"[INVITE] Created membership with member role")
     
     # Send invitation email
     logger.info(f"[INVITE] Attempting to send email to: {email}")
@@ -6186,7 +6275,7 @@ Please change your password after logging in.
         "message": "User invited" if email_sent else f"User created (email failed: {error_message})",
         "user_id": user.id,
         "username": username,
-        "temp_password": temp_password,  # Include so admin can share if email fails
+        "temp_password": temp_password,
         "email_sent": email_sent,
     }, status=201)
 
@@ -6417,6 +6506,183 @@ def settings_install_token_regenerate(request):
         "created_at": token.created_at.isoformat(),
         "is_active": token.is_active,
     })
+
+# Add these NEW endpoints to tracker/views.py
+# These use your existing OrganizationMembership model
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def settings_team_promote(request, user_id):
+    """
+    Promote a member to admin or manager to admin (owners only).
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    # Check requester is owner
+    if not is_org_owner(request.user, org):
+        return Response({"error": "Only owners can promote users"}, status=403)
+    
+    # Get target user membership
+    try:
+        membership = OrganizationMembership.objects.get(
+            user_id=user_id,
+            organization=org
+        )
+    except OrganizationMembership.DoesNotExist:
+        return Response({"error": "User not found in this organization"}, status=404)
+    
+    if membership.role == 'owner':
+        return Response({"error": "User is already owner"}, status=400)
+    
+    if membership.role == 'admin':
+        return Response({"error": "User is already admin"}, status=400)
+    
+    # Promote to admin (from member or manager)
+    old_role = membership.role
+    membership.role = 'admin'
+    membership.save()
+    
+    return Response({
+        "success": True,
+        "message": f"Promoted from {old_role} to admin",
+        "user_id": membership.user.id,
+        "username": membership.user.username,
+        "old_role": old_role,
+        "new_role": "admin",
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def settings_team_demote(request, user_id):
+    """
+    Demote admin to member or manager (owners only).
+    Optionally specify target_role in request body.
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    # Check requester is owner
+    if not is_org_owner(request.user, org):
+        return Response({"error": "Only owners can demote users"}, status=403)
+    
+    # Can't demote yourself
+    if user_id == request.user.id:
+        return Response({"error": "Cannot demote yourself"}, status=400)
+    
+    # Get target user membership
+    try:
+        membership = OrganizationMembership.objects.get(
+            user_id=user_id,
+            organization=org
+        )
+    except OrganizationMembership.DoesNotExist:
+        return Response({"error": "User not found in this organization"}, status=404)
+    
+    if membership.role == 'owner':
+        return Response({"error": "Cannot demote owner. Transfer ownership first."}, status=400)
+    
+    if membership.role == 'member':
+        return Response({"error": "User is already a member"}, status=400)
+    
+    # Get target role from request (default to member)
+    target_role = request.data.get('target_role', 'member')
+    if target_role not in ['member', 'manager']:
+        return Response({"error": "Invalid target role. Must be 'member' or 'manager'"}, status=400)
+    
+    # Demote
+    old_role = membership.role
+    membership.role = target_role
+    membership.save()
+    
+    return Response({
+        "success": True,
+        "message": f"Demoted from {old_role} to {target_role}",
+        "user_id": membership.user.id,
+        "username": membership.user.username,
+        "old_role": old_role,
+        "new_role": target_role,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def settings_team_set_manager(request, user_id):
+    """
+    Promote a member to manager (owners and admins can do this).
+    Managers can approve timecards but can't access full settings.
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    # Check requester is owner or admin
+    if not is_org_admin_or_owner(request.user, org):
+        return Response({"error": "Only owners and admins can promote to manager"}, status=403)
+    
+    # Get target user membership
+    try:
+        membership = OrganizationMembership.objects.get(
+            user_id=user_id,
+            organization=org
+        )
+    except OrganizationMembership.DoesNotExist:
+        return Response({"error": "User not found in this organization"}, status=404)
+    
+    if membership.role in ['owner', 'admin']:
+        return Response({"error": "Cannot change owner/admin role to manager"}, status=400)
+    
+    if membership.role == 'manager':
+        return Response({"error": "User is already a manager"}, status=400)
+    
+    # Promote to manager
+    membership.role = 'manager'
+    membership.save()
+    
+    return Response({
+        "success": True,
+        "message": f"Promoted to manager",
+        "user_id": membership.user.id,
+        "username": membership.user.username,
+        "new_role": "manager",
+    })
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def settings_team_remove(request, user_id):
+    """Remove a team member from the organization"""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    # Can't remove yourself
+    if user_id == request.user.id:
+        return Response({"error": "Cannot remove yourself"}, status=400)
+    
+    try:
+        membership = OrganizationMembership.objects.get(
+            user_id=user_id,
+            organization=org
+        )
+        
+        # Cannot remove owner
+        if membership.role == 'owner':
+            return Response({"error": "Cannot remove owner. Transfer ownership first."}, status=400)
+        
+        username = membership.user.username
+        membership.delete()
+        
+        return Response({
+            "success": True,
+            "message": f"Removed {username} from team",
+        })
+        
+    except OrganizationMembership.DoesNotExist:
+        return Response({"error": "User not found in this organization"}, status=404)
 
 from django.contrib.auth.signals import user_logged_in
 from django.dispatch import receiver

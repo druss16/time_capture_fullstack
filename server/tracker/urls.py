@@ -145,6 +145,10 @@ urlpatterns = [
     path("settings/devices/<int:device_id>/deactivate/", views.settings_device_deactivate, name="settings_device_deactivate"),
     path("settings/install-token/", views.settings_install_token, name="settings_install_token"),
     path("settings/install-token/regenerate/", views.settings_install_token_regenerate, name="settings_install_token_regenerate"),
+
+    path("settings/team/<int:user_id>/promote/", views.settings_team_promote),
+    path("settings/team/<int:user_id>/demote/", views.settings_team_demote),
+    path("settings/team/<int:user_id>/set-manager/", views.settings_team_set_manager),
     
     # -------------------------------
     # Router URLs (ViewSets)

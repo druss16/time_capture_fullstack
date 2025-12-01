@@ -1,9 +1,9 @@
 /**
- * Settings.tsx — Org Admin Settings Page
+ * Settings.tsx — Org Admin Settings Page with Role Management
  * 
  * Tabs:
  * - Organization Info (name, billing contact)
- * - Team Members (view users, invite new)
+ * - Team Members (view users, invite new, manage roles)
  * - Clients (add/edit/delete)
  * - Registered Devices (see who's tracking)
  * - Install Token (view/regenerate for IT)
@@ -55,7 +55,7 @@ type TeamMember = {
   first_name: string;
   last_name: string;
   is_active: boolean;
-  is_admin: boolean;
+  role: 'owner' | 'admin' | 'manager' | 'member';  // ✅ Changed from is_admin
   last_login: string | null;
   date_joined: string;
 };
@@ -104,6 +104,10 @@ export default function Settings() {
   const [clients, setClients] = useState<Client[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [installToken, setInstallToken] = useState<InstallToken | null>(null);
+  
+  // ✅ NEW: Track current user
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<string>('member');
 
   // Show toast
   const showSuccess = (msg: string) => {
@@ -115,6 +119,19 @@ export default function Settings() {
     setError(msg);
     setTimeout(() => setError(null), 5000);
   };
+
+  // ✅ NEW: Load current user info
+  useEffect(() => {
+    const loadUserInfo = async () => {
+      try {
+        const whoami = await safeFetchJson<any>(`${API_BASE}/whoami/`);
+        setCurrentUserId(whoami.user_id);
+      } catch (err) {
+        console.error('Failed to load user info:', err);
+      }
+    };
+    loadUserInfo();
+  }, []);
 
   // Load data based on active tab
   const loadTabData = useCallback(async (tab: Tab) => {
@@ -129,6 +146,13 @@ export default function Settings() {
         case 'team':
           const team = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`);
           setTeamMembers(team || []);
+          // ✅ NEW: Determine current user's role
+          if (currentUserId) {
+            const myMembership = team.find((m: TeamMember) => m.id === currentUserId);
+            if (myMembership) {
+              setCurrentUserRole(myMembership.role);
+            }
+          }
           break;
         case 'clients':
           const clientList = await safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`);
@@ -148,7 +172,7 @@ export default function Settings() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     loadTabData(activeTab);
@@ -227,6 +251,8 @@ export default function Settings() {
                   {activeTab === 'team' && (
                     <TeamTab
                       members={teamMembers}
+                      currentUserId={currentUserId}
+                      currentUserRole={currentUserRole}
                       onRefresh={() => loadTabData('team')}
                       onSuccess={showSuccess}
                       onError={showError}
@@ -411,15 +437,19 @@ function OrganizationTab({
 }
 
 // ============================================================================
-// Team Tab
+// Team Tab with Role Management ✅ UPDATED
 // ============================================================================
 function TeamTab({
   members,
+  currentUserId,
+  currentUserRole,
   onRefresh,
   onSuccess,
   onError,
 }: {
   members: TeamMember[];
+  currentUserId: number | null;
+  currentUserRole: string;
   onRefresh: () => void;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
@@ -432,12 +462,18 @@ function TeamTab({
     if (!inviteEmail.trim()) return;
     setInviting(true);
     try {
-      await safeFetchJson(`${API_BASE}/settings/team/invite/`, {
+      const response = await safeFetchJson<any>(`${API_BASE}/settings/team/invite/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: inviteEmail }),
       });
-      onSuccess('Invitation sent');
+      
+      // Show temp password if email failed
+      if (response.temp_password && !response.email_sent) {
+        alert(`User created!\n\nUsername: ${response.username}\nTemp Password: ${response.temp_password}\n\nPlease share these credentials with the user.`);
+      }
+      
+      onSuccess(response.email_sent ? 'Invitation sent' : 'User created (share credentials manually)');
       setInviteEmail('');
       setShowInvite(false);
       onRefresh();
@@ -445,6 +481,48 @@ function TeamTab({
       onError(err?.message || 'Failed to invite');
     } finally {
       setInviting(false);
+    }
+  };
+
+  // ✅ NEW: Role management handlers
+  const handlePromote = async (userId: number, username: string) => {
+    if (!confirm(`Promote ${username} to admin? They will be able to manage settings and team members.`)) return;
+    try {
+      await safeFetchJson(`${API_BASE}/settings/team/${userId}/promote/`, {
+        method: 'POST',
+      });
+      onSuccess('User promoted to admin');
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to promote');
+    }
+  };
+
+  const handleDemote = async (userId: number, username: string, targetRole: 'member' | 'manager' = 'member') => {
+    if (!confirm(`Demote ${username} to ${targetRole}? They will lose admin access.`)) return;
+    try {
+      await safeFetchJson(`${API_BASE}/settings/team/${userId}/demote/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_role: targetRole }),
+      });
+      onSuccess(`User demoted to ${targetRole}`);
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to demote');
+    }
+  };
+
+  const handleSetManager = async (userId: number, username: string) => {
+    if (!confirm(`Promote ${username} to manager? They will be able to approve timecards.`)) return;
+    try {
+      await safeFetchJson(`${API_BASE}/settings/team/${userId}/set-manager/`, {
+        method: 'POST',
+      });
+      onSuccess('User promoted to manager');
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to promote');
     }
   };
 
@@ -475,6 +553,23 @@ function TeamTab({
     if (diffDays < 7) return `${diffDays}d ago`;
     return date.toLocaleDateString();
   };
+
+  // ✅ NEW: Role badge helper
+  const getRoleBadge = (role: string) => {
+    switch (role) {
+      case 'owner':
+        return 'bg-purple-100 text-purple-800';
+      case 'admin':
+        return 'bg-blue-100 text-blue-800';
+      case 'manager':
+        return 'bg-green-100 text-green-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const isOwner = currentUserRole === 'owner';
+  const isAdminOrOwner = currentUserRole === 'owner' || currentUserRole === 'admin';
 
   return (
     <div>
@@ -536,49 +631,88 @@ function TeamTab({
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {members.map(member => (
-              <tr key={member.id} className="hover:bg-accent/30">
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                      <span className="text-sm font-medium text-primary">
-                        {(member.first_name?.[0] || member.username[0]).toUpperCase()}
-                      </span>
+            {members.map(member => {
+              const isCurrentUser = member.id === currentUserId;
+              const canModify = isOwner && !isCurrentUser && member.role !== 'owner';
+              const canSetManager = isAdminOrOwner && !isCurrentUser && member.role === 'member';
+              
+              return (
+                <tr key={member.id} className="hover:bg-accent/30">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                        <span className="text-sm font-medium text-primary">
+                          {(member.first_name?.[0] || member.username[0]).toUpperCase()}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="font-medium text-sm">
+                          {member.first_name} {member.last_name || member.username}
+                          {isCurrentUser && <span className="ml-2 text-xs text-muted-foreground">(you)</span>}
+                        </p>
+                        <p className="text-xs text-muted-foreground">@{member.username}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-medium text-sm">
-                        {member.first_name} {member.last_name || member.username}
-                      </p>
-                      <p className="text-xs text-muted-foreground">@{member.username}</p>
+                  </td>
+                  <td className="px-4 py-3 text-sm">{member.email || '—'}</td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${getRoleBadge(member.role)}`}>
+                      {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    {formatLastSeen(member.last_login)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      {/* Promote to Manager (for members) */}
+                      {canSetManager && (
+                        <button
+                          onClick={() => handleSetManager(member.id, member.username)}
+                          className="text-xs px-2 py-1 text-green-600 hover:text-green-800 hover:underline"
+                          title="Promote to Manager"
+                        >
+                          → Manager
+                        </button>
+                      )}
+                      
+                      {/* Promote to Admin (for members & managers) */}
+                      {canModify && (member.role === 'member' || member.role === 'manager') && (
+                        <button
+                          onClick={() => handlePromote(member.id, member.username)}
+                          className="text-xs px-2 py-1 text-blue-600 hover:text-blue-800 hover:underline"
+                          title="Promote to Admin"
+                        >
+                          → Admin
+                        </button>
+                      )}
+                      
+                      {/* Demote Admin */}
+                      {canModify && member.role === 'admin' && (
+                        <button
+                          onClick={() => handleDemote(member.id, member.username, 'member')}
+                          className="text-xs px-2 py-1 text-orange-600 hover:text-orange-800 hover:underline"
+                          title="Demote to Member"
+                        >
+                          → Member
+                        </button>
+                      )}
+                      
+                      {/* Remove (not for owners or yourself) */}
+                      {!isCurrentUser && member.role !== 'owner' && (
+                        <button
+                          onClick={() => handleRemove(member.id, member.username)}
+                          className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
+                          title="Remove from team"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-sm">{member.email || '—'}</td>
-                <td className="px-4 py-3">
-                  <span className={`text-xs px-2 py-1 rounded-full ${
-                    member.is_admin 
-                      ? 'bg-primary/10 text-primary font-medium' 
-                      : 'bg-muted text-muted-foreground'
-                  }`}>
-                    {member.is_admin ? 'Admin' : 'Member'}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-sm text-muted-foreground">
-                  {formatLastSeen(member.last_login)}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  {!member.is_admin && (
-                    <button
-                      onClick={() => handleRemove(member.id, member.username)}
-                      className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
-                      title="Remove from team"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {members.length === 0 && (
@@ -586,6 +720,16 @@ function TeamTab({
             No team members yet
           </div>
         )}
+      </div>
+      
+      {/* ✅ NEW: Role Legend */}
+      <div className="mt-4 p-3 bg-muted/30 rounded-lg">
+        <div className="text-xs text-muted-foreground space-y-1">
+          <p><span className="inline-block px-2 py-0.5 rounded bg-purple-100 text-purple-800 font-medium">Owner</span> — Full control, manage admins</p>
+          <p><span className="inline-block px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-medium">Admin</span> — Manage settings, invite users</p>
+          <p><span className="inline-block px-2 py-0.5 rounded bg-green-100 text-green-800 font-medium">Manager</span> — Approve timecards</p>
+          <p><span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-800 font-medium">Member</span> — Track time only</p>
+        </div>
       </div>
     </div>
   );

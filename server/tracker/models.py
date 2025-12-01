@@ -234,7 +234,7 @@ class UserWorkPattern(models.Model):
     Used to improve AI classification accuracy over time.
     """
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='work_patterns')
-    org = models.ForeignKey('auth.Group', on_delete=models.CASCADE, null=True)
+    org = models.ForeignKey('Organization', on_delete=models.CASCADE, null=True)
     
     # Pattern types
     PATTERN_TYPES = [
@@ -310,7 +310,7 @@ class AuthToken(models.Model):
 # ======  CORE MODELS  ======
 # ===========================
 class Client(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
     
     # ✅ ADD THIS FIELD
@@ -336,7 +336,7 @@ class Client(models.Model):
 
 
 class Project(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="projects")
     name = models.CharField(max_length=200)
     is_active = models.BooleanField(default=True)
@@ -350,7 +350,7 @@ class Project(models.Model):
 
 
 class Task(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="tasks")
     name = models.CharField(max_length=200)
     billable = models.BooleanField(default=True)
@@ -474,7 +474,7 @@ from django.utils import timezone
 
 class Block(models.Model):
     # Core identification
-    org = models.ForeignKey(Group, on_delete=models.CASCADE)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     device_id = models.CharField(max_length=64, db_index=True, default="unknown")
     hostname = models.CharField(max_length=120)
@@ -701,7 +701,7 @@ class Suggestion(models.Model):
 
 
 class Rule(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     pattern = models.CharField(max_length=500)
     field = models.CharField(max_length=20, choices=[("client", "client"), ("project", "project"), ("task", "task")])
     value_text = models.CharField(max_length=255)
@@ -713,7 +713,7 @@ class Rule(models.Model):
 # ======  TIME ENTRIES  =========
 # ===============================
 class TimecardEntry(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     date = models.DateField(db_index=True)
 
@@ -778,7 +778,7 @@ class TaskType(models.Model):
     Examples: "Tax Preparation", "Email/Communication", "Research", "Bookkeeping"
     These apply across ALL clients and projects.
     """
-    org = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="task_types")
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="task_types")
     name = models.CharField(max_length=100)  # "Tax Preparation", "Research"
     code = models.CharField(max_length=20, blank=True, default='')  # "TAX", "RES"
     
@@ -829,7 +829,7 @@ DEFAULT_CPA_TASK_TYPES = [
 # ======  AI + ORG CONFIG  ======
 # ===============================
 class AIProcessingLog(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     timestamp = models.DateTimeField(auto_now_add=True)
     operation_type = models.CharField(max_length=50)
@@ -846,7 +846,7 @@ class AIProcessingLog(models.Model):
 
 
 class OrganizationSettings(models.Model):
-    org = models.OneToOneField(Group, on_delete=models.CASCADE, related_name="settings")
+    org = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name="settings")
     company_name = models.CharField(max_length=200)
     industry = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
@@ -871,7 +871,7 @@ class KnownEntity(models.Model):
         ("category", "Category"),
         ("person", "Person"),
     ]
-    org = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="known_entities")
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="known_entities")
     entity_type = models.CharField(max_length=20, choices=ENTITY_TYPES)
     name = models.CharField(max_length=200)
     aliases = models.JSONField(default=list)
@@ -891,7 +891,7 @@ class KnownEntity(models.Model):
 
 
 class AITrainingExample(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="training_examples")
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="training_examples")
     text_content = models.TextField()
     correct_client = models.ForeignKey(Client, null=True, blank=True, on_delete=models.SET_NULL, related_name="training_examples")
     correct_project = models.ForeignKey(Project, null=True, blank=True, on_delete=models.SET_NULL, related_name="training_examples")
@@ -905,7 +905,7 @@ class AITrainingExample(models.Model):
 
 class OrgInstallToken(models.Model):
     """Token for MDM/silent agent installation"""
-    org = models.OneToOneField(Group, on_delete=models.CASCADE, related_name='install_token')
+    org = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name='install_token')
     token = models.CharField(max_length=64, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
@@ -923,7 +923,7 @@ class OrgInstallToken(models.Model):
 class AgentRegistration(models.Model):
     """Track installed desktop agents"""
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='agents')
-    org = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='agents')
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='agents')
     machine_name = models.CharField(max_length=255)
     os = models.CharField(max_length=20)  # 'windows' or 'macos'
     os_version = models.CharField(max_length=100, blank=True)
@@ -942,7 +942,7 @@ class AgentRegistration(models.Model):
 
 class OrgProfile(models.Model):
     '''Extended profile for organization/group'''
-    org = models.OneToOneField(Group, on_delete=models.CASCADE, related_name='profile')
+    org = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name='profile')
     billing_email = models.EmailField(blank=True, null=True)
     billing_contact = models.CharField(max_length=200, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -955,7 +955,7 @@ class OrgProfile(models.Model):
 # ======  CLASSIFICATION RULES ==
 # ===============================
 class ClientPattern(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="client_patterns", db_index=True)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="client_patterns", db_index=True)
     MATCH_TYPES = [
         ("domain", "Domain (email domain or URL)"),
         ("path", "File path segment"),
@@ -978,7 +978,7 @@ class ClientPattern(models.Model):
 
 
 class TaskPattern(models.Model):
-    org = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="task_patterns", db_index=True)
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="task_patterns", db_index=True)
     MATCH_TYPES = [
         ("bundle", "App Bundle ID"),
         ("keyword", "Keyword"),

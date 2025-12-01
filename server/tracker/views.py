@@ -6070,6 +6070,9 @@ def settings_team_invite(request):
     Invite a new team member by email.
     Creates a user account and sends invitation email.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     org = get_user_org(request.user)
     if not org:
         return Response({"error": "No organization found"}, status=404)
@@ -6077,6 +6080,8 @@ def settings_team_invite(request):
     email = (request.data.get("email") or "").strip().lower()
     if not email:
         return Response({"error": "Email is required"}, status=400)
+    
+    logger.info(f"[INVITE] Processing invite for: {email}")
     
     # Check if user already exists
     existing = User.objects.filter(email=email).first()
@@ -6110,10 +6115,18 @@ def settings_team_invite(request):
         is_active=True,
     )
     user.groups.add(org)
+    logger.info(f"[INVITE] Created user: {username}")
     
-    # Send invitation email (optional - configure SMTP)
+    # Send invitation email
+    logger.info(f"[INVITE] Attempting to send email to: {email}")
+    logger.info(f"[INVITE] From: {settings.DEFAULT_FROM_EMAIL}")
+    logger.info(f"[INVITE] SMTP: {settings.EMAIL_HOST}:{settings.EMAIL_PORT}")
+    
+    email_sent = False
+    error_message = None
+    
     try:
-        send_mail(
+        result = send_mail(
             subject=f"You've been invited to {org.name} on TimeTracker",
             message=f"""
 Hi!
@@ -6132,15 +6145,20 @@ Please change your password after logging in.
             recipient_list=[email],
             fail_silently=False,
         )
+        logger.info(f"[INVITE] ✅ Email sent successfully! Result: {result}")
+        email_sent = True
     except Exception as e:
-        print(f"[INVITE] Failed to send email: {e}")
+        error_message = str(e)
+        logger.error(f"[INVITE] ❌ Failed to send email: {e}")
+        logger.exception("Full email error traceback:")
     
     return Response({
         "success": True,
-        "message": "User invited",
+        "message": "User invited" if email_sent else f"User created (email failed: {error_message})",
         "user_id": user.id,
         "username": username,
         "temp_password": temp_password,  # Include so admin can share if email fails
+        "email_sent": email_sent,
     }, status=201)
 
 

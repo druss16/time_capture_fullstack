@@ -99,3 +99,57 @@ class AgentRegistrationAdmin(admin.ModelAdmin):
     list_filter = ['org', 'os', 'is_active']
     search_fields = ['user__username', 'machine_name']
     readonly_fields = ['agent_key', 'first_seen', 'last_seen']
+
+
+# Add this to tracker/admin.py (or create the file)
+
+"""
+Django admin configuration for TimeTracker models.
+Provides nice UI for managing Organizations and Memberships.
+"""
+
+from django.contrib import admin
+from tracker.models import Organization, OrganizationMembership
+
+
+class OrganizationMembershipInline(admin.TabularInline):
+    """Inline for viewing/editing memberships from Organization page"""
+    model = OrganizationMembership
+    extra = 0
+    fields = ['user', 'role', 'invited_by', 'joined_at']
+    readonly_fields = ['joined_at']
+    autocomplete_fields = ['user', 'invited_by']
+
+
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin):
+    """Admin interface for Organizations"""
+    list_display = ['name', 'billing_email', 'billing_contact', 'created_at', 'member_count']
+    search_fields = ['name', 'billing_email']
+    readonly_fields = ['created_at', 'updated_at']
+    inlines = [OrganizationMembershipInline]
+    
+    def member_count(self, obj):
+        """Show number of members in the org"""
+        return obj.memberships.count()
+    member_count.short_description = 'Members'
+
+
+@admin.register(OrganizationMembership)
+class OrganizationMembershipAdmin(admin.ModelAdmin):
+    """Admin interface for Organization Memberships"""
+    list_display = ['user', 'organization', 'role', 'invited_by', 'joined_at']
+    list_filter = ['role', 'organization']
+    search_fields = ['user__username', 'user__email', 'organization__name']
+    readonly_fields = ['joined_at']
+    autocomplete_fields = ['user', 'organization', 'invited_by']
+    
+    fieldsets = (
+        ('Membership', {
+            'fields': ('user', 'organization', 'role')
+        }),
+        ('Metadata', {
+            'fields': ('invited_by', 'joined_at'),
+            'classes': ('collapse',)
+        }),
+    )

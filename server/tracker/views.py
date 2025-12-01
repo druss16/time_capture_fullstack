@@ -113,6 +113,7 @@ from tracker.models import (
     AgentRegistration, 
     OrgInstallToken,
     OrgProfile,
+    Organization,
 
 )
 from tracker.permissions import AgentKeyPermission, NoAuth, PermUI
@@ -493,8 +494,8 @@ from tracker.models import OrganizationMembership
 
 class IsOrgAdmin(BasePermission):
     """
-    Check if user is owner/admin of their organization.
-    Uses existing OrganizationMembership model.
+    Check if user is owner/admin/manager of their organization.
+    Uses OrganizationMembership for per-org role control.
     """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
@@ -504,7 +505,7 @@ class IsOrgAdmin(BasePermission):
         if request.user.is_superuser:
             return True
         
-        # Get user's organization
+        # Get user's organization (Organization model, not Group)
         user_org = get_user_org(request.user)
         if not user_org:
             return False
@@ -513,16 +514,40 @@ class IsOrgAdmin(BasePermission):
         try:
             membership = OrganizationMembership.objects.get(
                 user=request.user,
-                organization=user_org
+                organization=user_org  # ✅ Now passing Organization instance
             )
             # Owner, admin, or manager can access settings
             return membership.role in ['owner', 'admin', 'manager']
         except OrganizationMembership.DoesNotExist:
-            # Fallback for backward compatibility
+            # Fallback for users without membership yet
             return request.user.is_staff
 
 
 # Update helper functions:
+# Helper to get user's org
+def get_user_org(user):
+    """
+    Get the user's Organization (not Django Group).
+    Returns Organization instance from OrganizationMembership.
+    """
+    try:
+        # Get from OrganizationMembership (preferred)
+        membership = OrganizationMembership.objects.filter(user=user).first()
+        if membership:
+            return membership.organization
+        
+        # Fallback: Try to find Organization from Group
+        group = user.groups.first()
+        if group:
+            # Find Organization with same name as Group
+            org = Organization.objects.filter(name=group.name).first()
+            if org:
+                return org
+        
+        return None
+    except Exception as e:
+        print(f"Error in get_user_org: {e}")
+        return None
 
 def get_user_role(user, organization):
     """Get user's role in an organization"""
@@ -542,7 +567,7 @@ def get_user_role(user, organization):
 
 
 def is_org_owner(user, organization):
-    """Check if user is owner of the org"""
+    """Check if user is owner of the organization"""
     if user.is_superuser:
         return True
     
@@ -555,9 +580,8 @@ def is_org_owner(user, organization):
     except OrganizationMembership.DoesNotExist:
         return False
 
-
 def is_org_admin_or_owner(user, organization):
-    """Check if user is owner or admin (for most settings access)"""
+    """Check if user is owner or admin"""
     if user.is_superuser:
         return True
     
@@ -569,6 +593,7 @@ def is_org_admin_or_owner(user, organization):
         return membership.role in ['owner', 'admin']
     except OrganizationMembership.DoesNotExist:
         return False
+
 
 ######
 # AFTER ORG ADMIN
@@ -6068,19 +6093,6 @@ from django.utils import timezone
 import secrets
 
 
-# Helper to get user's org
-def get_user_org(user):
-    """Get the user's organization (first group)"""
-    return user.groups.first()
-
-
-def is_org_admin(user, org):
-    """Check if user is an admin of the org (for now, check is_staff or first user)"""
-    # Simple check: user is staff OR user is the org creator
-    # You can expand this with a proper OrgMembership model later
-    return user.is_staff or user.is_superuser
-
-
 # ============================================================================
 # Organization Info
 # ============================================================================
@@ -6090,45 +6102,39 @@ def is_org_admin(user, org):
 def settings_org(request):
     """
     GET: Return organization info
-    PATCH: Update organization info (admin only)
+    PATCH: Update organization info
     """
+    # Get user's Organization (not Group)
     org = get_user_org(request.user)
     if not org:
         return Response({"error": "No organization found"}, status=404)
-    
-    # Get or create OrgProfile for extended fields
-    profile, _ = OrgProfile.objects.get_or_create(org=org)
     
     if request.method == "GET":
         return Response({
             "id": org.id,
             "name": org.name,
-            "billing_email": profile.billing_email or "",
-            "billing_contact": profile.billing_contact or "",
-            "created_at": profile.created_at.isoformat() if profile.created_at else org.id,  # Fallback
+            "billing_email": org.billing_email or "",
+            "billing_contact": org.billing_contact or "",
+            "created_at": org.created_at.isoformat() if hasattr(org, 'created_at') else None,
         })
     
     elif request.method == "PATCH":
-        data = request.data
+        # Update organization
+        if "name" in request.data:
+            org.name = request.data["name"]
+        if "billing_email" in request.data:
+            org.billing_email = request.data["billing_email"]
+        if "billing_contact" in request.data:
+            org.billing_contact = request.data["billing_contact"]
         
-        # Update org name if provided
-        if "name" in data:
-            org.name = data["name"].strip()
-            org.save()
-        
-        # Update profile fields
-        if "billing_email" in data:
-            profile.billing_email = data["billing_email"].strip()
-        if "billing_contact" in data:
-            profile.billing_contact = data["billing_contact"].strip()
-        profile.save()
+        org.save()
         
         return Response({
             "id": org.id,
             "name": org.name,
-            "billing_email": profile.billing_email or "",
-            "billing_contact": profile.billing_contact or "",
-            "created_at": profile.created_at.isoformat() if profile.created_at else None,
+            "billing_email": org.billing_email or "",
+            "billing_contact": org.billing_contact or "",
+            "created_at": org.created_at.isoformat() if hasattr(org, 'created_at') else None,
         })
 
 

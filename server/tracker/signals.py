@@ -15,6 +15,14 @@ from django.utils import timezone
 from tracker.models import Block
 from tracker.utils.monitoring import capture_exception
 
+
+from django.contrib.auth.models import User, Group
+from django.db.models.signals import m2m_changed
+from django.dispatch import receiver
+from tracker.models import Organization, OrganizationMembership
+
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Recursion guard (defensive; classify runs out-of-band via task shim anyway)
 _tls = threading.local()
@@ -103,3 +111,57 @@ class TrackerConfig(AppConfig):
     
     def ready(self):
         import tracker.signals  # ← Import signals
+
+
+# Add this to tracker/signals.py (create this file if it doesn't exist)
+
+"""
+Auto-create OrganizationMembership when users are added to Groups via Django admin.
+This keeps Django Groups and OrganizationMembership in sync.
+"""
+
+
+@receiver(m2m_changed, sender=User.groups.through)
+def auto_create_org_membership(sender, instance, action, pk_set, **kwargs):
+    """
+    Signal handler: When a user is added to a Group via Django admin,
+    automatically create the corresponding OrganizationMembership.
+    
+    This allows Django admin and Settings page to work together seamlessly.
+    """
+    if action == "post_add":
+        user = instance
+        
+        for group_id in pk_set:
+            try:
+                group = Group.objects.get(id=group_id)
+                
+                # Find or create Organization with same name as Group
+                org, org_created = Organization.objects.get_or_create(
+                    name=group.name,
+                    defaults={
+                        'billing_email': '',
+                        'billing_contact': '',
+                    }
+                )
+                
+                if org_created:
+                    print(f"📦 Created Organization: {org.name}")
+                
+                # Create OrganizationMembership if it doesn't exist
+                membership, mem_created = OrganizationMembership.objects.get_or_create(
+                    user=user,
+                    organization=org,
+                    defaults={
+                        'role': 'member',  # Default role when added via admin
+                        'invited_by': None,
+                    }
+                )
+                
+                if mem_created:
+                    print(f"✅ Auto-created membership: {user.username} → {org.name} (member)")
+                else:
+                    print(f"ℹ️  Membership already exists: {user.username} → {org.name} ({membership.role})")
+                    
+            except Exception as e:
+                print(f"❌ Error in auto_create_org_membership: {e}")

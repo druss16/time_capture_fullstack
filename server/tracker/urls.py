@@ -87,6 +87,8 @@ urlpatterns = [
 
     path("time-entries/manual/", views.create_manual_time_entry, name="create_manual_time_entry"),
 
+    path("agent/register/", views.register_agent, name="register_agent"),
+
     # -------------------------------
     # Device Management
     # -------------------------------
@@ -131,6 +133,18 @@ urlpatterns = [
     # CSRF
     # -------------------------------
     path("get-csrf/", views.get_csrf, name="get_csrf"),
+
+    # Settings endpoints
+    path("settings/org/", views.settings_org, name="settings_org"),
+    path("settings/team/", views.settings_team_list, name="settings_team_list"),
+    path("settings/team/invite/", views.settings_team_invite, name="settings_team_invite"),
+    path("settings/team/<int:user_id>/", views.settings_team_remove, name="settings_team_remove"),
+    path("settings/clients/", views.settings_clients, name="settings_clients"),
+    path("settings/clients/<int:client_id>/", views.settings_client_detail, name="settings_client_detail"),
+    path("settings/devices/", views.settings_devices, name="settings_devices"),
+    path("settings/devices/<int:device_id>/deactivate/", views.settings_device_deactivate, name="settings_device_deactivate"),
+    path("settings/install-token/", views.settings_install_token, name="settings_install_token"),
+    path("settings/install-token/regenerate/", views.settings_install_token_regenerate, name="settings_install_token_regenerate"),
     
     # -------------------------------
     # Router URLs (ViewSets)

@@ -26,6 +26,8 @@ from typing import Optional, Dict, Tuple
 
 from urllib.parse import urlparse     # <-- ADD THIS AT TOP LEVEL with other imports
 from timetracker_gui import run_gui_app, GUI_AVAILABLE
+from typing import Optional, Dict, Tuple
+
 
 from Quartz import (
     CGWindowListCopyWindowInfo,
@@ -63,6 +65,96 @@ except Exception:
 info = AppKit.NSBundle.mainBundle().infoDictionary()
 info["LSUIElement"] = "1"
 
+
+# ---------------- MDM Config (NEW) ----------------
+MDM_CONFIG_PATH_MAC = "/Library/Application Support/TimeTracker/config.plist"
+MDM_CONFIG_PATH_WIN = r"C:\ProgramData\TimeTracker\config.json"
+
+def get_mdm_config() -> Optional[dict]:
+    """
+    Load config from MDM-deployed file.
+    Returns config dict or None if not found.
+    """
+    if sys.platform == 'darwin':
+        config_path = MDM_CONFIG_PATH_MAC
+        if os.path.exists(config_path):
+            try:
+                import plistlib
+                with open(config_path, 'rb') as f:
+                    mdm = plistlib.load(f)
+                    log(f"[MDM] Loaded config from {config_path}")
+                    return mdm
+            except Exception as e:
+                log(f"[MDM] Failed to load plist: {e}")
+    
+    elif sys.platform == 'win32':
+        config_path = MDM_CONFIG_PATH_WIN
+        if os.path.exists(config_path):
+            try:
+                with open(config_path) as f:
+                    mdm = json.load(f)
+                    log(f"[MDM] Loaded config from {config_path}")
+                    return mdm
+            except Exception as e:
+                log(f"[MDM] Failed to load json: {e}")
+    
+    return None
+
+
+def register_with_org_token(mdm_config: dict, hostname: str) -> Optional[str]:
+    """
+    Auto-register device using org token from MDM config.
+    Returns api_key on success, None on failure.
+    """
+    # Get values (support both camelCase from plist and snake_case from json)
+    api_endpoint = (
+        mdm_config.get('ApiEndpoint') or 
+        mdm_config.get('api_endpoint') or 
+        API_BASE
+    )
+    org_token = mdm_config.get('OrgToken') or mdm_config.get('org_token')
+    
+    if not org_token:
+        log("[MDM] No org_token in MDM config")
+        return None
+    
+    register_url = f"{api_endpoint.rstrip('/')}/agent/register/"
+    
+    payload = {
+        "org_token": org_token,
+        "machine_name": hostname,
+        "os": "macos" if sys.platform == 'darwin' else 'windows',
+        "os_version": platform.platform(),
+        "username": get_os_username(),
+        "device_id": get_device_id(),
+        "app_version": APP_VERSION,
+    }
+    
+    try:
+        log(f"[MDM] Registering with org token at {register_url}...")
+        raw = http_post_json(register_url, payload, {"Content-Type": "application/json"}, timeout=10)
+        data = json.loads(raw or b"{}")
+        
+        agent_key = data.get("agent_key")
+        if agent_key:
+            # Save to local config
+            config["api_key"] = agent_key
+            config["api_base"] = api_endpoint
+            save_config(config)
+            
+            log(f"[MDM] ✅ Registered successfully!")
+            log(f"[MDM]    User: {data.get('username')}")
+            log(f"[MDM]    Org: {data.get('org_name')}")
+            log(f"[MDM]    New user: {data.get('is_new_user')}")
+            return agent_key
+        else:
+            log(f"[MDM] ❌ Registration failed: no agent_key in response")
+            log(f"[MDM]    Response: {data}")
+            return None
+            
+    except Exception as e:
+        log(f"[MDM] ❌ Registration error: {e}")
+        return None
 
 # ---------------- Config ----------------
 CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
@@ -1862,11 +1954,30 @@ def run_agent():
     write_pid()
 
     # Ensure we have a device key (pair if needed)
+    # Ensure we have a device key (MDM → pair code → interactive)
     key = config.get("api_key") or API_KEY
+    
     if not key:
-        key = ensure_api_key_interactive(hostname)
+        # === TRY MDM CONFIG FIRST ===
+        mdm_config = get_mdm_config()
+        if mdm_config:
+            log("[MDM] Found MDM configuration, attempting auto-registration...")
+            key = register_with_org_token(mdm_config, hostname)
+            if key:
+                # Update global
+                global API_KEY
+                API_KEY = key
+        
+        # === FALLBACK TO INTERACTIVE PAIRING ===
+        if not key:
+            key = ensure_api_key_interactive(hostname)
+        
         if not key:
             print("Exiting: no device key configured.")
+            print("Options:")
+            print("  1. Deploy MDM config to /Library/Application Support/TimeTracker/config.plist")
+            print("  2. Run interactively and enter pairing code")
+            print("  3. Set AGENT_PAIR_CODE environment variable")
             remove_pid()
             return
 

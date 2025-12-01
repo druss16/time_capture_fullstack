@@ -1,7 +1,7 @@
 # tracker/admin.py
 from django.contrib import admin
 from django.contrib.admin.sites import NotRegistered
-from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern
+from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OrgInstallToken, AgentRegistration
 
 # ---- Helpers to be idempotent ----
 def _unregister(model):
@@ -79,3 +79,23 @@ class TaskPatternAdmin(admin.ModelAdmin):
     list_display = ("task_category", "match_type", "pattern", "weight")
     list_filter = ("match_type",)
     search_fields = ("task_category", "pattern")
+
+
+
+@admin.register(OrgInstallToken)
+class OrgInstallTokenAdmin(admin.ModelAdmin):
+    list_display = ['org', 'token', 'is_active', 'created_at']
+    list_filter = ['is_active', 'org']
+    readonly_fields = ['token', 'created_at']
+    
+    def get_readonly_fields(self, request, obj=None):
+        if obj:  # Editing existing
+            return ['token', 'org', 'created_at']
+        return ['token', 'created_at']
+
+@admin.register(AgentRegistration)
+class AgentRegistrationAdmin(admin.ModelAdmin):
+    list_display = ['user', 'org', 'machine_name', 'os', 'last_seen', 'is_active']
+    list_filter = ['org', 'os', 'is_active']
+    search_fields = ['user__username', 'machine_name']
+    readonly_fields = ['agent_key', 'first_seen', 'last_seen']

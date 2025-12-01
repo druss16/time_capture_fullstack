@@ -5858,3 +5858,503 @@ def delete_block(request, block_id):
         "message": "Block deleted successfully",
         **block_info
     })
+
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])  # No auth - uses org token
+def register_agent(request):
+    """
+    Register a new agent installation using org token.
+    Called by desktop agent on first launch.
+    
+    Body: {
+        "org_token": "tt_org_abc123...",
+        "machine_name": "LAPTOP-ABC",
+        "os": "windows" | "macos",
+        "os_version": "Windows 11" | "macOS 14.0",
+        "username": "jsmith"  # System username
+    }
+    
+    Returns:
+        - agent_key: For future API auth
+        - user_id: Created or matched user
+    """
+    data = request.data
+    org_token = data.get('org_token', '').strip()
+    machine_name = data.get('machine_name', '').strip()
+    os_type = data.get('os', '').strip()
+    os_version = data.get('os_version', '').strip()
+    username = data.get('username', '').strip().lower()
+    
+    if not org_token:
+        return Response({"error": "org_token is required"}, status=400)
+    if not username:
+        return Response({"error": "username is required"}, status=400)
+    
+    # Validate org token
+    try:
+        install_token = OrgInstallToken.objects.select_related('org').get(
+            token=org_token,
+            is_active=True
+        )
+    except OrgInstallToken.DoesNotExist:
+        return Response({"error": "Invalid or expired org token"}, status=401)
+    
+    org = install_token.org
+    
+    # Find or create user
+    user, user_created = User.objects.get_or_create(
+        username=username,
+        defaults={
+            'email': f'{username}@{org.name.lower().replace(" ", "")}.local',
+            'first_name': username.title(),
+        }
+    )
+    
+    # Add user to org if not already
+    if org not in user.groups.all():
+        user.groups.add(org)
+    
+    # Create or update agent registration
+    agent, agent_created = AgentRegistration.objects.update_or_create(
+        user=user,
+        machine_name=machine_name,
+        defaults={
+            'org': org,
+            'os': os_type,
+            'os_version': os_version,
+            'last_seen': timezone.now(),
+            'is_active': True,
+        }
+    )
+    
+    # Generate agent key if new
+    if agent_created or not agent.agent_key:
+        agent.agent_key = f"tt_agent_{secrets.token_urlsafe(32)}"
+        agent.save()
+    
+    return Response({
+        "success": True,
+        "agent_key": agent.agent_key,
+        "user_id": user.id,
+        "username": user.username,
+        "org_name": org.name,
+        "is_new_user": user_created,
+        "is_new_agent": agent_created,
+    }, status=201 if agent_created else 200)
+
+
+
+from django.contrib.auth.models import User, Group
+from django.core.mail import send_mail
+from django.conf import settings
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.utils import timezone
+import secrets
+
+
+# Helper to get user's org
+def get_user_org(user):
+    """Get the user's organization (first group)"""
+    return user.groups.first()
+
+
+def is_org_admin(user, org):
+    """Check if user is an admin of the org (for now, check is_staff or first user)"""
+    # Simple check: user is staff OR user is the org creator
+    # You can expand this with a proper OrgMembership model later
+    return user.is_staff or user.is_superuser
+
+
+# ============================================================================
+# Organization Info
+# ============================================================================
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def settings_org(request):
+    """
+    GET: Return organization info
+    PATCH: Update organization info (admin only)
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    # Get or create OrgProfile for extended fields
+    profile, _ = OrgProfile.objects.get_or_create(org=org)
+    
+    if request.method == "GET":
+        return Response({
+            "id": org.id,
+            "name": org.name,
+            "billing_email": profile.billing_email or "",
+            "billing_contact": profile.billing_contact or "",
+            "created_at": profile.created_at.isoformat() if profile.created_at else org.id,  # Fallback
+        })
+    
+    elif request.method == "PATCH":
+        data = request.data
+        
+        # Update org name if provided
+        if "name" in data:
+            org.name = data["name"].strip()
+            org.save()
+        
+        # Update profile fields
+        if "billing_email" in data:
+            profile.billing_email = data["billing_email"].strip()
+        if "billing_contact" in data:
+            profile.billing_contact = data["billing_contact"].strip()
+        profile.save()
+        
+        return Response({
+            "id": org.id,
+            "name": org.name,
+            "billing_email": profile.billing_email or "",
+            "billing_contact": profile.billing_contact or "",
+            "created_at": profile.created_at.isoformat() if profile.created_at else None,
+        })
+
+
+# ============================================================================
+# Team Members
+# ============================================================================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def settings_team_list(request):
+    """List all team members in the organization"""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    members = User.objects.filter(groups=org).select_related()
+    
+    result = []
+    for member in members:
+        result.append({
+            "id": member.id,
+            "username": member.username,
+            "email": member.email or "",
+            "first_name": member.first_name or "",
+            "last_name": member.last_name or "",
+            "is_active": member.is_active,
+            "is_admin": member.is_staff or member.is_superuser,
+            "last_login": member.last_login.isoformat() if member.last_login else None,
+            "date_joined": member.date_joined.isoformat() if member.date_joined else None,
+        })
+    
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def settings_team_invite(request):
+    """
+    Invite a new team member by email.
+    Creates a user account and sends invitation email.
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    email = (request.data.get("email") or "").strip().lower()
+    if not email:
+        return Response({"error": "Email is required"}, status=400)
+    
+    # Check if user already exists
+    existing = User.objects.filter(email=email).first()
+    if existing:
+        # Add to org if not already
+        if org in existing.groups.all():
+            return Response({"error": "User is already a team member"}, status=400)
+        existing.groups.add(org)
+        return Response({
+            "success": True,
+            "message": "Existing user added to team",
+            "user_id": existing.id,
+        })
+    
+    # Create new user
+    username = email.split("@")[0].lower()
+    # Ensure unique username
+    base_username = username
+    counter = 1
+    while User.objects.filter(username=username).exists():
+        username = f"{base_username}{counter}"
+        counter += 1
+    
+    # Generate temporary password
+    temp_password = secrets.token_urlsafe(12)
+    
+    user = User.objects.create_user(
+        username=username,
+        email=email,
+        password=temp_password,
+        is_active=True,
+    )
+    user.groups.add(org)
+    
+    # Send invitation email (optional - configure SMTP)
+    try:
+        send_mail(
+            subject=f"You've been invited to {org.name} on TimeTracker",
+            message=f"""
+Hi!
+
+You've been invited to join {org.name} on TimeTracker.
+
+Login at: https://timetracker.mavops.ai/login
+Username: {username}
+Temporary Password: {temp_password}
+
+Please change your password after logging in.
+
+- The TimeTracker Team
+            """,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=True,
+        )
+    except Exception as e:
+        print(f"[INVITE] Failed to send email: {e}")
+    
+    return Response({
+        "success": True,
+        "message": "User invited",
+        "user_id": user.id,
+        "username": username,
+        "temp_password": temp_password,  # Include so admin can share if email fails
+    }, status=201)
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def settings_team_remove(request, user_id):
+    """Remove a team member from the organization"""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    # Can't remove yourself
+    if user_id == request.user.id:
+        return Response({"error": "Cannot remove yourself"}, status=400)
+    
+    try:
+        member = User.objects.get(id=user_id, groups=org)
+    except User.DoesNotExist:
+        return Response({"error": "User not found"}, status=404)
+    
+    # Remove from org
+    member.groups.remove(org)
+    
+    return Response({
+        "success": True,
+        "message": f"Removed {member.username} from team",
+    })
+
+
+# ============================================================================
+# Clients
+# ============================================================================
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def settings_clients(request):
+    """
+    GET: List all clients for the organization
+    POST: Create a new client
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    if request.method == "GET":
+        clients = Client.objects.filter(org=org).order_by("name")
+        result = []
+        for client in clients:
+            result.append({
+                "id": client.id,
+                "name": client.name,
+                "code": client.code or "",
+                "is_active": client.is_active if hasattr(client, 'is_active') else True,
+                "created_at": client.created_at.isoformat() if hasattr(client, 'created_at') and client.created_at else "",
+            })
+        return Response(result)
+    
+    elif request.method == "POST":
+        name = (request.data.get("name") or "").strip()
+        code = (request.data.get("code") or "").strip().upper()
+        
+        if not name:
+            return Response({"error": "Name is required"}, status=400)
+        
+        # Check for duplicate name in org
+        if Client.objects.filter(org=org, name__iexact=name).exists():
+            return Response({"error": "Client with this name already exists"}, status=400)
+        
+        client = Client.objects.create(
+            org=org,
+            name=name,
+            code=code or None,
+        )
+        
+        return Response({
+            "success": True,
+            "id": client.id,
+            "name": client.name,
+            "code": client.code or "",
+        }, status=201)
+
+
+@api_view(["PATCH", "DELETE"])
+@permission_classes([IsAuthenticated])
+def settings_client_detail(request, client_id):
+    """
+    PATCH: Update a client
+    DELETE: Delete a client
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    try:
+        client = Client.objects.get(id=client_id, org=org)
+    except Client.DoesNotExist:
+        return Response({"error": "Client not found"}, status=404)
+    
+    if request.method == "PATCH":
+        if "name" in request.data:
+            client.name = request.data["name"].strip()
+        if "code" in request.data:
+            client.code = request.data["code"].strip().upper() or None
+        if "is_active" in request.data:
+            client.is_active = bool(request.data["is_active"])
+        client.save()
+        
+        return Response({
+            "success": True,
+            "id": client.id,
+            "name": client.name,
+            "code": client.code or "",
+        })
+    
+    elif request.method == "DELETE":
+        client_name = client.name
+        client.delete()
+        return Response({
+            "success": True,
+            "message": f"Deleted client: {client_name}",
+        })
+
+
+# ============================================================================
+# Devices (Agent Registrations)
+# ============================================================================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def settings_devices(request):
+    """List all registered devices/agents for the organization"""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    devices = AgentRegistration.objects.filter(org=org).select_related("user").order_by("-last_seen")
+    
+    result = []
+    for device in devices:
+        result.append({
+            "id": device.id,
+            "user": device.user.username,
+            "user_id": device.user.id,
+            "machine_name": device.machine_name,
+            "os": device.os,
+            "os_version": device.os_version or "",
+            "agent_version": device.agent_version or "",
+            "first_seen": device.first_seen.isoformat() if device.first_seen else "",
+            "last_seen": device.last_seen.isoformat() if device.last_seen else "",
+            "is_active": device.is_active,
+        })
+    
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def settings_device_deactivate(request, device_id):
+    """Deactivate a device (revoke its agent key)"""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    try:
+        device = AgentRegistration.objects.get(id=device_id, org=org)
+    except AgentRegistration.DoesNotExist:
+        return Response({"error": "Device not found"}, status=404)
+    
+    device.is_active = False
+    device.agent_key = f"revoked_{device.agent_key}"  # Invalidate the key
+    device.save()
+    
+    return Response({
+        "success": True,
+        "message": f"Deactivated device: {device.machine_name}",
+    })
+
+
+# ============================================================================
+# Install Token
+# ============================================================================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def settings_install_token(request):
+    """Get the organization's install token"""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    try:
+        token = OrgInstallToken.objects.get(org=org, is_active=True)
+        return Response({
+            "token": token.token,
+            "created_at": token.created_at.isoformat(),
+            "is_active": token.is_active,
+        })
+    except OrgInstallToken.DoesNotExist:
+        return Response({
+            "token": None,
+            "created_at": None,
+            "is_active": False,
+        })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def settings_install_token_regenerate(request):
+    """Regenerate the organization's install token"""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    
+    # Deactivate existing token
+    OrgInstallToken.objects.filter(org=org).update(is_active=False)
+    
+    # Create new token
+    token = OrgInstallToken.objects.create(
+        org=org,
+        created_by=request.user,
+        is_active=True,
+    )
+    
+    return Response({
+        "success": True,
+        "token": token.token,
+        "created_at": token.created_at.isoformat(),
+        "is_active": token.is_active,
+    })

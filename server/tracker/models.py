@@ -903,6 +903,54 @@ class AITrainingExample(models.Model):
         ordering = ["-created_at"]
 
 
+class OrgInstallToken(models.Model):
+    """Token for MDM/silent agent installation"""
+    org = models.OneToOneField(Group, on_delete=models.CASCADE, related_name='install_token')
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    is_active = models.BooleanField(default=True)
+    
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = f"tt_org_{secrets.token_urlsafe(24)}"
+        super().save(*args, **kwargs)
+    
+    def __str__(self):
+        return f"{self.org.name} - {self.token[:20]}..."
+
+
+class AgentRegistration(models.Model):
+    """Track installed desktop agents"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='agents')
+    org = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='agents')
+    machine_name = models.CharField(max_length=255)
+    os = models.CharField(max_length=20)  # 'windows' or 'macos'
+    os_version = models.CharField(max_length=100, blank=True)
+    agent_key = models.CharField(max_length=100, unique=True, db_index=True)
+    agent_version = models.CharField(max_length=20, blank=True)
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        unique_together = ['user', 'machine_name']
+    
+    def __str__(self):
+        return f"{self.user.username} @ {self.machine_name}"
+
+
+class OrgProfile(models.Model):
+    '''Extended profile for organization/group'''
+    org = models.OneToOneField(Group, on_delete=models.CASCADE, related_name='profile')
+    billing_email = models.EmailField(blank=True, null=True)
+    billing_contact = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Profile for {self.org.name}"
+
 # ===============================
 # ======  CLASSIFICATION RULES ==
 # ===============================

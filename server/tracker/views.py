@@ -6130,7 +6130,7 @@ Please change your password after logging in.
             """,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[email],
-            fail_silently=True,
+            fail_silently=False,
         )
     except Exception as e:
         print(f"[INVITE] Failed to send email: {e}")

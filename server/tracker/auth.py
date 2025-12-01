@@ -8,6 +8,10 @@ from .models import AgentDevice
 from tracker.models import AuthToken  # ✅ Add this import
 
 
+from django.utils import timezone
+from datetime import timedelta
+
+
 User = get_user_model()
 
 
@@ -61,14 +65,11 @@ class NoAuth(BaseAuthentication):
     def authenticate(self, request):
         return None
 
-# Add to tracker/auth.py
-from rest_framework.authentication import BaseAuthentication
-from rest_framework.exceptions import AuthenticationFailed
-from tracker.models import AuthToken
 
 class BearerTokenAuthentication(BaseAuthentication):
     """
     Token authentication for browsers that block cookies.
+    Updates user.last_login on successful authentication (throttled to every 5 minutes).
     """
     def authenticate(self, request):
         auth_header = request.headers.get('Authorization', '')
@@ -81,7 +82,16 @@ class BearerTokenAuthentication(BaseAuthentication):
         try:
             auth_token = AuthToken.objects.select_related('user').get(token=token)
             if auth_token.is_valid():
-                return (auth_token.user, None)
+                user = auth_token.user
+                
+                # ✅ Update last_login (throttled to avoid DB writes on every request)
+                now = timezone.now()
+                if user.last_login is None or (now - user.last_login) > timedelta(minutes=5):
+                    user.last_login = now
+                    user.save(update_fields=['last_login'])
+                
+                return (user, None)
+        
         except AuthToken.DoesNotExist:
             pass
         

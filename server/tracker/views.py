@@ -675,6 +675,16 @@ def _signed_cookie_get(request, name: str, default=None):
     except signing.BadSignature:
         return default
 
+from django.contrib.auth.signals import user_logged_in
+from django.dispatch import receiver
+from django.utils import timezone
+
+@receiver(user_logged_in)
+def update_last_login(sender, user, **kwargs):
+    """Update last_login timestamp when user logs in"""
+    user.last_login = timezone.now()
+    user.save(update_fields=['last_login'])
+
 # -------------------------------------------------------------------
 # Utility helpers
 # -------------------------------------------------------------------

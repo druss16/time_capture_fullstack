@@ -15,6 +15,7 @@ import { AuthProvider, useAuth } from "@/auth/AuthProvider";
 import PairDeviceModal from "@/components/agent/PairDeviceModal";
 import Navigation from "@/components/Navigation";
 import ProtectedRoute from "@/routes/ProtectedRoute";
+import AdminRoute from "@/routes/AdminRoute";  // ✅ Add AdminRoute import
 
 // Client management components
 import { ClientList } from '@/components/clients/ClientList';
@@ -138,29 +139,35 @@ export default function App() {
                     </MaybeProtected>
                   }
                 />
-                {/* Admin Settings - Team, Clients, Devices, Billing */}
+                
+                {/* ✅ Admin Settings - Team, Clients, Devices, Billing (ADMIN ONLY) */}
                 <Route
                   path="/settings"
                   element={
                     <MaybeProtected>
-                      <AppLayout>
-                        <OrgAdminSettings />
-                      </AppLayout>
+                      <AdminRoute>
+                        <AppLayout>
+                          <OrgAdminSettings />
+                        </AppLayout>
+                      </AdminRoute>
                     </MaybeProtected>
                   }
                 />
 
-                {/* AI Classification Settings */}
+                {/* ✅ AI Classification Settings (ADMIN ONLY) */}
                 <Route
                   path="/settings/ai"
                   element={
                     <MaybeProtected>
-                      <AppLayout>
-                        <OrganizationSettings />
-                      </AppLayout>
+                      <AdminRoute>
+                        <AppLayout>
+                          <OrganizationSettings />
+                        </AppLayout>
+                      </AdminRoute>
                     </MaybeProtected>
                   }
                 />
+                
                 <Route
                   path="/devices"
                   element={

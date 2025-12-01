@@ -1,18 +1,29 @@
 /**
- * Navigation.tsx — Updated with Clients link (blue theme)
+ * Navigation.tsx — Updated with admin check and conditional Settings links
  */
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { Users } from 'lucide-react';
+import { safeFetchJson, API_BASE } from "@/lib/api";
 
 export default function Navigation() {
   const location = useLocation();
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const [userInfo, setUserInfo] = useState<any>(null);
+
+  // Fetch user info to check if admin
+  useEffect(() => {
+    safeFetchJson(`${API_BASE}/whoami/`)
+      .then(data => setUserInfo(data))
+      .catch(console.error);
+  }, []);
+
+  const isAdmin = userInfo?.is_staff || userInfo?.is_superuser || false;
 
   const isActive = (path: string) => location.pathname === path;
-
+  
   const linkClass = (path: string) => {
     const base = "px-4 py-2 rounded-lg font-medium text-sm transition-colors duration-150 flex items-center gap-2";
     return isActive(path)
@@ -31,7 +42,6 @@ export default function Navigation() {
             </span>
             <span>Time Capture</span>
           </Link>
-
           <div className="hidden sm:flex items-center gap-1 ml-4">
             <Link to="/daily" className={linkClass("/daily")}>
               📅 Daily Review
@@ -42,11 +52,14 @@ export default function Navigation() {
             <Link to="/devices" className={linkClass("/devices")}>
               💻 Devices
             </Link>
-            <Link to="/settings" className={linkClass("/settings")}>
-              ⚙️ Settings
-            </Link>
             
-            {/* 👇 CLIENTS LINK - Matching your blue theme */}
+            {/* Only show Settings to admins */}
+            {isAdmin && (
+              <Link to="/settings" className={linkClass("/settings")}>
+                ⚙️ Settings
+              </Link>
+            )}
+            
             <Link to="/clients" className={linkClass("/clients")}>
               <Users className="w-4 h-4" />
               Clients
@@ -54,8 +67,20 @@ export default function Navigation() {
           </div>
         </div>
 
-        {/* Right: Date + Logout */}
+        {/* Right: User info + Logout */}
         <div className="flex items-center gap-4">
+          {userInfo && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-blue-700 hidden sm:inline">
+                {userInfo.username}
+              </span>
+              {isAdmin && (
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium">
+                  Admin
+                </span>
+              )}
+            </div>
+          )}
           <span className="text-sm text-blue-700 hidden sm:inline">
             {new Date().toLocaleDateString()}
           </span>

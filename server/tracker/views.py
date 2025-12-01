@@ -36,7 +36,7 @@ from django.views.decorators.http import require_http_methods
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.exceptions import NotFound, ValidationError
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle, ScopedRateThrottle
 from rest_framework.authentication import SessionAuthentication
@@ -484,6 +484,24 @@ IDLE_APPS = {
     "idle", "loginwindow", "screensaverengine", "screensaver",
     "lockscreen", "notificationcenter", "controlcenter", "dock"
 }
+
+# Add this class right after imports, before your view functions
+class IsOrgAdmin(BasePermission):
+    """
+    Permission that checks if user is an admin of their organization.
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        
+        # Superusers and staff are always admins
+        if request.user.is_superuser or request.user.is_staff:
+            return True
+        
+        # Check if user has admin role in their org
+        # For now, only staff/superuser are admins
+        # Later you can add a proper OrgMembership model with roles
+        return False
 
 def _iso(dt):
     return dt.isoformat() if dt else None
@@ -3500,7 +3518,21 @@ def whoami(request):
     """Check authentication via token in database."""
     from tracker.models import AuthToken
     
-    # 1) Check Authorization header
+    # Helper to get org info
+    def get_user_info(user):
+        org = get_user_org(user)
+        return {
+            "is_authenticated": True,
+            "username": user.username,
+            "user_id": user.id,
+            "email": user.email or "",
+            "is_staff": user.is_staff,           # ✅ Add admin flags
+            "is_superuser": user.is_superuser,   # ✅ Add admin flags
+            "org_id": org.id if org else None,
+            "org_name": org.name if org else None,
+        }
+    
+    # 1) Check Authorization header (Bearer token)
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header.replace("Bearer ", "", 1).strip()
@@ -3508,14 +3540,11 @@ def whoami(request):
         try:
             auth_token = AuthToken.objects.select_related('user').get(token=token)
             if auth_token.is_valid():
-                return Response({
-                    "is_authenticated": True,
-                    "auth_source": "token",
-                    "username": auth_token.user.username,
-                    "user_id": auth_token.user.id,
-                    "host": None,
-                    "device_id": None,
-                })
+                user_data = get_user_info(auth_token.user)
+                user_data["auth_source"] = "token"
+                user_data["host"] = None
+                user_data["device_id"] = None
+                return Response(user_data)
         except AuthToken.DoesNotExist:
             pass
     
@@ -3530,34 +3559,33 @@ def whoami(request):
         try:
             device = AgentDevice.objects.filter(api_key=agent_key, is_active=True).select_related("user").first()
             if device and device.user_id:
-                return Response({
-                    "is_authenticated": True,
-                    "auth_source": "agent",
-                    "username": device.user.username,
-                    "user_id": device.user.pk,
-                    "host": device.hostname or None,
-                    "device_id": device.device_id,
-                })
+                user_data = get_user_info(device.user)
+                user_data["auth_source"] = "agent"
+                user_data["host"] = device.hostname or None
+                user_data["device_id"] = device.device_id
+                return Response(user_data)
         except Exception:
             pass
     
     # 3) Django session
     if getattr(request.user, "is_authenticated", False):
-        return Response({
-            "is_authenticated": True,
-            "auth_source": "session",
-            "username": request.user.username,
-            "user_id": request.user.pk,
-            "host": None,
-            "device_id": None,
-        })
+        user_data = get_user_info(request.user)
+        user_data["auth_source"] = "session"
+        user_data["host"] = None
+        user_data["device_id"] = None
+        return Response(user_data)
     
-    # 4) Unknown
+    # 4) Unknown/not authenticated
     return Response({
         "is_authenticated": False,
         "auth_source": "unknown",
         "username": "",
         "user_id": None,
+        "email": "",
+        "is_staff": False,
+        "is_superuser": False,
+        "org_id": None,
+        "org_name": None,
         "host": None,
         "device_id": None,
     })
@@ -5987,7 +6015,7 @@ def is_org_admin(user, org):
 # ============================================================================
 
 @api_view(["GET", "PATCH"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_org(request):
     """
     GET: Return organization info
@@ -6038,7 +6066,7 @@ def settings_org(request):
 # ============================================================================
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_team_list(request):
     """List all team members in the organization"""
     org = get_user_org(request.user)
@@ -6065,7 +6093,7 @@ def settings_team_list(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_team_invite(request):
     """
     Invite a new team member by email.
@@ -6164,7 +6192,7 @@ Please change your password after logging in.
 
 
 @api_view(["DELETE"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_team_remove(request, user_id):
     """Remove a team member from the organization"""
     org = get_user_org(request.user)
@@ -6194,7 +6222,7 @@ def settings_team_remove(request, user_id):
 # ============================================================================
 
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_clients(request):
     """
     GET: List all clients for the organization
@@ -6243,7 +6271,7 @@ def settings_clients(request):
 
 
 @api_view(["PATCH", "DELETE"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_client_detail(request, client_id):
     """
     PATCH: Update a client
@@ -6288,7 +6316,7 @@ def settings_client_detail(request, client_id):
 # ============================================================================
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_devices(request):
     """List all registered devices/agents for the organization"""
     org = get_user_org(request.user)
@@ -6316,7 +6344,7 @@ def settings_devices(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_device_deactivate(request, device_id):
     """Deactivate a device (revoke its agent key)"""
     org = get_user_org(request.user)
@@ -6343,7 +6371,7 @@ def settings_device_deactivate(request, device_id):
 # ============================================================================
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_install_token(request):
     """Get the organization's install token"""
     org = get_user_org(request.user)
@@ -6366,7 +6394,7 @@ def settings_install_token(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_install_token_regenerate(request):
     """Regenerate the organization's install token"""
     org = get_user_org(request.user)

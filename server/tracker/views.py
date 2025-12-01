@@ -6097,6 +6097,9 @@ import secrets
 # Organization Info
 # ============================================================================
 
+# UPDATED settings_org() function for tracker/views.py
+# This version doesn't assume billing_email/billing_contact fields exist
+
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_org(request):
@@ -6110,33 +6113,65 @@ def settings_org(request):
         return Response({"error": "No organization found"}, status=404)
     
     if request.method == "GET":
-        return Response({
+        # Build response with only fields that exist
+        response_data = {
             "id": org.id,
             "name": org.name,
-            "billing_email": org.billing_email or "",
-            "billing_contact": org.billing_contact or "",
-            "created_at": org.created_at.isoformat() if hasattr(org, 'created_at') else None,
-        })
+        }
+        
+        # Add optional fields if they exist
+        if hasattr(org, 'billing_email'):
+            response_data["billing_email"] = org.billing_email or ""
+        else:
+            response_data["billing_email"] = ""
+            
+        if hasattr(org, 'billing_contact'):
+            response_data["billing_contact"] = org.billing_contact or ""
+        else:
+            response_data["billing_contact"] = ""
+            
+        if hasattr(org, 'created_at'):
+            response_data["created_at"] = org.created_at.isoformat()
+        else:
+            response_data["created_at"] = None
+        
+        return Response(response_data)
     
     elif request.method == "PATCH":
-        # Update organization
+        # Update organization (only update fields that exist)
         if "name" in request.data:
             org.name = request.data["name"]
-        if "billing_email" in request.data:
+        
+        if "billing_email" in request.data and hasattr(org, 'billing_email'):
             org.billing_email = request.data["billing_email"]
-        if "billing_contact" in request.data:
+        
+        if "billing_contact" in request.data and hasattr(org, 'billing_contact'):
             org.billing_contact = request.data["billing_contact"]
         
         org.save()
         
-        return Response({
+        # Build response
+        response_data = {
             "id": org.id,
             "name": org.name,
-            "billing_email": org.billing_email or "",
-            "billing_contact": org.billing_contact or "",
-            "created_at": org.created_at.isoformat() if hasattr(org, 'created_at') else None,
-        })
-
+        }
+        
+        if hasattr(org, 'billing_email'):
+            response_data["billing_email"] = org.billing_email or ""
+        else:
+            response_data["billing_email"] = ""
+            
+        if hasattr(org, 'billing_contact'):
+            response_data["billing_contact"] = org.billing_contact or ""
+        else:
+            response_data["billing_contact"] = ""
+            
+        if hasattr(org, 'created_at'):
+            response_data["created_at"] = org.created_at.isoformat()
+        else:
+            response_data["created_at"] = None
+        
+        return Response(response_data)
 
 # ============================================================================
 # Team Members

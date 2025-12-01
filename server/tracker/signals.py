@@ -93,3 +93,13 @@ def _auto_classify_block(sender, instance: Block, created: bool, **kwargs):
             return
     
     transaction.on_commit(_do)
+
+
+from django.apps import AppConfig
+
+class TrackerConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'tracker'
+    
+    def ready(self):
+        import tracker.signals  # ← Import signals

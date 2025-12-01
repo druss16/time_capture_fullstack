@@ -26,7 +26,8 @@ import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 const DailyReview = lazy(() => import("./DailyReview"));
 const TimecardReview = lazy(() => import("./TimecardReview"));
 const TimecardSummary = lazy(() => import("./TimecardSummary"));
-const OrganizationSettings = lazy(() => import("./OrganizationSettings"));
+const OrgAdminSettings = lazy(() => import("./Settings"));  // ← The new one I created
+const OrganizationSettings = lazy(() => import("./OrganizationSettings")); // ← Your existing AI settings
 const Devices = lazy(() => import("./Devices"));
 const Login = lazy(() => import("./Login"));
 const Signup = lazy(() => import("./Signup"));
@@ -137,8 +138,21 @@ export default function App() {
                     </MaybeProtected>
                   }
                 />
+                {/* Admin Settings - Team, Clients, Devices, Billing */}
                 <Route
                   path="/settings"
+                  element={
+                    <MaybeProtected>
+                      <AppLayout>
+                        <OrgAdminSettings />
+                      </AppLayout>
+                    </MaybeProtected>
+                  }
+                />
+
+                {/* AI Classification Settings */}
+                <Route
+                  path="/settings/ai"
                   element={
                     <MaybeProtected>
                       <AppLayout>

@@ -124,10 +124,27 @@ class OrganizationMembershipInline(admin.TabularInline):
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
     """Admin interface for Organizations"""
-    list_display = ['name', 'billing_email', 'billing_contact', 'created_at', 'member_count']
-    search_fields = ['name', 'billing_email']
+    list_display = ['name', 'slug', 'plan', 'created_at', 'member_count']  # ✅ Only fields that exist
+    list_filter = ['plan']
+    search_fields = ['name', 'slug']  # ✅ Only fields that exist
     readonly_fields = ['created_at', 'updated_at']
     inlines = [OrganizationMembershipInline]
+    
+    fieldsets = (
+        ('Basic Info', {
+            'fields': ('name', 'slug')
+        }),
+        ('Subscription', {
+            'fields': ('plan', 'trial_ends_at', 'stripe_customer_id')
+        }),
+        ('Settings', {
+            'fields': ('timezone', 'billing_rate_default')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
     
     def member_count(self, obj):
         """Show number of members in the org"""

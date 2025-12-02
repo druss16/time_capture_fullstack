@@ -27,7 +27,6 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import localtime
 from django.views.decorators.csrf import csrf_exempt  # only if used
-from django.contrib.auth.models import Group
 from django.views.decorators.http import require_http_methods
 
 
@@ -84,7 +83,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 
 from django.db import transaction
 
-from django.contrib.auth.models import User, Group
+from django.contrib.auth.models import User
 from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
@@ -526,24 +525,11 @@ class IsOrgAdmin(BasePermission):
 # Update helper functions:
 # Helper to get user's org
 def get_user_org(user):
-    """
-    Get the user's Organization (not Django Group).
-    Returns Organization instance from OrganizationMembership.
-    """
+    """Get the user's Organization from OrganizationMembership."""
     try:
-        # Get from OrganizationMembership (preferred)
         membership = OrganizationMembership.objects.filter(user=user).first()
         if membership:
             return membership.organization
-        
-        # Fallback: Try to find Organization from Group
-        group = user.groups.first()
-        if group:
-            # Find Organization with same name as Group
-            org = Organization.objects.filter(name=group.name).first()
-            if org:
-                return org
-        
         return None
     except Exception as e:
         print(f"Error in get_user_org: {e}")
@@ -800,11 +786,14 @@ def get_org_or_default(request):
     Ensures there's always a Group so queries don't crash.
     """
     if USE_AUTH and getattr(request, "user", None) and request.user.is_authenticated:
-        org = request.user.groups.first()
+        org = get_user_org(request.user)
     else:
         org = None
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
+        org, _ = Organization.objects.get_or_create(
+            name="default-org",
+            defaults={"slug": "default-org"}
+        )
     return org
 
 
@@ -1621,7 +1610,10 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
             field = Block._meta.get_field("org")
             if not field.null:
                 if org_val is None:
-                    org_val, _ = Group.objects.get_or_create(name="default-org")
+                    org_val, _ = Organization.objects.get_or_create(
+                        name="default-org",
+                        defaults={"slug": "default-org"}
+                    )
                 kwargs["org"] = org_val
             else:
                 kwargs["org"] = org_val
@@ -3848,8 +3840,17 @@ def auth_signup(request):
 
     user = User.objects.create_user(username=username, email=email or None, password=password)
 
-    default_org, _ = Group.objects.get_or_create(name="default-org")
-    user.groups.add(default_org)
+    default_org, _ = Organization.objects.get_or_create(
+        name="default-org",
+        defaults={"slug": "default-org"}
+    )
+
+    # Create membership instead of adding to groups
+    OrganizationMembership.objects.get_or_create(
+        user=user,
+        organization=default_org,
+        defaults={"role": "member"}
+    )
 
     perform_login(request, user, email_verification=allauth_settings.EMAIL_VERIFICATION)
 
@@ -3984,9 +3985,12 @@ def set_current_client(request):
     client_name = data.get("client_name")
     
     # Get org
-    org = user.groups.first()
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
+        org, _ = Organization.objects.get_or_create(
+            name="default-org",
+            defaults={"slug": "default-org"}
+        )
     
     # Handle clearing current client
     if not client_id and not client_name:
@@ -4098,11 +4102,14 @@ def list_clients(request):
     ]
     """
     user = request.user
-    org = user.groups.first()
     
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
-    
+        org, _ = Organization.objects.get_or_create(
+            name="default-org",
+            defaults={"slug": "default-org"}
+        )
+
     clients = Client.objects.filter(org=org, is_active=True).order_by('name')
     
     return Response([{
@@ -4148,10 +4155,13 @@ def context_guess(request):
         })
     
     # Get user's clients
-    org = user.groups.first()
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
-    
+        org, _ = Organization.objects.get_or_create(
+            name="default-org",
+            defaults={"slug": "default-org"}
+        )
+        
     clients = list(Client.objects.filter(org=org, is_active=True))
     if not clients:
         return Response({
@@ -4398,9 +4408,12 @@ def create_client(request):
         code = name[:10].upper().replace(" ", "")
     
     # Get org
-    org = user.groups.first()
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
+        org, _ = Organization.objects.get_or_create(
+            name="default-org",
+            defaults={"slug": "default-org"}
+        )
     
     # Check if client already exists
     if Client.objects.filter(org=org, code=code).exists():
@@ -4457,9 +4470,12 @@ def import_clients_csv(request):
         )
     
     # Get org
-    org = user.groups.first()
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
+        org, _ = Organization.objects.get_or_create(
+            name="default-org",
+            defaults={"slug": "default-org"}
+        )
     
     # Parse CSV
     import csv
@@ -4849,9 +4865,9 @@ def get_categorization_data(request):
     limit = int(request.GET.get('limit', 500))
     
     # Get org
-    org = user.groups.first()
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
+        org, _ = Organization.objects.get_or_create(name="default-org", defaults={"slug": "default-org"})
     
     # Parse target date
     if date_str:
@@ -4969,9 +4985,9 @@ def save_categorization(request):
         )
     
     # Get org
-    org = user.groups.first()
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
+        org, _ = Organization.objects.get_or_create(name="default-org", defaults={"slug": "default-org"})
     
     # Get client (if provided)
     client = None
@@ -5096,9 +5112,9 @@ def bulk_categorize(request):
         )
     
     # Get org
-    org = user.groups.first()
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
+        org, _ = Organization.objects.get_or_create(name="default-org", defaults={"slug": "default-org"})
     
     results = {
         'success_count': 0,
@@ -5243,7 +5259,7 @@ from .serializers import (
 @permission_classes([IsAuthenticated])
 def client_options(request):
     """Get clients for dropdown"""
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     clients = Client.objects.filter(org=org, is_active=True).order_by('name')
     return Response(ClientListSerializer(clients, many=True).data)
 
@@ -5252,7 +5268,7 @@ def client_options(request):
 @permission_classes([IsAuthenticated])
 def project_options(request):
     """Get all projects for dropdown"""
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     projects = Project.objects.filter(org=org, is_active=True).select_related('client').order_by('client__name', 'name')
     return Response(ProjectListSerializer(projects, many=True).data)
 
@@ -5261,7 +5277,7 @@ def project_options(request):
 @permission_classes([IsAuthenticated])
 def project_options_by_client(request, client_id):
     """Get projects filtered by client (for cascading dropdown)"""
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     projects = Project.objects.filter(
         org=org, 
         client_id=client_id, 
@@ -5274,7 +5290,7 @@ def project_options_by_client(request, client_id):
 @permission_classes([IsAuthenticated])
 def task_type_options(request):
     """Get task types for dropdown"""
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     task_types = TaskType.objects.filter(org=org, is_active=True).order_by('sort_order', 'name')
     return Response(TaskTypeListSerializer(task_types, many=True).data)
 
@@ -5293,7 +5309,7 @@ def blocks_grouped(request):
         days: Number of days to look back (default 7)
         include_uncategorized: Include uncategorized blocks (default true)
     """
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     days = int(request.query_params.get('days', 7))
     include_uncategorized = request.query_params.get('include_uncategorized', 'true').lower() == 'true'
     
@@ -5340,11 +5356,11 @@ class TaskTypeViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        org = self.request.user.groups.first()
+        org = get_user_org(self.request.user)
         return TaskType.objects.filter(org=org).order_by('sort_order', 'name')
     
     def perform_create(self, serializer):
-        org = self.request.user.groups.first()
+        org = get_user_org(self.request.user)
         serializer.save(org=org)
 
 
@@ -5358,7 +5374,7 @@ class BlockCategorizationViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def uncategorized(self, request):
         """Get blocks that need categorization"""
-        org = request.user.groups.first()
+        org = get_user_org(request.user)
         
         blocks = Block.objects.filter(
             org=org,
@@ -5481,9 +5497,7 @@ def firm_signup(request):
             trial_ends_at=timezone.now() + timedelta(days=14),
         )
         
-        # 2. Create the Django Group (for backward compatibility)
-        group = Group.objects.create(name=f"org-{org.id}")
-        
+
         # 3. Create the owner user
         username = email.split('@')[0][:30]
         if User.objects.filter(username=username).exists():
@@ -5496,10 +5510,7 @@ def firm_signup(request):
             first_name=owner_name.split()[0] if owner_name else '',
             last_name=' '.join(owner_name.split()[1:]) if owner_name else '',
         )
-        
-        # 4. Add user to group
-        user.groups.add(group)
-        
+                
         # 5. Create membership with owner role
         OrganizationMembership.objects.create(
             user=user,
@@ -5511,7 +5522,7 @@ def firm_signup(request):
         from tracker.models import TaskType, DEFAULT_CPA_TASK_TYPES
         for idx, tt_data in enumerate(DEFAULT_CPA_TASK_TYPES):
             TaskType.objects.create(
-                org=group,
+                org=org,
                 name=tt_data['name'],
                 code=tt_data['code'],
                 color=tt_data['color'],
@@ -5597,10 +5608,6 @@ def accept_invitation(request, token):
             first_name=name.split()[0] if name else '',
         )
         
-        # Add to org's group
-        group = Group.objects.get(name=f"org-{invite.organization.id}")
-        user.groups.add(group)
-        
         # Create membership
         OrganizationMembership.objects.create(
             user=user,
@@ -5631,7 +5638,7 @@ def delete_client(request, client_id):
     Only owners/admins can delete clients.
     """
     user = request.user
-    org = user.groups.first()
+    org = get_user_org(user)
     
     if not org:
         return Response({'error': 'No organization found'}, status=400)
@@ -5683,7 +5690,7 @@ def delete_client(request, client_id):
 @permission_classes([IsAuthenticated])
 def list_projects(request):
     """List all projects, optionally filtered by client"""
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     client_id = request.GET.get('client_id')
     
     qs = Project.objects.filter(org=org, is_active=True).select_related('client')
@@ -5704,7 +5711,7 @@ def list_projects(request):
 @permission_classes([IsAuthenticated])
 def create_project(request):
     """Create a new project/engagement for a client"""
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     data = request.data
     
     client_id = data.get('client_id')
@@ -5747,7 +5754,7 @@ def create_project(request):
 @permission_classes([IsAuthenticated])
 def update_project(request, project_id):
     """Update a project"""
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     
     try:
         project = Project.objects.get(id=project_id, org=org)
@@ -5778,7 +5785,7 @@ def update_project(request, project_id):
 @permission_classes([IsAuthenticated])
 def delete_project(request, project_id):
     """Delete or deactivate a project"""
-    org = request.user.groups.first()
+    org = get_user_org(request.user)
     
     try:
         project = Project.objects.get(id=project_id, org=org)
@@ -5897,9 +5904,9 @@ def create_manual_time_entry(request):
         return Response({"error": "hours must be a number"}, status=400)
     
     # Get org
-    org = user.groups.first()
+    org = get_user_org(user)
     if not org:
-        org, _ = Group.objects.get_or_create(name="default-org")
+        org, _ = Organization.objects.get_or_create(name="default-org", defaults={"slug": "default-org"})
     
     # Get client
     try:
@@ -6185,20 +6192,24 @@ def settings_team_list(request):
     if not org:
         return Response({"error": "No organization found"}, status=404)
     
-    members = User.objects.filter(groups=org).select_related()
+    memberships = OrganizationMembership.objects.filter(
+        organization=org
+    ).select_related('user')
     
     result = []
-    for member in members:
+    for membership in memberships:  # ✅ Fixed: was 'members'
+        user = membership.user       # ✅ Get user from membership
         result.append({
-            "id": member.id,
-            "username": member.username,
-            "email": member.email or "",
-            "first_name": member.first_name or "",
-            "last_name": member.last_name or "",
-            "is_active": member.is_active,
-            "is_admin": member.is_staff or member.is_superuser,
-            "last_login": member.last_login.isoformat() if member.last_login else None,
-            "date_joined": member.date_joined.isoformat() if member.date_joined else None,
+            "id": user.id,
+            "username": user.username,
+            "email": user.email or "",
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "is_active": user.is_active,
+            "role": membership.role,  # ✅ Add role from membership
+            "is_admin": membership.role in ['owner', 'admin'],  # ✅ Use membership role
+            "last_login": user.last_login.isoformat() if user.last_login else None,
+            "date_joined": user.date_joined.isoformat() if user.date_joined else None,
         })
     
     return Response(result)

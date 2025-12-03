@@ -57,81 +57,58 @@ interface ManualCategorizationProps {
 }
 
 
-const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
-  const [blocks, setBlocks] = useState<Block[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const today = new Date();
-    return today.toLocaleDateString('en-CA');
-  });
-  
-  const [error, setError] = useState<string | null>(null);
-  const [stats, setStats] = useState<CategorizationData['stats'] | null>(null);
-
-  const fetchCategorizationData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const url = `${API_BASE}/categorization/data/?date=${selectedDate}`;
-      console.log('🔍 Fetching:', url);  // ✅ ADD THIS
-      
-      const data = await safeFetchJson<CategorizationData>(url);
-      
-      console.log('✅ Got data:', data);  // ✅ ADD THIS
-      
-      setBlocks(data.blocks || []);
-      setClients(data.clients || []);
-      setCategories(data.categories || []);
-      setStats(data.stats || null);
-    } catch (error: any) {
-      console.error('❌ Failed to load data:', error);
-      setError(error.message || 'Failed to load blocks');
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedDate]);
-
-  const categorizeBlock = useCallback(async (
-    blockId: number, 
-    blockIds: number[],
-    clientId: number | null, 
-    category: string, 
-    notes?: string
-  ) => {
-    try {
-      const payload = {
-        block_id: blockId,
-        block_ids: blockIds,
-        client_id: clientId,
-        category: category,
-        notes: notes || undefined,
-      };
-      
-      const result = await safeFetchJson(
-        `${API_BASE}/categorization/save/`,
-        {
-          method: 'POST',
-          body: JSON.stringify(payload)
-        }
-      );
-
-      await fetchCategorizationData();
-      
-      if (onComplete) {
-        onComplete();
+const categorizeBlock = useCallback(async (
+  blockId: number, 
+  blockIds: number[],
+  clientId: number | null, 
+  category: string, 
+  notes?: string
+) => {
+  try {
+    const payload = {
+      block_id: blockId,
+      block_ids: blockIds,
+      client_id: clientId,
+      category: category,
+      notes: notes || undefined,
+    };
+    
+    const result = await safeFetchJson(
+      `${API_BASE}/categorization/save/`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload)
       }
-      
-      return result;
-    } catch (error: any) {
-      console.error('categorizeBlock ERROR:', error);
-      setError(error.message || 'Failed to save categorization');
-      throw error;
+    );
+
+    // ✅ OPTIMISTIC UPDATE: Remove categorized block from local state
+    // instead of refetching everything
+    setBlocks(prevBlocks => prevBlocks.filter(b => b.id !== blockId));
+    
+    // Update stats
+    if (stats) {
+      const categorizedBlock = blocks.find(b => b.id === blockId);
+      const minutesRemoved = categorizedBlock?.duration_minutes || 0;
+      setStats({
+        ...stats,
+        uncategorized_count: Math.max(0, stats.uncategorized_count - 1),
+        total_minutes: Math.max(0, stats.total_minutes - minutesRemoved),
+      });
     }
-  }, [fetchCategorizationData, onComplete]);
+    
+    if (onComplete) {
+      onComplete();
+    }
+    
+    return result;
+  } catch (error: any) {
+    console.error('categorizeBlock ERROR:', error);
+    setError(error.message || 'Failed to save categorization');
+    // ✅ On error, refetch to get correct state
+    await fetchCategorizationData();
+    throw error;
+  }
+}, [blocks, stats, onComplete, fetchCategorizationData]);
 
   const totalHours = stats ? (stats.total_minutes / 60).toFixed(1) : '0.0';
 

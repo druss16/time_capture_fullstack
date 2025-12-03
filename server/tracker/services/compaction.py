@@ -54,11 +54,17 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         return 0
     
     # Get org if not provided
+    # Get org if not provided
     if not org:
-        org = user.groups.first()
-        if not org:
-            from django.contrib.auth.models import Group
-            org, _ = Group.objects.get_or_create(name="default-org")
+        from tracker.models import Organization, OrganizationMembership
+        membership = OrganizationMembership.objects.filter(user=user).first()
+        if membership:
+            org = membership.organization
+        else:
+            org, _ = Organization.objects.get_or_create(
+                name="default-org",
+                defaults={"slug": "default-org"}
+            )
     
     logger.info(f"[COMPACT] Processing {day} for {user.username}")
     

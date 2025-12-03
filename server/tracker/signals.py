@@ -95,10 +95,13 @@ def _auto_classify_block(sender, instance: Block, created: bool, **kwargs):
     def _do():
         try:
             blk = Block.objects.get(pk=instance.pk)
-            from tracker.tasks import classify_block_task  # ✅ ADD THIS LINE IF MISSING
-            classify_block_task.delay(blk.pk)  # ✅ Calls Celery task
+            from tracker.tasks import classify_block_task
+            classify_block_task.delay(blk.pk)
         except Block.DoesNotExist:
             return
+        except Exception as e:
+            # Don't let Redis/Celery errors break block creation
+            pass
     
     transaction.on_commit(_do)
 

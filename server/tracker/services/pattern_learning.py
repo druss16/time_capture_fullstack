@@ -156,6 +156,62 @@ class PatternLearningService:
         })
         
         return patterns
+
+    @staticmethod
+    def extract_app_patterns(block) -> List[Dict]:
+        """
+        Extract patterns from app name and URL for a SINGLE block.
+        
+        Examples:
+        - App: "Google Chrome" on "claude.ai" → Research/AI Assistance
+        - App: "Visual Studio Code" → Software Development
+        - App: "Zoom" → Meetings
+        """
+        patterns = []
+        
+        app_name = (getattr(block, 'app_name', None) or '').strip()
+        url = (getattr(block, 'url', None) or '').strip()
+        window_title = (getattr(block, 'window_title', None) or '').strip()
+        
+        # Pattern 1: App name (most reliable)
+        if app_name and app_name.lower() not in ('idle', 'unknown', ''):
+            patterns.append({
+                'type': 'app',
+                'key': app_name.lower(),
+                'confidence': 0.85
+            })
+        
+        # Pattern 2: URL domain (very useful for browser work)
+        if url:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                domain = parsed.netloc.lower()
+                
+                # Remove www. prefix
+                if domain.startswith('www.'):
+                    domain = domain[4:]
+                
+                if domain and len(domain) > 3:
+                    patterns.append({
+                        'type': 'domain',
+                        'key': domain,
+                        'confidence': 0.90
+                    })
+            except Exception:
+                pass
+        
+        # Pattern 3: Window title prefix (for desktop apps)
+        if window_title and ' - ' in window_title:
+            first_part = window_title.split(' - ')[0].strip()
+            if 2 < len(first_part) < 50:
+                patterns.append({
+                    'type': 'window_title_prefix',
+                    'key': first_part.lower(),
+                    'confidence': 0.75
+                })
+        
+        return patterns
     
     @staticmethod
     def extract_app_sequence_patterns(blocks: List) -> List[Dict]:
@@ -218,6 +274,7 @@ class PatternLearningService:
         
         # Extract all patterns
         all_patterns = []
+        all_patterns.extend(PatternLearningService.extract_app_patterns(block))
         all_patterns.extend(PatternLearningService.extract_file_patterns(block))
         all_patterns.extend(PatternLearningService.extract_time_patterns(block))
         
@@ -265,11 +322,14 @@ class PatternLearningService:
         suggestions = []
         
         # Extract patterns from current block
+        # Extract patterns from current block
+        app_patterns = PatternLearningService.extract_app_patterns(block)
         file_patterns = PatternLearningService.extract_file_patterns(block)
         time_patterns = PatternLearningService.extract_time_patterns(block)
-        
-        all_patterns = file_patterns + time_patterns
-        
+
+        all_patterns = app_patterns + file_patterns + time_patterns
+
+
         # Look up each pattern in database
         for pattern_data in all_patterns:
             try:

@@ -1588,6 +1588,12 @@ def compact_rawevents_into_blocks(user: Optional[str] = None, hostname: Optional
                 kwargs["app_name"] = cur.get("app_name") or "idle"
             if hasattr(Block, "bundle_id"):
                 kwargs["bundle_id"] = cur.get("bundle_id") or "__idle__"
+            # ✅ Auto-categorize idle blocks
+            kwargs["is_categorized"] = True
+            kwargs["categorized_by"] = "system"
+            kwargs["categorized_at"] = timezone.now()
+            hours = int((kwargs["end"] - kwargs["start"]).total_seconds() // 60) / 60.0
+            kwargs["category_hours"] = {"Idle": round(hours, 2)}
         else:
             # Use the client_id that was stored when the event was captured
             stored_client_id = cur.get("current_client_id")

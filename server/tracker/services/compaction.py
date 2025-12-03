@@ -209,28 +209,54 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     )
             
             # Create block
-            Block.objects.create(
-                org=org,
-                user=user,
-                device_id=block_data["device_id"],
-                hostname=block_data["hostname"],
-                start=block_data["start"],
-                end=block_data["end"],
-                day=day,
-                minutes=int(block_data["minutes"]),
-                title=block_data.get("app_name") or "Unknown",
-                window_title=block_data.get("window_title") or "",
-                url=block_data.get("url") or "",
-                file_path=block_data.get("file_path") or "",
-                app_name=block_data.get("app_name") or "",
-                bundle_id=block_data.get("bundle_id") or "",
-                hints=block_data.get("ctx") or {},
-                client=client,
-                category_hours={},
-                is_categorized=False,
-                approved=False,  # ✅ ADD THIS LINE
-
-            )
+            # Auto-categorize idle blocks
+            if is_idle:
+                hours = round(int(block_data["minutes"]) / 60.0, 2)
+                Block.objects.create(
+                    org=org,
+                    user=user,
+                    device_id=block_data["device_id"],
+                    hostname=block_data["hostname"],
+                    start=block_data["start"],
+                    end=block_data["end"],
+                    day=day,
+                    minutes=int(block_data["minutes"]),
+                    title="Idle",
+                    window_title="Idle/Uncategorized",
+                    url="",
+                    file_path="",
+                    app_name=block_data.get("app_name") or "Idle",
+                    bundle_id=block_data.get("bundle_id") or "__idle__",
+                    hints={},
+                    client=None,
+                    category_hours={"Idle": hours},
+                    is_categorized=True,
+                    categorized_by="system",
+                    categorized_at=timezone.now(),
+                    approved=False,
+                )
+            else:
+                Block.objects.create(
+                    org=org,
+                    user=user,
+                    device_id=block_data["device_id"],
+                    hostname=block_data["hostname"],
+                    start=block_data["start"],
+                    end=block_data["end"],
+                    day=day,
+                    minutes=int(block_data["minutes"]),
+                    title=block_data.get("app_name") or "Unknown",
+                    window_title=block_data.get("window_title") or "",
+                    url=block_data.get("url") or "",
+                    file_path=block_data.get("file_path") or "",
+                    app_name=block_data.get("app_name") or "",
+                    bundle_id=block_data.get("bundle_id") or "",
+                    hints=block_data.get("ctx") or {},
+                    client=client,
+                    category_hours={},
+                    is_categorized=False,
+                    approved=False,
+                )
             
             created_count += 1
     

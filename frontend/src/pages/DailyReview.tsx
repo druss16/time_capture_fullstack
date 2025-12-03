@@ -137,17 +137,49 @@ export default function DailyReview() {
   };
 
   // Default categories for CPA firms
+  // Default categories for CPA firms - matches backend CPA_CATEGORIES
   const DEFAULT_CATEGORIES = [
-    'Tax Preparation',
-    'Audit/Assurance',
-    'Bookkeeping',
-    'Advisory/Consulting',
-    'Research/AI Assistance',
-    'Email/Communication',
-    'Admin/Internal',
-    'Software Development',
-    'Meeting/Call',
-    'Training',
+    // Core Tax Services
+    "Tax Preparation",
+    "Tax Planning",
+    "Tax Research",
+    "Tax Compliance",
+    "Idle",
+    
+    // Accounting Services
+    "Accounting/Bookkeeping",
+    "Financial Statement Prep",
+    "Audit/Assurance",
+    "Payroll Services",
+    
+    // Advisory Services
+    "Advisory/Financial Planning",
+    "Valuation/Advisory",
+    "Forensic/Fraud Investigation",
+    
+    // Compliance & Regulatory
+    "SEC/Regulatory Compliance",
+    "Employee Benefits/ERISA",
+    
+    // Specialized Industry
+    "Real Estate/Property",
+    "Nonprofit/Form 990",
+    "Healthcare/Medical Practice",
+    "Construction/Contractors",
+    
+    // Consulting/Tech categories
+    "Software Development",
+    "Web Development",
+    "Research/AI Assistance",
+    "Design/Creative",
+    "Documentation",
+    
+    // Administrative
+    "Email/Communication",
+    "Meetings",
+    "Administration",
+    "Document Management",
+    "Review",
   ];
 
   // Load available categories (task types)

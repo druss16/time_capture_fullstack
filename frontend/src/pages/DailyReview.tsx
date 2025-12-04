@@ -76,6 +76,9 @@ export default function DailyReview() {
   // Track which clients are collapsed (default all expanded)
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
 
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+
+
   // Edit state
   const [editingBlock, setEditingBlock] = useState<{
     blockId: number; 
@@ -433,6 +436,16 @@ export default function DailyReview() {
     });
   };
 
+  // Toggle showing all activities in a category
+  const toggleCategoryExpand = (categoryKey: string) => {
+    setExpandedCategories(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(categoryKey)) newSet.delete(categoryKey);
+      else newSet.add(categoryKey);
+      return newSet;
+    });
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <Header
@@ -637,10 +650,26 @@ export default function DailyReview() {
                                     </div>
                                   </div>
                                   
-                                  {/* Activities with edit and delete buttons */}
                                   {cat.sample_activities && cat.sample_activities.length > 0 && (
-                                    <ul className="mt-2 ml-1 space-y-1.5">
-                                      {cat.sample_activities.map((activity, idx) => {
+                                    <div className="mt-2 ml-1">
+                                      {cat.block_count > 3 && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            toggleCategoryExpand(`${client.client_id}-${cat.name}`);
+                                          }}
+                                          className="text-xs text-primary hover:underline mb-2 block"
+                                        >
+                                          {expandedCategories.has(`${client.client_id}-${cat.name}`) 
+                                            ? '▼ Show less' 
+                                            : `▶ Show all ${cat.block_count} blocks`}
+                                        </button>
+                                      )}
+                                      <ul className="space-y-1.5">
+                                        {(expandedCategories.has(`${client.client_id}-${cat.name}`) 
+                                          ? cat.sample_activities 
+                                          : cat.sample_activities.slice(0, 3)
+                                        ).map((activity, idx) => {
                                         const parsed = parseActivity(activity);
                                         const isEditing = editingBlock?.blockId === parsed.blockId;
                                         

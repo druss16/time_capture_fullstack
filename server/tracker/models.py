@@ -509,6 +509,8 @@ class Block(models.Model):
     # Legacy lock (keep for backwards compatibility)
     locked = models.BooleanField(default=False)
 
+    deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+
 
     # ✅ NEW: Immutability Tracking (Production-Ready)
     is_categorized = models.BooleanField(

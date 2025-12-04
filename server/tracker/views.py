@@ -4645,7 +4645,8 @@ def today_time(request):
     blocks = Block.objects.filter(
         user=user,
         start__gte=start_utc,
-        start__lt=end_utc
+        start__lt=end_utc,
+        deleted_at__isnull=True  # ← Add this
     ).select_related('client').order_by('start')
     
     # ... rest of function stays the same

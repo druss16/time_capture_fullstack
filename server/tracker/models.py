@@ -472,6 +472,9 @@ from django.conf import settings
 from django.contrib.auth.models import Group
 from django.utils import timezone
 
+class ActiveBlockManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
 
 class Block(models.Model):
     # Core identification
@@ -508,6 +511,9 @@ class Block(models.Model):
     
     # Legacy lock (keep for backwards compatibility)
     locked = models.BooleanField(default=False)
+
+    objects = ActiveBlockManager()  # Default excludes deleted
+    all_objects = models.Manager()  # Use this to include deleted blocks
 
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
 

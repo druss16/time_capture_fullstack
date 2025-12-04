@@ -670,8 +670,8 @@ export default function DailyReview() {
                                           ? cat.sample_activities 
                                           : cat.sample_activities.slice(0, 3)
                                         ).map((activity, idx) => {
-                                        const parsed = parseActivity(activity);
-                                        const isEditing = editingBlock?.blockId === parsed.blockId;
+                                          const parsed = parseActivity(activity);
+                                          const isEditing = editingBlock?.blockId === parsed.blockId;
                                         
                                         return (
                                           <li key={idx} className="text-xs text-muted-foreground flex items-center gap-1.5 group">

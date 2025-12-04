@@ -652,19 +652,21 @@ export default function DailyReview() {
                                   </div>
                                   
                                   {/* Activities with edit and delete buttons */}
-                                  {cat.sample_activities.length > 3 && (
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        toggleCategoryExpand(categoryKey);
-                                      }}
-                                      className="text-xs text-primary hover:underline mb-2 block"
-                                    >
-                                      {isExpanded 
-                                        ? '▼ Show less' 
-                                        : `▶ Show all ${cat.sample_activities.length} activities`}
-                                    </button>
-                                  )}
+                                  {cat.sample_activities && cat.sample_activities.length > 0 && (
+                                    <div className="mt-2 ml-1">
+                                      {cat.sample_activities.length > 3 && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            toggleCategoryExpand(categoryKey);
+                                          }}
+                                          className="text-xs text-primary hover:underline mb-2 block"
+                                        >
+                                          {isExpanded 
+                                            ? '▼ Show less' 
+                                            : `▶ Show all ${cat.sample_activities.length} activities`}
+                                        </button>
+                                      )}
                                       <ul className="space-y-1.5">
                                         {(isExpanded 
                                           ? cat.sample_activities 

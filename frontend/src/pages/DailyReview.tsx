@@ -643,7 +643,7 @@ export default function DailyReview() {
                                     </div>
                                     <div className="flex items-center gap-3">
                                       <span className="text-xs text-muted-foreground">
-                                        {cat.unique_activities || cat.sample_activities.length} {(cat.unique_activities || cat.sample_activities.length) === 1 ? 'activity' : 'activities'}
+                                        {cat.sample_activities.length} {cat.sample_activities.length === 1 ? 'activity' : 'activities'}
                                       </span>
                                       <span className={`font-bold text-base ${isNonBillable ? 'text-muted-foreground' : 'text-success'}`}>
                                         {cat.hours.toFixed(2)}h
@@ -652,21 +652,19 @@ export default function DailyReview() {
                                   </div>
                                   
                                   {/* Activities with edit and delete buttons */}
-                                  {cat.sample_activities && cat.sample_activities.length > 0 && (
-                                    <div className="mt-2 ml-1">
-                                      {cat.block_count > 3 && (
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            toggleCategoryExpand(categoryKey);
-                                          }}
-                                          className="text-xs text-primary hover:underline mb-2 block"
-                                        >
-                                          {isExpanded 
-                                            ? '▼ Show less' 
-                                            : `▶ Show all ${cat.block_count} blocks`}
-                                        </button>
-                                      )}
+                                  {cat.sample_activities.length > 3 && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleCategoryExpand(categoryKey);
+                                      }}
+                                      className="text-xs text-primary hover:underline mb-2 block"
+                                    >
+                                      {isExpanded 
+                                        ? '▼ Show less' 
+                                        : `▶ Show all ${cat.sample_activities.length} activities`}
+                                    </button>
+                                  )}
                                       <ul className="space-y-1.5">
                                         {(isExpanded 
                                           ? cat.sample_activities 

@@ -4609,7 +4609,7 @@ def complete_onboarding(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def today_time(request):
-    """Get tracked time organized by client → category."""
+    """Get tracked time organized by client → category with aggregated activities."""
     from datetime import datetime, timedelta
     from datetime import timezone as dt_timezone
     from collections import defaultdict
@@ -4623,7 +4623,7 @@ def today_time(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
     
-    # ✅ Get date from query param, default to today
+    # Get date from query param, default to today
     date_str = request.GET.get('date')
     if date_str:
         target_date = parse_date(date_str)
@@ -4646,10 +4646,8 @@ def today_time(request):
         user=user,
         start__gte=start_utc,
         start__lt=end_utc,
-        deleted_at__isnull=True  # ← Add this
+        deleted_at__isnull=True  # Exclude soft-deleted blocks
     ).select_related('client').order_by('start')
-    
-    # ... rest of function stays the same
     
     # Helper: union of time spans (avoid overlaps)
     def union_minutes(spans):
@@ -4687,14 +4685,18 @@ def today_time(request):
     data = defaultdict(lambda: {
         'client_id': None,
         'client_name': None,
-        'categories': defaultdict(lambda: {'spans': [], 'count': 0, 'samples': []})
+        'categories': defaultdict(lambda: {
+            'spans': [], 
+            'count': 0, 
+            'by_title': {}  # Aggregate by title
+        })
     })
     
     for block in blocks:
         client_name = block.client.name if block.client else 'Unassigned'
         client_id = block.client.id if block.client else None
         
-        # ✅ Use category_hours (JSONField) instead of ai_category
+        # Use category_hours (JSONField) instead of ai_category
         if block.category_hours and isinstance(block.category_hours, dict):
             categories = list(block.category_hours.keys())
             category = categories[0] if categories else 'Uncategorized'
@@ -4708,17 +4710,28 @@ def today_time(request):
         cat_data['spans'].append({'start': block.start, 'end': block.end})
         cat_data['count'] += 1
         
-        # Sample activities (max 3)
-        # Sample activities (max 3) - include block ID for drag-drop
-        # Sample activities (max 3) - include block ID for drag-drop
-
-        # All activities - include block ID for editing
+        # Build title for aggregation
         title = block.window_title or block.url or block.app_name or 'Unknown'
         if len(title) > 60:
             title = title[:57] + '...'
-        cat_data['samples'].append(f"[id:{block.id}] {title}")
+        
+        # Aggregate by title
+        if title in cat_data['by_title']:
+            # Increment count, add minutes, collect all block IDs
+            cat_data['by_title'][title]['count'] += 1
+            cat_data['by_title'][title]['minutes'] += (block.minutes or 0)
+            cat_data['by_title'][title]['ids'].append(block.id)
+        else:
+            # First occurrence
+            cat_data['by_title'][title] = {
+                'id': block.id,  # Primary ID for editing
+                'title': title,
+                'count': 1,
+                'minutes': block.minutes or 0,
+                'ids': [block.id]  # All IDs with this title
+            }
     
-    # Calculate union minutes for each category
+    # Calculate union minutes for each category and build result
     result = []
     for client_name, client_data in sorted(data.items()):
         categories = []
@@ -4728,11 +4741,31 @@ def today_time(request):
             minutes = union_minutes(cat_data['spans'])
             total_client_minutes += minutes
             
+            # Build aggregated sample list, sorted by time (most time first)
+            aggregated_samples = []
+            by_title = cat_data.get('by_title', {})
+            
+            for title, info in sorted(by_title.items(), key=lambda x: -x[1]['minutes']):
+                if info['count'] > 1:
+                    # Multiple blocks with same title - show count and total time
+                    mins = info['minutes']
+                    if mins >= 60:
+                        time_str = f"{mins/60:.1f}h"
+                    else:
+                        time_str = f"{mins}m"
+                    aggregated_samples.append(
+                        f"[id:{info['id']}] {info['title']} ({info['count']}x, {time_str})"
+                    )
+                else:
+                    # Single occurrence
+                    aggregated_samples.append(f"[id:{info['id']}] {info['title']}")
+            
             categories.append({
                 'name': cat_name,
                 'hours': round(minutes / 60, 2),
                 'block_count': cat_data['count'],
-                'sample_activities': cat_data['samples']
+                'unique_activities': len(by_title),  # For UI to know when to show expand
+                'sample_activities': aggregated_samples
             })
         
         result.append({

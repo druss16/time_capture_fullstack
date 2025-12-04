@@ -643,7 +643,7 @@ export default function DailyReview() {
                                     </div>
                                     <div className="flex items-center gap-3">
                                       <span className="text-xs text-muted-foreground">
-                                        {cat.block_count} {cat.block_count === 1 ? 'block' : 'blocks'}
+                                        {cat.unique_activities || cat.sample_activities.length} {(cat.unique_activities || cat.sample_activities.length) === 1 ? 'activity' : 'activities'}
                                       </span>
                                       <span className={`font-bold text-base ${isNonBillable ? 'text-muted-foreground' : 'text-success'}`}>
                                         {cat.hours.toFixed(2)}h

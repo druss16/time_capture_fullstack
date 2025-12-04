@@ -785,7 +785,8 @@ def get_current_client_from_backend(api_base: str, api_key: str) -> dict:
     
     url = f"{api_base}/client/current"
     req = urllib.request.Request(url, method="GET")
-    req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Correct!
+    # req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Correct!
+    req.add_header("Authorization", f"DeviceKey {api_key}") 
     req.add_header("Content-Type", "application/json")
     
     try:
@@ -822,7 +823,8 @@ def set_current_client_on_backend(api_base: str, api_key: str,
         data=json.dumps(payload).encode("utf-8"),
         method="POST"
     )
-    req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Fixed
+    # req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Fixed
+    req.add_header("Authorization", f"DeviceKey {api_key}") 
     req.add_header("Content-Type", "application/json")
     
     try:
@@ -1076,28 +1078,54 @@ def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
     if bundle_id == "com.apple.Safari":
         url = osa_retry('tell application "Safari" to try\nset u to URL of current tab of front window\nreturn u\non error\nreturn ""\nend try')
         return {"url": url or None, "file_path": None}
-    # Chrome
+    
+    # Chrome - improved: explicit window 1, more retries
     if bundle_id in ("com.google.Chrome", "com.google.Chrome.canary"):
-        url = osa_retry('tell application "Google Chrome" to try\nset u to URL of active tab of front window\nreturn u\non error\nreturn ""\nend try')
+        script = '''tell application "Google Chrome"
+            try
+                if (count of windows) > 0 then
+                    return URL of active tab of window 1
+                end if
+                return ""
+            on error
+                return ""
+            end try
+        end tell'''
+        url = osa_retry(script, tries=3, delay=0.1)
         return {"url": url or None, "file_path": None}
-    # Brave
+    
+    # Brave - same improvement
     if bundle_id == "com.brave.Browser":
-        url = osa_retry('tell application "Brave Browser" to try\nset u to URL of active tab of front window\nreturn u\non error\nreturn ""\nend try')
+        script = '''tell application "Brave Browser"
+            try
+                if (count of windows) > 0 then
+                    return URL of active tab of window 1
+                end if
+                return ""
+            on error
+                return ""
+            end try
+        end tell'''
+        url = osa_retry(script, tries=3, delay=0.1)
         return {"url": url or None, "file_path": None}
+    
     # Preview
     if bundle_id == "com.apple.Preview":
         path = osa_retry('tell application "Preview" to try\nset theDoc to document 1\nset p to path of theDoc\nPOSIX path of p\non error\nreturn ""\nend try')
         return {"url": None, "file_path": path or None}
+    
     # Excel
     if bundle_id == "com.microsoft.Excel":
         path = osa_retry('tell application "Microsoft Excel" to try\nif not (exists active workbook) then return ""\nset p to (full name of active workbook)\nreturn POSIX path of p\non error\nreturn ""\nend try')
         return {"url": None, "file_path": path or None}
+    
     # Sublime
     if bundle_id in ("com.sublimetext.4", "com.sublimetext.3"):
         path = osa_retry('tell application "Sublime Text" to try\nif not (exists window 1) then return ""\nset theDoc to document of window 1\nif theDoc is missing value then return ""\nset p to (path of theDoc)\nreturn POSIX path of p\non error\nreturn ""\nend try')
         return {"url": None, "file_path": path or None}
+    
+    # DEFAULT - must be here!
     return {"url": None, "file_path": None}
-
 # ---------------- PID utils ----------------
 def write_pid():
     try:

@@ -76,8 +76,8 @@ export default function DailyReview() {
   // Track which clients are collapsed (default all expanded)
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
 
+  // Track which categories are expanded to show all blocks
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
-
 
   // Edit state
   const [editingBlock, setEditingBlock] = useState<{
@@ -139,7 +139,6 @@ export default function DailyReview() {
     return { blockId: null, title: activity, raw: activity };
   };
 
-  // Default categories for CPA firms
   // Default categories for CPA firms - matches backend CPA_CATEGORIES
   const DEFAULT_CATEGORIES = [
     // Core Tax Services
@@ -625,6 +624,8 @@ export default function DailyReview() {
                           <div className="divide-y divide-border bg-white">
                             {client.categories.map((cat) => {
                               const isNonBillable = isNonBillableCategory(cat.name);
+                              const categoryKey = `${client.client_id}-${cat.name}`;
+                              const isExpanded = expandedCategories.has(categoryKey);
                               
                               return (
                                 <div 
@@ -650,107 +651,109 @@ export default function DailyReview() {
                                     </div>
                                   </div>
                                   
+                                  {/* Activities with edit and delete buttons */}
                                   {cat.sample_activities && cat.sample_activities.length > 0 && (
                                     <div className="mt-2 ml-1">
                                       {cat.block_count > 3 && (
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            toggleCategoryExpand(`${client.client_id}-${cat.name}`);
+                                            toggleCategoryExpand(categoryKey);
                                           }}
                                           className="text-xs text-primary hover:underline mb-2 block"
                                         >
-                                          {expandedCategories.has(`${client.client_id}-${cat.name}`) 
+                                          {isExpanded 
                                             ? '▼ Show less' 
                                             : `▶ Show all ${cat.block_count} blocks`}
                                         </button>
                                       )}
                                       <ul className="space-y-1.5">
-                                        {(expandedCategories.has(`${client.client_id}-${cat.name}`) 
+                                        {(isExpanded 
                                           ? cat.sample_activities 
                                           : cat.sample_activities.slice(0, 3)
                                         ).map((activity, idx) => {
                                           const parsed = parseActivity(activity);
                                           const isEditing = editingBlock?.blockId === parsed.blockId;
-                                        
-                                        return (
-                                          <li key={idx} className="text-xs text-muted-foreground flex items-center gap-1.5 group">
-                                            <span className="text-muted-foreground/50">→</span>
-                                            
-                                            {isEditing ? (
-                                              // Edit mode - Client + Category dropdowns
-                                              <div className="flex items-center gap-2 flex-1 flex-wrap py-1">
-                                                {/* Client Dropdown */}
-                                                <select
-                                                  value={selectedClientId || ''}
-                                                  onChange={(e) => setSelectedClientId(e.target.value ? parseInt(e.target.value) : null)}
-                                                  className="text-xs border border-blue-400 rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[120px]"
-                                                >
-                                                  <option value="">— Client —</option>
-                                                  {availableClients.map(c => (
-                                                    <option key={c.id} value={c.id}>{c.name}</option>
-                                                  ))}
-                                                </select>
-                                                
-                                                {/* Category Dropdown */}
-                                                <select
-                                                  value={selectedCategory}
-                                                  onChange={(e) => setSelectedCategory(e.target.value)}
-                                                  className="text-xs border border-primary rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary min-w-[140px]"
-                                                >
-                                                  {availableCategories.map(catName => (
-                                                    <option key={catName} value={catName}>{catName}</option>
-                                                  ))}
-                                                </select>
-                                                
-                                                {/* Save button */}
-                                                <button
-                                                  onClick={handleSaveCategory}
-                                                  disabled={isUpdating}
-                                                  className="p-1.5 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 transition-colors"
-                                                  title="Save changes"
-                                                >
-                                                  <Check className="w-3.5 h-3.5" />
-                                                </button>
-                                                
-                                                {/* Cancel button */}
-                                                <button
-                                                  onClick={handleCancelEdit}
-                                                  className="p-1.5 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors"
-                                                  title="Cancel"
-                                                >
-                                                  <X className="w-3.5 h-3.5" />
-                                                </button>
-                                              </div>
-                                            ) : (
-                                              // Display mode
-                                              <>
-                                                <span className="flex-1">{parsed.title}</span>
-                                                {parsed.blockId && (
-                                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <button
-                                                      onClick={() => handleEditClick(parsed.blockId!, cat.name, client.client_id)}
-                                                      className="p-1 hover:bg-primary/10 rounded"
-                                                      title="Edit client/category"
-                                                    >
-                                                      <Pencil className="w-3 h-3 text-primary" />
-                                                    </button>
-                                                    <button
-                                                      onClick={() => handleDeleteBlock(parsed.blockId!, parsed.title)}
-                                                      disabled={deletingBlockId === parsed.blockId}
-                                                      className="p-1 hover:bg-red-100 rounded disabled:opacity-50"
-                                                      title="Delete block"
-                                                    >
-                                                      <Trash2 className="w-3 h-3 text-red-500" />
-                                                    </button>
-                                                  </div>
-                                                )}
-                                              </>
-                                            )}
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
+                                          
+                                          return (
+                                            <li key={idx} className="text-xs text-muted-foreground flex items-center gap-1.5 group">
+                                              <span className="text-muted-foreground/50">→</span>
+                                              
+                                              {isEditing ? (
+                                                // Edit mode - Client + Category dropdowns
+                                                <div className="flex items-center gap-2 flex-1 flex-wrap py-1">
+                                                  {/* Client Dropdown */}
+                                                  <select
+                                                    value={selectedClientId || ''}
+                                                    onChange={(e) => setSelectedClientId(e.target.value ? parseInt(e.target.value) : null)}
+                                                    className="text-xs border border-blue-400 rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[120px]"
+                                                  >
+                                                    <option value="">— Client —</option>
+                                                    {availableClients.map(c => (
+                                                      <option key={c.id} value={c.id}>{c.name}</option>
+                                                    ))}
+                                                  </select>
+                                                  
+                                                  {/* Category Dropdown */}
+                                                  <select
+                                                    value={selectedCategory}
+                                                    onChange={(e) => setSelectedCategory(e.target.value)}
+                                                    className="text-xs border border-primary rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary min-w-[140px]"
+                                                  >
+                                                    {availableCategories.map(catName => (
+                                                      <option key={catName} value={catName}>{catName}</option>
+                                                    ))}
+                                                  </select>
+                                                  
+                                                  {/* Save button */}
+                                                  <button
+                                                    onClick={handleSaveCategory}
+                                                    disabled={isUpdating}
+                                                    className="p-1.5 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 transition-colors"
+                                                    title="Save changes"
+                                                  >
+                                                    <Check className="w-3.5 h-3.5" />
+                                                  </button>
+                                                  
+                                                  {/* Cancel button */}
+                                                  <button
+                                                    onClick={handleCancelEdit}
+                                                    className="p-1.5 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors"
+                                                    title="Cancel"
+                                                  >
+                                                    <X className="w-3.5 h-3.5" />
+                                                  </button>
+                                                </div>
+                                              ) : (
+                                                // Display mode
+                                                <>
+                                                  <span className="flex-1">{parsed.title}</span>
+                                                  {parsed.blockId && (
+                                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                      <button
+                                                        onClick={() => handleEditClick(parsed.blockId!, cat.name, client.client_id)}
+                                                        className="p-1 hover:bg-primary/10 rounded"
+                                                        title="Edit client/category"
+                                                      >
+                                                        <Pencil className="w-3 h-3 text-primary" />
+                                                      </button>
+                                                      <button
+                                                        onClick={() => handleDeleteBlock(parsed.blockId!, parsed.title)}
+                                                        disabled={deletingBlockId === parsed.blockId}
+                                                        className="p-1 hover:bg-red-100 rounded disabled:opacity-50"
+                                                        title="Delete block"
+                                                      >
+                                                        <Trash2 className="w-3 h-3 text-red-500" />
+                                                      </button>
+                                                    </div>
+                                                  )}
+                                                </>
+                                              )}
+                                            </li>
+                                          );
+                                        })}
+                                      </ul>
+                                    </div>
                                   )}
                                 </div>
                               );

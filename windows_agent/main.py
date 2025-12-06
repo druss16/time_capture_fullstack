@@ -356,7 +356,12 @@ def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, st
     return False, "", host
 
 # ---------------- Device Identity ----------------
-def get_device_id() -> str:
+def get_device_id():
+    # Prefer server's integer device_id if we have it
+    if config.get("server_device_id"):
+        return config["server_device_id"]
+    
+    # Fall back to UUID for initial pairing
     try:
         if os.path.exists(DEVICE_ID_FILE):
             with open(DEVICE_ID_FILE, "r") as f:
@@ -392,8 +397,11 @@ def _claim_pair(code: str, hostname: str) -> Optional[str]:
         raw = http_post_json(PAIR_CLAIM, payload, {"Content-Type": "application/json"})
         data = json.loads(raw or b"{}")
         key = data.get("api_key")
+        server_device_id = data.get("device_id")  # Get server's integer device_id
         if key:
             config["api_key"] = key
+            if server_device_id:
+                config["server_device_id"] = server_device_id  # Save it!
             if "pair_code" in config:
                 del config["pair_code"]
             save_config(config)

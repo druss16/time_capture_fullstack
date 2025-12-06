@@ -25,7 +25,7 @@ from tkinter import ttk, messagebox, simpledialog
 try:
     import pystray
     from PIL import Image, ImageDraw
-    from pystray import MenuItem as Item
+    from pystray import MenuItem as Item, Menu
     TRAY_AVAILABLE = True
 except ImportError:
     TRAY_AVAILABLE = False
@@ -538,7 +538,7 @@ class TimeTrackerSystemTray:
             enabled=False
         ))
         
-        menu_items.append(Item.SEPARATOR)
+        menu_items.append(Menu.SEPARATOR)
         
         # Switch Client submenu
         client_items = [
@@ -554,13 +554,13 @@ class TimeTrackerSystemTray:
         
         menu_items.append(Item("Switch Client", pystray.Menu(*client_items)))
         
-        menu_items.append(Item.SEPARATOR)
+        menu_items.append(Menu.SEPARATOR)
         
         # Management options
         menu_items.append(Item("Manage Clients...", self._on_manage_clients))
         menu_items.append(Item("Today's Time...", self._on_today_time))
         
-        menu_items.append(Item.SEPARATOR)
+        menu_items.append(Menu.SEPARATOR)
         
         # Quit
         menu_items.append(Item("Quit", self._on_quit))

@@ -48,6 +48,22 @@ try:
 except ImportError:
     GUI_AVAILABLE = False
 
+
+# ---------------- Client Sync ----------------
+def get_current_client_from_backend(api_base, api_key):
+    """Fetch current client from Django API via HTTP"""
+    import urllib.request
+    import urllib.error
+    try:
+        url = f"{api_base.rstrip('/')}/devices/current-client/"
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"[CLIENT] Failed to get current client: {e}")
+        return None
+
 # ---------------- Config ----------------
 CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
@@ -545,7 +561,7 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
     conn.commit()
     
     # Get current client from backend
-    from tracker.utils.client_sync import get_current_client_from_backend
+    # Replaced with local function
     api_key = config.get("api_key") or API_KEY
     current_client_id = None
     current_client_name = None

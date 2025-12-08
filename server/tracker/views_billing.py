@@ -38,10 +38,8 @@ def get_monday(d):
 
 
 def get_membership(self, request):
-    """Get user's organization membership"""
     return OrganizationMembership.objects.filter(
-        user=request.user,
-        is_active=True
+        user=request.user
     ).select_related('organization').first()
 
 # ===============================
@@ -699,8 +697,7 @@ class EmployeeCostRateListView(APIView):
     def get_membership(self, request):
         """Get user's organization membership"""
         return OrganizationMembership.objects.filter(
-            user=request.user,
-            is_active=True
+            user=request.user
         ).select_related('organization').first()
     
     def get(self, request):
@@ -744,7 +741,6 @@ class EmployeeCostRateDetailView(APIView):
         """Get user's organization membership"""
         return OrganizationMembership.objects.filter(
             user=request.user,
-            is_active=True
         ).select_related('organization').first()
     
     def get_object(self, pk, org):
@@ -787,7 +783,6 @@ class ProfitabilityReportView(APIView):
         """Get user's organization membership"""
         return OrganizationMembership.objects.filter(
             user=request.user,
-            is_active=True
         ).select_related('organization').first()
     
     def get(self, request):
@@ -989,7 +984,6 @@ class TimesheetSubmitView(APIView):
     def get_membership(self, request):
         return OrganizationMembership.objects.filter(
             user=request.user,
-            is_active=True
         ).select_related('organization').first()
     
     def post(self, request, pk):
@@ -1052,7 +1046,6 @@ class TimesheetApproveView(APIView):
     def get_membership(self, request):
         return OrganizationMembership.objects.filter(
             user=request.user,
-            is_active=True
         ).select_related('organization').first()
     
     def post(self, request, pk):
@@ -1110,7 +1103,6 @@ class TimesheetRejectView(APIView):
     def get_membership(self, request):
         return OrganizationMembership.objects.filter(
             user=request.user,
-            is_active=True
         ).select_related('organization').first()
     
     def post(self, request, pk):
@@ -1166,7 +1158,6 @@ class TimesheetReopenView(APIView):
     def get_membership(self, request):
         return OrganizationMembership.objects.filter(
             user=request.user,
-            is_active=True
         ).select_related('organization').first()
     
     def post(self, request, pk):
@@ -1215,7 +1206,6 @@ class ApprovalQueueView(APIView):
     def get_membership(self, request):
         return OrganizationMembership.objects.filter(
             user=request.user,
-            is_active=True
         ).select_related('organization').first()
     
     def get(self, request):

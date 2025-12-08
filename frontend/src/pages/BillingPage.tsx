@@ -2,19 +2,17 @@
 // Main billing page with tabs for timesheet, approvals, and client summary
 
 import React, { useState } from 'react';
-import WeeklyTimesheet from '../components/WeeklyTimesheet';
-import ApprovalQueue from '../components/ApprovalQueue';
-import ClientSummary from '../components/ClientSummary';
+import { useAuth } from '@/auth/AuthProvider';
+import { API_BASE } from '@/lib/api';
+import WeeklyTimesheet from '@/components/WeeklyTimesheet';
+import ApprovalQueue from '@/components/ApprovalQueue';
+import ClientSummary from '@/components/ClientSummary';
 
 // ===============================
 // TYPES
 // ===============================
 
 type UserRole = 'owner' | 'admin' | 'manager' | 'member';
-
-interface BillingPageProps {
-  userRole?: UserRole;
-}
 
 interface Tab {
   id: string;
@@ -26,9 +24,12 @@ interface Tab {
 // MAIN COMPONENT
 // ===============================
 
-const BillingPage: React.FC<BillingPageProps> = ({ userRole = 'member' }) => {
+const BillingPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('timesheet');
+  const { user } = useAuth();
   
+  // Get role from auth - adjust property path based on your user object
+  const userRole = (user?.role || user?.membership?.role || 'member') as UserRole;
   const isManager = ['owner', 'admin', 'manager'].includes(userRole);
 
   const tabs: Tab[] = [
@@ -64,40 +65,38 @@ const BillingPage: React.FC<BillingPageProps> = ({ userRole = 'member' }) => {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="py-6">
-            <h1 className="text-2xl font-bold text-slate-800">Time & Billing</h1>
-            <p className="text-slate-500 mt-1">Track time, submit timesheets, and manage billing</p>
-          </div>
-          
-          {/* Tabs */}
-          <div className="flex gap-1">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-5 py-3 font-medium rounded-t-lg transition-colors ${
-                  activeTab === tab.id
-                    ? 'bg-slate-50 text-blue-600 border-t-2 border-x border-blue-500 border-slate-200 -mb-px'
-                    : 'text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                {tab.icon}
-                {tab.label}
-              </button>
-            ))}
-          </div>
+      <div>
+        <h1 className="text-2xl font-bold text-slate-800">Time & Billing</h1>
+        <p className="text-slate-500 mt-1">Track time, submit timesheets, and manage billing</p>
+      </div>
+      
+      {/* Tabs */}
+      <div className="border-b border-slate-200">
+        <div className="flex gap-1">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 px-5 py-3 font-medium rounded-t-lg transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-white text-blue-600 border-t-2 border-x border-blue-500 border-slate-200 -mb-px'
+                  : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {tab.icon}
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
       {/* Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'timesheet' && <WeeklyTimesheet />}
-        {activeTab === 'approvals' && isManager && <ApprovalQueue />}
-        {activeTab === 'billing' && isManager && <ClientSummary />}
+      <div>
+        {activeTab === 'timesheet' && <WeeklyTimesheet apiBase={API_BASE} />}
+        {activeTab === 'approvals' && isManager && <ApprovalQueue apiBase={API_BASE} />}
+        {activeTab === 'billing' && isManager && <ClientSummary apiBase={API_BASE} />}
       </div>
     </div>
   );

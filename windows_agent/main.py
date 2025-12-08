@@ -95,7 +95,7 @@ def _get(name, default=None, env=None):
     if env and os.getenv(env) is not None: return os.getenv(env)
     return default
 
-API_BASE = (_get("api_base", os.getenv("AGENT_API_BASE")) or "http://localhost:7123/api").rstrip("/")
+API_BASE = (_get("api_base", os.getenv("AGENT_API_BASE")) or "https://timetracker-api-k375.onrender.com/api").rstrip("/")
 POST_URL = _get("post_url", None) or f"{API_BASE}/raw-events/"
 HELLO_URL = _get("hello_url", None) or f"{API_BASE}/agents/hello2/"
 CONTROL_URL = _get("control_url", None) or f"{API_BASE}/agent/control/"

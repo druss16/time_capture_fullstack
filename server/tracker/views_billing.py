@@ -978,3 +978,289 @@ class ProfitabilityReportView(APIView):
                 'margin_percent': total_margin_pct,
             }
         })
+
+class TimesheetSubmitView(APIView):
+    """
+    POST /api/billing/timesheets/<id>/submit/
+    Submit a draft timesheet for approval - LINKS all blocks for that week
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_membership(self, request):
+        return OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+    
+    def post(self, request, pk):
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        # Get the timesheet - must belong to current user
+        timesheet = get_object_or_404(
+            Timesheet,
+            pk=pk,
+            organization=membership.organization,
+            user=request.user
+        )
+        
+        if timesheet.status != 'draft':
+            return Response({
+                'error': f'Cannot submit timesheet with status "{timesheet.status}". Only draft timesheets can be submitted.'
+            }, status=400)
+        
+        # Calculate week end (week_start is Monday, week_end is Sunday)
+        week_end = timesheet.week_start + timedelta(days=6)
+        
+        # ✅ LINK ALL BLOCKS FOR THIS WEEK TO THE TIMESHEET
+        blocks_updated = Block.objects.filter(
+            user=request.user,
+            org=membership.organization,  # Your model uses 'org' not 'organization'
+            start__date__gte=timesheet.week_start,
+            start__date__lte=week_end,
+        ).update(timesheet=timesheet)
+        
+        # Update timesheet status
+        timesheet.status = 'submitted'
+        timesheet.submitted_at = timezone.now()
+        timesheet.notes = request.data.get('notes', '')
+        timesheet.save()
+        
+        # Calculate totals for response
+        blocks = Block.objects.filter(timesheet=timesheet)
+        total_hours = sum(b.minutes or 0 for b in blocks) / 60
+        billable_hours = sum(b.minutes or 0 for b in blocks if b.is_billable) / 60
+        
+        return Response({
+            'id': timesheet.id,
+            'status': 'submitted',
+            'submitted_at': timesheet.submitted_at.isoformat(),
+            'blocks_linked': blocks_updated,
+            'total_hours': round(total_hours, 2),
+            'billable_hours': round(billable_hours, 2),
+        })
+
+
+class TimesheetApproveView(APIView):
+    """
+    POST /api/billing/timesheets/<id>/approve/
+    Manager approves a submitted timesheet
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_membership(self, request):
+        return OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+    
+    def post(self, request, pk):
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        # Only managers/admins/owners can approve
+        if membership.role not in ['owner', 'admin', 'manager']:
+            return Response({'error': 'Permission denied. Must be manager or above.'}, status=403)
+        
+        timesheet = get_object_or_404(
+            Timesheet,
+            pk=pk,
+            organization=membership.organization
+        )
+        
+        if timesheet.status != 'submitted':
+            return Response({
+                'error': f'Cannot approve timesheet with status "{timesheet.status}". Only submitted timesheets can be approved.'
+            }, status=400)
+        
+        # Cannot approve your own timesheet (optional business rule)
+        # if timesheet.user == request.user:
+        #     return Response({'error': 'Cannot approve your own timesheet'}, status=400)
+        
+        # Approve the timesheet
+        timesheet.status = 'approved'
+        timesheet.approved_at = timezone.now()
+        timesheet.approved_by = request.user
+        timesheet.save()
+        
+        # Optionally mark all blocks as approved too
+        Block.objects.filter(timesheet=timesheet).update(
+            approved=True,
+            approved_at=timezone.now(),
+            approved_by=request.user
+        )
+        
+        return Response({
+            'id': timesheet.id,
+            'status': 'approved',
+            'approved_at': timesheet.approved_at.isoformat(),
+            'approved_by': request.user.username,
+        })
+
+
+class TimesheetRejectView(APIView):
+    """
+    POST /api/billing/timesheets/<id>/reject/
+    Manager rejects a submitted timesheet with reason
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_membership(self, request):
+        return OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+    
+    def post(self, request, pk):
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        # Only managers/admins/owners can reject
+        if membership.role not in ['owner', 'admin', 'manager']:
+            return Response({'error': 'Permission denied. Must be manager or above.'}, status=403)
+        
+        timesheet = get_object_or_404(
+            Timesheet,
+            pk=pk,
+            organization=membership.organization
+        )
+        
+        if timesheet.status != 'submitted':
+            return Response({
+                'error': f'Cannot reject timesheet with status "{timesheet.status}". Only submitted timesheets can be rejected.'
+            }, status=400)
+        
+        # Reason is required
+        reason = request.data.get('reason', '').strip()
+        if not reason:
+            return Response({'error': 'Rejection reason is required'}, status=400)
+        
+        # Reject the timesheet
+        timesheet.status = 'rejected'
+        timesheet.rejection_reason = reason
+        timesheet.rejected_at = timezone.now()
+        timesheet.rejected_by = request.user
+        timesheet.save()
+        
+        # Unlink blocks so they can be edited (set timesheet back to null)
+        Block.objects.filter(timesheet=timesheet).update(timesheet=None)
+        
+        return Response({
+            'id': timesheet.id,
+            'status': 'rejected',
+            'rejection_reason': reason,
+            'rejected_by': request.user.username,
+        })
+
+
+class TimesheetReopenView(APIView):
+    """
+    POST /api/billing/timesheets/<id>/reopen/
+    Employee reopens a rejected timesheet to make edits
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_membership(self, request):
+        return OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+    
+    def post(self, request, pk):
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        # Get timesheet - must belong to current user
+        timesheet = get_object_or_404(
+            Timesheet,
+            pk=pk,
+            organization=membership.organization,
+            user=request.user
+        )
+        
+        if timesheet.status != 'rejected':
+            return Response({
+                'error': f'Cannot reopen timesheet with status "{timesheet.status}". Only rejected timesheets can be reopened.'
+            }, status=400)
+        
+        # Reopen as draft
+        timesheet.status = 'draft'
+        timesheet.rejection_reason = None
+        timesheet.rejected_at = None
+        timesheet.rejected_by = None
+        timesheet.save()
+        
+        return Response({
+            'id': timesheet.id,
+            'status': 'draft',
+            'message': 'Timesheet reopened. You can now make edits and resubmit.'
+        })
+
+
+# ============================================================================
+# UPDATE ApprovalQueueView to calculate hours from linked blocks
+# ============================================================================
+
+class ApprovalQueueView(APIView):
+    """
+    GET /api/billing/approval-queue/
+    Get all submitted timesheets pending approval
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_membership(self, request):
+        return OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+    
+    def get(self, request):
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        # Only managers/admins/owners can view queue
+        if membership.role not in ['owner', 'admin', 'manager']:
+            return Response({'error': 'Permission denied'}, status=403)
+        
+        # Get submitted timesheets
+        timesheets = Timesheet.objects.filter(
+            organization=membership.organization,
+            status='submitted'
+        ).select_related('user').order_by('submitted_at')
+        
+        result = []
+        for ts in timesheets:
+            # ✅ Calculate hours from LINKED blocks
+            blocks = Block.objects.filter(timesheet=ts)
+            
+            total_minutes = sum(b.minutes or 0 for b in blocks)
+            billable_minutes = sum(b.minutes or 0 for b in blocks if b.is_billable)
+            total_amount = sum(float(b.billing_amount or 0) for b in blocks if b.is_billable)
+            
+            # Calculate days pending
+            days_pending = 0
+            if ts.submitted_at:
+                days_pending = (timezone.now() - ts.submitted_at).days
+            
+            result.append({
+                'id': ts.id,
+                'user_id': ts.user_id,
+                'user_name': f"{ts.user.first_name} {ts.user.last_name}".strip() or ts.user.username,
+                'user_email': ts.user.email,
+                'week_start': ts.week_start.isoformat(),
+                'week_end': (ts.week_start + timedelta(days=6)).isoformat(),
+                'status': ts.status,
+                'submitted_at': ts.submitted_at.isoformat() if ts.submitted_at else None,
+                'days_pending': days_pending,
+                'notes': ts.notes or '',
+                'total_hours': round(total_minutes / 60, 2),
+                'billable_hours': round(billable_minutes / 60, 2),
+                'total_amount': round(total_amount, 2),
+            })
+        
+        return Response(result)

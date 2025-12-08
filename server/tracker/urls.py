@@ -173,6 +173,12 @@ urlpatterns = [
     # Profitability Report
     path('billing/profitability/', views_billing.ProfitabilityReportView.as_view(), name='profitability-report'),
 
+    path('billing/timesheets/<int:pk>/submit/', views_billing.TimesheetSubmitView.as_view(), name='timesheet-submit'),
+    path('billing/timesheets/<int:pk>/approve/', views_billing.TimesheetApproveView.as_view(), name='timesheet-approve'),
+    path('billing/timesheets/<int:pk>/reject/', views_billing.TimesheetRejectView.as_view(), name='timesheet-reject'),
+    path('billing/timesheets/<int:pk>/reopen/', views_billing.TimesheetReopenView.as_view(), name='timesheet-reopen'),
+    path('billing/approval-queue/', views_billing.ApprovalQueueView.as_view(), name='approval-queue'),
+
 
     # -------------------------------
     # Router URLs (ViewSets)

@@ -1,10 +1,11 @@
 /**
- * Settings.tsx — Org Admin Settings Page with Role Management
+ * Settings.tsx — Org Admin Settings Page with Role Management & Billing Rates
  * 
  * Tabs:
  * - Organization Info (name, billing contact)
  * - Team Members (view users, invite new, manage roles)
  * - Clients (add/edit/delete)
+ * - Billing Rates (hourly rates per user/client)
  * - Registered Devices (see who's tracking)
  * - Install Token (view/regenerate for IT)
  */
@@ -31,6 +32,7 @@ import {
   UserPlus,
   Eye,
   EyeOff,
+  DollarSign,
 } from "lucide-react";
 import { Header } from "@/components/common/Header";
 import { DESIGN_SYSTEM } from "@/lib/design-system";
@@ -55,7 +57,7 @@ type TeamMember = {
   first_name: string;
   last_name: string;
   is_active: boolean;
-  role: 'owner' | 'admin' | 'manager' | 'member';  // ✅ Changed from is_admin
+  role: 'owner' | 'admin' | 'manager' | 'member';
   last_login: string | null;
   date_joined: string;
 };
@@ -87,7 +89,21 @@ type InstallToken = {
   is_active: boolean;
 };
 
-type Tab = 'organization' | 'team' | 'clients' | 'devices' | 'token';
+type BillingRate = {
+  id: number;
+  user: number | null;
+  user_name: string;
+  client: number | null;
+  client_name: string;
+  task_type: number | null;
+  task_type_name: string;
+  hourly_rate: string;
+  effective_date: string;
+  end_date: string | null;
+  is_default: boolean;
+};
+
+type Tab = 'organization' | 'team' | 'clients' | 'billing' | 'devices' | 'token';
 
 // ============================================================================
 // Component
@@ -104,8 +120,9 @@ export default function Settings() {
   const [clients, setClients] = useState<Client[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [installToken, setInstallToken] = useState<InstallToken | null>(null);
+  const [billingRates, setBillingRates] = useState<BillingRate[]>([]);
   
-  // ✅ NEW: Track current user
+  // Track current user
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<string>('member');
 
@@ -120,7 +137,7 @@ export default function Settings() {
     setTimeout(() => setError(null), 5000);
   };
 
-  // ✅ NEW: Load current user info
+  // Load current user info
   useEffect(() => {
     const loadUserInfo = async () => {
       try {
@@ -146,7 +163,6 @@ export default function Settings() {
         case 'team':
           const team = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`);
           setTeamMembers(team || []);
-          // ✅ NEW: Determine current user's role
           if (currentUserId) {
             const myMembership = team.find((m: TeamMember) => m.id === currentUserId);
             if (myMembership) {
@@ -157,6 +173,17 @@ export default function Settings() {
         case 'clients':
           const clientList = await safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`);
           setClients(clientList || []);
+          break;
+        case 'billing':
+          const rates = await safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`);
+          setBillingRates(rates || []);
+          // Also load clients and team for dropdowns
+          const [clientsForRates, teamForRates] = await Promise.all([
+            safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
+            safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
+          ]);
+          setClients(clientsForRates || []);
+          setTeamMembers(teamForRates || []);
           break;
         case 'devices':
           const deviceList = await safeFetchJson<Device[]>(`${API_BASE}/settings/devices/`);
@@ -183,6 +210,7 @@ export default function Settings() {
     { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
     { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
     { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
+    { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" /> },
     { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
     { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
   ];
@@ -262,6 +290,16 @@ export default function Settings() {
                     <ClientsTab
                       clients={clients}
                       onRefresh={() => loadTabData('clients')}
+                      onSuccess={showSuccess}
+                      onError={showError}
+                    />
+                  )}
+                  {activeTab === 'billing' && (
+                    <BillingRatesTab
+                      rates={billingRates}
+                      users={teamMembers}
+                      clients={clients}
+                      onRefresh={() => loadTabData('billing')}
                       onSuccess={showSuccess}
                       onError={showError}
                     />
@@ -437,7 +475,7 @@ function OrganizationTab({
 }
 
 // ============================================================================
-// Team Tab with Role Management ✅ UPDATED
+// Team Tab with Role Management
 // ============================================================================
 function TeamTab({
   members,
@@ -468,7 +506,6 @@ function TeamTab({
         body: JSON.stringify({ email: inviteEmail }),
       });
       
-      // Show temp password if email failed
       if (response.temp_password && !response.email_sent) {
         alert(`User created!\n\nUsername: ${response.username}\nTemp Password: ${response.temp_password}\n\nPlease share these credentials with the user.`);
       }
@@ -484,7 +521,6 @@ function TeamTab({
     }
   };
 
-  // ✅ NEW: Role management handlers
   const handlePromote = async (userId: number, username: string) => {
     if (!confirm(`Promote ${username} to admin? They will be able to manage settings and team members.`)) return;
     try {
@@ -554,7 +590,6 @@ function TeamTab({
     return date.toLocaleDateString();
   };
 
-  // ✅ NEW: Role badge helper
   const getRoleBadge = (role: string) => {
     switch (role) {
       case 'owner':
@@ -588,7 +623,6 @@ function TeamTab({
         </button>
       </div>
 
-      {/* Invite Modal */}
       {showInvite && (
         <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
           <h3 className="font-medium mb-3">Invite Team Member</h3>
@@ -618,7 +652,6 @@ function TeamTab({
         </div>
       )}
 
-      {/* Team List */}
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full">
           <thead className="bg-muted/50">
@@ -665,7 +698,6 @@ function TeamTab({
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
-                      {/* Promote to Manager (for members) */}
                       {canSetManager && (
                         <button
                           onClick={() => handleSetManager(member.id, member.username)}
@@ -676,7 +708,6 @@ function TeamTab({
                         </button>
                       )}
                       
-                      {/* Promote to Admin (for members & managers) */}
                       {canModify && (member.role === 'member' || member.role === 'manager') && (
                         <button
                           onClick={() => handlePromote(member.id, member.username)}
@@ -687,7 +718,6 @@ function TeamTab({
                         </button>
                       )}
                       
-                      {/* Demote Admin */}
                       {canModify && member.role === 'admin' && (
                         <button
                           onClick={() => handleDemote(member.id, member.username, 'member')}
@@ -698,7 +728,6 @@ function TeamTab({
                         </button>
                       )}
                       
-                      {/* Remove (not for owners or yourself) */}
                       {!isCurrentUser && member.role !== 'owner' && (
                         <button
                           onClick={() => handleRemove(member.id, member.username)}
@@ -722,7 +751,6 @@ function TeamTab({
         )}
       </div>
       
-      {/* ✅ NEW: Role Legend */}
       <div className="mt-4 p-3 bg-muted/30 rounded-lg">
         <div className="text-xs text-muted-foreground space-y-1">
           <p><span className="inline-block px-2 py-0.5 rounded bg-purple-100 text-purple-800 font-medium">Owner</span> — Full control, manage admins</p>
@@ -824,7 +852,6 @@ function ClientsTab({
         </button>
       </div>
 
-      {/* Add/Edit Form */}
       {showAdd && (
         <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
           <h3 className="font-medium mb-3">{editingId ? 'Edit Client' : 'Add Client'}</h3>
@@ -870,7 +897,6 @@ function ClientsTab({
         </div>
       )}
 
-      {/* Clients List */}
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full">
           <thead className="bg-muted/50">
@@ -926,6 +952,258 @@ function ClientsTab({
             No clients yet. Add your first client to get started.
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Billing Rates Tab (NEW)
+// ============================================================================
+function BillingRatesTab({
+  rates,
+  users,
+  clients,
+  onRefresh,
+  onSuccess,
+  onError,
+}: {
+  rates: BillingRate[];
+  users: TeamMember[];
+  clients: Client[];
+  onRefresh: () => void;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    user: '',
+    client: '',
+    hourly_rate: '150.00',
+    effective_date: new Date().toISOString().split('T')[0],
+  });
+
+  const resetForm = () => {
+    setForm({
+      user: '',
+      client: '',
+      hourly_rate: '150.00',
+      effective_date: new Date().toISOString().split('T')[0],
+    });
+    setShowAdd(false);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await safeFetchJson(`${API_BASE}/billing/rates/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: form.user || null,
+          client: form.client || null,
+          hourly_rate: form.hourly_rate,
+          effective_date: form.effective_date,
+        }),
+      });
+      onSuccess('Rate added');
+      resetForm();
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (rateId: number) => {
+    if (!confirm('Delete this billing rate?')) return;
+    try {
+      await safeFetchJson(`${API_BASE}/billing/rates/${rateId}/`, {
+        method: 'DELETE',
+      });
+      onSuccess('Rate deleted');
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to delete');
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-semibold flex items-center gap-2">
+          <DollarSign className="w-5 h-5 text-primary" />
+          Billing Rates
+          <span className="text-sm font-normal text-muted-foreground">({rates.length})</span>
+        </h2>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          Add Rate
+        </button>
+      </div>
+
+      {/* Rate Priority Info */}
+      <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <h4 className="font-medium text-blue-800 mb-2">Rate Priority (highest to lowest):</h4>
+        <ol className="text-sm text-blue-700 space-y-1 list-decimal list-inside">
+          <li>User + Client specific rate (e.g., "John at Acme Corp = $200/hr")</li>
+          <li>Client specific rate (e.g., "Any user at Acme Corp = $175/hr")</li>
+          <li>User default rate (e.g., "John = $150/hr everywhere")</li>
+          <li>Organization default rate (no user, no client selected)</li>
+        </ol>
+      </div>
+
+      {/* Add Rate Form */}
+      {showAdd && (
+        <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
+          <h3 className="font-medium mb-4">Add Billing Rate</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1.5">
+                User <span className="text-muted-foreground font-normal">(blank = all users)</span>
+              </label>
+              <select
+                value={form.user}
+                onChange={(e) => setForm({ ...form, user: e.target.value })}
+                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                <option value="">All Users (Default)</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.first_name} {u.last_name || u.username}
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1.5">
+                Client <span className="text-muted-foreground font-normal">(blank = all clients)</span>
+              </label>
+              <select
+                value={form.client}
+                onChange={(e) => setForm({ ...form, client: e.target.value })}
+                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                <option value="">All Clients (Default)</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Hourly Rate ($)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.hourly_rate}
+                onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}
+                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Effective Date</label>
+              <input
+                type="date"
+                value={form.effective_date}
+                onChange={(e) => setForm({ ...form, effective_date: e.target.value })}
+                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+          </div>
+          
+          <div className="flex gap-2 mt-4">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
+            >
+              {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              Save Rate
+            </button>
+            <button
+              onClick={resetForm}
+              className="px-4 py-2 border border-border rounded-lg font-medium hover:bg-accent"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Rates Table */}
+      <div className="border border-border rounded-lg overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-muted/50">
+            <tr>
+              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">User</th>
+              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Client</th>
+              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Rate/Hour</th>
+              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Effective</th>
+              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {rates.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="text-center py-8 text-muted-foreground">
+                  No billing rates configured yet. Add your first rate to enable billing calculations.
+                </td>
+              </tr>
+            ) : (
+              rates.map((rate) => (
+                <tr key={rate.id} className="hover:bg-accent/30">
+                  <td className="px-4 py-3">
+                    {rate.user_name || (
+                      <span className="text-muted-foreground italic">All Users</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {rate.client_name || (
+                      <span className="text-muted-foreground italic">All Clients</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="font-semibold text-green-600">
+                      ${parseFloat(rate.hourly_rate).toFixed(2)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    {new Date(rate.effective_date).toLocaleDateString()}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => handleDelete(rate.id)}
+                      className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Example Setup */}
+      <div className="mt-6 p-4 bg-muted/30 rounded-lg">
+        <h4 className="font-medium text-sm mb-2">Example Rate Setup:</h4>
+        <div className="text-xs text-muted-foreground space-y-1">
+          <p>• <strong>Organization Default:</strong> User = blank, Client = blank, Rate = $150/hr</p>
+          <p>• <strong>Senior Staff:</strong> User = "John Smith", Client = blank, Rate = $200/hr</p>
+          <p>• <strong>Premium Client:</strong> User = blank, Client = "Acme Corp", Rate = $175/hr</p>
+          <p>• <strong>Specific Combo:</strong> User = "John Smith", Client = "Acme Corp", Rate = $225/hr</p>
+        </div>
       </div>
     </div>
   );
@@ -1046,7 +1324,6 @@ function DevicesTab({
         )}
       </div>
 
-      {/* Legend */}
       <div className="flex items-center gap-4 mt-4 text-xs text-muted-foreground">
         <div className="flex items-center gap-1.5">
           <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
@@ -1174,7 +1451,6 @@ function TokenTab({
         )}
       </div>
 
-      {/* MDM Instructions */}
       <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
         <h3 className="font-medium text-blue-900 mb-2">MDM Deployment Instructions</h3>
         <ol className="text-sm text-blue-800 space-y-1.5 list-decimal list-inside">

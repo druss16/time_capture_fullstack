@@ -2,6 +2,7 @@
 // Manager/billing view - hours and amounts by client for invoicing
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson, API_BASE } from '@/lib/api';
 
 // ===============================
 // TYPES
@@ -57,7 +58,7 @@ interface Filters {
 }
 
 interface ClientSummaryProps {
-  apiBase?: string;
+  // No props needed - uses API_BASE from lib/api
 }
 
 interface DateRangePickerProps {
@@ -301,7 +302,7 @@ const ClientCard: React.FC<ClientCardProps> = ({ client, expanded, onToggle, onC
 // MAIN COMPONENT
 // ===============================
 
-const ClientSummary: React.FC<ClientSummaryProps> = ({ apiBase = '/api' }) => {
+const ClientSummary: React.FC<ClientSummaryProps> = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [summaryData, setSummaryData] = useState<SummaryData | null>(null);
@@ -335,20 +336,16 @@ const ClientSummary: React.FC<ClientSummaryProps> = ({ apiBase = '/api' }) => {
         only_billable: String(filters.onlyBillable),
       });
       
-      const response = await fetch(`${apiBase}/billing/client-summary/?${params}`, {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const data: SummaryData = await response.json();
+      const data = await safeFetchJson<SummaryData>(
+        `${API_BASE}/billing/client-summary/?${params}`
+      );
       setSummaryData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
-  }, [apiBase, dateRange, filters]);
+  }, [dateRange, filters]);
 
   useEffect(() => {
     fetchSummary();

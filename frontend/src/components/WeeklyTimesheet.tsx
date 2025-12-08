@@ -2,6 +2,7 @@
 // Professional weekly timesheet grid for CPA firms
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson, API_BASE } from '@/lib/api';
 
 // ===============================
 // TYPES
@@ -36,7 +37,7 @@ interface DayHeader {
 }
 
 interface WeeklyTimesheetProps {
-  apiBase?: string;
+  // No props needed - uses API_BASE from lib/api
 }
 
 interface TimeCellProps {
@@ -184,7 +185,7 @@ const TimeCell: React.FC<TimeCellProps> = ({ value, onChange, disabled, isTotal 
 // MAIN COMPONENT
 // ===============================
 
-const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ apiBase = '/api' }) => {
+const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [weekStart, setWeekStart] = useState<string>(() => {
@@ -201,20 +202,16 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ apiBase = '/api' }) =
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/billing/weekly/?week_start=${weekStart}`, {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const data: TimesheetData = await response.json();
+      const data = await safeFetchJson<TimesheetData>(
+        `${API_BASE}/billing/weekly/?week_start=${weekStart}`
+      );
       setTimesheetData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
-  }, [apiBase, weekStart]);
+  }, [weekStart]);
 
   useEffect(() => {
     fetchTimesheet();
@@ -238,16 +235,13 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ apiBase = '/api' }) =
     
     setSubmitting(true);
     try {
-      const response = await fetch(`${apiBase}/billing/timesheets/${timesheetData.timesheet_id}/submit/`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: submitNotes }),
-      });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Submit failed');
-      }
+      await safeFetchJson(
+        `${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/submit/`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ notes: submitNotes }),
+        }
+      );
       setShowSubmitModal(false);
       setSubmitNotes('');
       fetchTimesheet();
@@ -263,14 +257,10 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ apiBase = '/api' }) =
     if (!timesheetData?.timesheet_id) return;
     
     try {
-      const response = await fetch(`${apiBase}/billing/timesheets/${timesheetData.timesheet_id}/reopen/`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Reopen failed');
-      }
+      await safeFetchJson(
+        `${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/reopen/`,
+        { method: 'POST' }
+      );
       fetchTimesheet();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');

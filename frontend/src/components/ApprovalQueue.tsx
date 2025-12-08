@@ -2,6 +2,7 @@
 // Manager dashboard for reviewing and approving timesheets
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson, API_BASE } from '@/lib/api';
 
 // ===============================
 // TYPES
@@ -29,7 +30,7 @@ interface QueueData {
 }
 
 interface ApprovalQueueProps {
-  apiBase?: string;
+  // No props needed - uses API_BASE from lib/api
 }
 
 interface TimesheetCardProps {
@@ -262,7 +263,7 @@ const TimesheetCard: React.FC<TimesheetCardProps> = ({ timesheet, onApprove, onR
 // MAIN COMPONENT
 // ===============================
 
-const ApprovalQueue: React.FC<ApprovalQueueProps> = ({ apiBase = '/api' }) => {
+const ApprovalQueue: React.FC<ApprovalQueueProps> = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [queueData, setQueueData] = useState<QueueData>({ count: 0, timesheets: [] });
@@ -272,23 +273,18 @@ const ApprovalQueue: React.FC<ApprovalQueueProps> = ({ apiBase = '/api' }) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/billing/approval-queue/`, {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error('You do not have permission to view the approval queue');
-        }
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const data: QueueData = await response.json();
+      const data = await safeFetchJson<QueueData>(`${API_BASE}/billing/approval-queue/`);
       setQueueData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      if (err instanceof Error && err.message.includes('403')) {
+        setError('You do not have permission to view the approval queue');
+      } else {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiBase]);
+  }, []);
 
   useEffect(() => {
     fetchQueue();
@@ -301,16 +297,13 @@ const ApprovalQueue: React.FC<ApprovalQueueProps> = ({ apiBase = '/api' }) => {
 
   const handleApprove = async (timesheetId: number): Promise<void> => {
     try {
-      const response = await fetch(`${apiBase}/billing/timesheets/${timesheetId}/approve/`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: '' }),
-      });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Approval failed');
-      }
+      await safeFetchJson(
+        `${API_BASE}/billing/timesheets/${timesheetId}/approve/`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ notes: '' }),
+        }
+      );
       showSuccess('Timesheet approved successfully');
       fetchQueue();
     } catch (err) {
@@ -320,16 +313,13 @@ const ApprovalQueue: React.FC<ApprovalQueueProps> = ({ apiBase = '/api' }) => {
 
   const handleReject = async (timesheetId: number, reason: string): Promise<void> => {
     try {
-      const response = await fetch(`${apiBase}/billing/timesheets/${timesheetId}/reject/`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason }),
-      });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Rejection failed');
-      }
+      await safeFetchJson(
+        `${API_BASE}/billing/timesheets/${timesheetId}/reject/`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ reason }),
+        }
+      );
       showSuccess('Timesheet rejected');
       fetchQueue();
     } catch (err) {

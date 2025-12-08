@@ -3,7 +3,6 @@
 
 import React, { useState } from 'react';
 import { useAuth } from '@/auth/AuthProvider';
-import { API_BASE } from '@/lib/api';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
@@ -94,9 +93,9 @@ const BillingPage: React.FC = () => {
 
       {/* Content */}
       <div>
-        {activeTab === 'timesheet' && <WeeklyTimesheet apiBase={API_BASE} />}
-        {activeTab === 'approvals' && isManager && <ApprovalQueue apiBase={API_BASE} />}
-        {activeTab === 'billing' && isManager && <ClientSummary apiBase={API_BASE} />}
+        {activeTab === 'timesheet' && <WeeklyTimesheet />}
+        {activeTab === 'approvals' && isManager && <ApprovalQueue />}
+        {activeTab === 'billing' && isManager && <ClientSummary />}
       </div>
     </div>
   );

@@ -15,7 +15,7 @@ import { AuthProvider, useAuth } from "@/auth/AuthProvider";
 import PairDeviceModal from "@/components/agent/PairDeviceModal";
 import Navigation from "@/components/Navigation";
 import ProtectedRoute from "@/routes/ProtectedRoute";
-import AdminRoute from "@/routes/AdminRoute";  // ✅ Add AdminRoute import
+import AdminRoute from "@/routes/AdminRoute";
 
 // Client management components
 import { ClientList } from '@/components/clients/ClientList';
@@ -27,15 +27,16 @@ import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 const DailyReview = lazy(() => import("./DailyReview"));
 const TimecardReview = lazy(() => import("./TimecardReview"));
 const TimecardSummary = lazy(() => import("./TimecardSummary"));
-const OrgAdminSettings = lazy(() => import("./Settings"));  // ← The new one I created
-const OrganizationSettings = lazy(() => import("./OrganizationSettings")); // ← Your existing AI settings
+const OrgAdminSettings = lazy(() => import("./Settings"));
+const OrganizationSettings = lazy(() => import("./OrganizationSettings"));
 const Devices = lazy(() => import("./Devices"));
 const Login = lazy(() => import("./Login"));
 const Signup = lazy(() => import("./Signup"));
 const NotFound = lazy(() => import("./NotFound"));
-
-// ✅ NEW: TimeReview for hybrid categorization
 const TimeReview = lazy(() => import("./TimeReview"));
+
+// ✅ NEW: Billing page with timesheets, approvals, and client billing
+const BillingPage = lazy(() => import("./BillingPage"));
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
@@ -139,8 +140,20 @@ export default function App() {
                     </MaybeProtected>
                   }
                 />
+
+                {/* ✅ NEW: Billing - Timesheets, Approvals, Client Billing */}
+                <Route
+                  path="/billing"
+                  element={
+                    <MaybeProtected>
+                      <AppLayout>
+                        <BillingPage />
+                      </AppLayout>
+                    </MaybeProtected>
+                  }
+                />
                 
-                {/* ✅ Admin Settings - Team, Clients, Devices, Billing (ADMIN ONLY) */}
+                {/* Admin Settings - Team, Clients, Devices, Billing (ADMIN ONLY) */}
                 <Route
                   path="/settings"
                   element={
@@ -154,7 +167,7 @@ export default function App() {
                   }
                 />
 
-                {/* ✅ AI Classification Settings (ADMIN ONLY) */}
+                {/* AI Classification Settings (ADMIN ONLY) */}
                 <Route
                   path="/settings/ai"
                   element={
@@ -179,7 +192,7 @@ export default function App() {
                   }
                 />
 
-                {/* ✅ NEW: Time Review (Hybrid Categorization) */}
+                {/* Time Review (Hybrid Categorization) */}
                 <Route
                   path="/time-review"
                   element={

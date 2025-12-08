@@ -20,6 +20,21 @@ from .serializers_billing import (
 )
 
 
+def get_user_org(user):
+    """Get the user's Organization from OrganizationMembership."""
+    try:
+        membership = OrganizationMembership.objects.filter(user=user).first()
+        if membership:
+            return membership.organization
+        return None
+    except Exception as e:
+        print(f"Error in get_user_org: {e}")
+        return None
+
+def get_monday(d):
+    """Get Monday of the week containing date d"""
+    return d - timedelta(days=d.weekday())
+
 # ===============================
 # BILLING RATES VIEWSET
 # ===============================

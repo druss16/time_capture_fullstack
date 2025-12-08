@@ -88,6 +88,8 @@ def save_config(cfg: dict):
         print(f"[WARN] Failed to save {CONFIG_FILE}: {e}")
 
 config = load_config()
+print(f"[DEBUG] Config loaded: {config}")
+print(f"[DEBUG] server_device_id = {config.get('server_device_id')}")
 
 # Tunables
 def _get(name, default=None, env=None):
@@ -358,8 +360,11 @@ def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, st
 # ---------------- Device Identity ----------------
 def get_device_id():
     # Prefer server's integer device_id if we have it
+    print(f"[DEBUG get_device_id] config.get('server_device_id') = {config.get('server_device_id')}")
     if config.get("server_device_id"):
+        print(f"[DEBUG get_device_id] Returning server_device_id: {config['server_device_id']}")
         return config["server_device_id"]
+    print("[DEBUG get_device_id] Falling back to UUID file")
     
     # Fall back to UUID for initial pairing
     try:

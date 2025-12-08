@@ -6819,7 +6819,6 @@ class CurrentMembershipView(APIView):
     def get(self, request):
         membership = OrganizationMembership.objects.filter(
             user=request.user,
-            is_active=True
         ).select_related('organization').first()
         
         if not membership:

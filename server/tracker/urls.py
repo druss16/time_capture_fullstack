@@ -27,12 +27,12 @@ urlpatterns = [
     # -------------------------------
     # Client Selection (Agent)
     # -------------------------------
-    path("client/set-current", views.set_current_client, name="set_current_client"),
-    path("client/current", views.get_current_client, name="get_current_client"),
-    path("clients/list", views.list_clients, name="list_clients"),
-    path("context/guess", views.context_guess, name="context_guess"),
-    path("context/confirm", views.context_confirm, name="context_confirm"),
-    path("context/reject", views.context_reject, name="context_reject"),
+    path("client/set-current/", views.set_current_client, name="set_current_client"),
+    path("client/current/", views.get_current_client, name="get_current_client"),
+    path("clients/list/", views.list_clients, name="list_clients"),
+    path("context/guess/", views.context_guess, name="context_guess"),
+    path("context/confirm/", views.context_confirm, name="context_confirm"),
+    path("context/reject/", views.context_reject, name="context_reject"),
 
     # -------------------------------
     # Manual Categorization (Legacy)

@@ -1193,18 +1193,21 @@ class ApprovalQueueView(APIView):
             return Response({'error': 'Permission denied'}, status=403)
         
         timesheets = Timesheet.objects.filter(
-            org=membership.organization,  # ← Use 'org'
+            org=membership.organization,
             status='submitted'
         ).select_related('user').order_by('submitted_at')
         
         result = []
         for ts in timesheets:
+            # Get linked blocks
             blocks = Block.objects.filter(timesheet=ts)
             
+            # Calculate hours from minutes
             total_minutes = sum(b.minutes or 0 for b in blocks)
             billable_minutes = sum(b.minutes or 0 for b in blocks if b.is_billable)
             total_amount = sum(float(b.billing_amount or 0) for b in blocks if b.is_billable)
             
+            # Days pending
             days_pending = 0
             if ts.submitted_at:
                 days_pending = (timezone.now() - ts.submitted_at).days
@@ -1219,10 +1222,10 @@ class ApprovalQueueView(APIView):
                 'status': ts.status,
                 'submitted_at': ts.submitted_at.isoformat() if ts.submitted_at else None,
                 'days_pending': days_pending,
-                'notes': ts.submitted_notes or '',  # ← Use 'submitted_notes'
-                'total_hours': round(total_minutes / 60, 2),
-                'billable_hours': round(billable_minutes / 60, 2),
-                'total_amount': round(total_amount, 2),
+                'notes': ts.submitted_notes or '',
+                'total_hours': round(total_minutes / 60, 2),  # ← Make sure this is here
+                'billable_hours': round(billable_minutes / 60, 2),  # ← And this
+                'total_amount': round(total_amount, 2),  # ← And this
             })
         
         return Response(result)

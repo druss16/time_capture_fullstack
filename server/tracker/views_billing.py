@@ -36,6 +36,14 @@ def get_monday(d):
     """Get Monday of the week containing date d"""
     return d - timedelta(days=d.weekday())
 
+
+def get_membership(self, request):
+    """Get user's organization membership"""
+    return OrganizationMembership.objects.filter(
+        user=request.user,
+        is_active=True
+    ).select_related('organization').first()
+
 # ===============================
 # BILLING RATES VIEWSET
 # ===============================
@@ -677,6 +685,10 @@ from decimal import Decimal
 from django.db.models import Sum, F, Q
 from django.db.models.functions import Coalesce
 
+# ============================================================================
+# REPLACE the EmployeeCostRate views in views_billing.py with these:
+# ============================================================================
+
 class EmployeeCostRateListView(APIView):
     """
     GET: List all employee cost rates for org
@@ -684,22 +696,39 @@ class EmployeeCostRateListView(APIView):
     """
     permission_classes = [IsAuthenticated]
     
+    def get_membership(self, request):
+        """Get user's organization membership"""
+        return OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+    
     def get(self, request):
-        org = request.membership.organization
-        rates = EmployeeCostRate.objects.filter(organization=org)
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        rates = EmployeeCostRate.objects.filter(
+            organization=membership.organization
+        ).select_related('user')
         serializer = EmployeeCostRateSerializer(rates, many=True)
         return Response(serializer.data)
     
     def post(self, request):
-        if request.membership.role not in ['owner', 'admin']:
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        if membership.role not in ['owner', 'admin']:
             return Response({'error': 'Permission denied'}, status=403)
         
-        serializer = EmployeeCostRateSerializer(
-            data=request.data,
-            context={'request': request}
-        )
+        # Add organization to data
+        data = request.data.copy()
+        data['organization'] = membership.organization.id
+        
+        serializer = EmployeeCostRateSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(organization=membership.organization)
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
@@ -711,21 +740,34 @@ class EmployeeCostRateDetailView(APIView):
     """
     permission_classes = [IsAuthenticated]
     
+    def get_membership(self, request):
+        """Get user's organization membership"""
+        return OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+    
     def get_object(self, pk, org):
         return get_object_or_404(EmployeeCostRate, pk=pk, organization=org)
     
     def get(self, request, pk):
-        org = request.membership.organization
-        rate = self.get_object(pk, org)
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        rate = self.get_object(pk, membership.organization)
         serializer = EmployeeCostRateSerializer(rate)
         return Response(serializer.data)
     
     def delete(self, request, pk):
-        if request.membership.role not in ['owner', 'admin']:
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        if membership.role not in ['owner', 'admin']:
             return Response({'error': 'Permission denied'}, status=403)
         
-        org = request.membership.organization
-        rate = self.get_object(pk, org)
+        rate = self.get_object(pk, membership.organization)
         rate.delete()
         return Response(status=204)
 
@@ -741,11 +783,22 @@ class ProfitabilityReportView(APIView):
     """
     permission_classes = [IsAuthenticated]
     
+    def get_membership(self, request):
+        """Get user's organization membership"""
+        return OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+    
     def get(self, request):
-        org = request.membership.organization
+        membership = self.get_membership(request)
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        
+        org = membership.organization
         
         # Only managers/admins/owners can view profitability
-        if request.membership.role not in ['owner', 'admin', 'manager']:
+        if membership.role not in ['owner', 'admin', 'manager']:
             return Response({'error': 'Permission denied'}, status=403)
         
         # Parse date range
@@ -765,12 +818,13 @@ class ProfitabilityReportView(APIView):
         )
         
         if only_approved:
+            # Filter for approved timesheets OR blocks with no timesheet (legacy data)
             blocks = blocks.filter(
-                timesheet__status__in=['approved', 'locked']
+                Q(timesheet__status__in=['approved', 'locked']) | 
+                Q(timesheet__isnull=True)
             )
         
-        # Get all cost rates for the org (we'll look up per user)
-        # Get the most recent cost rate per user
+        # Get all cost rates for the org (most recent per user)
         cost_rates = {}
         for rate in EmployeeCostRate.objects.filter(
             organization=org,
@@ -795,13 +849,25 @@ class ProfitabilityReportView(APIView):
         for block in blocks.select_related('client', 'user'):
             client_id = block.client_id or 0
             client_name = block.client.name if block.client else 'No Client'
-            client_code = block.client.code if block.client else ''
+            client_code = getattr(block.client, 'code', '') if block.client else ''
             
             user_id = block.user_id
             user_name = f"{block.user.first_name} {block.user.last_name}".strip() or block.user.username
             
-            hours = Decimal(block.minutes or 0) / Decimal('60')
-            billing_rate = block.billing_rate or Decimal('0')
+            # Calculate hours from minutes or duration
+            if hasattr(block, 'minutes') and block.minutes:
+                hours = Decimal(str(block.minutes)) / Decimal('60')
+            elif hasattr(block, 'duration') and block.duration:
+                hours = Decimal(str(block.duration)) / Decimal('60')
+            else:
+                # Calculate from start/end time
+                if block.end_time and block.start_time:
+                    delta = block.end_time - block.start_time
+                    hours = Decimal(str(delta.total_seconds())) / Decimal('3600')
+                else:
+                    hours = Decimal('0')
+            
+            billing_rate = Decimal(str(block.billing_rate)) if block.billing_rate else Decimal('0')
             cost_rate = cost_rates.get(user_id, default_cost_rate)
             
             revenue = hours * billing_rate
@@ -852,7 +918,7 @@ class ProfitabilityReportView(APIView):
         for client_id, client in clients_data.items():
             gross_margin = client['total_revenue'] - client['total_cost']
             margin_percent = (
-                (gross_margin / client['total_revenue'] * 100)
+                float(gross_margin / client['total_revenue'] * 100)
                 if client['total_revenue'] > 0 else 0
             )
             
@@ -861,7 +927,7 @@ class ProfitabilityReportView(APIView):
             for user_id, staff in client['staff'].items():
                 staff_margin = staff['revenue'] - staff['cost']
                 staff_margin_pct = (
-                    (staff_margin / staff['revenue'] * 100)
+                    float(staff_margin / staff['revenue'] * 100)
                     if staff['revenue'] > 0 else 0
                 )
                 staff_details.append({
@@ -885,7 +951,7 @@ class ProfitabilityReportView(APIView):
                 'total_revenue': float(client['total_revenue']),
                 'total_cost': float(client['total_cost']),
                 'gross_margin': float(gross_margin),
-                'margin_percent': float(margin_percent),
+                'margin_percent': margin_percent,
                 'staff_details': staff_details,
             })
         
@@ -895,7 +961,7 @@ class ProfitabilityReportView(APIView):
         # Calculate total margin
         total_margin = totals['total_revenue'] - totals['total_cost']
         total_margin_pct = (
-            (total_margin / totals['total_revenue'] * 100)
+            float(total_margin / totals['total_revenue'] * 100)
             if totals['total_revenue'] > 0 else 0
         )
         
@@ -909,6 +975,6 @@ class ProfitabilityReportView(APIView):
                 'total_revenue': float(totals['total_revenue']),
                 'total_cost': float(totals['total_cost']),
                 'gross_margin': float(total_margin),
-                'margin_percent': float(total_margin_pct),
+                'margin_percent': total_margin_pct,
             }
         })

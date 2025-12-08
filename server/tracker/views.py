@@ -1341,7 +1341,7 @@ def raw_events(request):
                 user=agent_user,
                 hostname=hostname,
                 ctx=item.get("ctx", {}) or {},
-                device_id=getattr(device, "device_id", "unknown") if device else "unknown",
+                device_id=device.id if device else None,
                 current_client_id=current_client_id,  # ← Store current client
             )
             

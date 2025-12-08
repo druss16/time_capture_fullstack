@@ -621,7 +621,7 @@ def get_current_client_from_backend(api_base: str, api_key: str) -> dict:
     if not api_base or not api_key:
         return {"client_id": None, "client_name": None}
     
-    url = f"{api_base}/client/current"
+    url = f"{api_base}/client/current/"
     req = urllib.request.Request(url, method="GET")
     req.add_header("Authorization", f"DeviceKey {api_key}")
     req.add_header("Content-Type", "application/json")
@@ -641,7 +641,7 @@ def set_current_client_backend(api_base: str, api_key: str, client_id: int) -> b
     if not api_base or not api_key:
         return False
     
-    url = f"{api_base}/client/set-current"
+    url = f"{api_base}/client/set-current/"
     data = {"client_id": client_id}
     
     req = urllib.request.Request(
@@ -669,7 +669,7 @@ def fetch_clients_from_backend(api_base: str, api_key: str) -> list:
     if not api_base or not api_key:
         return []
     
-    url = f"{api_base}/clients/list"
+    url = f"{api_base}/clients/list/"
     req = urllib.request.Request(url, method="GET")
     req.add_header("Authorization", f"DeviceKey {api_key}")
     req.add_header("Content-Type", "application/json")

@@ -246,9 +246,38 @@ def approval_queue(request):
         status='submitted'
     ).select_related('user').order_by('submitted_at')
     
+    # ✅ Calculate from blocks instead of using serializer
+    result = []
+    for ts in timesheets:
+        blocks = Block.objects.filter(timesheet=ts)
+        
+        total_minutes = sum(b.minutes or 0 for b in blocks)
+        billable_minutes = sum(b.minutes or 0 for b in blocks if b.is_billable)
+        total_amount = sum(float(b.billing_amount or 0) for b in blocks if b.is_billable)
+        
+        days_pending = 0
+        if ts.submitted_at:
+            days_pending = (timezone.now() - ts.submitted_at).days
+        
+        result.append({
+            'id': ts.id,
+            'user_id': ts.user_id,
+            'user_name': f"{ts.user.first_name} {ts.user.last_name}".strip() or ts.user.username,
+            'user_email': ts.user.email,
+            'week_start': ts.week_start.isoformat(),
+            'week_end': (ts.week_start + timedelta(days=6)).isoformat(),
+            'status': ts.status,
+            'submitted_at': ts.submitted_at.isoformat() if ts.submitted_at else None,
+            'days_pending': days_pending,
+            'notes': ts.submitted_notes or '',
+            'total_hours': round(total_minutes / 60, 2),
+            'billable_hours': round(billable_minutes / 60, 2),
+            'total_amount': round(total_amount, 2),
+        })
+    
     return Response({
-        'count': timesheets.count(),
-        'timesheets': ApprovalQueueItemSerializer(timesheets, many=True).data
+        'count': len(result),
+        'timesheets': result
     })
 
 
@@ -1173,59 +1202,3 @@ class TimesheetReopenView(APIView):
             'id': timesheet.id,
             'status': 'draft',
         })
-
-
-class ApprovalQueueView(APIView):
-    """GET /api/billing/approval-queue/"""
-    permission_classes = [IsAuthenticated]
-    
-    def get_membership(self, request):
-        return OrganizationMembership.objects.filter(
-            user=request.user
-        ).select_related('organization').first()
-    
-    def get(self, request):
-        membership = self.get_membership(request)
-        if not membership:
-            return Response({'error': 'No organization membership'}, status=403)
-        
-        if membership.role not in ['owner', 'admin', 'manager']:
-            return Response({'error': 'Permission denied'}, status=403)
-        
-        timesheets = Timesheet.objects.filter(
-            org=membership.organization,
-            status='submitted'
-        ).select_related('user').order_by('submitted_at')
-        
-        result = []
-        for ts in timesheets:
-            # Get linked blocks
-            blocks = Block.objects.filter(timesheet=ts)
-            
-            # Calculate hours from minutes
-            total_minutes = sum(b.minutes or 0 for b in blocks)
-            billable_minutes = sum(b.minutes or 0 for b in blocks if b.is_billable)
-            total_amount = sum(float(b.billing_amount or 0) for b in blocks if b.is_billable)
-            
-            # Days pending
-            days_pending = 0
-            if ts.submitted_at:
-                days_pending = (timezone.now() - ts.submitted_at).days
-            
-            result.append({
-                'id': ts.id,
-                'user_id': ts.user_id,
-                'user_name': f"{ts.user.first_name} {ts.user.last_name}".strip() or ts.user.username,
-                'user_email': ts.user.email,
-                'week_start': ts.week_start.isoformat(),
-                'week_end': (ts.week_start + timedelta(days=6)).isoformat(),
-                'status': ts.status,
-                'submitted_at': ts.submitted_at.isoformat() if ts.submitted_at else None,
-                'days_pending': days_pending,
-                'notes': ts.submitted_notes or '',
-                'total_hours': round(total_minutes / 60, 2),  # ← Make sure this is here
-                'billable_hours': round(billable_minutes / 60, 2),  # ← And this
-                'total_amount': round(total_amount, 2),  # ← And this
-            })
-        
-        return Response(result)

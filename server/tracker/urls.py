@@ -177,8 +177,6 @@ urlpatterns = [
     path('billing/timesheets/<int:pk>/approve/', views_billing.TimesheetApproveView.as_view(), name='timesheet-approve'),
     path('billing/timesheets/<int:pk>/reject/', views_billing.TimesheetRejectView.as_view(), name='timesheet-reject'),
     path('billing/timesheets/<int:pk>/reopen/', views_billing.TimesheetReopenView.as_view(), name='timesheet-reopen'),
-    path('billing/approval-queue/', views_billing.ApprovalQueueView.as_view(), name='approval-queue'),
-
 
     # -------------------------------
     # Router URLs (ViewSets)

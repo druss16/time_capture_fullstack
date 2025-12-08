@@ -856,11 +856,11 @@ class TimeTrackerMenuBar(NSObject):
 
         self.menu.addItem_(NSMenuItem.separatorItem())
 
-        manage_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Manage Clients...", "onManageClients:", ""
-        )
-        manage_item.setTarget_(self)
-        self.menu.addItem_(manage_item)
+        # manage_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        #     "Manage Clients...", "onManageClients:", ""
+        # )
+        # manage_item.setTarget_(self)
+        # self.menu.addItem_(manage_item)
 
         today_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Today's Time...", "onTodayTime:", ""

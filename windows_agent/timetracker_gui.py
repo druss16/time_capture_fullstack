@@ -557,7 +557,7 @@ class TimeTrackerSystemTray:
         menu_items.append(Menu.SEPARATOR)
         
         # Management options
-        menu_items.append(Item("Manage Clients...", self._on_manage_clients))
+        # menu_items.append(Item("Manage Clients...", self._on_manage_clients))
         menu_items.append(Item("Today's Time...", self._on_today_time))
         
         menu_items.append(Menu.SEPARATOR)

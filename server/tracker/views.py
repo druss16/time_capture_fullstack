@@ -3949,10 +3949,10 @@ def agents_pair_claim(request):
     return Response({
         "ok": True,
         "api_key": dev.api_key,
+        "device_id": dev.id,  # <-- Add this line
         "username": pc.user.username,
         "hostname": dev.hostname,
     }, status=200)
-
 
 
 # tracker/views.py

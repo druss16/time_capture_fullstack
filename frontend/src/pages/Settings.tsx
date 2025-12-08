@@ -97,7 +97,8 @@ type BillingRate = {
   client_name: string;
   task_type: number | null;
   task_type_name: string;
-  hourly_rate: string;
+  rate: string;  // Backend uses 'rate'
+  hourly_rate?: string;  // Keep for compatibility
   effective_date: string;
   end_date: string | null;
   is_default: boolean;
@@ -997,20 +998,32 @@ function BillingRatesTab({
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Build payload - only include user/client if selected
+      const payload: Record<string, any> = {
+        rate: form.hourly_rate,  // Backend expects 'rate' not 'hourly_rate'
+        effective_date: form.effective_date,
+      };
+      
+      // Only add user/client if a value was selected (convert to int)
+      if (form.user) {
+        payload.user = parseInt(form.user, 10);
+      }
+      if (form.client) {
+        payload.client = parseInt(form.client, 10);
+      }
+      
+      console.log('Sending billing rate:', payload); // Debug
+      
       await safeFetchJson(`${API_BASE}/billing/rates/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user: form.user || null,
-          client: form.client || null,
-          hourly_rate: form.hourly_rate,
-          effective_date: form.effective_date,
-        }),
+        body: JSON.stringify(payload),
       });
       onSuccess('Rate added');
       resetForm();
       onRefresh();
     } catch (err: any) {
+      console.error('Billing rate error:', err);
       onError(err?.message || 'Failed to save');
     } finally {
       setSaving(false);
@@ -1173,7 +1186,7 @@ function BillingRatesTab({
                   </td>
                   <td className="px-4 py-3 text-right">
                     <span className="font-semibold text-green-600">
-                      ${parseFloat(rate.hourly_rate).toFixed(2)}
+                      ${parseFloat(rate.rate || rate.hourly_rate || '0').toFixed(2)}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">

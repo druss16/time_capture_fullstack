@@ -534,36 +534,38 @@ class TimeTrackerSystemTray:
         # Current client (disabled, just for display)
         menu_items.append(Item(
             f"Client: {self.state.current_client_name}",
-            lambda: None,
+            None,
             enabled=False
         ))
         
-        menu_items.append(Menu.SEPARATOR)
-        
         # Switch Client submenu
+        def make_switch_handler(cid, cname):
+            def handler(icon, item):
+                self._switch_client(cid, cname)
+            return handler
+        
         client_items = [
-            Item("Clear Client", lambda: self._switch_client(0, "No Client"))
+            Item("Clear Client", make_switch_handler(0, "No Client"))
         ]
         
         for client in self.client_mgr.get_all():
             client_id = client["id"]
             client_name = client["name"]
             client_items.append(
-                Item(client_name, lambda cid=client_id, cname=client_name: self._switch_client(cid, cname))
+                Item(client_name, make_switch_handler(client_id, client_name))
             )
         
         menu_items.append(Item("Switch Client", pystray.Menu(*client_items)))
         
-        menu_items.append(Menu.SEPARATOR)
-        
-        # Management options
-        # menu_items.append(Item("Manage Clients...", self._on_manage_clients))
-        menu_items.append(Item("Today's Time...", self._on_today_time))
-        
-        menu_items.append(Menu.SEPARATOR)
+        # Today's Time
+        def on_today(icon, item):
+            self._on_today_time()
+        menu_items.append(Item("Today's Time...", on_today))
         
         # Quit
-        menu_items.append(Item("Quit", self._on_quit))
+        def on_quit(icon, item):
+            self._on_quit()
+        menu_items.append(Item("Quit", on_quit))
         
         return pystray.Menu(*menu_items)
     

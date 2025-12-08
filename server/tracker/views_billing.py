@@ -1000,7 +1000,7 @@ class TimesheetSubmitView(APIView):
             user=request.user
         )
         
-        # ✅ Allow both draft AND rejected status
+        # Allow both draft AND rejected status
         if timesheet.status not in ['draft', 'rejected']:
             return Response({
                 'error': f'Cannot submit timesheet with status "{timesheet.status}".'
@@ -1016,7 +1016,7 @@ class TimesheetSubmitView(APIView):
             start__date__lte=week_end,
         ).update(timesheet=timesheet)
         
-        # ✅ Clear rejection fields if resubmitting
+        # Clear rejection fields if resubmitting
         if timesheet.status == 'rejected':
             timesheet.rejection_reason = ''
             timesheet.rejected_at = None
@@ -1026,6 +1026,19 @@ class TimesheetSubmitView(APIView):
         timesheet.submitted_at = timezone.now()
         timesheet.submitted_notes = request.data.get('notes', '')
         timesheet.save()
+        
+        # Calculate totals
+        blocks = Block.objects.filter(timesheet=timesheet)
+        total_hours = sum(b.minutes or 0 for b in blocks) / 60
+        billable_hours = sum(b.minutes or 0 for b in blocks if b.is_billable) / 60
+        
+        return Response({
+            'id': timesheet.id,
+            'status': 'submitted',
+            'blocks_linked': blocks_updated,
+            'total_hours': round(total_hours, 2),
+            'billable_hours': round(billable_hours, 2),
+        })
 
 
 class TimesheetApproveView(APIView):

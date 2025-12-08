@@ -4,7 +4,7 @@
 from rest_framework import serializers
 from decimal import Decimal
 from django.contrib.auth import get_user_model
-from .models import BillingRate, Timesheet, Block, BlockAuditLog, Client, TaskType
+from .models import BillingRate, Timesheet, Block, BlockAuditLog, Client, TaskType, EmployeeCostRate
 
 User = get_user_model()
 
@@ -266,3 +266,28 @@ class InvoiceExportSerializer(serializers.Serializer):
     tax_rate = serializers.DecimalField(max_digits=5, decimal_places=4, default=Decimal('0'))
     tax_amount = serializers.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
     total_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class EmployeeCostRateSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = EmployeeCostRate
+        fields = [
+            'id', 'user', 'user_name', 'cost_rate',
+            'effective_date', 'end_date', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+    
+    def get_user_name(self, obj):
+        if obj.user:
+            name = f"{obj.user.first_name} {obj.user.last_name}".strip()
+            return name or obj.user.username
+        return None
+    
+    def create(self, validated_data):
+        # Auto-set organization from request
+        request = self.context.get('request')
+        if request and hasattr(request, 'membership'):
+            validated_data['organization'] = request.membership.organization
+        return super().create(validated_data)

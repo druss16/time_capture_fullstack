@@ -165,6 +165,14 @@ urlpatterns = [
     path("billing/blocks/<int:block_id>/", views_billing.update_block_billing, name="update-block-billing"),
     path("billing/blocks/<int:block_id>/audit/", views_billing.block_audit_history, name="block-audit"),
 
+    # Employee Cost Rates
+    path('billing/cost-rates/', views_billing.EmployeeCostRateListView.as_view(), name='cost-rate-list'),
+    path('billing/cost-rates/<int:pk>/', views_billing.EmployeeCostRateDetailView.as_view(), name='cost-rate-detail'),
+
+    # Profitability Report
+    path('billing/profitability/', views_billing.ProfitabilityReportView.as_view(), name='profitability-report'),
+
+
     # -------------------------------
     # Router URLs (ViewSets)
     # -------------------------------

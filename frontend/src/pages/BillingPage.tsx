@@ -6,6 +6,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
+import ClientProfitability from '@/components/ClientProfitability';
 
 // ===============================
 // TYPES
@@ -60,6 +61,15 @@ const BillingPage: React.FC = () => {
           </svg>
         ),
       },
+      {
+        id: 'profitability',
+        label: 'Profitability',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+          </svg>
+        ),
+      },
     ] : []),
   ];
 
@@ -96,6 +106,7 @@ const BillingPage: React.FC = () => {
         {activeTab === 'timesheet' && <WeeklyTimesheet />}
         {activeTab === 'approvals' && isManager && <ApprovalQueue />}
         {activeTab === 'billing' && isManager && <ClientSummary />}
+        {activeTab === 'profitability' && isManager && <ClientProfitability />}
       </div>
     </div>
   );

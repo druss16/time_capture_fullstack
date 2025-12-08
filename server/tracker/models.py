@@ -1489,3 +1489,54 @@ class BlockAuditLog(models.Model):
     
     def __str__(self):
         return f"{self.action} Block #{self.block_id} by {self.user} at {self.timestamp}"
+
+
+class EmployeeCostRate(models.Model):
+    """
+    What you PAY employees per hour (loaded labor cost).
+    Used to calculate profit margins.
+    
+    Margin = Billing Rate - Cost Rate
+    """
+    organization = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='employee_cost_rates'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='cost_rates'
+    )
+    cost_rate = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Hourly cost (loaded labor rate)"
+    )
+    effective_date = models.DateField(default=timezone.now)
+    end_date = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-effective_date']
+        unique_together = ['organization', 'user', 'effective_date']
+
+    def __str__(self):
+        return f"{self.user.username}: ${self.cost_rate}/hr"
+
+    @classmethod
+    def get_rate_for_user(cls, user, organization, date=None):
+        """Get the applicable cost rate for a user on a given date."""
+        if date is None:
+            date = timezone.now().date()
+        
+        rate = cls.objects.filter(
+            organization=organization,
+            user=user,
+            effective_date__lte=date
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=date)
+        ).order_by('-effective_date').first()
+        
+        return rate.cost_rate if rate else None

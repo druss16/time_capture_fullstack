@@ -104,7 +104,16 @@ type BillingRate = {
   is_default: boolean;
 };
 
-type Tab = 'organization' | 'team' | 'clients' | 'billing' | 'devices' | 'token';
+type EmployeeCostRate = {
+  id: number;
+  user: number;
+  user_name: string;
+  cost_rate: string;
+  effective_date: string;
+  end_date: string | null;
+};
+
+type Tab = 'organization' | 'team' | 'clients' | 'billing' | 'costs' | 'devices' | 'token';
 
 // ============================================================================
 // Component
@@ -122,6 +131,7 @@ export default function Settings() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [installToken, setInstallToken] = useState<InstallToken | null>(null);
   const [billingRates, setBillingRates] = useState<BillingRate[]>([]);
+  const [employeeCostRates, setEmployeeCostRates] = useState<EmployeeCostRate[]>([]);
   
   // Track current user
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
@@ -186,6 +196,13 @@ export default function Settings() {
           setClients(clientsForRates || []);
           setTeamMembers(teamForRates || []);
           break;
+        case 'costs':
+          const costRates = await safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []);
+          setEmployeeCostRates(costRates || []);
+          // Also load team for dropdown
+          const teamForCosts = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []);
+          setTeamMembers(teamForCosts || []);
+          break;
         case 'devices':
           const deviceList = await safeFetchJson<Device[]>(`${API_BASE}/settings/devices/`);
           setDevices(deviceList || []);
@@ -212,6 +229,7 @@ export default function Settings() {
     { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
     { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
     { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" /> },
+    { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" /> },
     { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
     { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
   ];
@@ -301,6 +319,15 @@ export default function Settings() {
                       users={teamMembers}
                       clients={clients}
                       onRefresh={() => loadTabData('billing')}
+                      onSuccess={showSuccess}
+                      onError={showError}
+                    />
+                  )}
+                  {activeTab === 'costs' && (
+                    <EmployeeCostRatesTab
+                      rates={employeeCostRates}
+                      users={teamMembers}
+                      onRefresh={() => loadTabData('costs')}
                       onSuccess={showSuccess}
                       onError={showError}
                     />
@@ -1216,6 +1243,236 @@ function BillingRatesTab({
           <p>• <strong>Senior Staff:</strong> User = "John Smith", Client = blank, Rate = $200/hr</p>
           <p>• <strong>Premium Client:</strong> User = blank, Client = "Acme Corp", Rate = $175/hr</p>
           <p>• <strong>Specific Combo:</strong> User = "John Smith", Client = "Acme Corp", Rate = $225/hr</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Employee Cost Rates Tab (NEW) - What you PAY employees
+// ============================================================================
+function EmployeeCostRatesTab({
+  rates,
+  users,
+  onRefresh,
+  onSuccess,
+  onError,
+}: {
+  rates: EmployeeCostRate[];
+  users: TeamMember[];
+  onRefresh: () => void;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    user: '',
+    cost_rate: '75.00',
+    effective_date: new Date().toISOString().split('T')[0],
+  });
+
+  const resetForm = () => {
+    setForm({
+      user: '',
+      cost_rate: '75.00',
+      effective_date: new Date().toISOString().split('T')[0],
+    });
+    setShowAdd(false);
+  };
+
+  const handleSave = async () => {
+    if (!form.user) {
+      onError('Please select an employee');
+      return;
+    }
+    setSaving(true);
+    try {
+      await safeFetchJson(`${API_BASE}/billing/cost-rates/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: parseInt(form.user, 10),
+          cost_rate: form.cost_rate,
+          effective_date: form.effective_date,
+        }),
+      });
+      onSuccess('Cost rate added');
+      resetForm();
+      onRefresh();
+    } catch (err: any) {
+      console.error('Cost rate error:', err);
+      onError(err?.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (rateId: number) => {
+    if (!confirm('Delete this cost rate?')) return;
+    try {
+      await safeFetchJson(`${API_BASE}/billing/cost-rates/${rateId}/`, {
+        method: 'DELETE',
+      });
+      onSuccess('Cost rate deleted');
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to delete');
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-semibold flex items-center gap-2">
+          <Users className="w-5 h-5 text-primary" />
+          Employee Cost Rates
+          <span className="text-sm font-normal text-muted-foreground">({rates.length})</span>
+        </h2>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          Add Cost Rate
+        </button>
+      </div>
+
+      {/* Explanation */}
+      <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+        <h4 className="font-medium text-amber-800 mb-2">What is a Cost Rate?</h4>
+        <p className="text-sm text-amber-700">
+          The <strong>cost rate</strong> is what you pay an employee per hour (their loaded labor cost). 
+          This is used to calculate profit margins: <em>Margin = Billing Rate - Cost Rate</em>.
+        </p>
+        <p className="text-sm text-amber-700 mt-2">
+          Example: If you bill a client $150/hr and the employee costs you $75/hr, your margin is $75/hr (50%).
+        </p>
+      </div>
+
+      {/* Add Rate Form */}
+      {showAdd && (
+        <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
+          <h3 className="font-medium mb-4">Add Employee Cost Rate</h3>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Employee *</label>
+              <select
+                value={form.user}
+                onChange={(e) => setForm({ ...form, user: e.target.value })}
+                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                required
+              >
+                <option value="">Select Employee</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.first_name} {u.last_name || u.username}
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Hourly Cost ($)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.cost_rate}
+                onChange={(e) => setForm({ ...form, cost_rate: e.target.value })}
+                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Effective Date</label>
+              <input
+                type="date"
+                value={form.effective_date}
+                onChange={(e) => setForm({ ...form, effective_date: e.target.value })}
+                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+          </div>
+          
+          <div className="flex gap-2 mt-4">
+            <button
+              onClick={handleSave}
+              disabled={saving || !form.user}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
+            >
+              {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              Save Cost Rate
+            </button>
+            <button
+              onClick={resetForm}
+              className="px-4 py-2 border border-border rounded-lg font-medium hover:bg-accent"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Rates Table */}
+      <div className="border border-border rounded-lg overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-muted/50">
+            <tr>
+              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Employee</th>
+              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Cost/Hour</th>
+              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Effective</th>
+              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {rates.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="text-center py-8 text-muted-foreground">
+                  No employee cost rates configured yet. Add cost rates to calculate profit margins.
+                </td>
+              </tr>
+            ) : (
+              rates.map((rate) => (
+                <tr key={rate.id} className="hover:bg-accent/30">
+                  <td className="px-4 py-3 font-medium">
+                    {rate.user_name}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="font-semibold text-orange-600">
+                      ${parseFloat(rate.cost_rate).toFixed(2)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    {new Date(rate.effective_date).toLocaleDateString()}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => handleDelete(rate.id)}
+                      className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Tip */}
+      <div className="mt-6 p-4 bg-muted/30 rounded-lg">
+        <h4 className="font-medium text-sm mb-2">Calculating Loaded Labor Cost</h4>
+        <div className="text-xs text-muted-foreground space-y-1">
+          <p>Include more than just salary when calculating cost rates:</p>
+          <p>• Base salary ÷ 2080 hours = base hourly rate</p>
+          <p>• + Benefits (health insurance, 401k match)</p>
+          <p>• + Payroll taxes (FICA, unemployment)</p>
+          <p>• + Overhead allocation (office space, software)</p>
+          <p className="mt-2"><strong>Rule of thumb:</strong> Loaded cost is typically 1.25x to 1.5x base salary</p>
         </div>
       </div>
     </div>

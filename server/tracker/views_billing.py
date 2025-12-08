@@ -2,23 +2,24 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView  # ← ADD THIS LINE
 from django.db.models import Sum, F, Q, DecimalField
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from datetime import timedelta, date
 from decimal import Decimal
-
 from .models import (
     BillingRate, Timesheet, Block, BlockAuditLog, 
-    Client, TaskType, Organization, OrganizationMembership
+    Client, TaskType, Organization, OrganizationMembership,
+    EmployeeCostRate,  # ← ADD THIS
 )
 from .serializers_billing import (
     BillingRateSerializer, TimesheetSummarySerializer, TimesheetDetailSerializer,
     ApprovalQueueItemSerializer, ClientSummarySerializer, BlockAuditLogSerializer,
-    InvoiceExportSerializer
+    InvoiceExportSerializer,
+    EmployeeCostRateSerializer,  # ← ADD THIS
 )
-
 
 def get_user_org(user):
     """Get the user's Organization from OrganizationMembership."""
@@ -670,3 +671,244 @@ def update_block_billing(request, block_id):
         'billing_amount': str(block.billing_amount) if block.billing_amount else None,
         'description_override': block.description_override,
     })
+
+
+from decimal import Decimal
+from django.db.models import Sum, F, Q
+from django.db.models.functions import Coalesce
+
+class EmployeeCostRateListView(APIView):
+    """
+    GET: List all employee cost rates for org
+    POST: Create new cost rate
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        org = request.membership.organization
+        rates = EmployeeCostRate.objects.filter(organization=org)
+        serializer = EmployeeCostRateSerializer(rates, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        if request.membership.role not in ['owner', 'admin']:
+            return Response({'error': 'Permission denied'}, status=403)
+        
+        serializer = EmployeeCostRateSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
+
+
+class EmployeeCostRateDetailView(APIView):
+    """
+    GET: Get single cost rate
+    DELETE: Remove cost rate
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_object(self, pk, org):
+        return get_object_or_404(EmployeeCostRate, pk=pk, organization=org)
+    
+    def get(self, request, pk):
+        org = request.membership.organization
+        rate = self.get_object(pk, org)
+        serializer = EmployeeCostRateSerializer(rate)
+        return Response(serializer.data)
+    
+    def delete(self, request, pk):
+        if request.membership.role not in ['owner', 'admin']:
+            return Response({'error': 'Permission denied'}, status=403)
+        
+        org = request.membership.organization
+        rate = self.get_object(pk, org)
+        rate.delete()
+        return Response(status=204)
+
+
+class ProfitabilityReportView(APIView):
+    """
+    GET: Calculate profit margins by client
+    
+    Query params:
+    - start_date: YYYY-MM-DD
+    - end_date: YYYY-MM-DD
+    - only_approved: true/false
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        org = request.membership.organization
+        
+        # Only managers/admins/owners can view profitability
+        if request.membership.role not in ['owner', 'admin', 'manager']:
+            return Response({'error': 'Permission denied'}, status=403)
+        
+        # Parse date range
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        only_approved = request.query_params.get('only_approved', 'true').lower() == 'true'
+        
+        if not start_date or not end_date:
+            return Response({'error': 'start_date and end_date required'}, status=400)
+        
+        # Build query
+        blocks = Block.objects.filter(
+            organization=org,
+            start_time__date__gte=start_date,
+            start_time__date__lte=end_date,
+            is_billable=True,
+        )
+        
+        if only_approved:
+            blocks = blocks.filter(
+                timesheet__status__in=['approved', 'locked']
+            )
+        
+        # Get all cost rates for the org (we'll look up per user)
+        # Get the most recent cost rate per user
+        cost_rates = {}
+        for rate in EmployeeCostRate.objects.filter(
+            organization=org,
+            effective_date__lte=end_date
+        ).select_related('user').order_by('user_id', '-effective_date'):
+            # Only keep first (most recent) rate per user
+            if rate.user_id not in cost_rates:
+                cost_rates[rate.user_id] = rate.cost_rate
+        
+        # Default cost rate if not set
+        default_cost_rate = Decimal('50.00')
+        
+        # Aggregate by client, then by user
+        clients_data = {}
+        totals = {
+            'total_hours': Decimal('0'),
+            'billable_hours': Decimal('0'),
+            'total_revenue': Decimal('0'),
+            'total_cost': Decimal('0'),
+        }
+        
+        for block in blocks.select_related('client', 'user'):
+            client_id = block.client_id or 0
+            client_name = block.client.name if block.client else 'No Client'
+            client_code = block.client.code if block.client else ''
+            
+            user_id = block.user_id
+            user_name = f"{block.user.first_name} {block.user.last_name}".strip() or block.user.username
+            
+            hours = Decimal(block.minutes or 0) / Decimal('60')
+            billing_rate = block.billing_rate or Decimal('0')
+            cost_rate = cost_rates.get(user_id, default_cost_rate)
+            
+            revenue = hours * billing_rate
+            cost = hours * cost_rate
+            
+            # Initialize client if needed
+            if client_id not in clients_data:
+                clients_data[client_id] = {
+                    'client_id': client_id,
+                    'client_name': client_name,
+                    'client_code': client_code,
+                    'total_hours': Decimal('0'),
+                    'billable_hours': Decimal('0'),
+                    'total_revenue': Decimal('0'),
+                    'total_cost': Decimal('0'),
+                    'staff': {}
+                }
+            
+            # Initialize staff if needed
+            if user_id not in clients_data[client_id]['staff']:
+                clients_data[client_id]['staff'][user_id] = {
+                    'user_id': user_id,
+                    'user_name': user_name,
+                    'hours': Decimal('0'),
+                    'billing_rate': float(billing_rate),
+                    'cost_rate': float(cost_rate),
+                    'revenue': Decimal('0'),
+                    'cost': Decimal('0'),
+                }
+            
+            # Accumulate
+            clients_data[client_id]['total_hours'] += hours
+            clients_data[client_id]['billable_hours'] += hours
+            clients_data[client_id]['total_revenue'] += revenue
+            clients_data[client_id]['total_cost'] += cost
+            
+            clients_data[client_id]['staff'][user_id]['hours'] += hours
+            clients_data[client_id]['staff'][user_id]['revenue'] += revenue
+            clients_data[client_id]['staff'][user_id]['cost'] += cost
+            
+            totals['total_hours'] += hours
+            totals['billable_hours'] += hours
+            totals['total_revenue'] += revenue
+            totals['total_cost'] += cost
+        
+        # Format response
+        clients_list = []
+        for client_id, client in clients_data.items():
+            gross_margin = client['total_revenue'] - client['total_cost']
+            margin_percent = (
+                (gross_margin / client['total_revenue'] * 100)
+                if client['total_revenue'] > 0 else 0
+            )
+            
+            # Format staff details
+            staff_details = []
+            for user_id, staff in client['staff'].items():
+                staff_margin = staff['revenue'] - staff['cost']
+                staff_margin_pct = (
+                    (staff_margin / staff['revenue'] * 100)
+                    if staff['revenue'] > 0 else 0
+                )
+                staff_details.append({
+                    'user_id': user_id,
+                    'user_name': staff['user_name'],
+                    'hours': float(staff['hours']),
+                    'billing_rate': staff['billing_rate'],
+                    'cost_rate': staff['cost_rate'],
+                    'revenue': float(staff['revenue']),
+                    'cost': float(staff['cost']),
+                    'margin': float(staff_margin),
+                    'margin_percent': float(staff_margin_pct),
+                })
+            
+            clients_list.append({
+                'client_id': client_id,
+                'client_name': client['client_name'],
+                'client_code': client['client_code'],
+                'total_hours': float(client['total_hours']),
+                'billable_hours': float(client['billable_hours']),
+                'total_revenue': float(client['total_revenue']),
+                'total_cost': float(client['total_cost']),
+                'gross_margin': float(gross_margin),
+                'margin_percent': float(margin_percent),
+                'staff_details': staff_details,
+            })
+        
+        # Sort by revenue descending
+        clients_list.sort(key=lambda x: x['total_revenue'], reverse=True)
+        
+        # Calculate total margin
+        total_margin = totals['total_revenue'] - totals['total_cost']
+        total_margin_pct = (
+            (total_margin / totals['total_revenue'] * 100)
+            if totals['total_revenue'] > 0 else 0
+        )
+        
+        return Response({
+            'period_start': start_date,
+            'period_end': end_date,
+            'clients': clients_list,
+            'totals': {
+                'total_hours': float(totals['total_hours']),
+                'billable_hours': float(totals['billable_hours']),
+                'total_revenue': float(totals['total_revenue']),
+                'total_cost': float(totals['total_cost']),
+                'gross_margin': float(total_margin),
+                'margin_percent': float(total_margin_pct),
+            }
+        })

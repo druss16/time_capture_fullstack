@@ -1,6 +1,8 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+from decimal import Decimal
+
 from django.contrib.auth.models import Group
 import hashlib
 import secrets  # ✅ add this import
@@ -476,20 +478,29 @@ class ActiveBlockManager(models.Manager):
     def get_queryset(self):
         return super().get_queryset().filter(deleted_at__isnull=True)
 
+# tracker/models.py - COMPLETE BLOCK MODEL
+# Replace your existing Block class with this
+
 class Block(models.Model):
+    # ===============================
     # Core identification
-    org = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    # ===============================
+    org = models.ForeignKey('Organization', on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     device_id = models.CharField(max_length=64, db_index=True, default="unknown")
     hostname = models.CharField(max_length=120)
     
+    # ===============================
     # Time tracking
+    # ===============================
     start = models.DateTimeField()
     end = models.DateTimeField()
     day = models.DateField(db_index=True, null=True, blank=True)
     minutes = models.IntegerField(null=True, blank=True)
     
+    # ===============================
     # Activity context
+    # ===============================
     title = models.TextField(blank=True, default="")
     window_title = models.TextField(blank=True, null=True)
     url = models.TextField(blank=True, default="")
@@ -498,11 +509,15 @@ class Block(models.Model):
     bundle_id = models.CharField(max_length=255, blank=True, default="")
     hints = models.JSONField(default=dict, blank=True)
     
+    # ===============================
     # Meeting metadata
+    # ===============================
     description = models.TextField(blank=True, default="")
     attendees = models.JSONField(default=list, blank=True)
     
+    # ===============================
     # Classification (the valuable data)
+    # ===============================
     category_hours = models.JSONField(default=dict, blank=True)
     client = models.ForeignKey('Client', null=True, blank=True, on_delete=models.SET_NULL)
     project = models.ForeignKey('Project', null=True, blank=True, on_delete=models.SET_NULL)
@@ -512,13 +527,16 @@ class Block(models.Model):
     # Legacy lock (keep for backwards compatibility)
     locked = models.BooleanField(default=False)
 
+    # ===============================
+    # Soft delete
+    # ===============================
     objects = ActiveBlockManager()  # Default excludes deleted
     all_objects = models.Manager()  # Use this to include deleted blocks
-
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
 
-
-    # ✅ NEW: Immutability Tracking (Production-Ready)
+    # ===============================
+    # Immutability Tracking
+    # ===============================
     is_categorized = models.BooleanField(
         default=False,
         db_index=True,
@@ -544,7 +562,9 @@ class Block(models.Model):
         help_text="Source of the categorization"
     )
     
-    # ✅ NEW: Approval Workflow (Enterprise Feature)
+    # ===============================
+    # Approval Workflow
+    # ===============================
     approved = models.BooleanField(
         default=False,
         db_index=True,
@@ -564,7 +584,9 @@ class Block(models.Model):
         help_text="Who approved this block"
     )
 
-    # ✅ NEW: Firm-wide task type (for hybrid categorization)
+    # ===============================
+    # Task Type (Firm-wide categories)
+    # ===============================
     task_type = models.ForeignKey(
         'TaskType',
         null=True,
@@ -573,29 +595,92 @@ class Block(models.Model):
         related_name='blocks',
         help_text="Firm-wide activity type (Tax Prep, Research, etc.)"
     )
+
+    # ===============================
+    # Billing Fields
+    # ===============================
+    is_billable = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Whether this time is billable to client"
+    )
+    billing_rate = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        null=True, 
+        blank=True,
+        help_text="Hourly rate applied to this block"
+    )
+    billing_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Calculated: (minutes/60) * billing_rate"
+    )
     
-    # AI classification metadata
+    # ===============================
+    # Timesheet Link
+    # ===============================
+    timesheet = models.ForeignKey(
+        'Timesheet',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='blocks',
+        help_text="Weekly timesheet this block belongs to"
+    )
+    
+    # ===============================
+    # Invoice Fields
+    # ===============================
+    description_override = models.TextField(
+        blank=True,
+        default='',
+        help_text="Custom description for invoice line item (overrides auto-generated)"
+    )
+    invoiced = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Has this block been included in an invoice?"
+    )
+    invoiced_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+    invoice_reference = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        help_text="Reference to external invoice (e.g., QBO invoice ID)"
+    )
+
+    # ===============================
+    # AI Classification Metadata
+    # ===============================
     ai_extracted_client = models.CharField(max_length=255, blank=True, null=True)
     ai_confidence = models.FloatField(default=0.0)
     ai_category = models.CharField(max_length=100, blank=True, default="")
     ai_processed_at = models.DateTimeField(null=True, blank=True)
     ai_hash = models.CharField(max_length=64, blank=True, null=True)
     
+    # ===============================
     # Timestamps
+    # ===============================
     updated_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+
+    # ===============================
+    # METHODS
+    # ===============================
     
     def compute_ai_hash(self):
-        """
-        Hash title/url/path for quick change detection.
-        """
+        """Hash title/url/path for quick change detection."""
         raw = f"{self.window_title or ''}|{self.url or ''}|{self.file_path or ''}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
     
     def has_ai_inputs_changed(self):
-        """
-        Returns True if the hash changed since last save.
-        """
+        """Returns True if the hash changed since last save."""
         new_hash = self.compute_ai_hash()
         return self.ai_hash != new_hash
     
@@ -619,60 +704,79 @@ class Block(models.Model):
             return True
         
         if self.approved:
-            # Approved blocks need manager permission (implement as needed)
             return False
         
         if self.categorized_by == 'ai' and user and user == self.user:
-            # User can correct their own AI-categorized blocks
             return True
         
         if self.categorized_by in ('manual', 'correction'):
-            # Already manually reviewed - shouldn't change
             return False
         
         return False
     
     def save(self, *args, **kwargs):
-        # ✅ Auto-set immutability flags when categories assigned
+        # ===============================
+        # 1. Auto-set day and minutes from start/end
+        # ===============================
+        if self.start:
+            self.day = self.start.astimezone(timezone.get_current_timezone()).date()
+        if self.start and self.end:
+            mins = int((self.end - self.start).total_seconds() // 60)
+            self.minutes = max(0, mins)
+        
+        # ===============================
+        # 2. Auto-set immutability flags when categories assigned
+        # ===============================
         if self.category_hours and not self.is_categorized:
             self.is_categorized = True
             self.categorized_at = timezone.now()
-            
-            # Set default categorized_by if not already set
             if not self.categorized_by:
-                self.categorized_by = 'ai'  # Default assumption
+                self.categorized_by = 'ai'
         
-        # Compute and store hash for change detection
+        # ===============================
+        # 3. Compute and store hash for change detection
+        # ===============================
         new_hash = self.compute_ai_hash()
         if not self.ai_hash or self.ai_hash != new_hash:
             self.ai_hash = new_hash
         
-        # ✅ Prevent modification of protected blocks (safety check)
+        # ===============================
+        # 4. Auto-calculate billing amount
+        # ===============================
+        if self.is_billable and self.billing_rate and self.minutes:
+            self.billing_amount = (Decimal(self.minutes) / 60) * self.billing_rate
+        elif not self.is_billable:
+            self.billing_amount = Decimal('0.00')
+        
+        # ===============================
+        # 5. Prevent modification of protected blocks
+        # ===============================
         if self.pk:  # Only check on updates, not creates
             try:
-                old = Block.objects.get(pk=self.pk)
+                old = Block.all_objects.get(pk=self.pk)
                 if old.is_protected() and not kwargs.pop('force_update', False):
-                    # Allow updates to non-critical fields
                     protected_fields = {
                         'category_hours', 'client', 'project', 'task',
                         'start', 'end', 'minutes'
                     }
-                    
-                    # Check if any protected field changed
                     for field in protected_fields:
                         if getattr(old, field) != getattr(self, field):
                             raise ValueError(
                                 f"Cannot modify protected block {self.pk}. "
-                                f"Block is {old.categorized_by} and {'approved' if old.approved else 'categorized'}."
+                                f"Block is {old.categorized_by} and "
+                                f"{'approved' if old.approved else 'categorized'}."
                             )
             except Block.DoesNotExist:
-                pass  # New block, allow save
+                pass
         
         super().save(*args, **kwargs)
     
+    # ===============================
+    # META
+    # ===============================
     class Meta:
         indexes = [
-            # Existing indexes
+            # Core lookups
             models.Index(fields=["org", "user", "day"]),
             models.Index(fields=["org", "start"]),
             models.Index(fields=["org", "client"]),
@@ -680,24 +784,29 @@ class Block(models.Model):
             models.Index(fields=["org", "task"]),
             models.Index(fields=["updated_at"]),
             
-            # ✅ NEW: Immutability & approval indexes
+            # Immutability & approval
             models.Index(fields=["is_categorized", "user", "start"]),
             models.Index(fields=["categorized_by", "org"]),
             models.Index(fields=["approved", "user", "day"]),
             models.Index(fields=["approved", "org", "client"]),
             
-            # ✅ NEW: Fast uncategorized lookup (critical for AI processing)
+            # AI processing
             models.Index(fields=["is_categorized", "org", "day"]),
             models.Index(fields=["is_categorized", "ai_processed_at"]),
+            
+            # Billing & invoicing
+            models.Index(fields=['is_billable', 'org', 'client']),
+            models.Index(fields=['timesheet', 'user']),
+            models.Index(fields=['invoiced', 'approved', 'client']),
         ]
         
-        # ✅ Optional: Add ordering for consistent results
         ordering = ['-start']
     
     def __str__(self):
         status = "✅" if self.is_categorized else "⏳"
-        category = self.ai_category or list(self.category_hours.keys())[0] if self.category_hours else 'Unclassified'
+        category = self.ai_category or (list(self.category_hours.keys())[0] if self.category_hours else 'Unclassified')
         return f"{status} {self.user.username} - {category} - {self.day}"
+
 
 
 class Suggestion(models.Model):
@@ -1034,3 +1143,349 @@ def _denormalize_block(sender, instance: Block, **kwargs):
     if instance.start and instance.end:
         mins = int((instance.end - instance.start).total_seconds() // 60)
         instance.minutes = max(0, mins)
+
+
+
+# ===============================
+# ======  BILLING MODELS  =======
+# ===============================
+# ADD THESE TO tracker/models.py
+
+from django.db import models
+from django.conf import settings
+from django.utils import timezone
+from decimal import Decimal
+
+
+class BillingRate(models.Model):
+    """
+    Staff billing rates - can be default rate or client-specific.
+    Rates can change over time (effective_date).
+    """
+    org = models.ForeignKey('Organization', on_delete=models.CASCADE, related_name='billing_rates')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='billing_rates')
+    
+    # If null, this is the user's default rate; if set, it's client-specific
+    client = models.ForeignKey('Client', on_delete=models.CASCADE, null=True, blank=True, related_name='billing_rates')
+    
+    rate = models.DecimalField(max_digits=10, decimal_places=2, help_text="Hourly billing rate in dollars")
+    effective_date = models.DateField(default=timezone.now, help_text="Rate effective from this date")
+    
+    # Optional: different rates for different work types
+    task_type = models.ForeignKey('TaskType', on_delete=models.SET_NULL, null=True, blank=True,
+                                   help_text="Optional: rate for specific task type")
+    
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-effective_date']
+        indexes = [
+            models.Index(fields=['org', 'user', 'effective_date']),
+            models.Index(fields=['org', 'user', 'client']),
+        ]
+        # Prevent duplicate rates for same user/client/task_type/date combo
+        constraints = [
+            models.UniqueConstraint(
+                fields=['org', 'user', 'client', 'task_type', 'effective_date'],
+                name='unique_billing_rate'
+            )
+        ]
+    
+    @classmethod
+    def get_rate_for_block(cls, block):
+        """
+        Get the applicable billing rate for a block.
+        Priority: Client+TaskType > Client > TaskType > User Default > Org Default
+        """
+        from django.db.models import Q
+        
+        rates = cls.objects.filter(
+            org=block.org,
+            user=block.user,
+            effective_date__lte=block.start.date()
+        ).order_by('-effective_date')
+        
+        # Try client + task_type specific
+        if block.client and block.task_type:
+            rate = rates.filter(client=block.client, task_type=block.task_type).first()
+            if rate:
+                return rate.rate
+        
+        # Try client specific
+        if block.client:
+            rate = rates.filter(client=block.client, task_type__isnull=True).first()
+            if rate:
+                return rate.rate
+        
+        # Try task_type specific
+        if block.task_type:
+            rate = rates.filter(client__isnull=True, task_type=block.task_type).first()
+            if rate:
+                return rate.rate
+            # Also check task_type's default rate
+            if block.task_type.default_rate:
+                return block.task_type.default_rate
+        
+        # Try user default rate
+        rate = rates.filter(client__isnull=True, task_type__isnull=True).first()
+        if rate:
+            return rate.rate
+        
+        # Fall back to org default
+        return block.org.billing_rate_default
+    
+    def __str__(self):
+        client_str = f" → {self.client.name}" if self.client else " (default)"
+        task_str = f" [{self.task_type.code}]" if self.task_type else ""
+        return f"{self.user.username}{client_str}{task_str}: ${self.rate}/hr"
+
+
+class Timesheet(models.Model):
+    """
+    Weekly timesheet container for approval workflow.
+    Aggregates blocks for a given week.
+    """
+    org = models.ForeignKey('Organization', on_delete=models.CASCADE, related_name='timesheets')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='timesheets')
+    
+    # Week identification (always Monday)
+    week_start = models.DateField(db_index=True, help_text="Monday of the timesheet week")
+    
+    # Status workflow
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('submitted', 'Submitted'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('locked', 'Locked'),  # After invoicing
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', db_index=True)
+    
+    # Submission tracking
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    submitted_notes = models.TextField(blank=True, default='', help_text="Notes from employee on submission")
+    
+    # Approval tracking
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True, blank=True,
+        related_name='approved_timesheets'
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approval_notes = models.TextField(blank=True, default='')
+    
+    # Rejection tracking
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='rejected_timesheets'
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, default='')
+    
+    # Cached totals (updated on save/submit)
+    total_hours = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    billable_hours = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    non_billable_hours = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = [['org', 'user', 'week_start']]
+        ordering = ['-week_start']
+        indexes = [
+            models.Index(fields=['org', 'status', 'week_start']),
+            models.Index(fields=['org', 'user', 'status']),
+            models.Index(fields=['approved_by', 'status']),
+        ]
+    
+    def get_week_end(self):
+        """Returns Sunday of the timesheet week"""
+        from datetime import timedelta
+        return self.week_start + timedelta(days=6)
+    
+    def recalculate_totals(self):
+        """
+        Recalculate totals from linked blocks.
+        Call this after blocks are added/modified.
+        """
+        from django.db.models import Sum, Case, When, F, DecimalField
+        from decimal import Decimal
+        
+        blocks = self.blocks.all()
+        
+        # Sum up minutes and convert to hours
+        totals = blocks.aggregate(
+            total_mins=Sum('minutes'),
+            billable_mins=Sum(
+                Case(
+                    When(is_billable=True, then=F('minutes')),
+                    default=0,
+                    output_field=models.IntegerField()
+                )
+            ),
+            total_amt=Sum(
+                Case(
+                    When(is_billable=True, then=F('minutes') * F('billing_rate') / 60),
+                    default=Decimal('0'),
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
+                )
+            )
+        )
+        
+        self.total_hours = Decimal(totals['total_mins'] or 0) / 60
+        self.billable_hours = Decimal(totals['billable_mins'] or 0) / 60
+        self.non_billable_hours = self.total_hours - self.billable_hours
+        self.total_amount = totals['total_amt'] or Decimal('0.00')
+        
+        self.save(update_fields=['total_hours', 'billable_hours', 'non_billable_hours', 'total_amount', 'updated_at'])
+    
+    def submit(self, notes=''):
+        """Submit timesheet for approval"""
+        if self.status != 'draft':
+            raise ValueError(f"Can only submit draft timesheets, current status: {self.status}")
+        
+        self.recalculate_totals()
+        self.status = 'submitted'
+        self.submitted_at = timezone.now()
+        self.submitted_notes = notes
+        self.save()
+        
+        # Lock associated blocks
+        self.blocks.update(approved=False)  # Mark as pending approval
+    
+    def approve(self, approved_by, notes=''):
+        """Approve the timesheet"""
+        if self.status != 'submitted':
+            raise ValueError(f"Can only approve submitted timesheets, current status: {self.status}")
+        
+        self.status = 'approved'
+        self.approved_by = approved_by
+        self.approved_at = timezone.now()
+        self.approval_notes = notes
+        self.save()
+        
+        # Mark all blocks as approved
+        self.blocks.update(
+            approved=True,
+            approved_at=timezone.now(),
+            approved_by=approved_by
+        )
+    
+    def reject(self, rejected_by, reason=''):
+        """Reject the timesheet, allowing re-submission"""
+        if self.status != 'submitted':
+            raise ValueError(f"Can only reject submitted timesheets, current status: {self.status}")
+        
+        self.status = 'rejected'
+        self.rejected_by = rejected_by
+        self.rejected_at = timezone.now()
+        self.rejection_reason = reason
+        self.save()
+        
+        # Unlock blocks for editing
+        self.blocks.update(approved=False)
+    
+    def reopen(self):
+        """Reopen a rejected timesheet as draft"""
+        if self.status != 'rejected':
+            raise ValueError("Can only reopen rejected timesheets")
+        
+        self.status = 'draft'
+        self.save()
+    
+    def lock(self):
+        """Lock timesheet after invoicing - no more changes allowed"""
+        if self.status != 'approved':
+            raise ValueError("Can only lock approved timesheets")
+        
+        self.status = 'locked'
+        self.save()
+        
+        # Permanently lock blocks
+        self.blocks.update(locked=True)
+    
+    @classmethod
+    def get_or_create_for_date(cls, org, user, date):
+        """
+        Get or create a timesheet for the week containing the given date.
+        """
+        from datetime import timedelta
+        
+        # Find Monday of the week
+        days_since_monday = date.weekday()
+        week_start = date - timedelta(days=days_since_monday)
+        
+        timesheet, created = cls.objects.get_or_create(
+            org=org,
+            user=user,
+            week_start=week_start,
+            defaults={'status': 'draft'}
+        )
+        return timesheet, created
+    
+    def __str__(self):
+        return f"{self.user.username} - Week of {self.week_start} ({self.status})"
+
+
+# ===============================
+# ======  AUDIT TRAIL  ==========
+# ===============================
+
+class BlockAuditLog(models.Model):
+    """
+    Tracks all changes to blocks for compliance/audit purposes.
+    """
+    block = models.ForeignKey('Block', on_delete=models.CASCADE, related_name='audit_logs')
+    
+    ACTION_CHOICES = [
+        ('create', 'Created'),
+        ('update', 'Updated'),
+        ('categorize', 'Categorized'),
+        ('approve', 'Approved'),
+        ('reject', 'Rejected'),
+        ('lock', 'Locked'),
+        ('delete', 'Deleted'),
+    ]
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    
+    # Who made the change
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True,
+        related_name='block_audit_actions'
+    )
+    
+    # What changed
+    field_name = models.CharField(max_length=100, blank=True, default='')
+    old_value = models.TextField(blank=True, default='')
+    new_value = models.TextField(blank=True, default='')
+    
+    # Full snapshot (for complex changes)
+    snapshot = models.JSONField(default=dict, blank=True)
+    
+    # Context
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+    
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    class Meta:
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['block', 'timestamp']),
+            models.Index(fields=['user', 'timestamp']),
+            models.Index(fields=['action', 'timestamp']),
+        ]
+    
+    def __str__(self):
+        return f"{self.action} Block #{self.block_id} by {self.user} at {self.timestamp}"

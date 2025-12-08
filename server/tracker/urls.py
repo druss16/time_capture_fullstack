@@ -2,13 +2,18 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from . import views_billing  # ✅ ADD THIS IMPORT
 
 # ========================================
 # Router for ViewSet-based endpoints
 # ========================================
 router = DefaultRouter()
 router.register(r'task-types', views.TaskTypeViewSet, basename='task-type')
-router.register(r'blocks-api', views.BlockCategorizationViewSet, basename='block-api')  # Renamed to avoid conflict
+router.register(r'blocks-api', views.BlockCategorizationViewSet, basename='block-api')
+
+# ✅ ADD: Billing ViewSets
+router.register(r'billing/rates', views_billing.BillingRateViewSet, basename='billing-rate')
+router.register(r'billing/timesheets', views_billing.TimesheetViewSet, basename='timesheet')
 
 urlpatterns = [
     # -------------------------------
@@ -42,8 +47,6 @@ urlpatterns = [
     path("categorization/bulk/", views.bulk_categorize, name='categorization-bulk'),
     path("categorization/stats/", views.category_stats, name='categorization-stats'),
 
-
-
     # -------------------------------
     # Multi-tenant / org management
     # -------------------------------
@@ -56,16 +59,13 @@ urlpatterns = [
     # -------------------------------
     path("clients/", views.create_client, name="create_client"),
     path("import-clients-csv/", views.import_clients_csv, name="import_clients_csv"),
-
     path("clients/<int:client_id>/", views.delete_client, name="delete_client"),
 
-    
-    # ✅ NEW: Dropdown data endpoints
+    # Dropdown data endpoints
     path("options/clients/", views.client_options, name="client_options"),
     path("options/projects/", views.project_options, name="project_options"),
     path("options/projects/<int:client_id>/", views.project_options_by_client, name="project_options_by_client"),
     path("options/task-types/", views.task_type_options, name="task_type_options"),
-
 
     path("projects/", views.list_projects, name="list_projects"),
     path("projects/create/", views.create_project, name="create_project"),
@@ -82,11 +82,8 @@ urlpatterns = [
     # Dashboard / Summary
     # -------------------------------
     path("today-time/", views.today_time, name="today_time"),
-
     path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),
-
     path("time-entries/manual/", views.create_manual_time_entry, name="create_manual_time_entry"),
-
     path("agent/register/", views.register_agent, name="register_agent"),
 
     # -------------------------------
@@ -110,11 +107,7 @@ urlpatterns = [
     path("recent-blocks/", views.recent_classified_blocks, name="recent_classified_blocks"),
     path("label-block/", views.label_block, name="label_block"),
     path("blocks/<int:block_id>/delete/", views.delete_block, name="delete_block"),
-    
-    # ✅ NEW: Grouped blocks view (for hybrid UI)
     path("blocks/grouped/", views.blocks_grouped, name="blocks_grouped"),
-
-    path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),
 
     # -------------------------------
     # Timecards
@@ -134,7 +127,9 @@ urlpatterns = [
     # -------------------------------
     path("get-csrf/", views.get_csrf, name="get_csrf"),
 
+    # -------------------------------
     # Settings endpoints
+    # -------------------------------
     path("settings/org/", views.settings_org, name="settings_org"),
     path("settings/team/", views.settings_team_list, name="settings_team_list"),
     path("settings/team/invite/", views.settings_team_invite, name="settings_team_invite"),
@@ -145,11 +140,31 @@ urlpatterns = [
     path("settings/devices/<int:device_id>/deactivate/", views.settings_device_deactivate, name="settings_device_deactivate"),
     path("settings/install-token/", views.settings_install_token, name="settings_install_token"),
     path("settings/install-token/regenerate/", views.settings_install_token_regenerate, name="settings_install_token_regenerate"),
-
     path("settings/team/<int:user_id>/promote/", views.settings_team_promote),
     path("settings/team/<int:user_id>/demote/", views.settings_team_demote),
     path("settings/team/<int:user_id>/set-manager/", views.settings_team_set_manager),
+
+    # ===============================
+    # ✅ NEW: BILLING & TIMESHEETS
+    # ===============================
     
+    # Timesheet Views (employee-facing)
+    path("billing/weekly/", views_billing.weekly_timesheet_view, name="weekly-timesheet"),
+    
+    # Approval Workflow (manager-facing)
+    path("billing/approval-queue/", views_billing.approval_queue, name="approval-queue"),
+    
+    # Client Billing Summary (for invoicing)
+    path("billing/client-summary/", views_billing.client_summary_view, name="client-summary"),
+    
+    # Invoice Export
+    path("billing/invoice/<int:client_id>/", views_billing.invoice_export, name="invoice-export"),
+    path("billing/mark-invoiced/", views_billing.mark_invoiced, name="mark-invoiced"),
+    
+    # Block Billing Management
+    path("billing/blocks/<int:block_id>/", views_billing.update_block_billing, name="update-block-billing"),
+    path("billing/blocks/<int:block_id>/audit/", views_billing.block_audit_history, name="block-audit"),
+
     # -------------------------------
     # Router URLs (ViewSets)
     # -------------------------------

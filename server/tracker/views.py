@@ -150,7 +150,7 @@ from rest_framework import status
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from .auth import AgentKeyAuthentication
-from .models import RawEvent, CurrentClient, Client
+from .models import RawEvent, CurrentClient, Client, BillingRate, Timesheet, Block, BlockAuditLog, Client, TaskType, Organization, OrganizationMembership
 
 # If you need a User class reference:
 User = get_user_model()
@@ -164,16 +164,28 @@ def log(msg: str):
     print(msg)  # Also print for immediate visibility
 
 
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 from django.db import transaction
-from datetime import timedelta
+from datetime import timedelta, date
 
 from tracker.models import Block, Client, UserWorkPattern
 from tracker.services.pattern_learning import PatternLearningService
+
+from rest_framework import viewsets, status
+from django.db.models import Sum, F, Q, DecimalField
+from django.db.models.functions import Coalesce
+from decimal import Decimal
+
+
+from .serializers_billing import (
+    BillingRateSerializer, TimesheetSummarySerializer, TimesheetDetailSerializer,
+    ApprovalQueueItemSerializer, ClientSummarySerializer, BlockAuditLogSerializer,
+    InvoiceExportSerializer
+)
 
 
 # ============================================================================
@@ -534,6 +546,10 @@ def get_user_org(user):
     except Exception as e:
         print(f"Error in get_user_org: {e}")
         return None
+
+def get_monday(d):
+    """Get Monday of the week containing date d"""
+    return d - timedelta(days=d.weekday())
 
 def get_user_role(user, organization):
     """Get user's role in an organization"""
@@ -3229,7 +3245,6 @@ def _pick_or_create_project(org, client, name):
 
 
 from django.db import transaction
-from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -6791,3 +6806,4 @@ def update_last_login(sender, user, **kwargs):
     logger.info(f"[LOGIN] Signal fired for user: {user.username}")
     user.last_login = timezone.now()
     user.save(update_fields=['last_login'])
+

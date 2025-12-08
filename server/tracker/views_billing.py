@@ -1018,7 +1018,7 @@ class TimesheetSubmitView(APIView):
         
         # ✅ Clear rejection fields if resubmitting
         if timesheet.status == 'rejected':
-            timesheet.rejection_reason = None
+            timesheet.rejection_reason = ''
             timesheet.rejected_at = None
             timesheet.rejected_by = None
         
@@ -1151,7 +1151,7 @@ class TimesheetReopenView(APIView):
             }, status=400)
         
         timesheet.status = 'draft'
-        timesheet.rejection_reason = None
+        timesheet.rejection_reason = ''
         timesheet.rejected_at = None
         timesheet.rejected_by = None
         timesheet.save()

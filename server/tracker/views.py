@@ -6807,3 +6807,34 @@ def update_last_login(sender, user, **kwargs):
     user.last_login = timezone.now()
     user.save(update_fields=['last_login'])
 
+
+
+class CurrentMembershipView(APIView):
+    """
+    GET: Return current user's organization membership including role
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        membership = OrganizationMembership.objects.filter(
+            user=request.user,
+            is_active=True
+        ).select_related('organization').first()
+        
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=404)
+        
+        return Response({
+            'id': membership.id,
+            'role': membership.role,
+            'is_active': membership.is_active,
+            'organization': {
+                'id': membership.organization.id,
+                'name': membership.organization.name,
+            },
+            'user': {
+                'id': request.user.id,
+                'username': request.user.username,
+                'email': request.user.email,
+            }
+        })

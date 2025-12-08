@@ -1,8 +1,9 @@
 // src/pages/BillingPage.tsx
 // Main billing page with tabs for timesheet, approvals, and client summary
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/auth/AuthProvider';
+import { safeFetchJson, API_BASE } from '@/lib/api';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
@@ -20,16 +21,64 @@ interface Tab {
   icon: React.ReactNode;
 }
 
+interface MembershipResponse {
+  role: UserRole;
+  organization?: {
+    id: number;
+    name: string;
+  };
+}
+
 // ===============================
 // MAIN COMPONENT
 // ===============================
 
 const BillingPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('timesheet');
+  const [userRole, setUserRole] = useState<UserRole>('member');
+  const [loading, setLoading] = useState(true);
   const { user } = useAuth();
   
-  // Get role from auth - adjust property path based on your user object
-  const userRole = (user?.role || user?.membership?.role || 'member') as UserRole;
+  // Fetch role from API since it might not be in auth context
+  useEffect(() => {
+    const fetchRole = async () => {
+      try {
+        // First check if role is already in user object
+        const authRole = user?.role || user?.membership?.role;
+        if (authRole && ['owner', 'admin', 'manager', 'member'].includes(authRole)) {
+          console.log('Role from auth:', authRole);
+          setUserRole(authRole as UserRole);
+          setLoading(false);
+          return;
+        }
+        
+        // Otherwise fetch from API
+        const response = await safeFetchJson<MembershipResponse>(
+          `${API_BASE}/settings/membership/`
+        );
+        console.log('Role from API:', response);
+        if (response?.role) {
+          setUserRole(response.role as UserRole);
+        }
+      } catch (err) {
+        console.error('Failed to fetch role:', err);
+        // Default to showing manager tabs if we can't determine role
+        // Better UX than hiding features from an admin
+        setUserRole('manager');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchRole();
+  }, [user]);
+  
+  // Debug logging
+  useEffect(() => {
+    console.log('BillingPage - user object:', user);
+    console.log('BillingPage - userRole:', userRole);
+  }, [user, userRole]);
+  
   const isManager = ['owner', 'admin', 'manager'].includes(userRole);
 
   const tabs: Tab[] = [
@@ -76,38 +125,52 @@ const BillingPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">Time & Billing</h1>
-        <p className="text-slate-500 mt-1">Track time, submit timesheets, and manage billing</p>
-      </div>
-      
-      {/* Tabs */}
-      <div className="border-b border-slate-200">
-        <div className="flex gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-5 py-3 font-medium rounded-t-lg transition-colors ${
-                activeTab === tab.id
-                  ? 'bg-white text-blue-600 border-t-2 border-x border-blue-500 border-slate-200 -mb-px'
-                  : 'text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              {tab.icon}
-              {tab.label}
-            </button>
-          ))}
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Time & Billing</h1>
+          <p className="text-slate-500 mt-1">Track time, submit timesheets, and manage billing</p>
+        </div>
+        {/* Debug: Show current role */}
+        <div className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">
+          Role: {userRole} {isManager ? '(Manager+)' : '(Member)'}
         </div>
       </div>
+      
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        </div>
+      ) : (
+        <>
+          {/* Tabs */}
+          <div className="border-b border-slate-200">
+            <div className="flex gap-1">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-5 py-3 font-medium rounded-t-lg transition-colors ${
+                    activeTab === tab.id
+                      ? 'bg-white text-blue-600 border-t-2 border-x border-blue-500 border-slate-200 -mb-px'
+                      : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {tab.icon}
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {/* Content */}
-      <div>
-        {activeTab === 'timesheet' && <WeeklyTimesheet />}
-        {activeTab === 'approvals' && isManager && <ApprovalQueue />}
-        {activeTab === 'billing' && isManager && <ClientSummary />}
-        {activeTab === 'profitability' && isManager && <ClientProfitability />}
-      </div>
+          {/* Content */}
+          <div>
+            {activeTab === 'timesheet' && <WeeklyTimesheet />}
+            {activeTab === 'approvals' && isManager && <ApprovalQueue />}
+            {activeTab === 'billing' && isManager && <ClientSummary />}
+            {activeTab === 'profitability' && isManager && <ClientProfitability />}
+          </div>
+        </>
+      )}
     </div>
   );
 };

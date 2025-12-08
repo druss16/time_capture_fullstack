@@ -143,6 +143,7 @@ urlpatterns = [
     path("settings/team/<int:user_id>/promote/", views.settings_team_promote),
     path("settings/team/<int:user_id>/demote/", views.settings_team_demote),
     path("settings/team/<int:user_id>/set-manager/", views.settings_team_set_manager),
+    path('settings/membership/', CurrentMembershipView.as_view(), name='current-membership'),
 
     # ===============================
     # ✅ NEW: BILLING & TIMESHEETS

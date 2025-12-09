@@ -177,6 +177,23 @@ urlpatterns = [
     path('billing/timesheets/<int:pk>/approve/', views_billing.TimesheetApproveView.as_view(), name='timesheet-approve'),
     path('billing/timesheets/<int:pk>/reject/', views_billing.TimesheetRejectView.as_view(), name='timesheet-reject'),
     path('billing/timesheets/<int:pk>/reopen/', views_billing.TimesheetReopenView.as_view(), name='timesheet-reopen'),
+    path('billing/timesheets/<int:pk>/lock/', views_billing.TimesheetLockView.as_view()),  # NEW
+
+    # History
+    path('billing/timesheet-history/', views_billing.timesheet_history),  # NEW
+```
+
+---
+
+## Complete Workflow Now
+```
+DRAFT ──► SUBMITTED ──► APPROVED ──► LOCKED
+  │           │             │
+  │           ▼             │
+  │       REJECTED ◄────────┘
+  │           │
+  └───────────┘
+      (reopen)
 
     # -------------------------------
     # Router URLs (ViewSets)

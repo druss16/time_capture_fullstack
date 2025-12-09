@@ -8,6 +8,7 @@ import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
 import ClientProfitability from '@/components/ClientProfitability';
+import TimesheetHistory from '@/components/TimesheetHistory';
 
 // ===============================
 // TYPES
@@ -52,19 +53,41 @@ const BillingPage: React.FC = () => {
           return;
         }
         
-        // Otherwise fetch from API
-        const response = await safeFetchJson<MembershipResponse>(
-          `${API_BASE}/settings/membership/`
-        );
-        console.log('Role from API:', response);
-        if (response?.role) {
-          setUserRole(response.role as UserRole);
+        // Try multiple endpoints that might return role
+        const endpoints = [
+          `${API_BASE}/settings/membership/`,
+          `${API_BASE}/auth/me/`,
+          `${API_BASE}/me/`,
+          `${API_BASE}/users/me/`,
+        ];
+        
+        for (const endpoint of endpoints) {
+          try {
+            const response = await safeFetchJson<any>(endpoint);
+            console.log(`Response from ${endpoint}:`, response);
+            
+            // Look for role in various places
+            const foundRole = response?.role || 
+                              response?.membership?.role || 
+                              response?.user?.role ||
+                              response?.data?.role;
+            
+            if (foundRole && ['owner', 'admin', 'manager', 'member'].includes(foundRole)) {
+              setUserRole(foundRole as UserRole);
+              setLoading(false);
+              return;
+            }
+          } catch (e) {
+            console.log(`Endpoint ${endpoint} failed, trying next...`);
+          }
         }
+        
+        // If we get here, no endpoint worked - default to showing manager tabs
+        console.warn('Could not determine role from any endpoint, defaulting to manager view');
+        setUserRole('manager');
       } catch (err) {
         console.error('Failed to fetch role:', err);
-        // Default to showing manager tabs if we can't determine role
-        // Better UX than hiding features from an admin
-        setUserRole('manager');
+        setUserRole('manager'); // Default to showing tabs
       } finally {
         setLoading(false);
       }
@@ -119,6 +142,15 @@ const BillingPage: React.FC = () => {
           </svg>
         ),
       },
+      {
+        id: 'history',
+        label: 'History',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        ),
+      },
     ] : []),
   ];
 
@@ -168,6 +200,7 @@ const BillingPage: React.FC = () => {
             {activeTab === 'approvals' && isManager && <ApprovalQueue />}
             {activeTab === 'billing' && isManager && <ClientSummary />}
             {activeTab === 'profitability' && isManager && <ClientProfitability />}
+            {activeTab === 'history' && isManager && <TimesheetHistory />}
           </div>
         </>
       )}

@@ -181,22 +181,5 @@ urlpatterns = [
 
     # History
     path('billing/timesheet-history/', views_billing.timesheet_history),  # NEW
-```
 
----
-
-## Complete Workflow Now
-```
-DRAFT ──► SUBMITTED ──► APPROVED ──► LOCKED
-  │           │             │
-  │           ▼             │
-  │       REJECTED ◄────────┘
-  │           │
-  └───────────┘
-      (reopen)
-
-    # -------------------------------
-    # Router URLs (ViewSets)
-    # -------------------------------
-    path("", include(router.urls)),
 ]

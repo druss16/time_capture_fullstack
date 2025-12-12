@@ -4,7 +4,7 @@ Improved compaction service that:
 1. Uses duration-to-next-event logic (more accurate)
 2. Caps idle gaps (lunch breaks don't create 60-min blocks)
 3. Coalesces adjacent identical activities
-4. Respects immutability (doesn't touch categorized blocks)
+4. Respects immutability (doesn't touch MANUALLY categorized blocks)
 """
 
 from __future__ import annotations
@@ -54,7 +54,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         return 0
     
     # Get org if not provided
-    # Get org if not provided
     if not org:
         from tracker.models import Organization, OrganizationMembership
         membership = OrganizationMembership.objects.filter(user=user).first()
@@ -85,7 +84,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     
     logger.info(f"[COMPACT] Found {len(events)} events for {day}")
     
-    # ✅ Step 2: Check for existing categorized blocks (DON'T DELETE THESE!)
+    # ✅ Step 2: Check for existing blocks
+    # ONLY protect MANUALLY categorized blocks - not system/pattern/idle
     existing_blocks = Block.objects.filter(
         user=user,
         day=day
@@ -94,25 +94,28 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if hostname:
         existing_blocks = existing_blocks.filter(hostname=hostname)
     
-    categorized_blocks = []
-    uncategorized_blocks = []
-    categorized_time_ranges = []
+    manually_categorized_blocks = []
+    blocks_to_delete = []
+    protected_time_ranges = []
     
     for b in existing_blocks:
-        if b.is_categorized:
-            categorized_blocks.append(b)
+        # Only protect blocks that were MANUALLY categorized by the user
+        if b.is_categorized and b.categorized_by == 'manual':
+            manually_categorized_blocks.append(b)
             if b.start and b.end:
-                categorized_time_ranges.append((b.start, b.end))
+                protected_time_ranges.append((b.start, b.end))
         else:
-            uncategorized_blocks.append(b)
+            # Delete everything else - system, pattern, idle, uncategorized
+            # These can be safely recreated from raw events
+            blocks_to_delete.append(b)
     
-    # Delete ONLY uncategorized blocks (safe to recreate)
-    if uncategorized_blocks:
-        uncategorized_ids = [b.id for b in uncategorized_blocks]
-        Block.objects.filter(id__in=uncategorized_ids).delete()
-        logger.info(f"[COMPACT] Deleted {len(uncategorized_ids)} uncategorized blocks")
+    # Delete non-manual blocks (safe to recreate)
+    if blocks_to_delete:
+        delete_ids = [b.id for b in blocks_to_delete]
+        deleted_count = Block.objects.filter(id__in=delete_ids).delete()[0]
+        logger.info(f"[COMPACT] Deleted {deleted_count} auto-generated blocks")
     
-    logger.info(f"[COMPACT] Protected {len(categorized_blocks)} categorized blocks")
+    logger.info(f"[COMPACT] Protected {len(manually_categorized_blocks)} manually categorized blocks")
     
     # ✅ Step 3: Build raw blocks using duration-to-next-event logic
     raw_blocks = []
@@ -136,15 +139,26 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         
         end = start + dur
         
-        # Check if this overlaps with a categorized block
-        overlaps = False
-        for cat_start, cat_end in categorized_time_ranges:
-            if start < cat_end and end > cat_start:
-                overlaps = True
-                break
+        # Check if this MOSTLY overlaps with a MANUALLY categorized block (>80%)
+        # This prevents replacing work that the user already categorized
+        overlaps_manual = False
+        block_duration = (end - start).total_seconds()
         
-        if overlaps:
-            continue  # Skip events that overlap with categorized blocks
+        for cat_start, cat_end in protected_time_ranges:
+            if start < cat_end and end > cat_start:
+                # Calculate overlap percentage
+                overlap_start = max(start, cat_start)
+                overlap_end = min(end, cat_end)
+                overlap_seconds = max(0, (overlap_end - overlap_start).total_seconds())
+                
+                # Only skip if >80% of this block overlaps with manually categorized
+                if block_duration > 0 and (overlap_seconds / block_duration) > 0.8:
+                    overlaps_manual = True
+                    logger.debug(f"[COMPACT] Skipping event - 80%+ overlap with manual block")
+                    break
+        
+        if overlaps_manual:
+            continue
         
         raw_blocks.append({
             "start": start,
@@ -162,8 +176,10 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         })
     
     if not raw_blocks:
-        logger.info(f"[COMPACT] No blocks to create (all overlapped with categorized blocks)")
+        logger.info(f"[COMPACT] No new blocks to create")
         return 0
+    
+    logger.info(f"[COMPACT] Built {len(raw_blocks)} raw blocks from events")
     
     # ✅ Step 4: Coalesce adjacent identical activities
     coalesced = []
@@ -209,8 +225,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     )
             
             # Create block
-            # Auto-categorize idle blocks
             if is_idle:
+                # Auto-categorize idle blocks (but NOT as 'manual')
                 hours = round(int(block_data["minutes"]) / 60.0, 2)
                 Block.objects.create(
                     org=org,
@@ -231,7 +247,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     client=None,
                     category_hours={"Idle": hours},
                     is_categorized=True,
-                    categorized_by="system",
+                    categorized_by="system",  # NOT 'manual' - can be replaced
                     categorized_at=timezone.now(),
                     approved=False,
                 )

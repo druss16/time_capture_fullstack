@@ -1370,8 +1370,8 @@ def billing_rates_list(request):
                 'client': rate.client_id,
                 'client_name': rate.client.name if rate.client else None,
                 'rate': str(rate.rate),
-                'effective_date': rate.effective_date.isoformat() if rate.effective_date else None,
-                'end_date': rate.end_date.isoformat() if rate.end_date else None,
+                'effective_date': rate.effective_date.isoformat() if hasattr(rate, 'effective_date') and rate.effective_date else None,
+                'end_date': rate.end_date.isoformat() if hasattr(rate, 'end_date') and rate.end_date else None,
             })
         return Response(result)
     

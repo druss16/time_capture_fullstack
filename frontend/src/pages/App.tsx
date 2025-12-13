@@ -25,7 +25,6 @@ import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 
 // --------- Lazy pages (code-splitting) ---------
 const DailyReview = lazy(() => import("./DailyReview"));
-const TimecardReview = lazy(() => import("./TimecardReview"));
 const TimecardSummary = lazy(() => import("./TimecardSummary"));
 const OrgAdminSettings = lazy(() => import("./Settings"));
 const OrganizationSettings = lazy(() => import("./OrganizationSettings"));
@@ -116,16 +115,6 @@ export default function App() {
                     <MaybeProtected>
                       <AppLayout>
                         <DailyReview />
-                      </AppLayout>
-                    </MaybeProtected>
-                  }
-                />
-                <Route
-                  path="/timecards"
-                  element={
-                    <MaybeProtected>
-                      <AppLayout>
-                        <TimecardReview />
                       </AppLayout>
                     </MaybeProtected>
                   }

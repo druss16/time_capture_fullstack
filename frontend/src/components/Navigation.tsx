@@ -75,10 +75,7 @@ export default function Navigation() {
             <Link to="/daily" className={linkClass("/daily")}>
               📅 Daily Review
             </Link>
-            <Link to="/timecards" className={linkClass("/timecards")}>
-              ⏱️ Timecards
-            </Link>
-            
+
             {/* Billing - Timesheets, Approvals, etc. */}
             <Link to="/billing" className={linkClass("/billing")}>
               <Receipt className="w-4 h-4" />
@@ -132,9 +129,6 @@ export default function Navigation() {
       <div className="sm:hidden border-t border-blue-100 px-4 py-2 flex items-center gap-2 overflow-x-auto">
         <Link to="/daily" className={linkClass("/daily")}>
           📅 Daily
-        </Link>
-        <Link to="/timecards" className={linkClass("/timecards")}>
-          ⏱️ Time
         </Link>
         <Link to="/billing" className={linkClass("/billing")}>
           💰 Billing

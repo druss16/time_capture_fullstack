@@ -1339,3 +1339,123 @@ def timesheet_history(request):
             'auto_submitted_count': sum(1 for r in result if r['auto_submitted']),
         }
     })
+
+
+# Add these to tracker/views_billing.py
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def billing_rates_list(request):
+    """
+    GET: List all billing rates for the org
+    POST: Create a new billing rate
+    """
+    from decimal import Decimal
+    from tracker.models import BillingRate, Client
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization found'}, status=404)
+    
+    if request.method == 'GET':
+        rates = BillingRate.objects.filter(org=org).select_related('user', 'client')
+        result = []
+        for rate in rates:
+            result.append({
+                'id': rate.id,
+                'user': rate.user_id,
+                'user_name': f"{rate.user.first_name} {rate.user.last_name}".strip() or rate.user.username if rate.user else None,
+                'client': rate.client_id,
+                'client_name': rate.client.name if rate.client else None,
+                'rate': str(rate.rate),
+                'effective_date': rate.effective_date.isoformat() if rate.effective_date else None,
+                'end_date': rate.end_date.isoformat() if rate.end_date else None,
+            })
+        return Response(result)
+    
+    elif request.method == 'POST':
+        data = request.data
+        
+        # Get user if specified
+        user = None
+        if data.get('user_id'):
+            user = User.objects.filter(id=data['user_id']).first()
+        
+        # Get client if specified
+        client = None
+        if data.get('client_id'):
+            client = Client.objects.filter(id=data['client_id'], org=org).first()
+        
+        # Create the rate
+        rate = BillingRate.objects.create(
+            org=org,
+            user=user,
+            client=client,
+            rate=Decimal(str(data.get('rate', '150.00'))),
+            effective_date=data.get('effective_date'),
+        )
+        
+        return Response({
+            'id': rate.id,
+            'user': rate.user_id,
+            'user_name': f"{rate.user.first_name} {rate.user.last_name}".strip() or rate.user.username if rate.user else None,
+            'client': rate.client_id,
+            'client_name': rate.client.name if rate.client else None,
+            'rate': str(rate.rate),
+            'effective_date': rate.effective_date.isoformat() if rate.effective_date else None,
+        }, status=201)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def billing_rates_detail(request, rate_id):
+    """
+    GET: Get a specific billing rate
+    PATCH: Update a billing rate
+    DELETE: Delete a billing rate
+    """
+    from decimal import Decimal
+    from tracker.models import BillingRate
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization found'}, status=404)
+    
+    try:
+        rate = BillingRate.objects.get(id=rate_id, org=org)
+    except BillingRate.DoesNotExist:
+        return Response({'error': 'Rate not found'}, status=404)
+    
+    if request.method == 'GET':
+        return Response({
+            'id': rate.id,
+            'user': rate.user_id,
+            'user_name': f"{rate.user.first_name} {rate.user.last_name}".strip() or rate.user.username if rate.user else None,
+            'client': rate.client_id,
+            'client_name': rate.client.name if rate.client else None,
+            'rate': str(rate.rate),
+            'effective_date': rate.effective_date.isoformat() if rate.effective_date else None,
+            'end_date': rate.end_date.isoformat() if rate.end_date else None,
+        })
+    
+    elif request.method == 'PATCH':
+        data = request.data
+        if 'rate' in data:
+            rate.rate = Decimal(str(data['rate']))
+        if 'effective_date' in data:
+            rate.effective_date = data['effective_date']
+        if 'end_date' in data:
+            rate.end_date = data['end_date']
+        rate.save()
+        
+        return Response({
+            'id': rate.id,
+            'rate': str(rate.rate),
+            'effective_date': rate.effective_date.isoformat() if rate.effective_date else None,
+        })
+    
+    elif request.method == 'DELETE':
+        rate.delete()
+        return Response({'status': 'deleted'}, status=204)

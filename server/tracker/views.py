@@ -3626,18 +3626,30 @@ from rest_framework.response import Response
 @permission_classes([AllowAny])
 def whoami(request):
     """Check authentication via token in database."""
-    from tracker.models import AuthToken
+    from tracker.models import AuthToken, OrganizationMembership
     
-    # Helper to get org info
+    # Helper to get org info AND role
     def get_user_info(user):
         org = get_user_org(user)
+        
+        # Get the user's role from OrganizationMembership
+        role = None
+        if org:
+            membership = OrganizationMembership.objects.filter(
+                user=user, 
+                organization=org
+            ).first()
+            if membership:
+                role = membership.role
+        
         return {
             "is_authenticated": True,
             "username": user.username,
             "user_id": user.id,
             "email": user.email or "",
-            "is_staff": user.is_staff,           # ✅ Add admin flags
-            "is_superuser": user.is_superuser,   # ✅ Add admin flags
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
+            "role": role,  # ← 'owner', 'admin', 'manager', or 'member'
             "org_id": org.id if org else None,
             "org_name": org.name if org else None,
         }
@@ -3694,6 +3706,7 @@ def whoami(request):
         "email": "",
         "is_staff": False,
         "is_superuser": False,
+        "role": None,
         "org_id": None,
         "org_name": None,
         "host": None,

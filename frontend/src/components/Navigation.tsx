@@ -1,5 +1,5 @@
 /**
- * Navigation.tsx — Updated with admin check and conditional Settings links
+ * Navigation.tsx — Updated with organization role display
  */
 import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -7,20 +7,31 @@ import { useAuth } from "../auth/AuthProvider";
 import { Users } from 'lucide-react';
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
+interface UserInfo {
+  username: string;
+  email: string;
+  role: 'owner' | 'admin' | 'manager' | 'member' | null;
+  org_name: string | null;
+  is_authenticated: boolean;
+}
+
 export default function Navigation() {
   const location = useLocation();
   const navigate = useNavigate();
   const { logout } = useAuth();
-  const [userInfo, setUserInfo] = useState<any>(null);
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
 
-  // Fetch user info to check if admin
+  // Fetch user info including organization role
   useEffect(() => {
     safeFetchJson(`${API_BASE}/whoami/`)
       .then(data => setUserInfo(data))
       .catch(console.error);
   }, []);
 
-  const isAdmin = userInfo?.is_staff || userInfo?.is_superuser || false;
+  // Role-based permissions
+  const userRole = userInfo?.role;
+  const canAccessSettings = ['owner', 'admin'].includes(userRole || '');
+  const canApproveTime = ['owner', 'admin', 'manager'].includes(userRole || '');
 
   const isActive = (path: string) => location.pathname === path;
   
@@ -29,6 +40,23 @@ export default function Navigation() {
     return isActive(path)
       ? `${base} bg-blue-600 text-white`
       : `${base} text-blue-800 hover:bg-blue-50 hover:text-blue-900`;
+  };
+
+  // Role badge styling
+  const getRoleBadge = (role: string | null) => {
+    if (!role || role === 'member') return null;
+    
+    const styles: Record<string, string> = {
+      owner: 'bg-purple-100 text-purple-800',
+      admin: 'bg-blue-100 text-blue-800',
+      manager: 'bg-green-100 text-green-800',
+    };
+    
+    return (
+      <span className={`text-xs px-2 py-1 rounded font-medium ${styles[role] || 'bg-gray-100 text-gray-800'}`}>
+        {role.charAt(0).toUpperCase() + role.slice(1)}
+      </span>
+    );
   };
 
   return (
@@ -42,6 +70,7 @@ export default function Navigation() {
             </span>
             <span>Time Capture</span>
           </Link>
+
           <div className="hidden sm:flex items-center gap-1 ml-4">
             <Link to="/daily" className={linkClass("/daily")}>
               📅 Daily Review
@@ -53,8 +82,8 @@ export default function Navigation() {
               💻 Devices
             </Link>
             
-            {/* Only show Settings to admins */}
-            {isAdmin && (
+            {/* Only show Settings to owners and admins */}
+            {canAccessSettings && (
               <Link to="/settings" className={linkClass("/settings")}>
                 ⚙️ Settings
               </Link>
@@ -74,11 +103,7 @@ export default function Navigation() {
               <span className="text-sm text-blue-700 hidden sm:inline">
                 {userInfo.username}
               </span>
-              {isAdmin && (
-                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium">
-                  Admin
-                </span>
-              )}
+              {getRoleBadge(userRole || null)}
             </div>
           )}
           <span className="text-sm text-blue-700 hidden sm:inline">

@@ -1,7 +1,7 @@
-// src/components/WeeklyTimesheet.tsx
+// src/components/WeeklyTimesheet.tsx (also known as MyTimesheet)
 // Professional weekly timesheet grid for CPA firms
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 
 // ===============================
@@ -27,6 +27,9 @@ interface TimesheetData {
   daily_totals: Record<string, number>;
   grand_total: number;
   billable_total: number;
+  auto_submitted?: boolean;  // ← NEW: Flag for auto-submitted timesheets
+  submitted_at?: string | null;
+  rejection_reason?: string;
 }
 
 interface DayHeader {
@@ -49,6 +52,7 @@ interface TimeCellProps {
 
 interface StatusBadgeProps {
   status: TimesheetData['status'];
+  autoSubmitted?: boolean;
 }
 
 // ===============================
@@ -74,11 +78,37 @@ const formatWeekRange = (weekStart: string): string => {
   return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
 };
 
+const isWeekEnded = (weekStart: string): boolean => {
+  const start = new Date(weekStart + 'T00:00:00');
+  const weekEnd = new Date(start);
+  weekEnd.setDate(weekEnd.getDate() + 6); // Sunday
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today > weekEnd;
+};
+
+const getCanSubmitDate = (weekStart: string): string => {
+  const start = new Date(weekStart + 'T00:00:00');
+  const monday = new Date(start);
+  monday.setDate(monday.getDate() + 7); // Next Monday
+  return monday.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+};
+
+const getDaysUntilSubmit = (weekStart: string): number => {
+  const start = new Date(weekStart + 'T00:00:00');
+  const weekEnd = new Date(start);
+  weekEnd.setDate(weekEnd.getDate() + 6); // Sunday
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = weekEnd.getTime() - today.getTime();
+  return Math.ceil(diff / (1000 * 60 * 60 * 24)) + 1; // +1 because submit is available day after week ends
+};
+
 // ===============================
 // SUB-COMPONENTS
 // ===============================
 
-const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
+const StatusBadge: React.FC<StatusBadgeProps> = ({ status, autoSubmitted }) => {
   const styles: Record<string, string> = {
     draft: 'bg-slate-100 text-slate-700 border-slate-200',
     submitted: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -96,17 +126,34 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
   };
 
   return (
-    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${styles[status] || styles.draft}`}>
-      {status === 'submitted' && (
-        <span className="w-2 h-2 bg-amber-500 rounded-full mr-2 animate-pulse" />
+    <div className="flex items-center gap-2">
+      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${styles[status] || styles.draft}`}>
+        {status === 'submitted' && (
+          <span className="w-2 h-2 bg-amber-500 rounded-full mr-2 animate-pulse" />
+        )}
+        {status === 'approved' && (
+          <svg className="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+          </svg>
+        )}
+        {status === 'locked' && (
+          <svg className="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+          </svg>
+        )}
+        {labels[status] || status}
+      </span>
+      
+      {/* Auto-submitted badge */}
+      {autoSubmitted && (
+        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200">
+          <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+          </svg>
+          Auto-submitted
+        </span>
       )}
-      {status === 'approved' && (
-        <svg className="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
-          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-        </svg>
-      )}
-      {labels[status] || status}
-    </span>
+    </div>
   );
 };
 
@@ -229,11 +276,24 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
     setWeekStart(monday.toISOString().split('T')[0]);
   };
 
+  // Check if can submit
+  const canSubmitTimesheet = useMemo(() => {
+    if (!timesheetData) return false;
+    if (timesheetData.status !== 'draft' && timesheetData.status !== 'rejected') return false;
+    return isWeekEnded(timesheetData.week_start);
+  }, [timesheetData]);
+
+  const daysUntilCanSubmit = useMemo(() => {
+    if (!timesheetData) return 0;
+    return getDaysUntilSubmit(timesheetData.week_start);
+  }, [timesheetData]);
+
   // Submit timesheet
   const handleSubmit = async (): Promise<void> => {
     if (!timesheetData?.timesheet_id) return;
     
     setSubmitting(true);
+    setError(null);
     try {
       await safeFetchJson(
         `${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/submit/`,
@@ -245,8 +305,14 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
       setShowSubmitModal(false);
       setSubmitNotes('');
       fetchTimesheet();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+    } catch (err: any) {
+      // Handle the "week not ended" error from backend
+      const errorData = err?.data || {};
+      if (errorData.can_submit_on) {
+        setError(`Cannot submit yet. This timesheet can be submitted starting ${errorData.can_submit_on}.`);
+      } else {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -287,6 +353,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
 
   const days = getDayHeaders();
   const isEditable = timesheetData?.status === 'draft' || timesheetData?.status === 'rejected';
+  const weekHasEnded = timesheetData ? isWeekEnded(timesheetData.week_start) : false;
 
   // Loading state
   if (loading) {
@@ -306,8 +373,13 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
       <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <h2 className="text-xl font-semibold text-slate-800">Weekly Timesheet</h2>
-            {timesheetData && <StatusBadge status={timesheetData.status} />}
+            <h2 className="text-xl font-semibold text-slate-800">My Timesheet</h2>
+            {timesheetData && (
+              <StatusBadge 
+                status={timesheetData.status} 
+                autoSubmitted={timesheetData.auto_submitted}
+              />
+            )}
           </div>
           
           {/* Week Navigation */}
@@ -358,6 +430,43 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
         </div>
       )}
 
+      {/* Auto-submitted Notice */}
+      {timesheetData?.auto_submitted && timesheetData?.status === 'submitted' && (
+        <div className="mx-6 mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-amber-500 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+            </svg>
+            <div>
+              <h4 className="font-medium text-amber-800">Timesheet Auto-Submitted</h4>
+              <p className="text-sm text-amber-700 mt-1">
+                This timesheet was automatically submitted on Tuesday because it wasn't manually submitted by the deadline.
+                Your manager will review it shortly.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Week Not Ended Info (for draft timesheets) */}
+      {timesheetData?.status === 'draft' && !weekHasEnded && (
+        <div className="mx-6 mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-blue-500 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            </svg>
+            <div>
+              <h4 className="font-medium text-blue-800">Week In Progress</h4>
+              <p className="text-sm text-blue-700 mt-1">
+                You can submit this timesheet starting <strong>{getCanSubmitDate(timesheetData.week_start)}</strong> 
+                {daysUntilCanSubmit > 0 && ` (${daysUntilCanSubmit} day${daysUntilCanSubmit !== 1 ? 's' : ''} from now)`}.
+                Your time is being tracked automatically.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Rejection Notice */}
       {timesheetData?.status === 'rejected' && (
         <div className="mx-6 mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
@@ -367,7 +476,9 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
             </svg>
             <div>
               <h4 className="font-medium text-red-800">Timesheet Rejected</h4>
-              <p className="text-sm text-red-700 mt-1">Please review and make corrections before resubmitting.</p>
+              <p className="text-sm text-red-700 mt-1">
+                {timesheetData.rejection_reason || 'Please review and make corrections before resubmitting.'}
+              </p>
             </div>
           </div>
         </div>
@@ -407,7 +518,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                       <span>No time entries for this week</span>
-                      <span className="text-sm">Time will appear here as it's tracked</span>
+                      <span className="text-sm">Time will appear here as it's tracked by your desktop agent</span>
                     </div>
                   </td>
                 </tr>
@@ -510,18 +621,35 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
           </div>
           
           <div className="flex items-center gap-3">
+            {/* Draft - can submit if week ended */}
             {timesheetData?.status === 'draft' && (
-              <button
-                onClick={() => setShowSubmitModal(true)}
-                className="px-6 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm hover:shadow flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Submit for Approval
-              </button>
+              <>
+                {weekHasEnded ? (
+                  <button
+                    onClick={() => setShowSubmitModal(true)}
+                    className="px-6 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm hover:shadow flex items-center gap-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Submit for Approval
+                  </button>
+                ) : (
+                  <button
+                    disabled
+                    className="px-6 py-2.5 bg-slate-300 text-slate-500 font-medium rounded-lg cursor-not-allowed flex items-center gap-2"
+                    title={`Submit available ${getCanSubmitDate(timesheetData.week_start)}`}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Submit ({daysUntilCanSubmit} day{daysUntilCanSubmit !== 1 ? 's' : ''})
+                  </button>
+                )}
+              </>
             )}
             
+            {/* Rejected - can reopen and resubmit */}
             {timesheetData?.status === 'rejected' && (
               <>
                 <button
@@ -539,21 +667,34 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
               </>
             )}
             
+            {/* Submitted - waiting */}
             {timesheetData?.status === 'submitted' && (
               <span className="text-amber-600 font-medium flex items-center gap-2">
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
                 </svg>
                 Awaiting manager approval
+                {timesheetData.auto_submitted && ' (auto-submitted)'}
               </span>
             )}
             
+            {/* Approved */}
             {timesheetData?.status === 'approved' && (
               <span className="text-emerald-600 font-medium flex items-center gap-2">
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
                 Approved
+              </span>
+            )}
+            
+            {/* Locked */}
+            {timesheetData?.status === 'locked' && (
+              <span className="text-slate-600 font-medium flex items-center gap-2">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                </svg>
+                Locked (Invoiced)
               </span>
             )}
           </div>
@@ -596,6 +737,9 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
                   rows={3}
                 />
               </div>
+              <div className="p-3 bg-blue-50 rounded-lg border border-blue-100 text-sm text-blue-700">
+                <strong>Note:</strong> Once submitted, you won't be able to edit this timesheet until your manager reviews it.
+              </div>
             </div>
             <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
               <button
@@ -615,7 +759,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
                     Submitting...
                   </>
                 ) : (
-                  'Submit'
+                  'Submit for Approval'
                 )}
               </button>
             </div>

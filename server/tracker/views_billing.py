@@ -246,7 +246,6 @@ def approval_queue(request):
         status='submitted'
     ).select_related('user').order_by('submitted_at')
     
-    # ✅ Calculate from blocks instead of using serializer
     result = []
     for ts in timesheets:
         blocks = Block.objects.filter(timesheet=ts)
@@ -273,6 +272,7 @@ def approval_queue(request):
             'total_hours': round(total_minutes / 60, 2),
             'billable_hours': round(billable_minutes / 60, 2),
             'total_amount': round(total_amount, 2),
+            'auto_submitted': ts.auto_submitted,  # ← NEW: Include auto_submitted flag
         })
     
     return Response({
@@ -350,12 +350,14 @@ def weekly_timesheet_view(request):
         'week_end': week_end.isoformat(),
         'timesheet_id': timesheet.id,
         'status': timesheet.status,
+        'auto_submitted': timesheet.auto_submitted,  # ← NEW
+        'submitted_at': timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,  # ← NEW
+        'rejection_reason': timesheet.rejection_reason or '',  # ← NEW
         'entries': list(grid.values()),
         'daily_totals': daily_totals,
         'grand_total': sum(daily_totals.values()),
         'billable_total': sum(r['total'] for r in grid.values() if r['is_billable']),
     })
-
 
 # ===============================
 # CLIENT SUMMARY VIEW (MANAGER/BILLING)
@@ -1320,6 +1322,7 @@ def timesheet_history(request):
             'submitted_at': ts.submitted_at.isoformat() if ts.submitted_at else None,
             'approved_at': ts.approved_at.isoformat() if ts.approved_at else None,
             'approved_by': ts.approved_by.username if ts.approved_by else None,
+            'auto_submitted': ts.auto_submitted,  # ← NEW: Include auto_submitted flag
         })
     
     return Response({

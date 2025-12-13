@@ -22,6 +22,7 @@ interface Timesheet {
   submitted_at: string | null;
   submitted_notes: string;
   days_pending: number;
+  auto_submitted?: boolean;  // ← NEW: Flag for auto-submitted timesheets
 }
 
 interface QueueData {
@@ -118,7 +119,11 @@ const TimesheetCard: React.FC<TimesheetCardProps> = ({ timesheet, onApprove, onR
 
   return (
     <>
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+      <div className={`bg-white rounded-xl border shadow-sm hover:shadow-md transition-shadow overflow-hidden ${
+        timesheet.auto_submitted 
+          ? 'border-amber-200 ring-1 ring-amber-100' 
+          : 'border-slate-200'
+      }`}>
         <div className="p-5">
           {/* Header */}
           <div className="flex items-start justify-between mb-4">
@@ -129,18 +134,47 @@ const TimesheetCard: React.FC<TimesheetCardProps> = ({ timesheet, onApprove, onR
                 <p className="text-sm text-slate-500">{timesheet.user_email}</p>
               </div>
             </div>
-            {timesheet.days_pending > 0 && (
-              <span className={`px-2 py-1 rounded text-xs font-medium ${
-                timesheet.days_pending >= 3 
-                  ? 'bg-red-100 text-red-700' 
-                  : timesheet.days_pending >= 1 
-                    ? 'bg-amber-100 text-amber-700'
-                    : 'bg-slate-100 text-slate-600'
-              }`}>
-                {timesheet.days_pending} day{timesheet.days_pending !== 1 ? 's' : ''} pending
-              </span>
-            )}
+            <div className="flex flex-col items-end gap-1">
+              {/* Auto-submitted badge */}
+              {timesheet.auto_submitted && (
+                <span className="px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-700 flex items-center gap-1">
+                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                  </svg>
+                  Auto-submitted
+                </span>
+              )}
+              {/* Days pending badge */}
+              {timesheet.days_pending > 0 && (
+                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                  timesheet.days_pending >= 3 
+                    ? 'bg-red-100 text-red-700' 
+                    : timesheet.days_pending >= 1 
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {timesheet.days_pending} day{timesheet.days_pending !== 1 ? 's' : ''} pending
+                </span>
+              )}
+            </div>
           </div>
+
+          {/* Auto-submitted notice */}
+          {timesheet.auto_submitted && (
+            <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-100">
+              <div className="flex items-start gap-2">
+                <svg className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <div className="text-xs font-medium text-amber-700">Not manually reviewed</div>
+                  <p className="text-xs text-amber-600 mt-0.5">
+                    This timesheet was auto-submitted (Tuesday deadline). Employee did not review before submission.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Week Info */}
           <div className="flex items-center gap-2 text-sm text-slate-600 mb-4">
@@ -167,15 +201,15 @@ const TimesheetCard: React.FC<TimesheetCardProps> = ({ timesheet, onApprove, onR
           </div>
 
           {/* Notes */}
-          {timesheet.submitted_notes && (
-            <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-100">
+          {timesheet.submitted_notes && !timesheet.submitted_notes.startsWith('[Auto-submitted') && (
+            <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
               <div className="flex items-start gap-2">
-                <svg className="w-4 h-4 text-amber-500 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <svg className="w-4 h-4 text-blue-500 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M18 13V5a2 2 0 00-2-2H4a2 2 0 00-2 2v8a2 2 0 002 2h3l3 3 3-3h3a2 2 0 002-2zM5 7a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1zm1 3a1 1 0 100 2h3a1 1 0 100-2H6z" clipRule="evenodd" />
                 </svg>
                 <div>
-                  <div className="text-xs font-medium text-amber-700 mb-1">Note from employee:</div>
-                  <p className="text-sm text-amber-800">{timesheet.submitted_notes}</p>
+                  <div className="text-xs font-medium text-blue-700 mb-1">Note from employee:</div>
+                  <p className="text-sm text-blue-800">{timesheet.submitted_notes}</p>
                 </div>
               </div>
             </div>
@@ -225,6 +259,11 @@ const TimesheetCard: React.FC<TimesheetCardProps> = ({ timesheet, onApprove, onR
               <p className="text-slate-600 mb-4">
                 Please provide a reason for rejecting <strong>{timesheet.user_name}'s</strong> timesheet.
               </p>
+              {timesheet.auto_submitted && (
+                <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
+                  <strong>Note:</strong> This timesheet was auto-submitted. The employee may not have reviewed their time entries.
+                </div>
+              )}
               <textarea
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
@@ -331,6 +370,9 @@ const ApprovalQueue: React.FC<ApprovalQueueProps> = () => {
     window.location.href = `/timesheets/${timesheetId}`;
   };
 
+  // Count auto-submitted
+  const autoSubmittedCount = queueData.timesheets.filter(t => t.auto_submitted).length;
+
   if (loading) {
     return (
       <div className="min-h-[400px] flex items-center justify-center">
@@ -382,18 +424,37 @@ const ApprovalQueue: React.FC<ApprovalQueueProps> = () => {
       )}
 
       {/* Queue Stats */}
-      <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-5 border border-amber-100">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-amber-500 rounded-xl flex items-center justify-center">
-            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-            </svg>
-          </div>
-          <div>
-            <div className="text-3xl font-bold text-amber-800">{queueData.count}</div>
-            <div className="text-amber-600">timesheet{queueData.count !== 1 ? 's' : ''} pending approval</div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-5 border border-amber-100">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-amber-500 rounded-xl flex items-center justify-center">
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+            </div>
+            <div>
+              <div className="text-3xl font-bold text-amber-800">{queueData.count}</div>
+              <div className="text-amber-600">timesheet{queueData.count !== 1 ? 's' : ''} pending approval</div>
+            </div>
           </div>
         </div>
+        
+        {/* Auto-submitted count */}
+        {autoSubmittedCount > 0 && (
+          <div className="bg-gradient-to-r from-slate-50 to-slate-100 rounded-xl p-5 border border-slate-200">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-slate-400 rounded-xl flex items-center justify-center">
+                <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-3xl font-bold text-slate-700">{autoSubmittedCount}</div>
+                <div className="text-slate-500">auto-submitted (not manually reviewed)</div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Queue List */}

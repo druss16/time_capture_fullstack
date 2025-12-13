@@ -1,10 +1,10 @@
 /**
- * Navigation.tsx — Updated with organization role display
+ * Navigation.tsx — Updated with organization role display and Billing link
  */
 import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { Users } from 'lucide-react';
+import { Users, Receipt } from 'lucide-react';
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
 interface UserInfo {
@@ -33,7 +33,7 @@ export default function Navigation() {
   const canAccessSettings = ['owner', 'admin'].includes(userRole || '');
   const canApproveTime = ['owner', 'admin', 'manager'].includes(userRole || '');
 
-  const isActive = (path: string) => location.pathname === path;
+  const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
   
   const linkClass = (path: string) => {
     const base = "px-4 py-2 rounded-lg font-medium text-sm transition-colors duration-150 flex items-center gap-2";
@@ -78,6 +78,13 @@ export default function Navigation() {
             <Link to="/timecards" className={linkClass("/timecards")}>
               ⏱️ Timecards
             </Link>
+            
+            {/* Billing - Timesheets, Approvals, etc. */}
+            <Link to="/billing" className={linkClass("/billing")}>
+              <Receipt className="w-4 h-4" />
+              Billing
+            </Link>
+            
             <Link to="/devices" className={linkClass("/devices")}>
               💻 Devices
             </Link>
@@ -119,6 +126,30 @@ export default function Navigation() {
             Logout
           </button>
         </div>
+      </div>
+
+      {/* Mobile Navigation */}
+      <div className="sm:hidden border-t border-blue-100 px-4 py-2 flex items-center gap-2 overflow-x-auto">
+        <Link to="/daily" className={linkClass("/daily")}>
+          📅 Daily
+        </Link>
+        <Link to="/timecards" className={linkClass("/timecards")}>
+          ⏱️ Time
+        </Link>
+        <Link to="/billing" className={linkClass("/billing")}>
+          💰 Billing
+        </Link>
+        <Link to="/devices" className={linkClass("/devices")}>
+          💻 Devices
+        </Link>
+        {canAccessSettings && (
+          <Link to="/settings" className={linkClass("/settings")}>
+            ⚙️ Settings
+          </Link>
+        )}
+        <Link to="/clients" className={linkClass("/clients")}>
+          👥 Clients
+        </Link>
       </div>
     </nav>
   );

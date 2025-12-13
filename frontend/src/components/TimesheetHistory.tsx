@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
+  AlertCircle,
 } from 'lucide-react';
 
 // ===============================
@@ -36,6 +37,7 @@ interface TimesheetHistoryItem {
   submitted_at: string | null;
   approved_at: string | null;
   approved_by: string | null;
+  auto_submitted?: boolean;  // ← NEW: Flag for auto-submitted timesheets
 }
 
 interface HistoryResponse {
@@ -160,25 +162,33 @@ const TimesheetHistory: React.FC = () => {
     { total_hours: 0, billable_hours: 0, total_amount: 0 }
   );
 
+  // Count auto-submitted
+  const autoSubmittedCount = data.filter(ts => ts.auto_submitted).length;
+
   // Status badge component
-  const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
-    if (status === 'approved') {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-700">
-          <CheckCircle className="w-3 h-3" />
-          Approved
-        </span>
-      );
-    }
-    if (status === 'locked') {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-slate-100 text-slate-700">
-          <Lock className="w-3 h-3" />
-          Locked
-        </span>
-      );
-    }
-    return null;
+  const StatusBadge: React.FC<{ status: string; autoSubmitted?: boolean }> = ({ status, autoSubmitted }) => {
+    return (
+      <div className="flex flex-col items-center gap-1">
+        {status === 'approved' && (
+          <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-700">
+            <CheckCircle className="w-3 h-3" />
+            Approved
+          </span>
+        )}
+        {status === 'locked' && (
+          <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-slate-100 text-slate-700">
+            <Lock className="w-3 h-3" />
+            Locked
+          </span>
+        )}
+        {autoSubmitted && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-700" title="Auto-submitted by system">
+            <Clock className="w-3 h-3" />
+            Auto
+          </span>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -283,7 +293,7 @@ const TimesheetHistory: React.FC = () => {
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-5 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-4">
           <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
             <FileText className="w-4 h-4" />
@@ -314,6 +324,15 @@ const TimesheetHistory: React.FC = () => {
             Total Value
           </div>
           <div className="text-2xl font-bold text-green-600">{formatCurrency(totals.total_amount)}</div>
+        </div>
+        
+        {/* Auto-submitted count */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4">
+          <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
+            <AlertCircle className="w-4 h-4" />
+            Auto-Submitted
+          </div>
+          <div className="text-2xl font-bold text-amber-600">{autoSubmittedCount}</div>
         </div>
       </div>
 
@@ -355,7 +374,12 @@ const TimesheetHistory: React.FC = () => {
                 </tr>
               ) : (
                 data.map((ts) => (
-                  <tr key={ts.id} className="hover:bg-slate-50 transition-colors">
+                  <tr 
+                    key={ts.id} 
+                    className={`hover:bg-slate-50 transition-colors ${
+                      ts.auto_submitted ? 'bg-amber-50/30' : ''
+                    }`}
+                  >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white font-medium text-sm">
@@ -374,7 +398,7 @@ const TimesheetHistory: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <StatusBadge status={ts.status} />
+                      <StatusBadge status={ts.status} autoSubmitted={ts.auto_submitted} />
                     </td>
                     <td className="px-4 py-3 text-right text-slate-700">
                       {ts.total_hours.toFixed(1)}h

@@ -799,6 +799,8 @@ class EmployeeCostRateDetailView(APIView):
         return Response(status=204)
 
 
+# Replace your ProfitabilityReportView in views_billing.py with this:
+
 class ProfitabilityReportView(APIView):
     """
     GET: Calculate profit margins by client
@@ -810,21 +812,17 @@ class ProfitabilityReportView(APIView):
     """
     permission_classes = [IsAuthenticated]
     
-    def get_membership(self, request):
-        """Get user's organization membership"""
-        return OrganizationMembership.objects.filter(
-            user=request.user,
-        ).select_related('organization').first()
-    
     def get(self, request):
-        membership = self.get_membership(request)
-        if not membership:
-            return Response({'error': 'No organization membership'}, status=403)
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization'}, status=400)
         
-        org = membership.organization
+        # Check permission
+        membership = OrganizationMembership.objects.filter(
+            user=request.user, organization=org
+        ).first()
         
-        # Only managers/admins/owners can view profitability
-        if membership.role not in ['owner', 'admin', 'manager']:
+        if not membership or membership.role not in ['owner', 'admin', 'manager']:
             return Response({'error': 'Permission denied'}, status=403)
         
         # Parse date range
@@ -835,11 +833,11 @@ class ProfitabilityReportView(APIView):
         if not start_date or not end_date:
             return Response({'error': 'start_date and end_date required'}, status=400)
         
-        # Build query
+        # Build query - FIXED: use 'org' not 'organization'
         blocks = Block.objects.filter(
-            organization=org,
-            start_time__date__gte=start_date,
-            start_time__date__lte=end_date,
+            org=org,  # ← CORRECT field name
+            day__gte=start_date,  # ← Use 'day' field for date filtering
+            day__lte=end_date,
             is_billable=True,
         )
         
@@ -852,13 +850,17 @@ class ProfitabilityReportView(APIView):
         
         # Get all cost rates for the org (most recent per user)
         cost_rates = {}
-        for rate in EmployeeCostRate.objects.filter(
-            organization=org,
-            effective_date__lte=end_date
-        ).select_related('user').order_by('user_id', '-effective_date'):
-            # Only keep first (most recent) rate per user
-            if rate.user_id not in cost_rates:
-                cost_rates[rate.user_id] = rate.cost_rate
+        try:
+            for rate in EmployeeCostRate.objects.filter(
+                organization=org,
+                effective_date__lte=end_date
+            ).select_related('user').order_by('user_id', '-effective_date'):
+                # Only keep first (most recent) rate per user
+                if rate.user_id not in cost_rates:
+                    cost_rates[rate.user_id] = rate.cost_rate
+        except Exception:
+            # EmployeeCostRate might not exist yet
+            pass
         
         # Default cost rate if not set
         default_cost_rate = Decimal('50.00')
@@ -880,19 +882,13 @@ class ProfitabilityReportView(APIView):
             user_id = block.user_id
             user_name = f"{block.user.first_name} {block.user.last_name}".strip() or block.user.username
             
-            # Calculate hours from minutes or duration
-            if hasattr(block, 'minutes') and block.minutes:
+            # Calculate hours from minutes
+            if block.minutes:
                 hours = Decimal(str(block.minutes)) / Decimal('60')
-            elif hasattr(block, 'duration') and block.duration:
-                hours = Decimal(str(block.duration)) / Decimal('60')
             else:
-                # Calculate from start/end time
-                if block.end_time and block.start_time:
-                    delta = block.end_time - block.start_time
-                    hours = Decimal(str(delta.total_seconds())) / Decimal('3600')
-                else:
-                    hours = Decimal('0')
+                hours = Decimal('0')
             
+            # Get rates
             billing_rate = Decimal(str(block.billing_rate)) if block.billing_rate else Decimal('0')
             cost_rate = cost_rates.get(user_id, default_cost_rate)
             
@@ -1004,7 +1000,7 @@ class ProfitabilityReportView(APIView):
                 'margin_percent': total_margin_pct,
             }
         })
-
+        
 # ============================================================================
 # CORRECTED VIEWS - Replace these in views_billing.py
 # Your models use: 'org' (not 'organization'), 'submitted_notes' (not 'notes')

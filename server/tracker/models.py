@@ -32,11 +32,17 @@ class Organization(models.Model):
     
     # Settings
     timezone = models.CharField(max_length=50, default='America/New_York')
-    billing_rate_default = models.DecimalField(max_digits=8, decimal_places=2, default=150.00)
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    billing_rate_default = models.DecimalField(
+    max_digits=10, 
+    decimal_places=2, 
+    default=Decimal('150.00'),
+    help_text="Default hourly billing rate"
+    )  
     
     class Meta:
         verbose_name = "Organization"

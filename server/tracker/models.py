@@ -1266,6 +1266,10 @@ class Timesheet(models.Model):
     # Submission tracking
     submitted_at = models.DateTimeField(null=True, blank=True)
     submitted_notes = models.TextField(blank=True, default='', help_text="Notes from employee on submission")
+    auto_submitted = models.BooleanField(
+        default=False, 
+        help_text="True if timesheet was automatically submitted by system (Tuesday auto-submit)"
+    )
     
     # Approval tracking
     approved_by = models.ForeignKey(
@@ -1311,6 +1315,23 @@ class Timesheet(models.Model):
         from datetime import timedelta
         return self.week_start + timedelta(days=6)
     
+    def can_submit(self):
+        """
+        Check if timesheet can be submitted.
+        Option A: Can only submit AFTER the week has ended.
+        """
+        from datetime import timedelta
+        today = timezone.now().date()
+        week_end = self.week_start + timedelta(days=6)
+        
+        if today <= week_end:
+            return False, f"Cannot submit until after {week_end.isoformat()}. Week still in progress."
+        
+        if self.status not in ('draft', 'rejected'):
+            return False, f"Cannot submit timesheet with status '{self.status}'."
+        
+        return True, None
+    
     def recalculate_totals(self):
         """
         Recalculate totals from linked blocks.
@@ -1347,15 +1368,29 @@ class Timesheet(models.Model):
         
         self.save(update_fields=['total_hours', 'billable_hours', 'non_billable_hours', 'total_amount', 'updated_at'])
     
-    def submit(self, notes=''):
-        """Submit timesheet for approval"""
-        if self.status != 'draft':
-            raise ValueError(f"Can only submit draft timesheets, current status: {self.status}")
+    def submit(self, notes='', auto=False):
+        """
+        Submit timesheet for approval.
+        
+        Args:
+            notes: Optional submission notes from employee
+            auto: True if this is an auto-submit (system-triggered)
+        """
+        if self.status not in ('draft', 'rejected'):
+            raise ValueError(f"Can only submit draft/rejected timesheets, current status: {self.status}")
         
         self.recalculate_totals()
         self.status = 'submitted'
         self.submitted_at = timezone.now()
         self.submitted_notes = notes
+        self.auto_submitted = auto
+        
+        # Clear rejection fields if resubmitting
+        if self.rejected_at:
+            self.rejection_reason = ''
+            self.rejected_at = None
+            self.rejected_by = None
+        
         self.save()
         
         # Lock associated blocks
@@ -1432,7 +1467,8 @@ class Timesheet(models.Model):
         return timesheet, created
     
     def __str__(self):
-        return f"{self.user.username} - Week of {self.week_start} ({self.status})"
+        auto_tag = " [AUTO]" if self.auto_submitted else ""
+        return f"{self.user.username} - Week of {self.week_start} ({self.status}){auto_tag}"
 
 
 # ===============================

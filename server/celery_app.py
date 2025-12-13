@@ -2,7 +2,10 @@
 """
 Celery configuration for TimeTracker background tasks.
 
-This replaces your existing celery_app.py.
+Includes:
+- Block compaction and AI classification (every 5 min)
+- Timesheet workflow (weekly reminders, auto-submit, manager notifications)
+- Maintenance (cleanup, daily summaries)
 """
 
 import os
@@ -26,13 +29,17 @@ app.autodiscover_tasks()
 # ============================================================================
 
 app.conf.beat_schedule = {
+    # =========================================================================
+    # BLOCK PROCESSING (Frequent)
+    # =========================================================================
+    
     # ✅ AUTO-COMPACT: Every 5 minutes ⚡
     # Creates blocks from raw events automatically
     'auto-compact-every-5-minutes': {
         'task': 'tracker.auto_compact_recent_events',
-        'schedule': crontab(minute='*/5'),  # ✅ Changed: 10 → 5 minutes
+        'schedule': crontab(minute='*/5'),
         'options': {
-            'expires': 300,  # ✅ Changed: 600 → 300 seconds
+            'expires': 300,
         }
     },
     
@@ -40,11 +47,59 @@ app.conf.beat_schedule = {
     # Learns patterns and auto-categorizes high-confidence blocks
     'ai-classify-every-5-minutes': {
         'task': 'tracker.ai_classify_uncategorized_blocks',
-        'schedule': crontab(minute='*/5'),  # ✅ Changed: 15 → 5 minutes
+        'schedule': crontab(minute='*/5'),
         'options': {
-            'expires': 300,  # ✅ Changed: 900 → 300 seconds
+            'expires': 300,
         }
     },
+    
+    # =========================================================================
+    # TIMESHEET WORKFLOW (Weekly)
+    # =========================================================================
+    
+    # ✅ MONDAY 1:00 AM: Pre-create timesheets for new week
+    # Ensures everyone has a DRAFT timesheet ready when they start
+    'create-weekly-timesheets': {
+        'task': 'tracker.create_weekly_timesheets',
+        'schedule': crontab(hour=1, minute=0, day_of_week=1),  # Monday 1am
+        'options': {
+            'expires': 3600,
+        }
+    },
+    
+    # ✅ MONDAY 9:00 AM: Remind users to submit last week's timesheet
+    # "Your timesheet for Dec 1-7 is ready to submit!"
+    'timesheet-reminder-monday': {
+        'task': 'tracker.send_timesheet_reminders',
+        'schedule': crontab(hour=9, minute=0, day_of_week=1),  # Monday 9am
+        'options': {
+            'expires': 3600,
+        }
+    },
+    
+    # ✅ TUESDAY 9:00 AM: Auto-submit any remaining DRAFT timesheets
+    # Marks with auto_submitted=True so managers know it wasn't manually reviewed
+    'timesheet-auto-submit-tuesday': {
+        'task': 'tracker.auto_submit_timesheets',
+        'schedule': crontab(hour=9, minute=0, day_of_week=2),  # Tuesday 9am
+        'options': {
+            'expires': 3600,
+        }
+    },
+    
+    # ✅ TUESDAY 10:00 AM: Notify managers of pending approvals
+    # "You have 5 timesheets pending approval"
+    'notify-managers-pending-approvals': {
+        'task': 'tracker.notify_managers_pending_approvals',
+        'schedule': crontab(hour=10, minute=0, day_of_week=2),  # Tuesday 10am
+        'options': {
+            'expires': 3600,
+        }
+    },
+    
+    # =========================================================================
+    # MAINTENANCE (Daily)
+    # =========================================================================
     
     # ✅ CLEANUP: Daily at 2 AM
     # Removes old raw events to prevent database bloat
@@ -116,9 +171,32 @@ def setup_periodic_tasks(sender, **kwargs):
     print("=" * 80)
     print("CELERY BEAT SCHEDULE LOADED:")
     print("=" * 80)
-    for task_name, task_config in app.conf.beat_schedule.items():
+    
+    # Group tasks by category for cleaner output
+    categories = {
+        'BLOCK PROCESSING': ['auto-compact', 'ai-classify'],
+        'TIMESHEET WORKFLOW': ['timesheet', 'create-weekly', 'notify-managers'],
+        'MAINTENANCE': ['cleanup', 'summary'],
+    }
+    
+    for task_name, task_config in sorted(app.conf.beat_schedule.items()):
         print(f"  ✓ {task_name}")
         print(f"    Task: {task_config['task']}")
         print(f"    Schedule: {task_config['schedule']}")
         print()
+    
+    print("=" * 80)
+    print("WEEKLY TIMESHEET WORKFLOW:")
+    print("=" * 80)
+    print("""
+    SUNDAY     Week ends (users can now submit)
+    
+    MONDAY     
+    ├── 1:00 AM   Create DRAFT timesheets for new week
+    └── 9:00 AM   📧 Reminder: "Submit your timesheet!"
+    
+    TUESDAY    
+    ├── 9:00 AM   ⚡ Auto-submit remaining DRAFTs
+    └── 10:00 AM  📧 Notify managers of pending approvals
+    """)
     print("=" * 80)

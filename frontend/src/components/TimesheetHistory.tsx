@@ -7,7 +7,6 @@ import {
   CheckCircle,
   Lock,
   Calendar,
-  User,
   Clock,
   DollarSign,
   RefreshCw,
@@ -19,30 +18,41 @@ import {
 } from 'lucide-react';
 
 // ===============================
-// TYPES
+// TYPES - Match backend response
 // ===============================
 
 interface TimesheetHistoryItem {
   id: number;
   user_id: number;
-  user_name: string;
+  user_username: string;
   user_email: string;
+  user_first_name: string;
+  user_last_name: string;
   week_start: string;
   week_end: string;
   status: 'approved' | 'locked';
   total_hours: number;
   billable_hours: number;
-  non_billable_hours: number;
-  total_amount: number;
+  total_amount: string;  // Backend sends as string
+  auto_submitted: boolean;
   submitted_at: string | null;
   approved_at: string | null;
-  approved_by: string | null;
-  auto_submitted?: boolean;  // ← NEW: Flag for auto-submitted timesheets
+  approved_by_id: number | null;
+  approved_by_username: string | null;
+  locked_at?: string | null;
+}
+
+interface HistorySummary {
+  total_timesheets: number;
+  total_hours: number;
+  billable_hours: number;
+  total_amount: string;
+  auto_submitted_count: number;
 }
 
 interface HistoryResponse {
-  count: number;
   timesheets: TimesheetHistoryItem[];
+  summary: HistorySummary;
 }
 
 interface TeamMember {
@@ -56,11 +66,6 @@ interface TeamMember {
 // HELPER FUNCTIONS
 // ===============================
 
-const formatDate = (dateStr: string): string => {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-};
-
 const formatDateRange = (start: string, end: string): string => {
   const startDate = new Date(start);
   const endDate = new Date(end);
@@ -73,13 +78,14 @@ const formatDateRange = (start: string, end: string): string => {
   return `${startMonth} ${startDate.getDate()} - ${endMonth} ${endDate.getDate()}, ${startDate.getFullYear()}`;
 };
 
-const formatCurrency = (amount: number): string => {
+const formatCurrency = (amount: string | number): string => {
+  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(amount);
+  }).format(num || 0);
 };
 
 const formatDateTime = (dateStr: string | null): string => {
@@ -93,6 +99,13 @@ const formatDateTime = (dateStr: string | null): string => {
   });
 };
 
+const getUserDisplayName = (ts: TimesheetHistoryItem): string => {
+  if (ts.user_first_name && ts.user_last_name) {
+    return `${ts.user_first_name} ${ts.user_last_name}`;
+  }
+  return ts.user_username;
+};
+
 // ===============================
 // MAIN COMPONENT
 // ===============================
@@ -101,6 +114,7 @@ const TimesheetHistory: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<TimesheetHistoryItem[]>([]);
+  const [summary, setSummary] = useState<HistorySummary | null>(null);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [showFilters, setShowFilters] = useState(false);
   
@@ -141,6 +155,7 @@ const TimesheetHistory: React.FC = () => {
       
       const response = await safeFetchJson<HistoryResponse>(url);
       setData(response.timesheets || []);
+      setSummary(response.summary || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load history');
     } finally {
@@ -151,19 +166,6 @@ const TimesheetHistory: React.FC = () => {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  // Calculate totals
-  const totals = data.reduce(
-    (acc, ts) => ({
-      total_hours: acc.total_hours + ts.total_hours,
-      billable_hours: acc.billable_hours + ts.billable_hours,
-      total_amount: acc.total_amount + ts.total_amount,
-    }),
-    { total_hours: 0, billable_hours: 0, total_amount: 0 }
-  );
-
-  // Count auto-submitted
-  const autoSubmittedCount = data.filter(ts => ts.auto_submitted).length;
 
   // Status badge component
   const StatusBadge: React.FC<{ status: string; autoSubmitted?: boolean }> = ({ status, autoSubmitted }) => {
@@ -292,14 +294,16 @@ const TimesheetHistory: React.FC = () => {
         </div>
       )}
 
-      {/* Summary Cards */}
+      {/* Summary Cards - Use backend summary */}
       <div className="grid grid-cols-5 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-4">
           <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
             <FileText className="w-4 h-4" />
             Timesheets
           </div>
-          <div className="text-2xl font-bold text-slate-800">{data.length}</div>
+          <div className="text-2xl font-bold text-slate-800">
+            {summary?.total_timesheets ?? data.length}
+          </div>
         </div>
         
         <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -307,7 +311,9 @@ const TimesheetHistory: React.FC = () => {
             <Clock className="w-4 h-4" />
             Total Hours
           </div>
-          <div className="text-2xl font-bold text-slate-800">{totals.total_hours.toFixed(1)}</div>
+          <div className="text-2xl font-bold text-slate-800">
+            {(summary?.total_hours ?? 0).toFixed(1)}
+          </div>
         </div>
         
         <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -315,7 +321,9 @@ const TimesheetHistory: React.FC = () => {
             <Clock className="w-4 h-4" />
             Billable Hours
           </div>
-          <div className="text-2xl font-bold text-blue-600">{totals.billable_hours.toFixed(1)}</div>
+          <div className="text-2xl font-bold text-blue-600">
+            {(summary?.billable_hours ?? 0).toFixed(1)}
+          </div>
         </div>
         
         <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -323,16 +331,19 @@ const TimesheetHistory: React.FC = () => {
             <DollarSign className="w-4 h-4" />
             Total Value
           </div>
-          <div className="text-2xl font-bold text-green-600">{formatCurrency(totals.total_amount)}</div>
+          <div className="text-2xl font-bold text-green-600">
+            {formatCurrency(summary?.total_amount ?? '0')}
+          </div>
         </div>
         
-        {/* Auto-submitted count */}
         <div className="bg-white border border-slate-200 rounded-xl p-4">
           <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
             <AlertCircle className="w-4 h-4" />
             Auto-Submitted
           </div>
-          <div className="text-2xl font-bold text-amber-600">{autoSubmittedCount}</div>
+          <div className="text-2xl font-bold text-amber-600">
+            {summary?.auto_submitted_count ?? 0}
+          </div>
         </div>
       </div>
 
@@ -383,10 +394,10 @@ const TimesheetHistory: React.FC = () => {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white font-medium text-sm">
-                          {ts.user_name.charAt(0).toUpperCase()}
+                          {getUserDisplayName(ts).charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <div className="font-medium text-slate-800">{ts.user_name}</div>
+                          <div className="font-medium text-slate-800">{getUserDisplayName(ts)}</div>
                           <div className="text-xs text-slate-500">{ts.user_email}</div>
                         </div>
                       </div>
@@ -413,9 +424,9 @@ const TimesheetHistory: React.FC = () => {
                       <div className="text-sm text-slate-600">
                         {formatDateTime(ts.approved_at)}
                       </div>
-                      {ts.approved_by && (
+                      {ts.approved_by_username && (
                         <div className="text-xs text-slate-400">
-                          by {ts.approved_by}
+                          by {ts.approved_by_username}
                         </div>
                       )}
                     </td>

@@ -2,10 +2,11 @@
  * Settings.tsx — Org Admin Settings Page with Role Management & Billing Rates
  * 
  * Tabs:
- * - Organization Info (name, billing contact)
+ * - Organization Info (name, billing contact, DEFAULT BILLING RATE)
  * - Team Members (view users, invite new, manage roles)
  * - Clients (add/edit/delete)
  * - Billing Rates (hourly rates per user/client)
+ * - Employee Costs (cost rates for profitability)
  * - Registered Devices (see who's tracking)
  * - Install Token (view/regenerate for IT)
  */
@@ -47,6 +48,7 @@ type OrgInfo = {
   name: string;
   billing_email: string;
   billing_contact: string;
+  billing_rate_default: string;  // ← NEW: Default hourly rate
   created_at: string;
 };
 
@@ -97,8 +99,8 @@ type BillingRate = {
   client_name: string;
   task_type: number | null;
   task_type_name: string;
-  rate: string;  // Backend uses 'rate'
-  hourly_rate?: string;  // Keep for compatibility
+  rate: string;
+  hourly_rate?: string;
   effective_date: string;
   end_date: string | null;
   is_default: boolean;
@@ -318,6 +320,7 @@ export default function Settings() {
                       rates={billingRates}
                       users={teamMembers}
                       clients={clients}
+                      orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
                       onRefresh={() => loadTabData('billing')}
                       onSuccess={showSuccess}
                       onError={showError}
@@ -359,7 +362,7 @@ export default function Settings() {
 }
 
 // ============================================================================
-// Organization Tab
+// Organization Tab - NOW WITH DEFAULT BILLING RATE
 // ============================================================================
 function OrganizationTab({
   orgInfo,
@@ -378,6 +381,7 @@ function OrganizationTab({
     name: '',
     billing_email: '',
     billing_contact: '',
+    billing_rate_default: '150.00',  // ← NEW
   });
 
   useEffect(() => {
@@ -386,6 +390,7 @@ function OrganizationTab({
         name: orgInfo.name || '',
         billing_email: orgInfo.billing_email || '',
         billing_contact: orgInfo.billing_contact || '',
+        billing_rate_default: orgInfo.billing_rate_default || '150.00',  // ← NEW
       });
     }
   }, [orgInfo]);
@@ -459,7 +464,31 @@ function OrganizationTab({
               className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
-          <div className="flex gap-2 pt-2">
+          
+          {/* ✅ NEW: Default Billing Rate */}
+          <div className="pt-4 border-t border-border">
+            <label className="block text-sm font-medium mb-1.5">
+              <DollarSign className="w-4 h-4 inline mr-1" />
+              Default Hourly Billing Rate
+            </label>
+            <div className="relative max-w-xs">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.billing_rate_default}
+                onChange={(e) => setForm({ ...form, billing_rate_default: e.target.value })}
+                className="w-full pl-8 pr-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
+                placeholder="150.00"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground mt-1.5">
+              This rate applies to all billable time unless overridden in Billing Rates
+            </p>
+          </div>
+
+          <div className="flex gap-2 pt-4">
             <button
               onClick={handleSave}
               disabled={saving}
@@ -477,7 +506,7 @@ function OrganizationTab({
           </div>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-6">
           <div className="grid grid-cols-2 gap-4">
             <div>
               <p className="text-sm text-muted-foreground">Organization Name</p>
@@ -494,6 +523,31 @@ function OrganizationTab({
             <div>
               <p className="text-sm text-muted-foreground">Billing Contact</p>
               <p className="font-medium">{orgInfo.billing_contact || '—'}</p>
+            </div>
+          </div>
+          
+          {/* ✅ NEW: Show Default Rate in view mode */}
+          <div className="pt-4 border-t border-border">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-green-700 font-medium flex items-center gap-2">
+                    <DollarSign className="w-4 h-4" />
+                    Default Hourly Billing Rate
+                  </p>
+                  <p className="text-2xl font-bold text-green-700 mt-1">
+                    ${parseFloat(orgInfo.billing_rate_default || '150.00').toFixed(2)}/hr
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                    Firm Default
+                  </span>
+                </div>
+              </div>
+              <p className="text-xs text-green-600 mt-2">
+                All new time entries use this rate unless a custom rate is configured in Billing Rates
+              </p>
             </div>
           </div>
         </div>
@@ -986,12 +1040,13 @@ function ClientsTab({
 }
 
 // ============================================================================
-// Billing Rates Tab (NEW)
+// Billing Rates Tab - Now shows org default rate
 // ============================================================================
 function BillingRatesTab({
   rates,
   users,
   clients,
+  orgDefaultRate,
   onRefresh,
   onSuccess,
   onError,
@@ -999,6 +1054,7 @@ function BillingRatesTab({
   rates: BillingRate[];
   users: TeamMember[];
   clients: Client[];
+  orgDefaultRate: string;
   onRefresh: () => void;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
@@ -1025,21 +1081,17 @@ function BillingRatesTab({
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Build payload - only include user/client if selected
       const payload: Record<string, any> = {
-        rate: form.hourly_rate,  // Backend expects 'rate' not 'hourly_rate'
+        rate: form.hourly_rate,
         effective_date: form.effective_date,
       };
       
-      // Only add user/client if a value was selected (convert to int)
       if (form.user) {
-        payload.user = parseInt(form.user, 10);
+        payload.user_id = parseInt(form.user, 10);
       }
       if (form.client) {
-        payload.client = parseInt(form.client, 10);
+        payload.client_id = parseInt(form.client, 10);
       }
-      
-      console.log('Sending billing rate:', payload); // Debug
       
       await safeFetchJson(`${API_BASE}/billing/rates/`, {
         method: 'POST',
@@ -1076,15 +1128,33 @@ function BillingRatesTab({
         <h2 className="text-xl font-semibold flex items-center gap-2">
           <DollarSign className="w-5 h-5 text-primary" />
           Billing Rates
-          <span className="text-sm font-normal text-muted-foreground">({rates.length})</span>
+          <span className="text-sm font-normal text-muted-foreground">({rates.length} custom)</span>
         </h2>
         <button
           onClick={() => setShowAdd(true)}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors"
         >
           <Plus className="w-4 h-4" />
-          Add Rate
+          Add Custom Rate
         </button>
+      </div>
+
+      {/* Show Org Default Rate */}
+      <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-green-700 font-medium">Organization Default Rate</p>
+            <p className="text-2xl font-bold text-green-700">${parseFloat(orgDefaultRate).toFixed(2)}/hr</p>
+          </div>
+          <div className="text-right">
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+              Base Rate
+            </span>
+            <p className="text-xs text-green-600 mt-1">
+              Edit in Organization tab
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Rate Priority Info */}
@@ -1094,14 +1164,14 @@ function BillingRatesTab({
           <li>User + Client specific rate (e.g., "John at Acme Corp = $200/hr")</li>
           <li>Client specific rate (e.g., "Any user at Acme Corp = $175/hr")</li>
           <li>User default rate (e.g., "John = $150/hr everywhere")</li>
-          <li>Organization default rate (no user, no client selected)</li>
+          <li>Organization default rate (${parseFloat(orgDefaultRate).toFixed(2)}/hr)</li>
         </ol>
       </div>
 
       {/* Add Rate Form */}
       {showAdd && (
         <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
-          <h3 className="font-medium mb-4">Add Billing Rate</h3>
+          <h3 className="font-medium mb-4">Add Custom Rate Override</h3>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1.5">
@@ -1112,7 +1182,7 @@ function BillingRatesTab({
                 onChange={(e) => setForm({ ...form, user: e.target.value })}
                 className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
               >
-                <option value="">All Users (Default)</option>
+                <option value="">All Users</option>
                 {users.map((u) => (
                   <option key={u.id} value={u.id}>
                     {u.first_name} {u.last_name || u.username}
@@ -1130,7 +1200,7 @@ function BillingRatesTab({
                 onChange={(e) => setForm({ ...form, client: e.target.value })}
                 className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
               >
-                <option value="">All Clients (Default)</option>
+                <option value="">All Clients</option>
                 {clients.map((c) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
@@ -1163,7 +1233,7 @@ function BillingRatesTab({
           <div className="flex gap-2 mt-4">
             <button
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || (!form.user && !form.client)}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
             >
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -1176,6 +1246,11 @@ function BillingRatesTab({
               Cancel
             </button>
           </div>
+          {!form.user && !form.client && (
+            <p className="text-xs text-amber-600 mt-2">
+              ⚠️ Select a user and/or client. To change the org default, go to the Organization tab.
+            </p>
+          )}
         </div>
       )}
 
@@ -1195,7 +1270,7 @@ function BillingRatesTab({
             {rates.length === 0 ? (
               <tr>
                 <td colSpan={5} className="text-center py-8 text-muted-foreground">
-                  No billing rates configured yet. Add your first rate to enable billing calculations.
+                  No custom rate overrides configured. All billing uses the organization default (${parseFloat(orgDefaultRate).toFixed(2)}/hr).
                 </td>
               </tr>
             ) : (
@@ -1234,23 +1309,12 @@ function BillingRatesTab({
           </tbody>
         </table>
       </div>
-
-      {/* Example Setup */}
-      <div className="mt-6 p-4 bg-muted/30 rounded-lg">
-        <h4 className="font-medium text-sm mb-2">Example Rate Setup:</h4>
-        <div className="text-xs text-muted-foreground space-y-1">
-          <p>• <strong>Organization Default:</strong> User = blank, Client = blank, Rate = $150/hr</p>
-          <p>• <strong>Senior Staff:</strong> User = "John Smith", Client = blank, Rate = $200/hr</p>
-          <p>• <strong>Premium Client:</strong> User = blank, Client = "Acme Corp", Rate = $175/hr</p>
-          <p>• <strong>Specific Combo:</strong> User = "John Smith", Client = "Acme Corp", Rate = $225/hr</p>
-        </div>
-      </div>
     </div>
   );
 }
 
 // ============================================================================
-// Employee Cost Rates Tab (NEW) - What you PAY employees
+// Employee Cost Rates Tab
 // ============================================================================
 function EmployeeCostRatesTab({
   rates,

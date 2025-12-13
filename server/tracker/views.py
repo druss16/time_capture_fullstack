@@ -6185,6 +6185,8 @@ def settings_org(request):
     GET: Return organization info
     PATCH: Update organization info
     """
+    from decimal import Decimal
+    
     # Get user's Organization (not Group)
     org = get_user_org(request.user)
     if not org:
@@ -6207,6 +6209,12 @@ def settings_org(request):
             response_data["billing_contact"] = org.billing_contact or ""
         else:
             response_data["billing_contact"] = ""
+        
+        # ✅ NEW: Default billing rate
+        if hasattr(org, 'billing_rate_default'):
+            response_data["billing_rate_default"] = str(org.billing_rate_default or "150.00")
+        else:
+            response_data["billing_rate_default"] = "150.00"
             
         if hasattr(org, 'created_at'):
             response_data["created_at"] = org.created_at.isoformat()
@@ -6226,6 +6234,10 @@ def settings_org(request):
         if "billing_contact" in request.data and hasattr(org, 'billing_contact'):
             org.billing_contact = request.data["billing_contact"]
         
+        # ✅ NEW: Default billing rate
+        if "billing_rate_default" in request.data and hasattr(org, 'billing_rate_default'):
+            org.billing_rate_default = Decimal(str(request.data["billing_rate_default"]))
+        
         org.save()
         
         # Build response
@@ -6243,6 +6255,12 @@ def settings_org(request):
             response_data["billing_contact"] = org.billing_contact or ""
         else:
             response_data["billing_contact"] = ""
+        
+        # ✅ NEW: Default billing rate
+        if hasattr(org, 'billing_rate_default'):
+            response_data["billing_rate_default"] = str(org.billing_rate_default or "150.00")
+        else:
+            response_data["billing_rate_default"] = "150.00"
             
         if hasattr(org, 'created_at'):
             response_data["created_at"] = org.created_at.isoformat()

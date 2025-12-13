@@ -1,5 +1,5 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, action
+from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView  # ← ADD THIS LINE
@@ -1000,7 +1000,7 @@ class ProfitabilityReportView(APIView):
                 'margin_percent': total_margin_pct,
             }
         })
-        
+
 # ============================================================================
 # CORRECTED VIEWS - Replace these in views_billing.py
 # Your models use: 'org' (not 'organization'), 'submitted_notes' (not 'notes')
@@ -1260,8 +1260,7 @@ class TimesheetLockView(APIView):
 @api_view(['GET'])
 def timesheet_history(request):
     """
-    Get all approved/invoiced/locked timesheets.
-    Managers see all, members see only their own.
+    Get all approved/locked timesheets with totals calculated from blocks.
     """
     org = get_user_org(request.user)
     if not org:
@@ -1274,7 +1273,7 @@ def timesheet_history(request):
     if not membership:
         return Response({'error': 'No membership'}, status=403)
     
-    # Base query - approved and locked timesheets
+    # Base query
     timesheets = Timesheet.objects.filter(
         org=org,
         status__in=['approved', 'locked']
@@ -1284,44 +1283,59 @@ def timesheet_history(request):
     if membership.role == 'member':
         timesheets = timesheets.filter(user=request.user)
     
-    # Optional filters
-    user_id = request.query_params.get('user_id')
-    if user_id:
-        timesheets = timesheets.filter(user_id=user_id)
-    
-    status = request.query_params.get('status')
-    if status:
-        timesheets = timesheets.filter(status=status)
-    
-    # Date range filter
-    start_date = request.query_params.get('start_date')
-    end_date = request.query_params.get('end_date')
-    if start_date:
-        timesheets = timesheets.filter(week_start__gte=start_date)
-    if end_date:
-        timesheets = timesheets.filter(week_start__lte=end_date)
-    
     result = []
+    summary_totals = {'total_hours': 0, 'billable_hours': 0, 'total_amount': Decimal('0')}
+    
     for ts in timesheets:
+        week_end = ts.week_start + timedelta(days=6)
+        
+        # Calculate totals FROM BLOCKS (not cached fields)
+        blocks = Block.objects.filter(
+            org=org,
+            user=ts.user,
+            day__gte=ts.week_start,
+            day__lte=week_end,
+        )
+        
+        total_minutes = sum(b.minutes or 0 for b in blocks)
+        billable_minutes = sum(b.minutes or 0 for b in blocks if b.is_billable and b.client_id)
+        total_amount = sum(Decimal(str(b.billing_amount or 0)) for b in blocks if b.is_billable and b.client_id)
+        
+        total_hours = round(total_minutes / 60, 2)
+        billable_hours = round(billable_minutes / 60, 2)
+        
         result.append({
             'id': ts.id,
             'user_id': ts.user_id,
-            'user_name': f"{ts.user.first_name} {ts.user.last_name}".strip() or ts.user.username,
+            'user_username': ts.user.username,
             'user_email': ts.user.email,
+            'user_first_name': ts.user.first_name,
+            'user_last_name': ts.user.last_name,
             'week_start': ts.week_start.isoformat(),
-            'week_end': ts.get_week_end().isoformat(),
+            'week_end': week_end.isoformat(),
             'status': ts.status,
-            'total_hours': float(ts.total_hours),
-            'billable_hours': float(ts.billable_hours),
-            'non_billable_hours': float(ts.non_billable_hours),
-            'total_amount': float(ts.total_amount),
+            'total_hours': total_hours,
+            'billable_hours': billable_hours,
+            'total_amount': str(total_amount),
+            'auto_submitted': getattr(ts, 'auto_submitted', False),
             'submitted_at': ts.submitted_at.isoformat() if ts.submitted_at else None,
             'approved_at': ts.approved_at.isoformat() if ts.approved_at else None,
-            'approved_by': ts.approved_by.username if ts.approved_by else None,
-            'auto_submitted': ts.auto_submitted,  # ← NEW: Include auto_submitted flag
+            'approved_by_id': ts.approved_by_id,
+            'approved_by_username': ts.approved_by.username if ts.approved_by else None,
         })
+        
+        # Accumulate summary
+        summary_totals['total_hours'] += total_hours
+        summary_totals['billable_hours'] += billable_hours
+        summary_totals['total_amount'] += total_amount
     
     return Response({
-        'count': len(result),
         'timesheets': result,
+        'summary': {
+            'total_timesheets': len(result),
+            'total_hours': round(summary_totals['total_hours'], 2),
+            'billable_hours': round(summary_totals['billable_hours'], 2),
+            'total_amount': str(summary_totals['total_amount']),
+            'auto_submitted_count': sum(1 for r in result if r['auto_submitted']),
+        }
     })

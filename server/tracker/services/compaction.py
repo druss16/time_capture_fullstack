@@ -98,15 +98,15 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     blocks_to_delete = []
     protected_time_ranges = []
     
+    # FIXED - Protect ALL categorized blocks
     for b in existing_blocks:
-        # Only protect blocks that were MANUALLY categorized by the user
-        if b.is_categorized and b.categorized_by == 'manual':
-            manually_categorized_blocks.append(b)
+        # Protect ANY categorized block (manual, ai, pattern, system, etc.)
+        if b.is_categorized:
+            categorized_blocks.append(b)
             if b.start and b.end:
                 protected_time_ranges.append((b.start, b.end))
         else:
-            # Delete everything else - system, pattern, idle, uncategorized
-            # These can be safely recreated from raw events
+            # Only delete UNCATEGORIZED blocks (safe to recreate)
             blocks_to_delete.append(b)
     
     # Delete non-manual blocks (safe to recreate)

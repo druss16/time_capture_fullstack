@@ -1,0 +1,388 @@
+/**
+ * global.css - Base styles and animations
+ * Drop this in your src/styles/global.css or equivalent
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =============================================================================
+   CSS VARIABLES - Semantic colors
+   ============================================================================= */
+
+:root {
+  /* Primary - Teal (accounting/money association) */
+  --color-primary: 20 184 166; /* teal-500 */
+  --color-primary-dark: 13 148 136; /* teal-600 */
+  --color-primary-light: 204 251 241; /* teal-100 */
+  
+  /* Success - Emerald */
+  --color-success: 16 185 129; /* emerald-500 */
+  --color-success-light: 209 250 229; /* emerald-100 */
+  
+  /* Warning - Amber */
+  --color-warning: 245 158 11; /* amber-500 */
+  --color-warning-light: 254 243 199; /* amber-100 */
+  
+  /* Danger - Red */
+  --color-danger: 239 68 68; /* red-500 */
+  --color-danger-light: 254 226 226; /* red-100 */
+  
+  /* Neutral - Slate */
+  --color-neutral-50: 248 250 252;
+  --color-neutral-100: 241 245 249;
+  --color-neutral-200: 226 232 240;
+  --color-neutral-300: 203 213 225;
+  --color-neutral-400: 148 163 184;
+  --color-neutral-500: 100 116 139;
+  --color-neutral-600: 71 85 105;
+  --color-neutral-700: 51 65 85;
+  --color-neutral-800: 30 41 59;
+  --color-neutral-900: 15 23 42;
+  
+  /* Backgrounds */
+  --bg-page: var(--color-neutral-100);
+  --bg-card: 255 255 255;
+  --bg-elevated: 255 255 255;
+  
+  /* Text */
+  --text-primary: var(--color-neutral-800);
+  --text-secondary: var(--color-neutral-600);
+  --text-muted: var(--color-neutral-500);
+  --text-disabled: var(--color-neutral-400);
+  
+  /* Borders */
+  --border-default: var(--color-neutral-200);
+  --border-strong: var(--color-neutral-300);
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+}
+
+/* =============================================================================
+   BASE STYLES
+   ============================================================================= */
+
+body {
+  @apply bg-slate-100 text-slate-800 antialiased;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Better focus styles */
+*:focus-visible {
+  @apply outline-none ring-2 ring-teal-400 ring-offset-2;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  @apply w-2 h-2;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-slate-100 rounded-full;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full hover:bg-slate-400;
+}
+
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* =============================================================================
+   TYPOGRAPHY
+   ============================================================================= */
+
+/* Tighter tracking on headings for premium feel */
+h1, h2, h3, h4, h5, h6,
+.heading {
+  @apply tracking-tight;
+}
+
+h1 { @apply text-3xl font-bold text-slate-900; }
+h2 { @apply text-2xl font-bold text-slate-900; }
+h3 { @apply text-xl font-bold text-slate-800; }
+h4 { @apply text-lg font-semibold text-slate-800; }
+h5 { @apply text-base font-semibold text-slate-700; }
+h6 { @apply text-sm font-semibold text-slate-700; }
+
+/* =============================================================================
+   ANIMATIONS
+   ============================================================================= */
+
+/* Fade in */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Slide up */
+@keyframes slideUp {
+  from { 
+    opacity: 0; 
+    transform: translateY(10px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+
+/* Slide in from top */
+@keyframes slideInFromTop {
+  from { 
+    opacity: 0; 
+    transform: translateY(-10px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+
+/* Slide in from right */
+@keyframes slideInFromRight {
+  from { 
+    opacity: 0; 
+    transform: translateX(10px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateX(0); 
+  }
+}
+
+/* Scale in */
+@keyframes scaleIn {
+  from { 
+    opacity: 0; 
+    transform: scale(0.95); 
+  }
+  to { 
+    opacity: 1; 
+    transform: scale(1); 
+  }
+}
+
+/* Pulse */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Shimmer for skeletons */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Utility classes */
+.animate-in { animation-duration: 300ms; animation-fill-mode: forwards; }
+.fade-in { animation-name: fadeIn; }
+.slide-in-from-bottom-2 { animation-name: slideUp; }
+.slide-in-from-top-2 { animation-name: slideInFromTop; }
+.slide-in-from-right-2 { animation-name: slideInFromRight; }
+.scale-in { animation-name: scaleIn; }
+
+/* Animation durations */
+.duration-150 { animation-duration: 150ms; }
+.duration-200 { animation-duration: 200ms; }
+.duration-300 { animation-duration: 300ms; }
+.duration-500 { animation-duration: 500ms; }
+
+/* Skeleton shimmer effect */
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgb(226 232 240) 0%,
+    rgb(241 245 249) 50%,
+    rgb(226 232 240) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* =============================================================================
+   COMPONENT UTILITIES
+   ============================================================================= */
+
+/* Card hover effect */
+.card-hover {
+  @apply transition-all duration-200;
+}
+
+.card-hover:hover {
+  @apply shadow-md -translate-y-0.5;
+}
+
+/* Button press effect */
+.btn-press:active {
+  @apply scale-[0.98];
+}
+
+/* Glass effect */
+.glass {
+  @apply bg-white/80 backdrop-blur-xl;
+}
+
+/* Focus ring for inputs */
+.input-focus:focus {
+  @apply border-teal-400 ring-2 ring-teal-400/20 outline-none;
+}
+
+/* Status indicator dot */
+.status-dot {
+  @apply w-2 h-2 rounded-full;
+}
+
+.status-dot-draft { @apply bg-slate-400; }
+.status-dot-pending { @apply bg-amber-500; }
+.status-dot-submitted { @apply bg-blue-500; }
+.status-dot-approved { @apply bg-emerald-500; }
+.status-dot-rejected { @apply bg-red-500; }
+.status-dot-locked { @apply bg-purple-500; }
+.status-dot-billed { @apply bg-teal-500; }
+
+/* =============================================================================
+   TABLE STYLES
+   ============================================================================= */
+
+.table-premium {
+  @apply w-full border-collapse;
+}
+
+.table-premium thead {
+  @apply bg-slate-50 border-b-2 border-slate-200;
+}
+
+.table-premium th {
+  @apply px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase tracking-wider;
+}
+
+.table-premium td {
+  @apply px-4 py-3 text-sm text-slate-700;
+}
+
+.table-premium tbody tr {
+  @apply border-b border-slate-100 hover:bg-slate-50 transition-colors;
+}
+
+.table-premium tbody tr:last-child {
+  @apply border-b-0;
+}
+
+/* =============================================================================
+   FORM STYLES
+   ============================================================================= */
+
+.input-premium {
+  @apply w-full px-3 py-2 bg-white border-2 border-slate-200 rounded-lg;
+  @apply text-slate-800 font-medium placeholder:text-slate-400;
+  @apply focus:border-teal-400 focus:ring-2 focus:ring-teal-400/20 focus:outline-none;
+  @apply transition-all duration-200;
+}
+
+.select-premium {
+  @apply w-full px-3 py-2 bg-white border-2 border-slate-200 rounded-lg;
+  @apply text-slate-800 font-medium cursor-pointer;
+  @apply focus:border-teal-400 focus:ring-2 focus:ring-teal-400/20 focus:outline-none;
+  @apply transition-all duration-200;
+}
+
+.label-premium {
+  @apply text-sm font-semibold text-slate-700 mb-1.5 block;
+}
+
+/* =============================================================================
+   BUTTON STYLES
+   ============================================================================= */
+
+.btn {
+  @apply inline-flex items-center justify-center gap-2;
+  @apply font-semibold rounded-lg;
+  @apply transition-all duration-200;
+  @apply active:scale-[0.98];
+  @apply disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-sm { @apply px-3 py-1.5 text-sm; }
+.btn-md { @apply px-4 py-2 text-sm; }
+.btn-lg { @apply px-5 py-2.5 text-base; }
+
+.btn-primary {
+  @apply bg-teal-500 text-white;
+  @apply shadow-lg shadow-teal-500/25;
+  @apply hover:bg-teal-600 hover:shadow-xl hover:shadow-teal-500/30;
+}
+
+.btn-secondary {
+  @apply bg-slate-100 text-slate-700;
+  @apply border-2 border-slate-200;
+  @apply hover:bg-slate-200 hover:border-slate-300;
+}
+
+.btn-ghost {
+  @apply text-slate-600;
+  @apply hover:bg-slate-100 hover:text-slate-800;
+}
+
+.btn-danger {
+  @apply bg-red-500 text-white;
+  @apply shadow-lg shadow-red-500/25;
+  @apply hover:bg-red-600;
+}
+
+.btn-success {
+  @apply bg-emerald-500 text-white;
+  @apply shadow-lg shadow-emerald-500/25;
+  @apply hover:bg-emerald-600;
+}
+
+/* =============================================================================
+   BADGE STYLES
+   ============================================================================= */
+
+.badge {
+  @apply inline-flex items-center gap-1.5;
+  @apply px-2.5 py-1 rounded-full;
+  @apply text-xs font-semibold;
+}
+
+.badge-primary { @apply bg-teal-100 text-teal-700; }
+.badge-success { @apply bg-emerald-100 text-emerald-700; }
+.badge-warning { @apply bg-amber-100 text-amber-700; }
+.badge-danger { @apply bg-red-100 text-red-700; }
+.badge-neutral { @apply bg-slate-100 text-slate-600; }
+.badge-purple { @apply bg-purple-100 text-purple-700; }
+.badge-sky { @apply bg-sky-100 text-sky-700; }
+
+/* =============================================================================
+   DARK MODE (optional - uncomment if needed)
+   ============================================================================= */
+
+/*
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-page: var(--color-neutral-900);
+    --bg-card: var(--color-neutral-800);
+    --text-primary: var(--color-neutral-100);
+    --text-secondary: var(--color-neutral-300);
+    --border-default: var(--color-neutral-700);
+  }
+  
+  body {
+    @apply bg-slate-900 text-slate-100;
+  }
+}
+*/

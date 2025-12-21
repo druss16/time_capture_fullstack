@@ -1,11 +1,21 @@
 /**
- * Navigation.tsx — Updated with organization role display and Billing link
+ * Navigation.tsx - Dark header navigation
+ * Uses dark slate header (intentional) + shadcn variables for content
  */
 import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { Users, Receipt } from 'lucide-react';
+import { 
+  Users, 
+  Receipt, 
+  Calendar, 
+  Monitor, 
+  Settings, 
+  LogOut,
+  Clock
+} from 'lucide-react';
 import { safeFetchJson, API_BASE } from "@/lib/api";
+import { cn, getRoleColor } from "@/lib/design-system";
 
 interface UserInfo {
   username: string;
@@ -21,129 +31,151 @@ export default function Navigation() {
   const { logout } = useAuth();
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
 
-  // Fetch user info including organization role
   useEffect(() => {
     safeFetchJson(`${API_BASE}/whoami/`)
       .then(data => setUserInfo(data))
       .catch(console.error);
   }, []);
 
-  // Role-based permissions
   const userRole = userInfo?.role;
   const canAccessSettings = ['owner', 'admin'].includes(userRole || '');
-  const canApproveTime = ['owner', 'admin', 'manager'].includes(userRole || '');
-
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
-  
-  const linkClass = (path: string) => {
-    const base = "px-4 py-2 rounded-lg font-medium text-sm transition-colors duration-150 flex items-center gap-2";
-    return isActive(path)
-      ? `${base} bg-blue-600 text-white`
-      : `${base} text-blue-800 hover:bg-blue-50 hover:text-blue-900`;
-  };
 
-  // Role badge styling
-  const getRoleBadge = (role: string | null) => {
-    if (!role || role === 'member') return null;
-    
-    const styles: Record<string, string> = {
-      owner: 'bg-purple-100 text-purple-800',
-      admin: 'bg-blue-100 text-blue-800',
-      manager: 'bg-green-100 text-green-800',
-    };
-    
-    return (
-      <span className={`text-xs px-2 py-1 rounded font-medium ${styles[role] || 'bg-gray-100 text-gray-800'}`}>
-        {role.charAt(0).toUpperCase() + role.slice(1)}
-      </span>
-    );
-  };
+  const navItems = [
+    { path: '/daily', label: 'Daily Review', icon: Calendar },
+    { path: '/billing', label: 'Billing', icon: Receipt },
+    { path: '/devices', label: 'Devices', icon: Monitor },
+    { path: '/clients', label: 'Clients', icon: Users },
+  ];
 
   return (
-    <nav className="sticky top-0 z-40 bg-white border-b border-blue-100 shadow-sm">
-      <div className="max-w-7xl mx-auto flex items-center justify-between px-6 py-3">
-        {/* Left: Brand + links */}
-        <div className="flex items-center gap-2">
-          <Link to="/" className="flex items-center gap-2 text-blue-900 font-semibold">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white font-bold text-sm">
-              T
-            </span>
-            <span>Time Capture</span>
-          </Link>
-
-          <div className="hidden sm:flex items-center gap-1 ml-4">
-            <Link to="/daily" className={linkClass("/daily")}>
-              📅 Daily Review
+    <nav className="bg-slate-800 text-white shadow-xl">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-14">
+          {/* Left: Logo + Nav */}
+          <div className="flex items-center gap-8">
+            {/* Logo */}
+            <Link to="/" className="flex items-center gap-2.5 group">
+              <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center shadow-lg shadow-primary/30 group-hover:opacity-90 transition-opacity">
+                <Clock className="w-5 h-5 text-primary-foreground" />
+              </div>
+              <div className="hidden sm:block">
+                <span className="text-base font-bold text-white tracking-tight">TimeTracker</span>
+                <span className="text-xs text-slate-400 block -mt-0.5">by MavOps</span>
+              </div>
             </Link>
 
-            {/* Billing - Timesheets, Approvals, etc. */}
-            <Link to="/billing" className={linkClass("/billing")}>
-              <Receipt className="w-4 h-4" />
-              Billing
-            </Link>
-            
-            <Link to="/devices" className={linkClass("/devices")}>
-              💻 Devices
-            </Link>
-            
-            {/* Only show Settings to owners and admins */}
-            {canAccessSettings && (
-              <Link to="/settings" className={linkClass("/settings")}>
-                ⚙️ Settings
-              </Link>
-            )}
-            
-            <Link to="/clients" className={linkClass("/clients")}>
-              <Users className="w-4 h-4" />
-              Clients
-            </Link>
-          </div>
-        </div>
-
-        {/* Right: User info + Logout */}
-        <div className="flex items-center gap-4">
-          {userInfo && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-blue-700 hidden sm:inline">
-                {userInfo.username}
-              </span>
-              {getRoleBadge(userRole || null)}
+            {/* Nav Links */}
+            <div className="hidden md:flex items-center gap-1">
+              {navItems.map((item) => {
+                const Icon = item.icon;
+                const active = isActive(item.path);
+                
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    className={cn(
+                      'flex items-center gap-2 px-3.5 py-2 rounded-xl',
+                      'text-sm font-semibold transition-all duration-200',
+                      active 
+                        ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30' 
+                        : 'text-slate-300 hover:text-white hover:bg-slate-700'
+                    )}
+                  >
+                    <Icon className="w-4 h-4" />
+                    {item.label}
+                  </Link>
+                );
+              })}
+              
+              {canAccessSettings && (
+                <Link
+                  to="/settings"
+                  className={cn(
+                    'flex items-center gap-2 px-3.5 py-2 rounded-xl',
+                    'text-sm font-semibold transition-all duration-200',
+                    isActive('/settings')
+                      ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30' 
+                      : 'text-slate-300 hover:text-white hover:bg-slate-700'
+                  )}
+                >
+                  <Settings className="w-4 h-4" />
+                  Settings
+                </Link>
+              )}
             </div>
-          )}
-          <span className="text-sm text-blue-700 hidden sm:inline">
-            {new Date().toLocaleDateString()}
-          </span>
-          <button
-            onClick={async () => {
-              await logout();
-              navigate("/login");
-            }}
-            className="rounded-lg border border-blue-200 px-4 py-2 text-sm text-blue-800 hover:bg-blue-50 hover:text-blue-900"
-          >
-            Logout
-          </button>
+          </div>
+
+          {/* Right: Date + User + Logout */}
+          <div className="flex items-center gap-4">
+            <span className="hidden lg:block text-sm text-slate-400 font-medium">
+              {new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+            </span>
+
+            {userInfo && (
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-sm font-bold text-white">
+                  {userInfo.username.charAt(0).toUpperCase()}
+                </div>
+                <div className="hidden md:block">
+                  <p className="text-sm font-semibold text-white leading-none">{userInfo.username}</p>
+                  {userInfo.org_name && <p className="text-xs text-slate-400">{userInfo.org_name}</p>}
+                </div>
+                {userRole && userRole !== 'member' && (
+                  <span className={cn('text-xs px-2 py-0.5 rounded font-semibold', getRoleColor(userRole))}>
+                    {userRole.charAt(0).toUpperCase() + userRole.slice(1)}
+                  </span>
+                )}
+              </div>
+            )}
+
+            <button
+              onClick={async () => { await logout(); navigate("/login"); }}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-all"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Mobile Navigation */}
-      <div className="sm:hidden border-t border-blue-100 px-4 py-2 flex items-center gap-2 overflow-x-auto">
-        <Link to="/daily" className={linkClass("/daily")}>
-          📅 Daily
-        </Link>
-        <Link to="/billing" className={linkClass("/billing")}>
-          💰 Billing
-        </Link>
-        <Link to="/devices" className={linkClass("/devices")}>
-          💻 Devices
-        </Link>
-        {canAccessSettings && (
-          <Link to="/settings" className={linkClass("/settings")}>
-            ⚙️ Settings
-          </Link>
-        )}
-        <Link to="/clients" className={linkClass("/clients")}>
-          👥 Clients
-        </Link>
+      <div className="md:hidden border-t border-slate-700 bg-slate-900">
+        <div className="px-2 py-2 flex items-center gap-1 overflow-x-auto scrollbar-hide">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = isActive(item.path);
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-2 rounded-lg whitespace-nowrap',
+                  'text-sm font-semibold transition-all',
+                  active ? 'bg-primary text-primary-foreground' : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                )}
+              >
+                <Icon className="w-4 h-4" />
+                {item.label}
+              </Link>
+            );
+          })}
+          {canAccessSettings && (
+            <Link
+              to="/settings"
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg whitespace-nowrap',
+                'text-sm font-semibold transition-all',
+                isActive('/settings') ? 'bg-primary text-primary-foreground' : 'text-slate-400 hover:text-white hover:bg-slate-700'
+              )}
+            >
+              <Settings className="w-4 h-4" />
+              Settings
+            </Link>
+          )}
+        </div>
       </div>
     </nav>
   );

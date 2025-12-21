@@ -4,7 +4,7 @@ Improved compaction service that:
 1. Uses duration-to-next-event logic (more accurate)
 2. Caps idle gaps (lunch breaks don't create 60-min blocks)
 3. Coalesces adjacent identical activities
-4. Respects immutability (doesn't touch MANUALLY categorized blocks)
+4. Respects immutability (doesn't touch ANY categorized blocks)
 """
 
 from __future__ import annotations
@@ -32,15 +32,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     """
     Build blocks from raw events for a specific day.
     Uses duration-to-next-event logic for accurate time tracking.
-    
-    Args:
-        user: User instance or username
-        day: date object for the day to compact
-        hostname: Optional hostname filter
-        org: Organization Group
-    
-    Returns:
-        Number of blocks created
     """
     # Normalize user
     if isinstance(user, str):
@@ -85,7 +76,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     logger.info(f"[COMPACT] Found {len(events)} events for {day}")
     
     # ✅ Step 2: Check for existing blocks
-    # ONLY protect MANUALLY categorized blocks - not system/pattern/idle
     existing_blocks = Block.objects.filter(
         user=user,
         day=day
@@ -94,28 +84,29 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if hostname:
         existing_blocks = existing_blocks.filter(hostname=hostname)
     
-    manually_categorized_blocks = []
-    blocks_to_delete = []
-    protected_time_ranges = []
+    # ✅ FIXED: Use consistent variable names throughout!
+    categorized_blocks = []      # Blocks to KEEP (protected)
+    blocks_to_delete = []        # Blocks to DELETE (uncategorized only)
+    protected_time_ranges = []   # Time ranges already categorized
     
-    # FIXED - Protect ALL categorized blocks
     for b in existing_blocks:
-        # Protect ANY categorized block (manual, ai, pattern, system, etc.)
+        # ✅ FIXED: Protect ANY categorized block (manual, ai, pattern, system)
         if b.is_categorized:
-            categorized_blocks.append(b)
+            categorized_blocks.append(b)  # ✅ FIXED: Now using correct variable!
             if b.start and b.end:
                 protected_time_ranges.append((b.start, b.end))
         else:
             # Only delete UNCATEGORIZED blocks (safe to recreate)
             blocks_to_delete.append(b)
     
-    # Delete non-manual blocks (safe to recreate)
+    # Delete ONLY uncategorized blocks
     if blocks_to_delete:
         delete_ids = [b.id for b in blocks_to_delete]
         deleted_count = Block.objects.filter(id__in=delete_ids).delete()[0]
-        logger.info(f"[COMPACT] Deleted {deleted_count} auto-generated blocks")
+        logger.info(f"[COMPACT] Deleted {deleted_count} uncategorized blocks")
     
-    logger.info(f"[COMPACT] Protected {len(manually_categorized_blocks)} manually categorized blocks")
+    # ✅ FIXED: Using correct variable in log message
+    logger.info(f"[COMPACT] Protected {len(categorized_blocks)} categorized blocks")
     
     # ✅ Step 3: Build raw blocks using duration-to-next-event logic
     raw_blocks = []
@@ -123,41 +114,34 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     for i, event in enumerate(events):
         start = event.ts_utc
         
-        # Duration = time until next event (or now if this is the last event)
         if i + 1 < len(events):
             next_ts = events[i + 1].ts_utc
         else:
-            # Last event of the day - cap at 10 minutes
             next_ts = start + timedelta(minutes=10)
         
-        # Calculate duration with idle cap
         dur = max(timedelta(0), min(next_ts - start, IDLE_CAP))
         
-        # Skip tiny blips
         if dur < MIN_BLOCK:
             continue
         
         end = start + dur
         
-        # Check if this MOSTLY overlaps with a MANUALLY categorized block (>80%)
-        # This prevents replacing work that the user already categorized
-        overlaps_manual = False
+        # Check overlap with protected (categorized) blocks
+        overlaps_protected = False
         block_duration = (end - start).total_seconds()
         
         for cat_start, cat_end in protected_time_ranges:
             if start < cat_end and end > cat_start:
-                # Calculate overlap percentage
                 overlap_start = max(start, cat_start)
                 overlap_end = min(end, cat_end)
                 overlap_seconds = max(0, (overlap_end - overlap_start).total_seconds())
                 
-                # Only skip if >80% of this block overlaps with manually categorized
                 if block_duration > 0 and (overlap_seconds / block_duration) > 0.8:
-                    overlaps_manual = True
-                    logger.debug(f"[COMPACT] Skipping event - 80%+ overlap with manual block")
+                    overlaps_protected = True
+                    logger.debug(f"[COMPACT] Skipping event - 80%+ overlap with categorized block")
                     break
         
-        if overlaps_manual:
+        if overlaps_protected:
             continue
         
         raw_blocks.append({
@@ -186,11 +170,9 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     
     for block in raw_blocks:
         if coalesced and _can_coalesce(coalesced[-1], block):
-            # Merge with previous block
             coalesced[-1]["end"] = block["end"]
             coalesced[-1]["minutes"] += block["minutes"]
         else:
-            # Start new block
             coalesced.append(block)
     
     logger.info(f"[COMPACT] Coalesced {len(raw_blocks)} raw blocks → {len(coalesced)} final blocks")
@@ -200,14 +182,12 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     
     with transaction.atomic():
         for block_data in coalesced:
-            # Check if this is idle activity
             is_idle = is_idle_activity(
                 app_name=block_data.get("app_name"),
                 bundle_id=block_data.get("bundle_id"),
                 window_title=block_data.get("window_title")
             )
             
-            # Get client (only for non-idle blocks)
             client = None
             if not is_idle:
                 client_id = block_data.get("current_client_id")
@@ -217,16 +197,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     except Client.DoesNotExist:
                         pass
                 
-                # Fallback: Get current client for user
                 if not client:
                     client = get_current_client_for_user(
                         user,
                         device_id=block_data.get("device_id")
                     )
             
-            # Create block
             if is_idle:
-                # Auto-categorize idle blocks (but NOT as 'manual')
                 hours = round(int(block_data["minutes"]) / 60.0, 2)
                 Block.objects.create(
                     org=org,
@@ -247,7 +224,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     client=None,
                     category_hours={"Idle": hours},
                     is_categorized=True,
-                    categorized_by="system",  # NOT 'manual' - can be replaced
+                    categorized_by="system",
                     categorized_at=timezone.now(),
                     approved=False,
                 )
@@ -282,14 +259,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
 
 
 def _can_coalesce(block1: Dict[str, Any], block2: Dict[str, Any]) -> bool:
-    """
-    Check if two blocks can be merged.
-    
-    Criteria:
-    - Same app_name, bundle_id, window_title
-    - Gap between blocks < 5 seconds
-    """
-    # Check signature match
+    """Check if two blocks can be merged."""
     if not all([
         block1["app_name"] == block2["app_name"],
         block1["bundle_id"] == block2["bundle_id"],
@@ -297,7 +267,6 @@ def _can_coalesce(block1: Dict[str, Any], block2: Dict[str, Any]) -> bool:
     ]):
         return False
     
-    # Check time gap
     gap = block2["start"] - block1["end"]
     if gap > COALESCE_GAP:
         return False
@@ -306,19 +275,7 @@ def _can_coalesce(block1: Dict[str, Any], block2: Dict[str, Any]) -> bool:
 
 
 def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:
-    """
-    Quick compaction of recent events (last 15 minutes).
-    Called after raw events are ingested to create blocks immediately.
-    
-    Args:
-        user: User instance or username
-        hostname: Optional hostname filter
-        minutes_back: How far back to look (default 15 minutes)
-    
-    Returns:
-        Number of blocks created/updated
-    """
-    # Normalize user
+    """Quick compaction of recent events."""
     if isinstance(user, str):
         try:
             user = User.objects.get(username=user)
@@ -328,30 +285,16 @@ def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: in
     if not user:
         return 0
     
-    # Get today's date
     today = timezone.localdate()
-    
-    # Compact today
     return compact_day(user, today, hostname=hostname)
 
 
-# ============================================================================
-# BACKGROUND TASK: Auto-compact for all active users
-# ============================================================================
-
 def auto_compact_all_active_users(minutes_back: int = 30):
-    """
-    Auto-compact recent events for all users who have activity in the last N minutes.
-    Called by Celery beat every 10 minutes.
-    
-    Returns:
-        Dict with stats
-    """
+    """Auto-compact for all users with recent activity."""
     from django.utils import timezone
     
     cutoff = timezone.now() - timedelta(minutes=minutes_back)
     
-    # Find users with recent activity
     recent_users = RawEvent.objects.filter(
         ts_utc__gte=cutoff
     ).values_list('user', 'hostname').distinct()

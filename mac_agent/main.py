@@ -222,7 +222,7 @@ PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 POLL_SECONDS      = int(_get("poll_seconds", _get("AGENT_POLL_SECONDS", 5, "AGENT_POLL_SECONDS")) or 5)
 MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS", 15, "AGENT_MIN_DWELL_SECONDS")) or 15)
 # NEW: mouse idle threshold (seconds) before pausing tracking
-MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 20))
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 90))
 
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 
@@ -237,7 +237,7 @@ CONTEXT_GUESS_URL    = _get("context_guess_url", None) or f"{API_BASE}/context/g
 CONTEXT_CONFIRM_URL  = _get("context_confirm_url", None) or f"{API_BASE}/context/confirm"
 CONTEXT_REJECT_URL   = _get("context_reject_url", None) or f"{API_BASE}/context/reject"
 
-MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 20))
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 90))
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 
 # --- Tools vs Clients (NEW) ---

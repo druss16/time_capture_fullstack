@@ -109,7 +109,7 @@ DEVICE_ID_FILE = _get("device_id_file", os.path.join(APPDATA, "TimeTracker", ".d
 
 POLL_SECONDS = int(_get("poll_seconds", 5))
 MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", 15))
-MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", 20))
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", 90))
 VERBOSE = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
 DB_PATH = _get("db_path", os.getenv("WIN_AGENT_DB")) or DB_PATH_DEFAULT
 CONTEXT_PORT = int(_get("context_port", 7321))

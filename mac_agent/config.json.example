@@ -3,6 +3,7 @@
   "api_key": "your-secret-api-key-here",
   "min_dwell_seconds": 15,
   "poll_seconds": 5,
+  "mouse_idle_pause_seconds": 90,
   "verbose": true,
   "print_every": false,
   "disable_ax": false,

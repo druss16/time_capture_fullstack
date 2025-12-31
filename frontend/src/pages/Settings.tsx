@@ -1,14 +1,6 @@
 /**
- * Settings.tsx — Org Admin Settings Page with Role Management & Billing Rates
- * 
- * Tabs:
- * - Organization Info (name, billing contact, DEFAULT BILLING RATE)
- * - Team Members (view users, invite new, manage roles)
- * - Clients (add/edit/delete)
- * - Billing Rates (hourly rates per user/client)
- * - Employee Costs (cost rates for profitability)
- * - Registered Devices (see who's tracking)
- * - Install Token (view/regenerate for IT)
+ * Settings.tsx — Org Admin Settings Page
+ * STRONGER FONTS - darker text, bolder weights
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -27,7 +19,6 @@ import {
   Check,
   X,
   Mail,
-  Clock,
   AlertCircle,
   CheckCircle2,
   UserPlus,
@@ -35,8 +26,7 @@ import {
   EyeOff,
   DollarSign,
 } from "lucide-react";
-import { Header } from "@/components/common/Header";
-import { DESIGN_SYSTEM } from "@/lib/design-system";
+import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -48,7 +38,7 @@ type OrgInfo = {
   name: string;
   billing_email: string;
   billing_contact: string;
-  billing_rate_default: string;  // ← NEW: Default hourly rate
+  billing_rate_default: string;
   created_at: string;
 };
 
@@ -135,11 +125,9 @@ export default function Settings() {
   const [billingRates, setBillingRates] = useState<BillingRate[]>([]);
   const [employeeCostRates, setEmployeeCostRates] = useState<EmployeeCostRate[]>([]);
   
-  // Track current user
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<string>('member');
 
-  // Show toast
   const showSuccess = (msg: string) => {
     setSuccess(msg);
     setTimeout(() => setSuccess(null), 3000);
@@ -150,7 +138,6 @@ export default function Settings() {
     setTimeout(() => setError(null), 5000);
   };
 
-  // Load current user info
   useEffect(() => {
     const loadUserInfo = async () => {
       try {
@@ -163,7 +150,6 @@ export default function Settings() {
     loadUserInfo();
   }, []);
 
-  // Load data based on active tab
   const loadTabData = useCallback(async (tab: Tab) => {
     setLoading(true);
     setError(null);
@@ -190,7 +176,6 @@ export default function Settings() {
         case 'billing':
           const rates = await safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`);
           setBillingRates(rates || []);
-          // Also load clients and team for dropdowns
           const [clientsForRates, teamForRates] = await Promise.all([
             safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
             safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
@@ -201,7 +186,6 @@ export default function Settings() {
         case 'costs':
           const costRates = await safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []);
           setEmployeeCostRates(costRates || []);
-          // Also load team for dropdown
           const teamForCosts = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []);
           setTeamMembers(teamForCosts || []);
           break;
@@ -225,7 +209,6 @@ export default function Settings() {
     loadTabData(activeTab);
   }, [activeTab, loadTabData]);
 
-  // Tab definitions
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
     { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
@@ -237,28 +220,33 @@ export default function Settings() {
   ];
 
   return (
-    <div className="min-h-screen bg-background">
-      <Header
-        title="Settings"
-        subtitle="Manage your organization"
-        icon={<SettingsIcon className="w-6 h-6 text-primary-foreground" />}
-      />
-
+    <div className="min-h-screen bg-slate-50">
       {/* Toast Notifications */}
       {success && (
-        <div className="fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 bg-green-600 text-white animate-in slide-in-from-right">
+        <div className="fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 bg-emerald-500 text-white font-bold animate-in slide-in-from-right">
           <CheckCircle2 className="w-4 h-4" />
-          <span className="text-sm font-medium">{success}</span>
+          <span className="text-sm">{success}</span>
         </div>
       )}
       {error && (
-        <div className="fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 bg-red-600 text-white animate-in slide-in-from-right">
+        <div className="fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 bg-red-500 text-white font-bold animate-in slide-in-from-right">
           <AlertCircle className="w-4 h-4" />
-          <span className="text-sm font-medium">{error}</span>
+          <span className="text-sm">{error}</span>
         </div>
       )}
 
-      <div className={DESIGN_SYSTEM.spacing.container + " py-6"}>
+      <div className="max-w-6xl mx-auto px-6 py-6">
+        {/* Page Header */}
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
+            <SettingsIcon className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Settings</h1>
+            <p className="text-slate-600 font-medium">Manage your organization</p>
+          </div>
+        </div>
+
         <div className="flex gap-6">
           {/* Sidebar Tabs */}
           <div className="w-56 flex-shrink-0">
@@ -267,11 +255,12 @@ export default function Settings() {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  className={cn(
+                    'w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold transition-all',
                     activeTab === tab.id
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                  }`}
+                      ? 'bg-primary text-white shadow-lg shadow-primary/25'
+                      : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                  )}
                 >
                   {tab.icon}
                   {tab.label}
@@ -282,10 +271,13 @@ export default function Settings() {
 
           {/* Content Area */}
           <div className="flex-1 min-w-0">
-            <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
+            <div className="bg-white border-2 border-slate-200 rounded-2xl p-6 shadow-sm">
               {loading ? (
                 <div className="flex items-center justify-center py-12">
-                  <RefreshCw className="w-6 h-6 text-primary animate-spin" />
+                  <div className="text-center">
+                    <RefreshCw className="w-6 h-6 text-primary animate-spin mx-auto mb-2" />
+                    <p className="text-slate-600 font-semibold">Loading...</p>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -362,7 +354,7 @@ export default function Settings() {
 }
 
 // ============================================================================
-// Organization Tab - NOW WITH DEFAULT BILLING RATE
+// Organization Tab
 // ============================================================================
 function OrganizationTab({
   orgInfo,
@@ -381,7 +373,7 @@ function OrganizationTab({
     name: '',
     billing_email: '',
     billing_contact: '',
-    billing_rate_default: '150.00',  // ← NEW
+    billing_rate_default: '150.00',
   });
 
   useEffect(() => {
@@ -390,7 +382,7 @@ function OrganizationTab({
         name: orgInfo.name || '',
         billing_email: orgInfo.billing_email || '',
         billing_contact: orgInfo.billing_contact || '',
-        billing_rate_default: orgInfo.billing_rate_default || '150.00',  // ← NEW
+        billing_rate_default: orgInfo.billing_rate_default || '150.00',
       });
     }
   }, [orgInfo]);
@@ -414,20 +406,20 @@ function OrganizationTab({
   };
 
   if (!orgInfo) {
-    return <div className="text-muted-foreground">No organization data</div>;
+    return <div className="text-slate-500 font-medium">No organization data</div>;
   }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Building2 className="w-5 h-5 text-primary" />
           Organization Info
         </h2>
         {!editing && (
           <button
             onClick={() => setEditing(true)}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-accent transition-colors"
+            className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
           >
             <Pencil className="w-4 h-4" />
             Edit
@@ -436,70 +428,69 @@ function OrganizationTab({
       </div>
 
       {editing ? (
-        <div className="space-y-4 max-w-md">
+        <div className="space-y-5 max-w-md">
           <div>
-            <label className="block text-sm font-medium mb-1.5">Organization Name</label>
+            <label className="block text-sm font-bold text-slate-800 mb-2">Organization Name</label>
             <input
               type="text"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1.5">Billing Email</label>
+            <label className="block text-sm font-bold text-slate-800 mb-2">Billing Email</label>
             <input
               type="email"
               value={form.billing_email}
               onChange={(e) => setForm({ ...form, billing_email: e.target.value })}
-              className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1.5">Billing Contact Name</label>
+            <label className="block text-sm font-bold text-slate-800 mb-2">Billing Contact Name</label>
             <input
               type="text"
               value={form.billing_contact}
               onChange={(e) => setForm({ ...form, billing_contact: e.target.value })}
-              className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
             />
           </div>
           
-          {/* ✅ NEW: Default Billing Rate */}
-          <div className="pt-4 border-t border-border">
-            <label className="block text-sm font-medium mb-1.5">
-              <DollarSign className="w-4 h-4 inline mr-1" />
+          <div className="pt-4 border-t-2 border-slate-200">
+            <label className="block text-sm font-bold text-slate-800 mb-2 flex items-center gap-2">
+              <DollarSign className="w-4 h-4" />
               Default Hourly Billing Rate
             </label>
             <div className="relative max-w-xs">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">$</span>
               <input
                 type="number"
                 step="0.01"
                 min="0"
                 value={form.billing_rate_default}
                 onChange={(e) => setForm({ ...form, billing_rate_default: e.target.value })}
-                className="w-full pl-8 pr-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl text-slate-900 font-semibold focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
                 placeholder="150.00"
               />
             </div>
-            <p className="text-xs text-muted-foreground mt-1.5">
+            <p className="text-sm text-slate-600 font-medium mt-2">
               This rate applies to all billable time unless overridden in Billing Rates
             </p>
           </div>
 
-          <div className="flex gap-2 pt-4">
+          <div className="flex gap-3 pt-4">
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
+              className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all"
             >
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Save
             </button>
             <button
               onClick={() => setEditing(false)}
-              className="px-4 py-2 border border-border rounded-lg font-medium hover:bg-accent"
+              className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
             >
               Cancel
             </button>
@@ -507,45 +498,42 @@ function OrganizationTab({
         </div>
       ) : (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-6">
             <div>
-              <p className="text-sm text-muted-foreground">Organization Name</p>
-              <p className="font-medium">{orgInfo.name}</p>
+              <p className="text-sm text-slate-500 font-semibold mb-1">Organization Name</p>
+              <p className="text-slate-900 font-bold">{orgInfo.name}</p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Created</p>
-              <p className="font-medium">{new Date(orgInfo.created_at).toLocaleDateString()}</p>
+              <p className="text-sm text-slate-500 font-semibold mb-1">Created</p>
+              <p className="text-slate-900 font-bold">{new Date(orgInfo.created_at).toLocaleDateString()}</p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Billing Email</p>
-              <p className="font-medium">{orgInfo.billing_email || '—'}</p>
+              <p className="text-sm text-slate-500 font-semibold mb-1">Billing Email</p>
+              <p className="text-slate-900 font-bold">{orgInfo.billing_email || '—'}</p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Billing Contact</p>
-              <p className="font-medium">{orgInfo.billing_contact || '—'}</p>
+              <p className="text-sm text-slate-500 font-semibold mb-1">Billing Contact</p>
+              <p className="text-slate-900 font-bold">{orgInfo.billing_contact || '—'}</p>
             </div>
           </div>
           
-          {/* ✅ NEW: Show Default Rate in view mode */}
-          <div className="pt-4 border-t border-border">
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+          <div className="pt-4 border-t-2 border-slate-200">
+            <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-green-700 font-medium flex items-center gap-2">
+                  <p className="text-sm text-emerald-700 font-bold flex items-center gap-2">
                     <DollarSign className="w-4 h-4" />
                     Default Hourly Billing Rate
                   </p>
-                  <p className="text-2xl font-bold text-green-700 mt-1">
+                  <p className="text-3xl font-extrabold text-emerald-700 mt-1">
                     ${parseFloat(orgInfo.billing_rate_default || '150.00').toFixed(2)}/hr
                   </p>
                 </div>
-                <div className="text-right">
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                    Firm Default
-                  </span>
-                </div>
+                <span className="bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-full text-xs font-bold">
+                  Firm Default
+                </span>
               </div>
-              <p className="text-xs text-green-600 mt-2">
+              <p className="text-sm text-emerald-600 font-medium mt-3">
                 All new time entries use this rate unless a custom rate is configured in Billing Rates
               </p>
             </div>
@@ -557,7 +545,7 @@ function OrganizationTab({
 }
 
 // ============================================================================
-// Team Tab with Role Management
+// Team Tab
 // ============================================================================
 function TeamTab({
   members,
@@ -604,11 +592,9 @@ function TeamTab({
   };
 
   const handlePromote = async (userId: number, username: string) => {
-    if (!confirm(`Promote ${username} to admin? They will be able to manage settings and team members.`)) return;
+    if (!confirm(`Promote ${username} to admin?`)) return;
     try {
-      await safeFetchJson(`${API_BASE}/settings/team/${userId}/promote/`, {
-        method: 'POST',
-      });
+      await safeFetchJson(`${API_BASE}/settings/team/${userId}/promote/`, { method: 'POST' });
       onSuccess('User promoted to admin');
       onRefresh();
     } catch (err: any) {
@@ -617,7 +603,7 @@ function TeamTab({
   };
 
   const handleDemote = async (userId: number, username: string, targetRole: 'member' | 'manager' = 'member') => {
-    if (!confirm(`Demote ${username} to ${targetRole}? They will lose admin access.`)) return;
+    if (!confirm(`Demote ${username} to ${targetRole}?`)) return;
     try {
       await safeFetchJson(`${API_BASE}/settings/team/${userId}/demote/`, {
         method: 'POST',
@@ -632,11 +618,9 @@ function TeamTab({
   };
 
   const handleSetManager = async (userId: number, username: string) => {
-    if (!confirm(`Promote ${username} to manager? They will be able to approve timecards.`)) return;
+    if (!confirm(`Promote ${username} to manager?`)) return;
     try {
-      await safeFetchJson(`${API_BASE}/settings/team/${userId}/set-manager/`, {
-        method: 'POST',
-      });
+      await safeFetchJson(`${API_BASE}/settings/team/${userId}/set-manager/`, { method: 'POST' });
       onSuccess('User promoted to manager');
       onRefresh();
     } catch (err: any) {
@@ -647,9 +631,7 @@ function TeamTab({
   const handleRemove = async (userId: number, username: string) => {
     if (!confirm(`Remove ${username} from the team?`)) return;
     try {
-      await safeFetchJson(`${API_BASE}/settings/team/${userId}/`, {
-        method: 'DELETE',
-      });
+      await safeFetchJson(`${API_BASE}/settings/team/${userId}/`, { method: 'DELETE' });
       onSuccess('Team member removed');
       onRefresh();
     } catch (err: any) {
@@ -674,14 +656,10 @@ function TeamTab({
 
   const getRoleBadge = (role: string) => {
     switch (role) {
-      case 'owner':
-        return 'bg-purple-100 text-purple-800';
-      case 'admin':
-        return 'bg-blue-100 text-blue-800';
-      case 'manager':
-        return 'bg-green-100 text-green-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
+      case 'owner': return 'bg-purple-100 text-purple-800';
+      case 'admin': return 'bg-blue-100 text-blue-800';
+      case 'manager': return 'bg-emerald-100 text-emerald-800';
+      default: return 'bg-slate-100 text-slate-700';
     }
   };
 
@@ -691,14 +669,14 @@ function TeamTab({
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Users className="w-5 h-5 text-primary" />
           Team Members
-          <span className="text-sm font-normal text-muted-foreground">({members.length})</span>
+          <span className="text-sm font-bold text-slate-500">({members.length})</span>
         </h2>
         <button
           onClick={() => setShowInvite(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
         >
           <UserPlus className="w-4 h-4" />
           Invite Member
@@ -706,27 +684,27 @@ function TeamTab({
       </div>
 
       {showInvite && (
-        <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
-          <h3 className="font-medium mb-3">Invite Team Member</h3>
+        <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
+          <h3 className="font-bold text-slate-900 mb-3">Invite Team Member</h3>
           <div className="flex gap-2">
             <input
               type="email"
               value={inviteEmail}
               onChange={(e) => setInviteEmail(e.target.value)}
               placeholder="email@company.com"
-              className="flex-1 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              className="flex-1 border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
             />
             <button
               onClick={handleInvite}
               disabled={inviting || !inviteEmail.trim()}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
+              className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 transition-all"
             >
               {inviting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
               Send
             </button>
             <button
               onClick={() => setShowInvite(false)}
-              className="px-4 py-2 border border-border rounded-lg hover:bg-accent"
+              className="px-4 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
             >
               Cancel
             </button>
@@ -734,88 +712,63 @@ function TeamTab({
         </div>
       )}
 
-      <div className="border border-border rounded-lg overflow-hidden">
+      <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
         <table className="w-full">
-          <thead className="bg-muted/50">
+          <thead className="bg-slate-100">
             <tr>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">User</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Email</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Role</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Last Active</th>
-              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Actions</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">User</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Email</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Role</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Last Active</th>
+              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border">
+          <tbody className="divide-y divide-slate-200">
             {members.map(member => {
               const isCurrentUser = member.id === currentUserId;
               const canModify = isOwner && !isCurrentUser && member.role !== 'owner';
               const canSetManager = isAdminOrOwner && !isCurrentUser && member.role === 'member';
               
               return (
-                <tr key={member.id} className="hover:bg-accent/30">
+                <tr key={member.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                        <span className="text-sm font-medium text-primary">
+                      <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
+                        <span className="text-sm font-bold text-primary">
                           {(member.first_name?.[0] || member.username[0]).toUpperCase()}
                         </span>
                       </div>
                       <div>
-                        <p className="font-medium text-sm">
+                        <p className="font-bold text-slate-900 text-sm">
                           {member.first_name} {member.last_name || member.username}
-                          {isCurrentUser && <span className="ml-2 text-xs text-muted-foreground">(you)</span>}
+                          {isCurrentUser && <span className="ml-2 text-xs text-slate-500 font-semibold">(you)</span>}
                         </p>
-                        <p className="text-xs text-muted-foreground">@{member.username}</p>
+                        <p className="text-xs text-slate-500 font-medium">@{member.username}</p>
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm">{member.email || '—'}</td>
+                  <td className="px-4 py-3 text-sm text-slate-700 font-medium">{member.email || '—'}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${getRoleBadge(member.role)}`}>
+                    <span className={cn('text-xs px-2.5 py-1 rounded-full font-bold', getRoleBadge(member.role))}>
                       {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                  <td className="px-4 py-3 text-sm text-slate-500 font-medium">
                     {formatLastSeen(member.last_login)}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
                       {canSetManager && (
-                        <button
-                          onClick={() => handleSetManager(member.id, member.username)}
-                          className="text-xs px-2 py-1 text-green-600 hover:text-green-800 hover:underline"
-                          title="Promote to Manager"
-                        >
-                          → Manager
-                        </button>
+                        <button onClick={() => handleSetManager(member.id, member.username)} className="text-xs px-2 py-1 text-emerald-600 font-bold hover:underline">→ Manager</button>
                       )}
-                      
                       {canModify && (member.role === 'member' || member.role === 'manager') && (
-                        <button
-                          onClick={() => handlePromote(member.id, member.username)}
-                          className="text-xs px-2 py-1 text-blue-600 hover:text-blue-800 hover:underline"
-                          title="Promote to Admin"
-                        >
-                          → Admin
-                        </button>
+                        <button onClick={() => handlePromote(member.id, member.username)} className="text-xs px-2 py-1 text-blue-600 font-bold hover:underline">→ Admin</button>
                       )}
-                      
                       {canModify && member.role === 'admin' && (
-                        <button
-                          onClick={() => handleDemote(member.id, member.username, 'member')}
-                          className="text-xs px-2 py-1 text-orange-600 hover:text-orange-800 hover:underline"
-                          title="Demote to Member"
-                        >
-                          → Member
-                        </button>
+                        <button onClick={() => handleDemote(member.id, member.username, 'member')} className="text-xs px-2 py-1 text-amber-600 font-bold hover:underline">→ Member</button>
                       )}
-                      
                       {!isCurrentUser && member.role !== 'owner' && (
-                        <button
-                          onClick={() => handleRemove(member.id, member.username)}
-                          className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
-                          title="Remove from team"
-                        >
+                        <button onClick={() => handleRemove(member.id, member.username)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       )}
@@ -827,18 +780,16 @@ function TeamTab({
           </tbody>
         </table>
         {members.length === 0 && (
-          <div className="text-center py-8 text-muted-foreground">
-            No team members yet
-          </div>
+          <div className="text-center py-8 text-slate-500 font-medium">No team members yet</div>
         )}
       </div>
       
-      <div className="mt-4 p-3 bg-muted/30 rounded-lg">
-        <div className="text-xs text-muted-foreground space-y-1">
-          <p><span className="inline-block px-2 py-0.5 rounded bg-purple-100 text-purple-800 font-medium">Owner</span> — Full control, manage admins</p>
-          <p><span className="inline-block px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-medium">Admin</span> — Manage settings, invite users</p>
-          <p><span className="inline-block px-2 py-0.5 rounded bg-green-100 text-green-800 font-medium">Manager</span> — Approve timecards</p>
-          <p><span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-800 font-medium">Member</span> — Track time only</p>
+      <div className="mt-4 p-4 bg-slate-100 rounded-xl">
+        <div className="text-sm text-slate-600 font-medium space-y-1">
+          <p><span className="inline-block px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 font-bold text-xs">Owner</span> — Full control, manage admins</p>
+          <p><span className="inline-block px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold text-xs">Admin</span> — Manage settings, invite users</p>
+          <p><span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-xs">Manager</span> — Approve timecards</p>
+          <p><span className="inline-block px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 font-bold text-xs">Member</span> — Track time only</p>
         </div>
       </div>
     </div>
@@ -905,11 +856,9 @@ function ClientsTab({
   };
 
   const handleDelete = async (clientId: number, clientName: string) => {
-    if (!confirm(`Delete client "${clientName}"? This cannot be undone.`)) return;
+    if (!confirm(`Delete client "${clientName}"?`)) return;
     try {
-      await safeFetchJson(`${API_BASE}/settings/clients/${clientId}/`, {
-        method: 'DELETE',
-      });
+      await safeFetchJson(`${API_BASE}/settings/clients/${clientId}/`, { method: 'DELETE' });
       onSuccess('Client deleted');
       onRefresh();
     } catch (err: any) {
@@ -920,14 +869,14 @@ function ClientsTab({
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Briefcase className="w-5 h-5 text-primary" />
           Clients
-          <span className="text-sm font-normal text-muted-foreground">({clients.length})</span>
+          <span className="text-sm font-bold text-slate-500">({clients.length})</span>
         </h2>
         <button
           onClick={() => { resetForm(); setShowAdd(true); }}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
         >
           <Plus className="w-4 h-4" />
           Add Client
@@ -935,43 +884,43 @@ function ClientsTab({
       </div>
 
       {showAdd && (
-        <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
-          <h3 className="font-medium mb-3">{editingId ? 'Edit Client' : 'Add Client'}</h3>
+        <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
+          <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Client' : 'Add Client'}</h3>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1.5">Client Name *</label>
+              <label className="block text-sm font-bold text-slate-800 mb-2">Client Name *</label>
               <input
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="Acme Corporation"
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1.5">Code (optional)</label>
+              <label className="block text-sm font-bold text-slate-800 mb-2">Code (optional)</label>
               <input
                 type="text"
                 value={form.code}
                 onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
                 placeholder="ACME"
                 maxLength={10}
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50 uppercase"
+                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all uppercase"
               />
             </div>
           </div>
-          <div className="flex gap-2 mt-4">
+          <div className="flex gap-3 mt-4">
             <button
               onClick={handleSave}
               disabled={saving || !form.name.trim()}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
+              className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all"
             >
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               {editingId ? 'Update' : 'Add'}
             </button>
             <button
               onClick={resetForm}
-              className="px-4 py-2 border border-border rounded-lg font-medium hover:bg-accent"
+              className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
             >
               Cancel
             </button>
@@ -979,48 +928,39 @@ function ClientsTab({
         </div>
       )}
 
-      <div className="border border-border rounded-lg overflow-hidden">
+      <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
         <table className="w-full">
-          <thead className="bg-muted/50">
+          <thead className="bg-slate-100">
             <tr>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Client Name</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Code</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Status</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Added</th>
-              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Actions</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Client Name</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Code</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Status</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Added</th>
+              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border">
+          <tbody className="divide-y divide-slate-200">
             {clients.map(client => (
-              <tr key={client.id} className="hover:bg-accent/30">
-                <td className="px-4 py-3 font-medium">{client.name}</td>
-                <td className="px-4 py-3 text-sm text-muted-foreground font-mono">{client.code || '—'}</td>
+              <tr key={client.id} className="hover:bg-slate-50 transition-colors">
+                <td className="px-4 py-3 font-bold text-slate-900">{client.name}</td>
+                <td className="px-4 py-3 text-sm text-slate-500 font-mono font-semibold">{client.code || '—'}</td>
                 <td className="px-4 py-3">
-                  <span className={`text-xs px-2 py-1 rounded-full ${
-                    client.is_active
-                      ? 'bg-green-100 text-green-700'
-                      : 'bg-muted text-muted-foreground'
-                  }`}>
+                  <span className={cn(
+                    'text-xs px-2.5 py-1 rounded-full font-bold',
+                    client.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                  )}>
                     {client.is_active ? 'Active' : 'Inactive'}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-sm text-muted-foreground">
+                <td className="px-4 py-3 text-sm text-slate-500 font-medium">
                   {new Date(client.created_at).toLocaleDateString()}
                 </td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex items-center justify-end gap-1">
-                    <button
-                      onClick={() => handleEdit(client)}
-                      className="p-1.5 text-primary hover:bg-primary/10 rounded transition-colors"
-                      title="Edit"
-                    >
+                    <button onClick={() => handleEdit(client)} className="p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-colors">
                       <Pencil className="w-4 h-4" />
                     </button>
-                    <button
-                      onClick={() => handleDelete(client.id, client.name)}
-                      className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
-                      title="Delete"
-                    >
+                    <button onClick={() => handleDelete(client.id, client.name)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
@@ -1030,9 +970,7 @@ function ClientsTab({
           </tbody>
         </table>
         {clients.length === 0 && (
-          <div className="text-center py-8 text-muted-foreground">
-            No clients yet. Add your first client to get started.
-          </div>
+          <div className="text-center py-8 text-slate-500 font-medium">No clients yet. Add your first client to get started.</div>
         )}
       </div>
     </div>
@@ -1040,7 +978,7 @@ function ClientsTab({
 }
 
 // ============================================================================
-// Billing Rates Tab - Now shows org default rate
+// Billing Rates Tab
 // ============================================================================
 function BillingRatesTab({
   rates,
@@ -1069,29 +1007,16 @@ function BillingRatesTab({
   });
 
   const resetForm = () => {
-    setForm({
-      user: '',
-      client: '',
-      hourly_rate: '150.00',
-      effective_date: new Date().toISOString().split('T')[0],
-    });
+    setForm({ user: '', client: '', hourly_rate: '150.00', effective_date: new Date().toISOString().split('T')[0] });
     setShowAdd(false);
   };
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const payload: Record<string, any> = {
-        rate: form.hourly_rate,
-        effective_date: form.effective_date,
-      };
-      
-      if (form.user) {
-        payload.user_id = parseInt(form.user, 10);
-      }
-      if (form.client) {
-        payload.client_id = parseInt(form.client, 10);
-      }
+      const payload: Record<string, any> = { rate: form.hourly_rate, effective_date: form.effective_date };
+      if (form.user) payload.user_id = parseInt(form.user, 10);
+      if (form.client) payload.client_id = parseInt(form.client, 10);
       
       await safeFetchJson(`${API_BASE}/billing/rates/`, {
         method: 'POST',
@@ -1102,7 +1027,6 @@ function BillingRatesTab({
       resetForm();
       onRefresh();
     } catch (err: any) {
-      console.error('Billing rate error:', err);
       onError(err?.message || 'Failed to save');
     } finally {
       setSaving(false);
@@ -1112,9 +1036,7 @@ function BillingRatesTab({
   const handleDelete = async (rateId: number) => {
     if (!confirm('Delete this billing rate?')) return;
     try {
-      await safeFetchJson(`${API_BASE}/billing/rates/${rateId}/`, {
-        method: 'DELETE',
-      });
+      await safeFetchJson(`${API_BASE}/billing/rates/${rateId}/`, { method: 'DELETE' });
       onSuccess('Rate deleted');
       onRefresh();
     } catch (err: any) {
@@ -1125,183 +1047,108 @@ function BillingRatesTab({
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <DollarSign className="w-5 h-5 text-primary" />
           Billing Rates
-          <span className="text-sm font-normal text-muted-foreground">({rates.length} custom)</span>
+          <span className="text-sm font-bold text-slate-500">({rates.length} custom)</span>
         </h2>
         <button
           onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
         >
           <Plus className="w-4 h-4" />
           Add Custom Rate
         </button>
       </div>
 
-      {/* Show Org Default Rate */}
-      <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+      {/* Org Default Rate */}
+      <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm text-green-700 font-medium">Organization Default Rate</p>
-            <p className="text-2xl font-bold text-green-700">${parseFloat(orgDefaultRate).toFixed(2)}/hr</p>
+            <p className="text-sm text-emerald-700 font-bold">Organization Default Rate</p>
+            <p className="text-3xl font-extrabold text-emerald-700">${parseFloat(orgDefaultRate).toFixed(2)}/hr</p>
           </div>
           <div className="text-right">
-            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-              Base Rate
-            </span>
-            <p className="text-xs text-green-600 mt-1">
-              Edit in Organization tab
-            </p>
+            <span className="bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-full text-xs font-bold">Base Rate</span>
+            <p className="text-xs text-emerald-600 font-medium mt-1">Edit in Organization tab</p>
           </div>
         </div>
       </div>
 
       {/* Rate Priority Info */}
-      <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-        <h4 className="font-medium text-blue-800 mb-2">Rate Priority (highest to lowest):</h4>
-        <ol className="text-sm text-blue-700 space-y-1 list-decimal list-inside">
-          <li>User + Client specific rate (e.g., "John at Acme Corp = $200/hr")</li>
-          <li>Client specific rate (e.g., "Any user at Acme Corp = $175/hr")</li>
-          <li>User default rate (e.g., "John = $150/hr everywhere")</li>
-          <li>Organization default rate (${parseFloat(orgDefaultRate).toFixed(2)}/hr)</li>
+      <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+        <h4 className="font-bold text-blue-800 mb-2">Rate Priority (highest to lowest):</h4>
+        <ol className="text-sm text-blue-700 font-medium space-y-1 list-decimal list-inside">
+          <li><strong>User + Client</strong> — "John at Acme Corp = $200/hr"</li>
+          <li><strong>Client</strong> — "Any user at Acme Corp = $175/hr"</li>
+          <li><strong>User</strong> — "John = $150/hr everywhere"</li>
+          <li><strong>Default</strong> — ${parseFloat(orgDefaultRate).toFixed(2)}/hr</li>
         </ol>
       </div>
 
-      {/* Add Rate Form */}
       {showAdd && (
-        <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
-          <h3 className="font-medium mb-4">Add Custom Rate Override</h3>
+        <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
+          <h3 className="font-bold text-slate-900 mb-4">Add Custom Rate Override</h3>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1.5">
-                User <span className="text-muted-foreground font-normal">(blank = all users)</span>
-              </label>
-              <select
-                value={form.user}
-                onChange={(e) => setForm({ ...form, user: e.target.value })}
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
+              <label className="block text-sm font-bold text-slate-800 mb-2">User <span className="font-medium text-slate-500">(blank = all)</span></label>
+              <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white">
                 <option value="">All Users</option>
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.first_name} {u.last_name || u.username}
-                  </option>
-                ))}
+                {users.map((u) => <option key={u.id} value={u.id}>{u.first_name} {u.last_name || u.username}</option>)}
               </select>
             </div>
-            
             <div>
-              <label className="block text-sm font-medium mb-1.5">
-                Client <span className="text-muted-foreground font-normal">(blank = all clients)</span>
-              </label>
-              <select
-                value={form.client}
-                onChange={(e) => setForm({ ...form, client: e.target.value })}
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
+              <label className="block text-sm font-bold text-slate-800 mb-2">Client <span className="font-medium text-slate-500">(blank = all)</span></label>
+              <select value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white">
                 <option value="">All Clients</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
-            
             <div>
-              <label className="block text-sm font-medium mb-1.5">Hourly Rate ($)</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={form.hourly_rate}
-                onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
+              <label className="block text-sm font-bold text-slate-800 mb-2">Hourly Rate ($)</label>
+              <input type="number" step="0.01" min="0" value={form.hourly_rate} onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-semibold focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
             </div>
-            
             <div>
-              <label className="block text-sm font-medium mb-1.5">Effective Date</label>
-              <input
-                type="date"
-                value={form.effective_date}
-                onChange={(e) => setForm({ ...form, effective_date: e.target.value })}
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
+              <label className="block text-sm font-bold text-slate-800 mb-2">Effective Date</label>
+              <input type="date" value={form.effective_date} onChange={(e) => setForm({ ...form, effective_date: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
             </div>
           </div>
-          
-          <div className="flex gap-2 mt-4">
-            <button
-              onClick={handleSave}
-              disabled={saving || (!form.user && !form.client)}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
-            >
+          <div className="flex gap-3 mt-4">
+            <button onClick={handleSave} disabled={saving || (!form.user && !form.client)} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Save Rate
             </button>
-            <button
-              onClick={resetForm}
-              className="px-4 py-2 border border-border rounded-lg font-medium hover:bg-accent"
-            >
-              Cancel
-            </button>
+            <button onClick={resetForm} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
           </div>
           {!form.user && !form.client && (
-            <p className="text-xs text-amber-600 mt-2">
-              ⚠️ Select a user and/or client. To change the org default, go to the Organization tab.
-            </p>
+            <p className="text-sm text-amber-600 font-semibold mt-3">⚠️ Select a user and/or client. To change the org default, go to the Organization tab.</p>
           )}
         </div>
       )}
 
-      {/* Rates Table */}
-      <div className="border border-border rounded-lg overflow-hidden">
+      <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
         <table className="w-full">
-          <thead className="bg-muted/50">
+          <thead className="bg-slate-100">
             <tr>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">User</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Client</th>
-              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Rate/Hour</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Effective</th>
-              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Actions</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">User</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Client</th>
+              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Rate/Hour</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Effective</th>
+              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border">
+          <tbody className="divide-y divide-slate-200">
             {rates.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="text-center py-8 text-muted-foreground">
-                  No custom rate overrides configured. All billing uses the organization default (${parseFloat(orgDefaultRate).toFixed(2)}/hr).
-                </td>
-              </tr>
+              <tr><td colSpan={5} className="text-center py-8 text-slate-500 font-medium">No custom rate overrides. All billing uses default (${parseFloat(orgDefaultRate).toFixed(2)}/hr).</td></tr>
             ) : (
               rates.map((rate) => (
-                <tr key={rate.id} className="hover:bg-accent/30">
-                  <td className="px-4 py-3">
-                    {rate.user_name || (
-                      <span className="text-muted-foreground italic">All Users</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    {rate.client_name || (
-                      <span className="text-muted-foreground italic">All Clients</span>
-                    )}
-                  </td>
+                <tr key={rate.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-4 py-3 font-semibold text-slate-900">{rate.user_name || <span className="text-slate-400 italic font-medium">All Users</span>}</td>
+                  <td className="px-4 py-3 font-semibold text-slate-900">{rate.client_name || <span className="text-slate-400 italic font-medium">All Clients</span>}</td>
+                  <td className="px-4 py-3 text-right"><span className="font-extrabold text-emerald-600 text-lg">${parseFloat(rate.rate || rate.hourly_rate || '0').toFixed(2)}</span></td>
+                  <td className="px-4 py-3 text-sm text-slate-500 font-medium">{new Date(rate.effective_date).toLocaleDateString()}</td>
                   <td className="px-4 py-3 text-right">
-                    <span className="font-semibold text-green-600">
-                      ${parseFloat(rate.rate || rate.hourly_rate || '0').toFixed(2)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {new Date(rate.effective_date).toLocaleDateString()}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => handleDelete(rate.id)}
-                      className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => handleDelete(rate.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
                   </td>
                 </tr>
               ))
@@ -1331,42 +1178,26 @@ function EmployeeCostRatesTab({
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    user: '',
-    cost_rate: '75.00',
-    effective_date: new Date().toISOString().split('T')[0],
-  });
+  const [form, setForm] = useState({ user: '', cost_rate: '75.00', effective_date: new Date().toISOString().split('T')[0] });
 
   const resetForm = () => {
-    setForm({
-      user: '',
-      cost_rate: '75.00',
-      effective_date: new Date().toISOString().split('T')[0],
-    });
+    setForm({ user: '', cost_rate: '75.00', effective_date: new Date().toISOString().split('T')[0] });
     setShowAdd(false);
   };
 
   const handleSave = async () => {
-    if (!form.user) {
-      onError('Please select an employee');
-      return;
-    }
+    if (!form.user) { onError('Please select an employee'); return; }
     setSaving(true);
     try {
       await safeFetchJson(`${API_BASE}/billing/cost-rates/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user: parseInt(form.user, 10),
-          cost_rate: form.cost_rate,
-          effective_date: form.effective_date,
-        }),
+        body: JSON.stringify({ user: parseInt(form.user, 10), cost_rate: form.cost_rate, effective_date: form.effective_date }),
       });
       onSuccess('Cost rate added');
       resetForm();
       onRefresh();
     } catch (err: any) {
-      console.error('Cost rate error:', err);
       onError(err?.message || 'Failed to save');
     } finally {
       setSaving(false);
@@ -1376,9 +1207,7 @@ function EmployeeCostRatesTab({
   const handleDelete = async (rateId: number) => {
     if (!confirm('Delete this cost rate?')) return;
     try {
-      await safeFetchJson(`${API_BASE}/billing/cost-rates/${rateId}/`, {
-        method: 'DELETE',
-      });
+      await safeFetchJson(`${API_BASE}/billing/cost-rates/${rateId}/`, { method: 'DELETE' });
       onSuccess('Cost rate deleted');
       onRefresh();
     } catch (err: any) {
@@ -1389,136 +1218,79 @@ function EmployeeCostRatesTab({
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Users className="w-5 h-5 text-primary" />
           Employee Cost Rates
-          <span className="text-sm font-normal text-muted-foreground">({rates.length})</span>
+          <span className="text-sm font-bold text-slate-500">({rates.length})</span>
         </h2>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors"
-        >
+        <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all">
           <Plus className="w-4 h-4" />
           Add Cost Rate
         </button>
       </div>
 
-      {/* Explanation */}
-      <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-        <h4 className="font-medium text-amber-800 mb-2">What is a Cost Rate?</h4>
-        <p className="text-sm text-amber-700">
-          The <strong>cost rate</strong> is what you pay an employee per hour (their loaded labor cost). 
-          This is used to calculate profit margins: <em>Margin = Billing Rate - Cost Rate</em>.
+      <div className="mb-6 p-4 bg-amber-50 border-2 border-amber-200 rounded-xl">
+        <h4 className="font-bold text-amber-800 mb-2">What is a Cost Rate?</h4>
+        <p className="text-sm text-amber-700 font-medium">
+          The <strong>cost rate</strong> is what you pay an employee per hour (loaded labor cost). 
+          Used to calculate profit: <em>Margin = Billing Rate - Cost Rate</em>.
         </p>
-        <p className="text-sm text-amber-700 mt-2">
-          Example: If you bill a client $150/hr and the employee costs you $75/hr, your margin is $75/hr (50%).
+        <p className="text-sm text-amber-700 font-medium mt-2">
+          Example: Bill client $150/hr, employee costs $75/hr → margin is $75/hr (50%).
         </p>
       </div>
 
-      {/* Add Rate Form */}
       {showAdd && (
-        <div className="mb-6 p-4 bg-accent/50 border border-border rounded-lg">
-          <h3 className="font-medium mb-4">Add Employee Cost Rate</h3>
+        <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
+          <h3 className="font-bold text-slate-900 mb-4">Add Employee Cost Rate</h3>
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1.5">Employee *</label>
-              <select
-                value={form.user}
-                onChange={(e) => setForm({ ...form, user: e.target.value })}
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                required
-              >
+              <label className="block text-sm font-bold text-slate-800 mb-2">Employee *</label>
+              <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white" required>
                 <option value="">Select Employee</option>
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.first_name} {u.last_name || u.username}
-                  </option>
-                ))}
+                {users.map((u) => <option key={u.id} value={u.id}>{u.first_name} {u.last_name || u.username}</option>)}
               </select>
             </div>
-            
             <div>
-              <label className="block text-sm font-medium mb-1.5">Hourly Cost ($)</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={form.cost_rate}
-                onChange={(e) => setForm({ ...form, cost_rate: e.target.value })}
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
+              <label className="block text-sm font-bold text-slate-800 mb-2">Hourly Cost ($)</label>
+              <input type="number" step="0.01" min="0" value={form.cost_rate} onChange={(e) => setForm({ ...form, cost_rate: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-semibold focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
             </div>
-            
             <div>
-              <label className="block text-sm font-medium mb-1.5">Effective Date</label>
-              <input
-                type="date"
-                value={form.effective_date}
-                onChange={(e) => setForm({ ...form, effective_date: e.target.value })}
-                className="w-full border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
+              <label className="block text-sm font-bold text-slate-800 mb-2">Effective Date</label>
+              <input type="date" value={form.effective_date} onChange={(e) => setForm({ ...form, effective_date: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
             </div>
           </div>
-          
-          <div className="flex gap-2 mt-4">
-            <button
-              onClick={handleSave}
-              disabled={saving || !form.user}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
-            >
+          <div className="flex gap-3 mt-4">
+            <button onClick={handleSave} disabled={saving || !form.user} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Save Cost Rate
             </button>
-            <button
-              onClick={resetForm}
-              className="px-4 py-2 border border-border rounded-lg font-medium hover:bg-accent"
-            >
-              Cancel
-            </button>
+            <button onClick={resetForm} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
           </div>
         </div>
       )}
 
-      {/* Rates Table */}
-      <div className="border border-border rounded-lg overflow-hidden">
+      <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
         <table className="w-full">
-          <thead className="bg-muted/50">
+          <thead className="bg-slate-100">
             <tr>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Employee</th>
-              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Cost/Hour</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Effective</th>
-              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Actions</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Employee</th>
+              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Cost/Hour</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Effective</th>
+              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border">
+          <tbody className="divide-y divide-slate-200">
             {rates.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="text-center py-8 text-muted-foreground">
-                  No employee cost rates configured yet. Add cost rates to calculate profit margins.
-                </td>
-              </tr>
+              <tr><td colSpan={4} className="text-center py-8 text-slate-500 font-medium">No employee cost rates configured yet. Add cost rates to calculate profit margins.</td></tr>
             ) : (
               rates.map((rate) => (
-                <tr key={rate.id} className="hover:bg-accent/30">
-                  <td className="px-4 py-3 font-medium">
-                    {rate.user_name}
-                  </td>
+                <tr key={rate.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-4 py-3 font-bold text-slate-900">{rate.user_name}</td>
+                  <td className="px-4 py-3 text-right"><span className="font-extrabold text-amber-600 text-lg">${parseFloat(rate.cost_rate).toFixed(2)}</span></td>
+                  <td className="px-4 py-3 text-sm text-slate-500 font-medium">{new Date(rate.effective_date).toLocaleDateString()}</td>
                   <td className="px-4 py-3 text-right">
-                    <span className="font-semibold text-orange-600">
-                      ${parseFloat(rate.cost_rate).toFixed(2)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {new Date(rate.effective_date).toLocaleDateString()}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => handleDelete(rate.id)}
-                      className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => handleDelete(rate.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
                   </td>
                 </tr>
               ))
@@ -1527,16 +1299,14 @@ function EmployeeCostRatesTab({
         </table>
       </div>
 
-      {/* Tip */}
-      <div className="mt-6 p-4 bg-muted/30 rounded-lg">
-        <h4 className="font-medium text-sm mb-2">Calculating Loaded Labor Cost</h4>
-        <div className="text-xs text-muted-foreground space-y-1">
-          <p>Include more than just salary when calculating cost rates:</p>
+      <div className="mt-6 p-4 bg-slate-100 rounded-xl">
+        <h4 className="font-bold text-slate-800 text-sm mb-2">Calculating Loaded Labor Cost</h4>
+        <div className="text-sm text-slate-600 font-medium space-y-1">
           <p>• Base salary ÷ 2080 hours = base hourly rate</p>
           <p>• + Benefits (health insurance, 401k match)</p>
           <p>• + Payroll taxes (FICA, unemployment)</p>
-          <p>• + Overhead allocation (office space, software)</p>
-          <p className="mt-2"><strong>Rule of thumb:</strong> Loaded cost is typically 1.25x to 1.5x base salary</p>
+          <p>• + Overhead allocation (office, software)</p>
+          <p className="mt-2 text-slate-700"><strong>Rule of thumb:</strong> Loaded cost is typically 1.25x to 1.5x base salary</p>
         </div>
       </div>
     </div>
@@ -1575,17 +1345,15 @@ function DevicesTab({
     const date = new Date(lastSeen);
     const now = new Date();
     const diffHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
-    if (diffHours < 1) return 'bg-green-500';
-    if (diffHours < 24) return 'bg-yellow-500';
-    return 'bg-gray-400';
+    if (diffHours < 1) return 'bg-emerald-500';
+    if (diffHours < 24) return 'bg-amber-500';
+    return 'bg-slate-400';
   };
 
   const handleDeactivate = async (deviceId: number, machineName: string) => {
     if (!confirm(`Deactivate agent on "${machineName}"?`)) return;
     try {
-      await safeFetchJson(`${API_BASE}/settings/devices/${deviceId}/deactivate/`, {
-        method: 'POST',
-      });
+      await safeFetchJson(`${API_BASE}/settings/devices/${deviceId}/deactivate/`, { method: 'POST' });
       onSuccess('Device deactivated');
       onRefresh();
     } catch (err: any) {
@@ -1596,55 +1364,42 @@ function DevicesTab({
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Monitor className="w-5 h-5 text-primary" />
           Registered Devices
-          <span className="text-sm font-normal text-muted-foreground">({devices.length})</span>
+          <span className="text-sm font-bold text-slate-500">({devices.length})</span>
         </h2>
-        <button
-          onClick={onRefresh}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-accent transition-colors"
-        >
+        <button onClick={onRefresh} className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">
           <RefreshCw className="w-4 h-4" />
           Refresh
         </button>
       </div>
 
-      <div className="border border-border rounded-lg overflow-hidden">
+      <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
         <table className="w-full">
-          <thead className="bg-muted/50">
+          <thead className="bg-slate-100">
             <tr>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Status</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">User</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Machine</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">OS</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Version</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Last Seen</th>
-              <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Actions</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Status</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">User</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Machine</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">OS</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Version</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Last Seen</th>
+              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border">
+          <tbody className="divide-y divide-slate-200">
             {devices.map(device => (
-              <tr key={device.id} className={`hover:bg-accent/30 ${!device.is_active ? 'opacity-50' : ''}`}>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2.5 h-2.5 rounded-full ${device.is_active ? getStatusColor(device.last_seen) : 'bg-gray-300'}`} />
-                  </div>
-                </td>
-                <td className="px-4 py-3 font-medium text-sm">{device.user}</td>
-                <td className="px-4 py-3 text-sm">{device.machine_name}</td>
-                <td className="px-4 py-3 text-sm capitalize">{device.os}</td>
-                <td className="px-4 py-3 text-sm text-muted-foreground font-mono">{device.agent_version || '—'}</td>
-                <td className="px-4 py-3 text-sm text-muted-foreground">{formatLastSeen(device.last_seen)}</td>
+              <tr key={device.id} className={cn('hover:bg-slate-50 transition-colors', !device.is_active && 'opacity-50')}>
+                <td className="px-4 py-3"><div className={cn('w-3 h-3 rounded-full', device.is_active ? getStatusColor(device.last_seen) : 'bg-slate-300')} /></td>
+                <td className="px-4 py-3 font-bold text-slate-900 text-sm">{device.user}</td>
+                <td className="px-4 py-3 text-sm text-slate-700 font-medium">{device.machine_name}</td>
+                <td className="px-4 py-3 text-sm text-slate-700 font-medium capitalize">{device.os}</td>
+                <td className="px-4 py-3 text-sm text-slate-500 font-mono font-semibold">{device.agent_version || '—'}</td>
+                <td className="px-4 py-3 text-sm text-slate-500 font-medium">{formatLastSeen(device.last_seen)}</td>
                 <td className="px-4 py-3 text-right">
                   {device.is_active && (
-                    <button
-                      onClick={() => handleDeactivate(device.id, device.machine_name)}
-                      className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
-                      title="Deactivate"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => handleDeactivate(device.id, device.machine_name)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><X className="w-4 h-4" /></button>
                   )}
                 </td>
               </tr>
@@ -1652,25 +1407,14 @@ function DevicesTab({
           </tbody>
         </table>
         {devices.length === 0 && (
-          <div className="text-center py-8 text-muted-foreground">
-            No devices registered yet. Install the agent to start tracking.
-          </div>
+          <div className="text-center py-8 text-slate-500 font-medium">No devices registered yet. Install the agent to start tracking.</div>
         )}
       </div>
 
-      <div className="flex items-center gap-4 mt-4 text-xs text-muted-foreground">
-        <div className="flex items-center gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
-          Active now
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-yellow-500" />
-          Active today
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-gray-400" />
-          Inactive
-        </div>
+      <div className="flex items-center gap-6 mt-4 text-sm text-slate-600 font-medium">
+        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-500" />Active now</div>
+        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500" />Active today</div>
+        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-slate-400" />Inactive</div>
       </div>
     </div>
   );
@@ -1706,9 +1450,7 @@ function TokenTab({
     if (!confirm('Regenerate install token? The old token will stop working immediately.')) return;
     setRegenerating(true);
     try {
-      await safeFetchJson(`${API_BASE}/settings/install-token/regenerate/`, {
-        method: 'POST',
-      });
+      await safeFetchJson(`${API_BASE}/settings/install-token/regenerate/`, { method: 'POST' });
       onSuccess('Token regenerated');
       onRefresh();
     } catch (err: any) {
@@ -1721,51 +1463,37 @@ function TokenTab({
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Key className="w-5 h-5 text-primary" />
           Install Token
         </h2>
       </div>
 
-      <div className="bg-accent/50 border border-border rounded-lg p-6">
-        <p className="text-sm text-muted-foreground mb-4">
+      <div className="bg-slate-50 border-2 border-slate-200 rounded-xl p-6">
+        <p className="text-sm text-slate-600 font-medium mb-4">
           Share this token with your IT team for MDM deployment. Agents will automatically register with your organization.
         </p>
 
         {token ? (
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-2">Organization Token</label>
+              <label className="block text-sm font-bold text-slate-800 mb-2">Organization Token</label>
               <div className="flex items-center gap-2">
-                <div className="flex-1 bg-white border border-border rounded-lg px-4 py-3 font-mono text-sm">
+                <div className="flex-1 bg-white border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-sm text-slate-900 font-semibold">
                   {showToken ? token.token : '••••••••••••••••••••••••••••••••'}
                 </div>
-                <button
-                  onClick={() => setShowToken(!showToken)}
-                  className="p-2.5 border border-border rounded-lg hover:bg-accent transition-colors"
-                  title={showToken ? 'Hide' : 'Show'}
-                >
-                  {showToken ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                <button onClick={() => setShowToken(!showToken)} className="p-2.5 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-all">
+                  {showToken ? <EyeOff className="w-5 h-5 text-slate-600" /> : <Eye className="w-5 h-5 text-slate-600" />}
                 </button>
-                <button
-                  onClick={handleCopy}
-                  className="p-2.5 border border-border rounded-lg hover:bg-accent transition-colors"
-                  title="Copy"
-                >
-                  {copied ? <Check className="w-5 h-5 text-green-600" /> : <Copy className="w-5 h-5" />}
+                <button onClick={handleCopy} className="p-2.5 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-all">
+                  {copied ? <Check className="w-5 h-5 text-emerald-600" /> : <Copy className="w-5 h-5 text-slate-600" />}
                 </button>
               </div>
             </div>
 
             <div className="flex items-center justify-between pt-2">
-              <p className="text-xs text-muted-foreground">
-                Created: {new Date(token.created_at).toLocaleString()}
-              </p>
-              <button
-                onClick={handleRegenerate}
-                disabled={regenerating}
-                className="flex items-center gap-2 px-4 py-2 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
-              >
+              <p className="text-sm text-slate-500 font-medium">Created: {new Date(token.created_at).toLocaleString()}</p>
+              <button onClick={handleRegenerate} disabled={regenerating} className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-red-200 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-all disabled:opacity-50">
                 {regenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                 Regenerate Token
               </button>
@@ -1773,29 +1501,21 @@ function TokenTab({
           </div>
         ) : (
           <div className="text-center py-8">
-            <p className="text-muted-foreground mb-4">No install token exists yet.</p>
-            <button
-              onClick={handleRegenerate}
-              disabled={regenerating}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50"
-            >
-              Generate Token
-            </button>
+            <p className="text-slate-500 font-medium mb-4">No install token exists yet.</p>
+            <button onClick={handleRegenerate} disabled={regenerating} className="px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">Generate Token</button>
           </div>
         )}
       </div>
 
-      <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-        <h3 className="font-medium text-blue-900 mb-2">MDM Deployment Instructions</h3>
-        <ol className="text-sm text-blue-800 space-y-1.5 list-decimal list-inside">
+      <div className="mt-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+        <h3 className="font-bold text-blue-900 mb-3">MDM Deployment Instructions</h3>
+        <ol className="text-sm text-blue-800 font-medium space-y-2 list-decimal list-inside">
           <li>Download the TimeTracker installer (.pkg for Mac, .msi for Windows)</li>
           <li>Create a configuration file with the token above</li>
           <li>Deploy both via your MDM (Jamf, Intune, Kandji, etc.)</li>
           <li>Agents will auto-register when users log in</li>
         </ol>
-        <p className="text-xs text-blue-600 mt-3">
-          Need help? Contact support@mavops.ai
-        </p>
+        <p className="text-sm text-blue-600 font-semibold mt-4">Need help? Contact support@mavops.ai</p>
       </div>
     </div>
   );

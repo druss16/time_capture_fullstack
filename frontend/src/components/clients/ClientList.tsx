@@ -1,15 +1,13 @@
 /**
- * ClientList.tsx - Updated to match existing backend API
+ * ClientList.tsx - Client management page
+ * Updated to match design system
  */
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, Upload, Pencil, Trash2 } from 'lucide-react';
-import { postJson } from '@/lib/csrf';
-
-import { safeFetchJson } from '@/lib/api';
-
-const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
-const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
+import { Search, Plus, Upload, Pencil, Trash2, Briefcase, RefreshCw } from 'lucide-react';
+import { safeFetchJson, API_BASE } from '@/lib/api';
+import { cn } from '@/lib/design-system';
 
 interface Client {
   id: number;
@@ -17,8 +15,6 @@ interface Client {
   code: string;
   is_active: boolean;
 }
-
-
 
 export function ClientList() {
   const navigate = useNavigate();
@@ -30,8 +26,8 @@ export function ClientList() {
     fetchClients();
   }, []);
 
-  // Replace the fetchClients function (around line 27-42):
   const fetchClients = async () => {
+    setLoading(true);
     try {
       const data = await safeFetchJson<Client[]>(`${API_BASE}/clients/list/`);
       setClients(data);
@@ -49,101 +45,135 @@ export function ClientList() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-lg text-gray-600">Loading clients...</div>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw className="w-8 h-8 text-primary animate-spin mx-auto mb-3" />
+          <p className="text-slate-600 font-semibold">Loading clients...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-slate-50">
+      <div className="max-w-6xl mx-auto p-6">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Clients</h1>
-          <p className="text-gray-600">Manage your client list</p>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
+              <Briefcase className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Clients</h1>
+              <p className="text-slate-600 font-medium">Manage your client list</p>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => navigate('/clients/add')}
+              className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              Add Client
+            </button>
+            <button
+              onClick={() => navigate('/clients/import')}
+              className="flex items-center gap-2 px-4 py-2.5 border-2 border-slate-200 bg-white text-slate-700 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all"
+            >
+              <Upload className="w-4 h-4" />
+              Import CSV
+            </button>
+          </div>
         </div>
 
-        {/* Actions Bar */}
-        <div className="bg-white rounded-lg shadow-sm p-4 mb-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-            {/* Search */}
-            <div className="relative flex-1 max-w-md w-full">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-              <input
-                type="text"
-                placeholder="Search clients..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex gap-2">
-              <button
-                onClick={() => navigate('/clients/add')}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Client
-              </button>
-              <button
-                onClick={() => navigate('/clients/import')}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
-              >
-                <Upload className="w-4 h-4" />
-                Import CSV
-              </button>
-            </div>
+        {/* Search Bar */}
+        <div className="bg-white rounded-2xl border-2 border-slate-200 shadow-sm p-4 mb-6">
+          <div className="relative max-w-md">
+            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" />
+            <input
+              type="text"
+              placeholder="Search clients..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-12 pr-4 py-3 border-2 border-slate-200 rounded-xl text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+            />
           </div>
         </div>
 
         {/* Clients Table */}
-        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+        <div className="bg-white rounded-2xl border-2 border-slate-200 shadow-sm overflow-hidden">
           {filteredClients.length === 0 ? (
-            <div className="text-center py-12">
-              <p className="text-gray-500 mb-4">No clients found</p>
-              <button
-                onClick={() => navigate('/clients/add')}
-                className="text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Add your first client
-              </button>
+            <div className="text-center py-16">
+              <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4">
+                <Briefcase className="w-8 h-8 text-slate-400" />
+              </div>
+              {searchQuery ? (
+                <>
+                  <p className="text-slate-700 font-bold">No clients match "{searchQuery}"</p>
+                  <p className="text-sm text-slate-500 font-medium mt-1">
+                    Try a different search term
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-slate-700 font-bold">No clients yet</p>
+                  <button
+                    onClick={() => navigate('/clients/add')}
+                    className="mt-4 px-4 py-2 text-primary font-bold hover:underline"
+                  >
+                    Add your first client →
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
+                <thead className="bg-slate-100">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Client Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Code
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
+                    <th className="text-left px-6 py-3 text-sm font-bold text-slate-700">Client Name</th>
+                    <th className="text-left px-6 py-3 text-sm font-bold text-slate-700">Code</th>
+                    <th className="text-left px-6 py-3 text-sm font-bold text-slate-700">Status</th>
+                    <th className="text-right px-6 py-3 text-sm font-bold text-slate-700">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="divide-y divide-slate-200">
                   {filteredClients.map((client) => (
-                    <tr key={client.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="font-medium text-gray-900">{client.name}</div>
+                    <tr key={client.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-slate-900">{client.name}</p>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-500">{client.code}</div>
+                      <td className="px-6 py-4">
+                        <span className="text-sm text-slate-500 font-mono font-semibold">{client.code || '—'}</span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                      <td className="px-6 py-4">
+                        <span className={cn(
+                          'text-xs px-2.5 py-1 rounded-full font-bold',
                           client.is_active 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-gray-100 text-gray-800'
-                        }`}>
+                            ? 'bg-emerald-100 text-emerald-700' 
+                            : 'bg-slate-100 text-slate-500'
+                        )}>
                           {client.is_active ? 'Active' : 'Inactive'}
                         </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => navigate(`/clients/${client.id}/edit`)}
+                            className="p-2 text-primary hover:bg-primary/10 rounded-lg transition-colors"
+                            title="Edit"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -154,9 +184,11 @@ export function ClientList() {
         </div>
 
         {/* Stats */}
-        <div className="mt-6 text-center text-sm text-gray-600">
-          Showing {filteredClients.length} of {clients.length} clients
-        </div>
+        {clients.length > 0 && (
+          <div className="mt-4 text-center text-sm text-slate-500 font-medium">
+            Showing {filteredClients.length} of {clients.length} client{clients.length !== 1 ? 's' : ''}
+          </div>
+        )}
       </div>
     </div>
   );

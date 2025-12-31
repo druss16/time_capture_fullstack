@@ -1,6 +1,5 @@
 /**
- * BillingPage.tsx - Sidebar layout like Laurel
- * Keeps nice sidebar with descriptions, removes redundant main area header
+ * BillingPage.tsx - Sidebar layout with STRONGER FONTS
  */
 import React, { useState, useEffect } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
@@ -17,7 +16,7 @@ import {
   FileText,
   ChevronRight
 } from 'lucide-react';
-import { cn, getRoleColor, SKELETON, DESIGN_SYSTEM } from '@/lib/design-system';
+import { cn, getRoleColor, SKELETON } from '@/lib/design-system';
 
 type UserRole = 'owner' | 'admin' | 'manager' | 'member';
 
@@ -100,16 +99,16 @@ const BillingPage: React.FC = () => {
   return (
     <div className="flex min-h-[calc(100vh-56px)]">
       {/* Sidebar */}
-      <aside className="w-64 bg-card border-r-2 border-border flex-shrink-0 flex flex-col">
+      <aside className="w-64 bg-white border-r-2 border-slate-200 flex-shrink-0 flex flex-col">
         {/* Sidebar Header */}
-        <div className="p-4 border-b-2 border-border">
+        <div className="p-4 border-b-2 border-slate-200">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
-              <DollarSign className="w-5 h-5 text-primary-foreground" />
+              <DollarSign className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className={cn(DESIGN_SYSTEM.typography.h5, 'tracking-tight')}>Billing</h1>
-              <p className="text-xs text-muted-foreground">Time & Invoicing</p>
+              <h1 className="text-lg font-extrabold text-slate-900 tracking-tight">Billing</h1>
+              <p className="text-sm text-slate-600 font-medium">Time & Invoicing</p>
             </div>
           </div>
         </div>
@@ -129,24 +128,24 @@ const BillingPage: React.FC = () => {
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
                     'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl',
-                    'text-sm font-semibold transition-all duration-200',
+                    'text-sm font-bold transition-all duration-200',
                     'group border-2',
                     isActive 
                       ? 'bg-primary/10 text-primary border-primary/30' 
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground border-transparent'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border-transparent'
                   )}
                 >
                   <div className={cn(
                     'w-8 h-8 rounded-lg flex items-center justify-center transition-colors',
-                    isActive ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground group-hover:bg-muted-foreground/20'
+                    isActive ? 'bg-primary text-white' : 'bg-slate-200 text-slate-600 group-hover:bg-slate-300'
                   )}>
                     <Icon className="w-4 h-4" />
                   </div>
                   <div className="flex-1 text-left">
                     <span className="block">{tab.label}</span>
                     <span className={cn(
-                      'text-xs font-normal',
-                      isActive ? 'text-primary/70' : 'text-muted-foreground'
+                      'text-xs font-semibold',
+                      isActive ? 'text-primary/70' : 'text-slate-500'
                     )}>{tab.description}</span>
                   </div>
                   {isActive && <ChevronRight className="w-4 h-4 text-primary" />}
@@ -158,17 +157,17 @@ const BillingPage: React.FC = () => {
 
         {/* User Info at Bottom */}
         {userInfo && (
-          <div className="p-4 border-t-2 border-border bg-muted/30">
+          <div className="p-4 border-t-2 border-slate-200 bg-slate-50">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-muted flex items-center justify-center text-sm font-bold text-muted-foreground">
+              <div className="w-9 h-9 rounded-full bg-slate-300 flex items-center justify-center text-sm font-bold text-slate-700">
                 {userInfo.username.charAt(0).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-foreground truncate">{userInfo.username}</p>
-                {userInfo.org_name && <p className="text-xs text-muted-foreground truncate">{userInfo.org_name}</p>}
+                <p className="text-sm font-bold text-slate-900 truncate">{userInfo.username}</p>
+                {userInfo.org_name && <p className="text-xs text-slate-600 font-medium truncate">{userInfo.org_name}</p>}
               </div>
               {userRole && userRole !== 'member' && (
-                <span className={cn('text-xs px-2 py-0.5 rounded font-semibold', getRoleColor(userRole))}>
+                <span className={cn('text-xs px-2 py-0.5 rounded font-bold', getRoleColor(userRole))}>
                   {userRole.charAt(0).toUpperCase() + userRole.slice(1)}
                 </span>
               )}
@@ -177,8 +176,8 @@ const BillingPage: React.FC = () => {
         )}
       </aside>
 
-      {/* Main Content - NO redundant header, just the component */}
-      <main className="flex-1 p-6 bg-background">
+      {/* Main Content */}
+      <main className="flex-1 p-6 bg-slate-50">
         {loading ? (
           <ContentSkeleton />
         ) : (

@@ -3500,7 +3500,7 @@ def import_clients_csv(request):
     Enhanced CSV import with validation.
     
     Supported columns:
-      - client (required): Client name
+      - name/client/client_name (required): Client name
       - code (optional): Short code (e.g., "ACME")
       - contact (optional): Contact person
       - email (optional): Email address
@@ -3513,23 +3513,27 @@ def import_clients_csv(request):
     
     if 'file' not in request.FILES:
         raise ValidationError({"file": "Upload a CSV file."})
-
     f = request.FILES['file']
     try:
         text = f.read().decode('utf-8', errors='ignore')
     except Exception:
         text = f.read().decode('latin-1', errors='ignore')
-
     reader = csv.DictReader(io.StringIO(text))
     
     created = {"clients": 0, "projects": 0, "skipped": 0}
     errors = []
     
     for row_num, row in enumerate(reader, start=2):
-        client_name = (row.get('client') or '').strip()
+        # ✅ Flexible column name matching for client name
+        client_name = None
+        for col in ['name', 'client', 'client_name', 'Name', 'Client', 'Client Name', 'CLIENT', 'NAME']:
+            if col in row and row[col]:
+                client_name = row[col].strip()
+                break
         
         if not client_name:
             errors.append(f"Row {row_num}: Missing client name")
+            created['skipped'] += 1
             continue
         
         # Check if already exists
@@ -3542,16 +3546,20 @@ def import_clients_csv(request):
         active_str = str(row.get('active', 'true')).lower()
         is_active = active_str in ('1', 'true', 'yes', 'y')
         
+        # ✅ Get optional code field
+        code = (row.get('code') or row.get('Code') or row.get('CODE') or '').strip()
+        
         # Create client
         client = Client.objects.create(
             org=org,
             name=client_name,
+            code=code if code else '',
             is_active=is_active
         )
         created['clients'] += 1
         
         # Optional: Create default project
-        project_name = (row.get('project') or '').strip()
+        project_name = (row.get('project') or row.get('Project') or row.get('PROJECT') or '').strip()
         if project_name:
             Project.objects.create(
                 org=org,
@@ -3560,15 +3568,15 @@ def import_clients_csv(request):
                 is_active=True
             )
             created['projects'] += 1
-
+    
     return Response({
-        "message": "Import complete",
+        "ok": True,
+        "message": f"Successfully imported {created['clients']} clients ({created['skipped']} skipped)",
         "clients": created['clients'],
         "projects": created['projects'],
         "skipped": created['skipped'],
         "errors": errors if errors else None
     })
-
 
 # -------------------------------------------------------------------
 # Agent sessions (admin glance)

@@ -45,7 +45,7 @@ interface OnboardingWizardProps {
   initialStep?: number;
 }
 
-export default function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
+export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(initialStep);
   const [status, setStatus] = useState<{ steps: OnboardingSteps; is_complete: boolean } | null>(null);

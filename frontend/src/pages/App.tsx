@@ -21,7 +21,7 @@ import AdminRoute from "@/routes/AdminRoute";
 import { ClientList } from '@/components/clients/ClientList';
 import { ClientImport } from '@/components/clients/ClientImport';
 import { ManualClientEntry } from '@/components/clients/ManualClientEntry';
-import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
+import OnboardingWizard from '@/components/onboarding/OnboardingWizard';
 
 // --------- Lazy pages (code-splitting) ---------
 const DailyReview = lazy(() => import("./DailyReview"));

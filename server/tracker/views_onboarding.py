@@ -1,14 +1,7 @@
 # tracker/views_onboarding.py
 """
 Self-Service Onboarding API Endpoints
-
-Implements the streamlined 5-step onboarding flow:
-1. Admin signs up (firm name, email, password)
-2. Connect integration (Karbon/QBO/TaxDome)
-3. Invite team (emails with agent download links)
-4. Set billing rates (optional)
-5. Start tracking
-
+CSRF exempt for token-based authentication
 """
 
 from rest_framework.decorators import api_view, permission_classes
@@ -21,45 +14,33 @@ from django.utils import timezone
 from django.utils.text import slugify
 from django.core.mail import send_mail
 from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
 from datetime import timedelta
 from decimal import Decimal
-import uuid
 import secrets
 
 from .models import (
     Organization, OrganizationMembership, Client, TaskType, 
-    Invitation, OrgInstallToken, DEFAULT_CPA_TASK_TYPES
+    OrgInstallToken, AuthToken, AgentRegistration,
+    BillingRate, DEFAULT_CPA_TASK_TYPES
 )
 
 User = get_user_model()
 
 
 # ============================================================================
-# STEP 1: Firm Signup (Enhanced)
+# STEP 1: Firm Signup
 # ============================================================================
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def onboarding_signup(request):
     """
     Create new CPA firm account with owner.
-    
-    POST: {
-        "firm_name": "Smith & Associates CPA",
-        "email": "john@smithcpa.com",
-        "password": "securepass123",
-        "owner_name": "John Smith",
-        "timezone": "America/New_York"  # optional
-    }
-    
-    Returns:
-        - User credentials
-        - Organization details
-        - Auth token for immediate login
     """
     data = request.data
     
-    # Validate required fields
     firm_name = (data.get('firm_name') or '').strip()
     email = (data.get('email') or '').strip().lower()
     password = data.get('password') or ''
@@ -79,7 +60,6 @@ def onboarding_signup(request):
     if errors:
         return Response({'ok': False, 'errors': errors}, status=400)
     
-    # Check if email already exists
     if User.objects.filter(email=email).exists():
         return Response({
             'ok': False, 
@@ -141,15 +121,14 @@ def onboarding_signup(request):
                 sort_order=idx,
             )
         
-        # 5. Create Install Token for agent deployment
+        # 5. Create Install Token
         install_token = OrgInstallToken.objects.create(
             org=org,
             created_by=user,
             is_active=True,
         )
         
-        # 6. Generate auth token for immediate login
-        from .models import AuthToken
+        # 6. Generate auth token
         auth_token = secrets.token_urlsafe(32)
         AuthToken.objects.create(
             user=user,
@@ -157,7 +136,6 @@ def onboarding_signup(request):
             expires_at=timezone.now() + timedelta(days=14),
         )
     
-    # Log them in
     login(request, user)
     
     return Response({
@@ -177,7 +155,7 @@ def onboarding_signup(request):
             'trial_ends_at': org.trial_ends_at.isoformat() if org.trial_ends_at else None,
         },
         'install_token': install_token.token,
-        'onboarding_step': 1,  # Just completed step 1
+        'onboarding_step': 1,
     }, status=201)
 
 
@@ -185,46 +163,32 @@ def onboarding_signup(request):
 # ONBOARDING STATUS
 # ============================================================================
 
+@csrf_exempt
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def onboarding_status(request):
-    """
-    Get current onboarding progress for the user's organization.
-    
-    Returns completion status for each step:
-    1. Account created (always true if authenticated)
-    2. Integration connected
-    3. Team invited (at least 1 other member)
-    4. Rates configured
-    5. Agent installed (at least 1 device)
-    """
-    from .models import AgentRegistration, BillingRate
-    
+    """Get current onboarding progress."""
     user = request.user
     
-    # Get org membership
     membership = OrganizationMembership.objects.filter(user=user).select_related('organization').first()
     if not membership:
         return Response({'error': 'No organization found'}, status=404)
     
     org = membership.organization
     
-    # Check each step
     steps = {
-        'account_created': True,  # They're authenticated
-        'integration_connected': _check_integration_connected(org),
+        'account_created': True,
+        'integration_connected': Client.objects.filter(org=org).count() > 0,
         'team_invited': OrganizationMembership.objects.filter(organization=org).count() > 1,
         'rates_configured': BillingRate.objects.filter(org=org).exists() or org.billing_rate_default != Decimal('150.00'),
         'agent_installed': AgentRegistration.objects.filter(org=org, is_active=True).exists(),
     }
     
-    # Calculate overall progress
     completed = sum(1 for v in steps.values() if v)
     total = len(steps)
     
-    # Determine current step (first incomplete)
-    current_step = 5  # All complete
     step_order = ['account_created', 'integration_connected', 'team_invited', 'rates_configured', 'agent_installed']
+    current_step = 5
     for i, step in enumerate(step_order):
         if not steps[step]:
             current_step = i + 1
@@ -248,31 +212,21 @@ def onboarding_status(request):
     })
 
 
-def _check_integration_connected(org):
-    """Check if any integration is connected for this org."""
-    # For now, check if org has clients imported (sign of integration)
-    # In future, check actual OAuth tokens
-    return Client.objects.filter(org=org).count() > 0
-
-
 # ============================================================================
 # STEP 2: INTEGRATIONS
 # ============================================================================
 
+@csrf_exempt
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def integration_list(request):
-    """
-    List available integrations and their connection status.
-    """
+    """List available integrations."""
     membership = OrganizationMembership.objects.filter(user=request.user).first()
     if not membership:
         return Response({'error': 'No organization'}, status=404)
     
     org = membership.organization
     
-    # In production, check actual OAuth tokens
-    # For now, return available integrations
     integrations = [
         {
             'id': 'karbon',
@@ -307,15 +261,11 @@ def integration_list(request):
     })
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def integration_connect(request, provider):
-    """
-    Initiate OAuth connection for a provider.
-    
-    In production, this would redirect to the provider's OAuth flow.
-    For now, it's a placeholder that returns the OAuth URL.
-    """
+    """Initiate OAuth connection."""
     valid_providers = ['karbon', 'quickbooks', 'taxdome']
     if provider not in valid_providers:
         return Response({'error': f'Unknown provider: {provider}'}, status=400)
@@ -324,13 +274,9 @@ def integration_connect(request, provider):
     if not membership:
         return Response({'error': 'No organization'}, status=404)
     
-    # Generate OAuth state token
     state = secrets.token_urlsafe(32)
-    
-    # Store state for verification (in production, use cache or DB)
     request.session[f'{provider}_oauth_state'] = state
     
-    # Build OAuth URL (placeholder - implement actual OAuth in production)
     oauth_urls = {
         'karbon': 'https://app.karbonhq.com/oauth/authorize',
         'quickbooks': 'https://appcenter.intuit.com/connect/oauth2',
@@ -341,16 +287,15 @@ def integration_connect(request, provider):
         'provider': provider,
         'oauth_url': oauth_urls[provider],
         'state': state,
-        'message': f'Redirect user to OAuth URL to connect {provider}',
         'note': 'OAuth integration not yet implemented - use CSV import for now',
     })
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def integration_disconnect(request, provider):
     """Disconnect an integration."""
-    # In production, revoke OAuth tokens
     return Response({
         'ok': True,
         'provider': provider,
@@ -358,16 +303,14 @@ def integration_disconnect(request, provider):
     })
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def skip_integration(request):
-    """
-    Skip integration step and continue onboarding.
-    User can always connect integrations later.
-    """
+    """Skip integration step."""
     return Response({
         'ok': True,
-        'message': 'Integration step skipped. You can connect integrations anytime from Settings.',
+        'message': 'Integration step skipped.',
         'next_step': 3,
     })
 
@@ -376,24 +319,11 @@ def skip_integration(request):
 # STEP 3: TEAM INVITES
 # ============================================================================
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def invite_team_bulk(request):
-    """
-    Invite multiple team members at once.
-    
-    POST: {
-        "invites": [
-            {"email": "jane@firm.com", "role": "manager", "name": "Jane Doe"},
-            {"email": "bob@firm.com", "role": "member", "name": "Bob Smith"}
-        ]
-    }
-    
-    Sends emails with:
-    - Login credentials
-    - Desktop agent download link
-    - Getting started instructions
-    """
+    """Invite multiple team members."""
     membership = OrganizationMembership.objects.filter(user=request.user).first()
     if not membership or membership.role not in ['owner', 'admin']:
         return Response({'error': 'Not authorized to invite team members'}, status=403)
@@ -418,7 +348,6 @@ def invite_team_bulk(request):
         if role not in ['admin', 'manager', 'member']:
             role = 'member'
         
-        # Check if already a member
         if User.objects.filter(email=email).exists():
             existing_user = User.objects.get(email=email)
             if OrganizationMembership.objects.filter(user=existing_user, organization=org).exists():
@@ -442,9 +371,8 @@ def invite_team_bulk(request):
 
 
 def _create_and_invite_user(org, email, role, name, invited_by):
-    """Create user and send invite email with agent download link."""
+    """Create user and send invite email."""
     
-    # Generate credentials
     username = email.split('@')[0][:30]
     base_username = username
     counter = 1
@@ -457,7 +385,6 @@ def _create_and_invite_user(org, email, role, name, invited_by):
     first_name = name.split()[0] if name else ''
     last_name = ' '.join(name.split()[1:]) if name and len(name.split()) > 1 else ''
     
-    # Create user
     user = User.objects.create_user(
         username=username,
         email=email,
@@ -467,7 +394,6 @@ def _create_and_invite_user(org, email, role, name, invited_by):
         is_active=True,
     )
     
-    # Create membership
     OrganizationMembership.objects.create(
         user=user,
         organization=org,
@@ -475,10 +401,8 @@ def _create_and_invite_user(org, email, role, name, invited_by):
         invited_by=invited_by,
     )
     
-    # Get install token for agent download
     install_token = OrgInstallToken.objects.filter(org=org, is_active=True).first()
     
-    # Build email content
     app_url = getattr(settings, 'APP_URL', 'https://timetracker.mavops.ai')
     agent_download_url = f"{app_url}/download?token={install_token.token}" if install_token else f"{app_url}/download"
     
@@ -487,58 +411,51 @@ Hi {first_name or 'there'}!
 
 You've been invited to join {org.name} on TimeTracker.
 
-🚀 GET STARTED IN 2 MINUTES:
+GET STARTED:
 
-1️⃣ Download the Desktop App:
+1. Download the Desktop App:
    {agent_download_url}
    
-2️⃣ Sign in with these credentials:
+2. Sign in with these credentials:
    Email: {email}
    Password: {temp_password}
    
-3️⃣ That's it! The app runs in the background and tracks your time automatically.
+3. That's it! The app runs in the background and tracks your time automatically.
 
-💡 QUICK TIPS:
-• Select your current client from the menu bar icon
-• Review your timesheet weekly (you'll get a reminder)
-• Time is categorized automatically by AI
-
-Need help? Reply to this email or visit {app_url}/help
-
-Welcome aboard! 🎉
+Need help? Visit {app_url}/help
 
 - The TimeTracker Team
 """
 
-    # Send email
     email_sent = False
     try:
         send_mail(
             subject=f"You're invited to {org.name} on TimeTracker",
             message=email_body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@mavops.ai'),
             recipient_list=[email],
             fail_silently=False,
         )
         email_sent = True
-    except Exception as e:
-        pass  # Don't fail the invite if email fails
+    except Exception:
+        pass
     
     return {
         'email': email,
         'success': True,
         'user_id': user.id,
         'username': username,
-        'temp_password': temp_password,  # Return for display in case email fails
+        'temp_password': temp_password,
         'email_sent': email_sent,
         'role': role,
     }
 
 
+@csrf_exempt
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def team_status(request):
-    """Get current team members for onboarding display."""
+    """Get current team members."""
     membership = OrganizationMembership.objects.filter(user=request.user).first()
     if not membership:
         return Response({'error': 'No organization'}, status=404)
@@ -561,13 +478,14 @@ def team_status(request):
     })
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def skip_team_invites(request):
-    """Skip team invite step - can invite later."""
+    """Skip team invite step."""
     return Response({
         'ok': True,
-        'message': 'Team invites skipped. You can invite team members anytime from Settings.',
+        'message': 'Team invites skipped.',
         'next_step': 4,
     })
 
@@ -576,14 +494,11 @@ def skip_team_invites(request):
 # STEP 4: BILLING RATES
 # ============================================================================
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def set_default_rate(request):
-    """
-    Set the organization's default billing rate.
-    
-    POST: {"rate": 175.00}
-    """
+    """Set the organization's default billing rate."""
     membership = OrganizationMembership.objects.filter(user=request.user).first()
     if not membership or membership.role not in ['owner', 'admin']:
         return Response({'error': 'Not authorized'}, status=403)
@@ -611,13 +526,14 @@ def set_default_rate(request):
     })
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def skip_rates(request):
-    """Skip rate configuration - uses default $150/hour."""
+    """Skip rate configuration."""
     return Response({
         'ok': True,
-        'message': 'Rate configuration skipped. Default rate is $150/hour. You can configure rates in Settings.',
+        'message': 'Rate configuration skipped.',
         'next_step': 5,
     })
 
@@ -626,18 +542,15 @@ def skip_rates(request):
 # STEP 5: COMPLETE ONBOARDING
 # ============================================================================
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def complete_onboarding(request):
-    """
-    Mark onboarding as complete.
-    User is ready to start tracking time.
-    """
+    """Mark onboarding as complete."""
     membership = OrganizationMembership.objects.filter(user=request.user).first()
     if not membership:
         return Response({'error': 'No organization'}, status=404)
     
-    # Get install token for agent download
     install_token = OrgInstallToken.objects.filter(
         org=membership.organization, 
         is_active=True
@@ -645,7 +558,7 @@ def complete_onboarding(request):
     
     return Response({
         'ok': True,
-        'message': 'Onboarding complete! You\'re ready to start tracking time.',
+        'message': 'Onboarding complete!',
         'next_steps': [
             'Download the desktop app to start automatic time tracking',
             'Select your client from the menu bar when working',
@@ -660,16 +573,11 @@ def complete_onboarding(request):
 # AGENT DOWNLOAD
 # ============================================================================
 
+@csrf_exempt
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def agent_download_info(request):
-    """
-    Get agent download URLs.
-    Works with or without authentication.
-    """
-    import platform
-    
-    # Detect platform from User-Agent
+    """Get agent download URLs."""
     ua = request.META.get('HTTP_USER_AGENT', '').lower()
     detected_os = 'unknown'
     if 'mac' in ua or 'darwin' in ua:
@@ -677,7 +585,6 @@ def agent_download_info(request):
     elif 'windows' in ua or 'win' in ua:
         detected_os = 'windows'
     
-    # In production, these would be actual download URLs
     app_url = getattr(settings, 'APP_URL', 'https://timetracker.mavops.ai')
     
     return Response({

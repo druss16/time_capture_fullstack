@@ -1,6 +1,7 @@
 // src/services/onboardingApi.ts
 /**
  * API service for self-service onboarding flow
+ * Updated to match existing API patterns with CSRF support
  */
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -129,12 +130,26 @@ export interface ApiError {
   error?: string;
 }
 
-// Helper to get auth token
+// Get CSRF token from cookie (Django pattern)
+const getCSRFToken = (): string | null => {
+  const name = 'csrftoken';
+  const cookies = document.cookie.split(';');
+  for (const cookie of cookies) {
+    const [key, value] = cookie.trim().split('=');
+    if (key === name) return value;
+  }
+  return null;
+};
+
+// Helper to get auth headers with CSRF
 const getAuthHeaders = (): HeadersInit => {
   const token = localStorage.getItem('authToken');
+  const csrfToken = getCSRFToken();
+  
   return {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Token ${token}` } : {}),
+    ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
   };
 };
 
@@ -142,6 +157,7 @@ const getAuthHeaders = (): HeadersInit => {
 const apiFetch = async <T>(endpoint: string, options: RequestInit = {}): Promise<T> => {
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
+    credentials: 'include', // Include cookies for session auth
     headers: {
       ...getAuthHeaders(),
       ...(options.headers || {}),
@@ -278,7 +294,44 @@ export const getDownloadInfo = async (): Promise<DownloadInfoResponse> => {
   return apiFetch<DownloadInfoResponse>('/onboarding/download/');
 };
 
-const onboardingApi = {
+// ============================================================================
+// CLIENT IMPORT (using existing endpoint)
+// ============================================================================
+
+export const importClientsCSV = async (file: File): Promise<{
+  message: string;
+  clients: number;
+  projects: number;
+  skipped: number;
+  errors?: string[];
+}> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const token = localStorage.getItem('authToken');
+  const csrfToken = getCSRFToken();
+  
+  const response = await fetch(`${API_BASE}/import-clients-csv/`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      ...(token ? { 'Authorization': `Token ${token}` } : {}),
+      ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
+      // Don't set Content-Type - browser will set it with boundary for FormData
+    },
+    body: formData,
+  });
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    throw { status: response.status, ...data };
+  }
+  
+  return data;
+};
+
+export default {
   signup,
   getOnboardingStatus,
   getIntegrations,
@@ -292,6 +345,5 @@ const onboardingApi = {
   skipRates,
   completeOnboarding,
   getDownloadInfo,
+  importClientsCSV,
 };
-
-export default onboardingApi;

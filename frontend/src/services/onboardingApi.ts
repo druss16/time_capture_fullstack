@@ -3,7 +3,7 @@
  * API service for self-service onboarding flow
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 // Types
 export interface User {

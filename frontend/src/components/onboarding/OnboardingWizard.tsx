@@ -11,6 +11,7 @@ import { getOnboardingStatus, Organization, OnboardingSteps } from '../../servic
 import SignupStep from './steps/SignupStep';
 import IntegrationStep from './steps/IntegrationStep';
 import TeamInviteStep from './steps/TeamInviteStep';
+import PricingStep from './steps/PricingStep';
 import BillingRatesStep from './steps/BillingRatesStep';
 import CompleteStep from './steps/CompleteStep';
 
@@ -19,6 +20,7 @@ import {
   UserPlus, 
   Link2, 
   Users, 
+  CreditCard,
   DollarSign, 
   Download,
   Check,
@@ -30,15 +32,16 @@ interface Step {
   id: number;
   name: string;
   icon: LucideIcon;
-  key: keyof OnboardingSteps;
+  key: keyof OnboardingSteps | 'plan_selected';
 }
 
 const STEPS: Step[] = [
   { id: 1, name: 'Create Account', icon: UserPlus, key: 'account_created' },
   { id: 2, name: 'Connect Integration', icon: Link2, key: 'integration_connected' },
   { id: 3, name: 'Invite Team', icon: Users, key: 'team_invited' },
-  { id: 4, name: 'Set Rates', icon: DollarSign, key: 'rates_configured' },
-  { id: 5, name: 'Start Tracking', icon: Download, key: 'agent_installed' },
+  { id: 4, name: 'Choose Plan', icon: CreditCard, key: 'plan_selected' },
+  { id: 5, name: 'Set Rates', icon: DollarSign, key: 'rates_configured' },
+  { id: 6, name: 'Start Tracking', icon: Download, key: 'agent_installed' },
 ];
 
 interface OnboardingWizardProps {
@@ -53,7 +56,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
   const [organization, setOrganization] = useState<Organization | null>(null);
 
   useEffect(() => {
-    const token = localStorage.getItem('authToken');
+    const token = localStorage.getItem('auth_token');
     if (token && currentStep > 1) {
       loadStatus();
     } else {
@@ -68,7 +71,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
       setOrganization(data.organization);
       
       if (data.is_complete) {
-        navigate('/dashboard');
+        navigate('/daily');
         return;
       }
       
@@ -85,15 +88,15 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
       setOrganization(data.organization);
     }
     
-    if (stepNum < 5) {
+    if (stepNum < 6) {
       setCurrentStep(stepNum + 1);
     } else {
-      navigate('/dashboard');
+      navigate('/daily');
     }
   };
 
   const handleSkip = (stepNum: number) => {
-    if (stepNum < 5) {
+    if (stepNum < 6) {
       setCurrentStep(stepNum + 1);
     }
   };
@@ -132,7 +135,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
             <ol className="flex items-center justify-between">
               {STEPS.map((step, idx) => {
                 const StepIcon = step.icon;
-                const isComplete = status?.steps?.[step.key] || currentStep > step.id;
+                const isComplete = (status?.steps?.[step.key as keyof OnboardingSteps]) || currentStep > step.id;
                 const isCurrent = currentStep === step.id;
                 
                 return (
@@ -194,17 +197,25 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
         )}
         
         {currentStep === 4 && (
-          <BillingRatesStep 
-            organization={organization}
-            onComplete={() => handleStepComplete(4)} 
-            onSkip={() => handleSkip(4)}
+          <PricingStep 
+            organizationId={organization?.id || 0}
+            onComplete={() => handleStepComplete(4)}
+            onStartTrial={() => handleStepComplete(4)}
           />
         )}
         
         {currentStep === 5 && (
-          <CompleteStep 
+          <BillingRatesStep 
             organization={organization}
             onComplete={() => handleStepComplete(5)} 
+            onSkip={() => handleSkip(5)}
+          />
+        )}
+        
+        {currentStep === 6 && (
+          <CompleteStep 
+            organization={organization}
+            onComplete={() => handleStepComplete(6)} 
           />
         )}
       </main>

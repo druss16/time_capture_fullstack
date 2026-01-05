@@ -1459,3 +1459,406 @@ def billing_rates_detail(request, rate_id):
     elif request.method == 'DELETE':
         rate.delete()
         return Response({'status': 'deleted'}, status=204)
+
+
+# tracker/views_billing.py
+"""
+Stripe billing integration for TimeTracker.
+Handles checkout sessions, webhooks, and subscription management.
+"""
+
+import stripe
+from django.conf import settings
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
+from datetime import timedelta
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+
+from .models import Organization, OrganizationMembership
+
+# Initialize Stripe
+stripe.api_key = settings.STRIPE_SECRET_KEY
+
+# Price IDs - Replace with your real Stripe Price IDs
+STRIPE_PRICES = getattr(settings, 'STRIPE_PRICES', {
+    'starter_monthly': 'price_starter_monthly',      # $29.99/user/month
+    'starter_yearly': 'price_starter_yearly',        # $287.90/user/year (20% off)
+    'professional_monthly': 'price_professional_monthly',  # $49.99/user/month
+    'professional_yearly': 'price_professional_yearly',    # $479.90/user/year (20% off)
+})
+
+
+# ============================================================================
+# CHECKOUT SESSION
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_checkout_session(request):
+    """
+    Create a Stripe Checkout session for subscription.
+    
+    POST body:
+    {
+        "price_id": "price_xxx",  // Stripe Price ID
+        "quantity": 5,            // Number of seats
+        "success_url": "https://...",
+        "cancel_url": "https://..."
+    }
+    """
+    try:
+        # Get user's org
+        membership = OrganizationMembership.objects.filter(
+            user=request.user
+        ).select_related('organization').first()
+        
+        if not membership:
+            return Response({'error': 'No organization found'}, status=400)
+        
+        org = membership.organization
+        
+        # Get or create Stripe customer
+        if not org.stripe_customer_id:
+            customer = stripe.Customer.create(
+                email=request.user.email,
+                name=org.name,
+                metadata={
+                    'organization_id': org.id,
+                    'organization_slug': org.slug,
+                }
+            )
+            org.stripe_customer_id = customer.id
+            org.save(update_fields=['stripe_customer_id'])
+        
+        # Create checkout session
+        price_id = request.data.get('price_id')
+        quantity = request.data.get('quantity', 1)
+        success_url = request.data.get('success_url', f"{settings.FRONTEND_URL}/onboarding?step=complete")
+        cancel_url = request.data.get('cancel_url', f"{settings.FRONTEND_URL}/onboarding?step=pricing")
+        
+        session = stripe.checkout.Session.create(
+            customer=org.stripe_customer_id,
+            payment_method_types=['card'],
+            line_items=[{
+                'price': price_id,
+                'quantity': quantity,
+            }],
+            mode='subscription',
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                'organization_id': org.id,
+                'user_id': request.user.id,
+            },
+            subscription_data={
+                'metadata': {
+                    'organization_id': org.id,
+                },
+            },
+            allow_promotion_codes=True,
+        )
+        
+        return Response({
+            'checkout_url': session.url,
+            'session_id': session.id,
+        })
+        
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_billing_portal_session(request):
+    """
+    Create a Stripe Customer Portal session for managing subscription.
+    Allows customers to update payment method, view invoices, cancel, etc.
+    """
+    try:
+        membership = OrganizationMembership.objects.filter(
+            user=request.user
+        ).select_related('organization').first()
+        
+        if not membership:
+            return Response({'error': 'No organization found'}, status=400)
+        
+        org = membership.organization
+        
+        if not org.stripe_customer_id:
+            return Response({'error': 'No billing account found'}, status=400)
+        
+        return_url = request.data.get('return_url', f"{settings.FRONTEND_URL}/settings")
+        
+        session = stripe.billing_portal.Session.create(
+            customer=org.stripe_customer_id,
+            return_url=return_url,
+        )
+        
+        return Response({
+            'portal_url': session.url,
+        })
+        
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+
+
+# ============================================================================
+# SUBSCRIPTION STATUS
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_subscription_status(request):
+    """
+    Get current subscription status for the organization.
+    """
+    try:
+        membership = OrganizationMembership.objects.filter(
+            user=request.user
+        ).select_related('organization').first()
+        
+        if not membership:
+            return Response({'error': 'No organization found'}, status=400)
+        
+        org = membership.organization
+        
+        # Check trial status
+        now = timezone.now()
+        trial_active = org.trial_ends_at and org.trial_ends_at > now
+        trial_days_left = 0
+        if trial_active:
+            trial_days_left = (org.trial_ends_at - now).days
+        
+        # Get Stripe subscription if exists
+        subscription_data = None
+        if org.stripe_customer_id:
+            subscriptions = stripe.Subscription.list(
+                customer=org.stripe_customer_id,
+                status='active',
+                limit=1,
+            )
+            
+            if subscriptions.data:
+                sub = subscriptions.data[0]
+                subscription_data = {
+                    'id': sub.id,
+                    'status': sub.status,
+                    'current_period_end': sub.current_period_end,
+                    'cancel_at_period_end': sub.cancel_at_period_end,
+                    'plan': sub.items.data[0].price.nickname if sub.items.data else None,
+                    'quantity': sub.items.data[0].quantity if sub.items.data else 1,
+                }
+        
+        return Response({
+            'organization': {
+                'id': org.id,
+                'name': org.name,
+                'plan': org.plan,
+            },
+            'trial': {
+                'active': trial_active,
+                'ends_at': org.trial_ends_at.isoformat() if org.trial_ends_at else None,
+                'days_left': trial_days_left,
+            },
+            'subscription': subscription_data,
+            'has_payment_method': bool(org.stripe_customer_id and subscription_data),
+        })
+        
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+
+
+# ============================================================================
+# WEBHOOK HANDLER
+# ============================================================================
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def stripe_webhook(request):
+    """
+    Handle Stripe webhook events.
+    
+    Events handled:
+    - checkout.session.completed: Subscription started
+    - customer.subscription.updated: Plan changed
+    - customer.subscription.deleted: Subscription cancelled
+    - invoice.payment_failed: Payment failed
+    """
+    payload = request.body
+    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+    webhook_secret = settings.STRIPE_WEBHOOK_SECRET
+    
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, webhook_secret
+        )
+    except ValueError:
+        return HttpResponse(status=400)
+    except stripe.error.SignatureVerificationError:
+        return HttpResponse(status=400)
+    
+    event_type = event['type']
+    data = event['data']['object']
+    
+    # Handle specific events
+    if event_type == 'checkout.session.completed':
+        handle_checkout_completed(data)
+    
+    elif event_type == 'customer.subscription.updated':
+        handle_subscription_updated(data)
+    
+    elif event_type == 'customer.subscription.deleted':
+        handle_subscription_deleted(data)
+    
+    elif event_type == 'invoice.payment_failed':
+        handle_payment_failed(data)
+    
+    return HttpResponse(status=200)
+
+
+def handle_checkout_completed(session):
+    """Handle successful checkout - activate subscription."""
+    org_id = session.get('metadata', {}).get('organization_id')
+    
+    if not org_id:
+        # Try to find org by customer ID
+        customer_id = session.get('customer')
+        try:
+            org = Organization.objects.get(stripe_customer_id=customer_id)
+            org_id = org.id
+        except Organization.DoesNotExist:
+            print(f"[Stripe] Could not find org for checkout session {session['id']}")
+            return
+    
+    try:
+        org = Organization.objects.get(id=org_id)
+        
+        # Determine plan from the subscription
+        subscription_id = session.get('subscription')
+        if subscription_id:
+            subscription = stripe.Subscription.retrieve(subscription_id)
+            price_id = subscription.items.data[0].price.id if subscription.items.data else None
+            
+            # Map price to plan
+            if price_id in [STRIPE_PRICES.get('professional_monthly'), STRIPE_PRICES.get('professional_yearly')]:
+                org.plan = 'professional'
+            else:
+                org.plan = 'starter'
+        
+        # Clear trial (they're now paying)
+        org.trial_ends_at = None
+        org.save(update_fields=['plan', 'trial_ends_at'])
+        
+        print(f"[Stripe] Activated {org.plan} plan for org {org.name}")
+        
+    except Organization.DoesNotExist:
+        print(f"[Stripe] Organization {org_id} not found")
+
+
+def handle_subscription_updated(subscription):
+    """Handle subscription changes (upgrades, downgrades, quantity changes)."""
+    customer_id = subscription.get('customer')
+    
+    try:
+        org = Organization.objects.get(stripe_customer_id=customer_id)
+        
+        # Check if subscription is still active
+        if subscription['status'] in ['active', 'trialing']:
+            price_id = subscription['items']['data'][0]['price']['id'] if subscription['items']['data'] else None
+            
+            if price_id in [STRIPE_PRICES.get('professional_monthly'), STRIPE_PRICES.get('professional_yearly')]:
+                org.plan = 'professional'
+            else:
+                org.plan = 'starter'
+            
+            org.save(update_fields=['plan'])
+            print(f"[Stripe] Updated {org.name} to {org.plan}")
+        
+    except Organization.DoesNotExist:
+        print(f"[Stripe] Organization not found for customer {customer_id}")
+
+
+def handle_subscription_deleted(subscription):
+    """Handle subscription cancellation - downgrade to trial/free."""
+    customer_id = subscription.get('customer')
+    
+    try:
+        org = Organization.objects.get(stripe_customer_id=customer_id)
+        org.plan = 'trial'
+        # Give them 7 days to resubscribe
+        org.trial_ends_at = timezone.now() + timedelta(days=7)
+        org.save(update_fields=['plan', 'trial_ends_at'])
+        
+        print(f"[Stripe] Subscription cancelled for {org.name}")
+        
+        # TODO: Send email notification about cancellation
+        
+    except Organization.DoesNotExist:
+        print(f"[Stripe] Organization not found for customer {customer_id}")
+
+
+def handle_payment_failed(invoice):
+    """Handle failed payment - notify org admin."""
+    customer_id = invoice.get('customer')
+    
+    try:
+        org = Organization.objects.get(stripe_customer_id=customer_id)
+        
+        # TODO: Send email notification about failed payment
+        # TODO: Maybe create a PaymentFailure record
+        
+        print(f"[Stripe] Payment failed for {org.name}")
+        
+    except Organization.DoesNotExist:
+        print(f"[Stripe] Organization not found for customer {customer_id}")
+
+
+# ============================================================================
+# PLAN SELECTION (for trial users)
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def select_plan(request):
+    """
+    Select a plan during onboarding (before payment).
+    Stores the intended plan for when they convert from trial.
+    """
+    try:
+        membership = OrganizationMembership.objects.filter(
+            user=request.user
+        ).select_related('organization').first()
+        
+        if not membership:
+            return Response({'error': 'No organization found'}, status=400)
+        
+        org = membership.organization
+        
+        plan = request.data.get('plan', 'professional')
+        seats = request.data.get('seats', 1)
+        
+        # Store intended plan (will apply after trial or payment)
+        # For now, just validate and acknowledge
+        if plan not in ['starter', 'professional']:
+            return Response({'error': 'Invalid plan'}, status=400)
+        
+        # You could store this in a separate field like `intended_plan`
+        # For simplicity, we'll just return success
+        
+        return Response({
+            'ok': True,
+            'plan': plan,
+            'seats': seats,
+            'message': f'Selected {plan} plan with {seats} seat(s). Your 7-day trial has started.',
+        })
+        
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)

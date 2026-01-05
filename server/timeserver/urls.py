@@ -17,4 +17,5 @@ urlpatterns = [
     path("api/auth/signup/", tracker_views.auth_signup, name="auth_signup"),
     path("api/whoami/",      tracker_views.whoami,      name="whoami"),
     path('api/onboarding/', include('tracker.urls_onboarding')),
+    path('api/billing/', include('tracker.urls_billing')),
 ]

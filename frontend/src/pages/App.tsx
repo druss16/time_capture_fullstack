@@ -105,7 +105,7 @@ export default function App() {
 
                 {/* Public auth routes */}
                 {!AUTH_DISABLED && <Route path="/login" element={<Login />} />}
-                {!AUTH_DISABLED && <Route path="/signup" element={<Signup />} />}
+                {!AUTH_DISABLED && <Route path="/signup" element={<OnboardingWizard initialStep={1} />} />}
                 {!AUTH_DISABLED && <Route path="/logout" element={<Logout />} />}
 
                 {/* Protected pages (wrapped in AppLayout) */}
@@ -224,6 +224,12 @@ export default function App() {
                     </MaybeProtected>
                   }
                 />
+
+                // In your Routes section, add these two routes:
+
+                {/* Self-Service Onboarding (public - no auth required) */}
+                <Route path="/onboarding" element={<OnboardingWizard />} />
+                <Route path="/onboarding/signup" element={<OnboardingWizard initialStep={1} />} />
 
                 {/* 404 */}
                 <Route path="*" element={<NotFound />} />

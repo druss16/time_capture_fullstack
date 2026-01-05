@@ -1582,3 +1582,4 @@ class EmployeeCostRate(models.Model):
         ).order_by('-effective_date').first()
         
         return rate.cost_rate if rate else None
+

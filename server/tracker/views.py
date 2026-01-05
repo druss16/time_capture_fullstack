@@ -3783,44 +3783,79 @@ from datetime import timedelta
 @permission_classes([AllowAny])
 @csrf_exempt
 def auth_login(request):
-    """JSON login endpoint - returns token stored in database."""
+    """JSON login endpoint - accepts username OR email."""
     data = request.data or {}
-    username = (data.get("username") or "").strip()
+    username_or_email = (data.get("username") or data.get("email") or "").strip()
     password = data.get("password") or ""
-
-    if not username or not password:
+    
+    if not username_or_email or not password:
         return Response(
-            {"ok": False, "error": "Username and password required."},
+            {"ok": False, "error": "Username/email and password required."},
             status=status.HTTP_400_BAD_REQUEST
         )
-
-    user = authenticate(request, username=username, password=password)
+    
+    # Try to find user by email or username
+    user = None
+    if '@' in username_or_email:
+        # Looks like an email - try email first
+        user = User.objects.filter(email__iexact=username_or_email).first()
+    
+    if not user:
+        # Try username (case-insensitive)
+        user = User.objects.filter(username__iexact=username_or_email).first()
+    
     if not user:
         return Response(
             {"ok": False, "error": "Invalid credentials."},
             status=status.HTTP_400_BAD_REQUEST
         )
-
+    
+    # Verify password
+    if not user.check_password(password):
+        return Response(
+            {"ok": False, "error": "Invalid credentials."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if not user.is_active:
+        return Response(
+            {"ok": False, "error": "Account is disabled."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Log them in (creates session)
+    login(request, user)
+    
     # Generate token and store in database
-    from tracker.models import AuthToken
+    from tracker.models import AuthToken, OrganizationMembership
     
     token_value = secrets.token_urlsafe(32)
-    expires_at = timezone.now() + timedelta(days=14)  # 2 weeks
+    expires_at = timezone.now() + timedelta(days=14)
     
     AuthToken.objects.create(
         user=user,
         token=token_value,
         expires_at=expires_at
     )
-
+    
+    # Get org/role info
+    membership = OrganizationMembership.objects.filter(user=user).select_related('organization').first()
+    
     return Response({
         "ok": True,
         "token": token_value,
         "user": {
             "id": user.id,
             "username": user.username,
-            "email": user.email or ""
-        }
+            "email": user.email or "",
+            "name": f"{user.first_name} {user.last_name}".strip(),
+        },
+        "organization": {
+            "id": membership.organization.id,
+            "name": membership.organization.name,
+            "slug": membership.organization.slug,
+        } if membership else None,
+        "role": membership.role if membership else None,
     })
 
 

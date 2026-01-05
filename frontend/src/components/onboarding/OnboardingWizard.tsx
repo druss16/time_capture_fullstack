@@ -211,3 +211,5 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
     </div>
   );
 }
+
+export default OnboardingWizard;

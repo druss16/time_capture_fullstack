@@ -66,36 +66,43 @@ class NoAuth(BaseAuthentication):
         return None
 
 
+# Add this class to tracker/auth.py
+
 class BearerTokenAuthentication(BaseAuthentication):
     """
-    Token authentication for browsers that block cookies.
-    Updates user.last_login on successful authentication (throttled to every 5 minutes).
+    Custom auth that accepts: Authorization: Bearer <token>
+    Looks up tokens in tracker_authtoken table.
     """
+    keyword = 'Bearer'
+    
     def authenticate(self, request):
-        auth_header = request.headers.get('Authorization', '')
+        from .models import AuthToken  # Import here to avoid circular imports
         
-        if not auth_header.startswith('Bearer '):
-            return None  # Not a bearer token, try next auth method
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
         
-        token = auth_header.replace('Bearer ', '', 1).strip()
+        if not auth_header.startswith(f'{self.keyword} '):
+            return None  # Let other auth backends try
+        
+        token = auth_header[len(self.keyword) + 1:].strip()
+        
+        if not token:
+            return None
         
         try:
             auth_token = AuthToken.objects.select_related('user').get(token=token)
-            if auth_token.is_valid():
-                user = auth_token.user
-                
-                # ✅ Update last_login (throttled to avoid DB writes on every request)
-                now = timezone.now()
-                if user.last_login is None or (now - user.last_login) > timedelta(minutes=5):
-                    user.last_login = now
-                    user.save(update_fields=['last_login'])
-                
-                return (user, None)
-        
+            
+            # Check if valid (not expired)
+            if not auth_token.is_valid():
+                raise AuthenticationFailed('Token expired')
+            
+            return (auth_token.user, auth_token)
+            
         except AuthToken.DoesNotExist:
-            pass
-        
-        return None  # Invalid token, try next auth method
+            # Don't raise - let other auth backends try
+            return None
+    
+    def authenticate_header(self, request):
+        return self.keyword
 
 
 __all__ = ["AgentKeyAuthentication", "AgentKeyPermission", "NoAuth", "BearerTokenAuthentication"]

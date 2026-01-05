@@ -143,12 +143,12 @@ const getCSRFToken = (): string | null => {
 
 // Helper to get auth headers with CSRF
 const getAuthHeaders = (): HeadersInit => {
-  const token = localStorage.getItem('authToken');
+  const token = localStorage.getItem('auth_token');  // ✅ Fixed: was 'authToken'
   const csrfToken = getCSRFToken();
   
   return {
     'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Token ${token}` } : {}),
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),  // ✅ Fixed: was 'Token'
     ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
   };
 };
@@ -198,7 +198,7 @@ export const signup = async (params: SignupParams): Promise<SignupResponse> => {
   });
   
   if (data.token) {
-    localStorage.setItem('authToken', data.token);
+    localStorage.setItem('auth_token', data.token);  // ✅ Fixed: was 'authToken'
   }
   
   return data;
@@ -308,14 +308,14 @@ export const importClientsCSV = async (file: File): Promise<{
   const formData = new FormData();
   formData.append('file', file);
   
-  const token = localStorage.getItem('authToken');
+  const token = localStorage.getItem('auth_token');  // ✅ Fixed: was 'authToken'
   const csrfToken = getCSRFToken();
   
   const response = await fetch(`${API_BASE}/import-clients-csv/`, {
     method: 'POST',
     credentials: 'include',
     headers: {
-      ...(token ? { 'Authorization': `Token ${token}` } : {}),
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),  // ✅ Fixed: was 'Token'
       ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
       // Don't set Content-Type - browser will set it with boundary for FormData
     },

@@ -69,40 +69,42 @@ class NoAuth(BaseAuthentication):
 # Add this class to tracker/auth.py
 
 class BearerTokenAuthentication(BaseAuthentication):
-    """
-    Custom auth that accepts: Authorization: Bearer <token>
-    Looks up tokens in tracker_authtoken table.
-    """
     keyword = 'Bearer'
     
     def authenticate(self, request):
-        from .models import AuthToken  # Import here to avoid circular imports
+        from .models import AuthToken
+        import logging
+        logger = logging.getLogger(__name__)
         
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        logger.info(f"[BearerAuth] Header: {auth_header[:50] if auth_header else 'NONE'}")
         
         if not auth_header.startswith(f'{self.keyword} '):
-            return None  # Let other auth backends try
+            logger.info("[BearerAuth] No Bearer prefix, skipping")
+            return None
         
         token = auth_header[len(self.keyword) + 1:].strip()
+        logger.info(f"[BearerAuth] Token: {token[:20]}...")
         
         if not token:
             return None
         
         try:
             auth_token = AuthToken.objects.select_related('user').get(token=token)
+            logger.info(f"[BearerAuth] Found token for user: {auth_token.user.username}")
             
-            # Check if valid (not expired)
             if not auth_token.is_valid():
+                logger.info("[BearerAuth] Token expired!")
                 raise AuthenticationFailed('Token expired')
             
+            logger.info(f"[BearerAuth] SUCCESS - authenticated {auth_token.user.username}")
             return (auth_token.user, auth_token)
             
         except AuthToken.DoesNotExist:
-            # Don't raise - let other auth backends try
+            logger.info(f"[BearerAuth] Token not found in DB")
             return None
     
     def authenticate_header(self, request):
         return self.keyword
-
 
 __all__ = ["AgentKeyAuthentication", "AgentKeyPermission", "NoAuth", "BearerTokenAuthentication"]

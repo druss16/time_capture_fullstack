@@ -730,6 +730,11 @@ from django.db import IntegrityError
 
 from django.db import IntegrityError
 
+# Replace EmployeeCostRateListView and EmployeeCostRateDetailView in views_billing.py with this:
+# Note: The model field is `cost_rate` (not hourly_cost)
+
+from django.db import IntegrityError
+
 class EmployeeCostRateListView(APIView):
     """
     GET: List all employee cost rates for the org
@@ -751,7 +756,7 @@ class EmployeeCostRateListView(APIView):
                 'user': rate.user.id,
                 'user_name': rate.user.username,
                 'user_email': rate.user.email or '',
-                'cost_rate': str(rate.hourly_cost),  # API field name
+                'cost_rate': str(rate.cost_rate),
                 'effective_date': safe_date(rate.effective_date),
             })
         
@@ -763,8 +768,7 @@ class EmployeeCostRateListView(APIView):
             return Response({'error': 'No organization found'}, status=404)
         
         user_id = request.data.get('user')
-        # Accept both field names for flexibility
-        cost_rate = request.data.get('cost_rate') or request.data.get('hourly_cost')
+        cost_rate = request.data.get('cost_rate')
         effective_date = request.data.get('effective_date')
         
         if not user_id:
@@ -786,7 +790,7 @@ class EmployeeCostRateListView(APIView):
                 'message': f'A cost rate already exists for this employee on {effective_date}',
                 'existing_rate': {
                     'id': existing.id,
-                    'cost_rate': str(existing.hourly_cost),  # API field name
+                    'cost_rate': str(existing.cost_rate),
                     'effective_date': safe_date(existing.effective_date),
                 },
                 'hint': 'Use PATCH /api/billing/cost-rates/{id}/ to update, or choose a different effective date'
@@ -796,7 +800,7 @@ class EmployeeCostRateListView(APIView):
             rate = EmployeeCostRate.objects.create(
                 organization=org,
                 user_id=user_id,
-                hourly_cost=Decimal(str(cost_rate)),
+                cost_rate=Decimal(str(cost_rate)),
                 effective_date=effective_date or None,
             )
             
@@ -804,7 +808,7 @@ class EmployeeCostRateListView(APIView):
                 'id': rate.id,
                 'user': rate.user.id,
                 'user_name': rate.user.username,
-                'cost_rate': str(rate.hourly_cost),
+                'cost_rate': str(rate.cost_rate),
                 'effective_date': safe_date(rate.effective_date),
             }, status=201)
             
@@ -814,6 +818,89 @@ class EmployeeCostRateListView(APIView):
                 'error': 'duplicate',
                 'message': 'A cost rate already exists for this employee on this date',
             }, status=409)
+
+
+class EmployeeCostRateDetailView(APIView):
+    """
+    GET: Get a specific cost rate
+    PUT/PATCH: Update a cost rate
+    DELETE: Delete a cost rate
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_object(self, pk, org):
+        try:
+            return EmployeeCostRate.objects.get(id=pk, organization=org)
+        except EmployeeCostRate.DoesNotExist:
+            return None
+    
+    def get(self, request, pk):
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
+        
+        rate = self.get_object(pk, org)
+        if not rate:
+            return Response({'error': 'Cost rate not found'}, status=404)
+        
+        return Response({
+            'id': rate.id,
+            'user': rate.user.id,
+            'user_name': rate.user.username,
+            'cost_rate': str(rate.cost_rate),
+            'effective_date': safe_date(rate.effective_date),
+        })
+    
+    def put(self, request, pk):
+        return self.patch(request, pk)
+    
+    def patch(self, request, pk):
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
+        
+        rate = self.get_object(pk, org)
+        if not rate:
+            return Response({'error': 'Cost rate not found'}, status=404)
+        
+        if 'cost_rate' in request.data:
+            rate.cost_rate = Decimal(str(request.data['cost_rate']))
+        if 'effective_date' in request.data:
+            rate.effective_date = request.data['effective_date']
+        
+        try:
+            rate.save()
+        except IntegrityError:
+            return Response({
+                'error': 'duplicate',
+                'message': 'A cost rate already exists for this employee on this date',
+            }, status=409)
+        
+        return Response({
+            'id': rate.id,
+            'user': rate.user.id,
+            'user_name': rate.user.username,
+            'cost_rate': str(rate.cost_rate),
+            'effective_date': safe_date(rate.effective_date),
+        })
+    
+    def delete(self, request, pk):
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
+        
+        rate = self.get_object(pk, org)
+        if not rate:
+            return Response({'error': 'Cost rate not found'}, status=404)
+        
+        rate_id = rate.id
+        rate.delete()
+        
+        return Response({
+            'success': True,
+            'message': f'Cost rate {rate_id} deleted',
+        })
+
 
 
 class EmployeeCostRateDetailView(APIView):

@@ -724,85 +724,180 @@ from django.db.models.functions import Coalesce
 # REPLACE the EmployeeCostRate views in views_billing.py with these:
 # ============================================================================
 
+# Replace EmployeeCostRateListView in views_billing.py with this:
+
+from django.db import IntegrityError
+
+from django.db import IntegrityError
+
 class EmployeeCostRateListView(APIView):
     """
-    GET: List all employee cost rates for org
-    POST: Create new cost rate
+    GET: List all employee cost rates for the org
+    POST: Create a new cost rate (or return conflict if duplicate)
     """
     permission_classes = [IsAuthenticated]
     
-    def get_membership(self, request):
-        """Get user's organization membership"""
-        return OrganizationMembership.objects.filter(
-            user=request.user
-        ).select_related('organization').first()
-    
     def get(self, request):
-        membership = self.get_membership(request)
-        if not membership:
-            return Response({'error': 'No organization membership'}, status=403)
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
         
-        rates = EmployeeCostRate.objects.filter(
-            organization=membership.organization
-        ).select_related('user')
-        serializer = EmployeeCostRateSerializer(rates, many=True)
-        return Response(serializer.data)
+        rates = EmployeeCostRate.objects.filter(organization=org).select_related('user')
+        
+        result = []
+        for rate in rates:
+            result.append({
+                'id': rate.id,
+                'user': rate.user.id,
+                'user_name': rate.user.username,
+                'user_email': rate.user.email or '',
+                'cost_rate': str(rate.hourly_cost),  # API field name
+                'effective_date': safe_date(rate.effective_date),
+            })
+        
+        return Response(result)
     
     def post(self, request):
-        membership = self.get_membership(request)
-        if not membership:
-            return Response({'error': 'No organization membership'}, status=403)
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
         
-        if membership.role not in ['owner', 'admin']:
-            return Response({'error': 'Permission denied'}, status=403)
+        user_id = request.data.get('user')
+        # Accept both field names for flexibility
+        cost_rate = request.data.get('cost_rate') or request.data.get('hourly_cost')
+        effective_date = request.data.get('effective_date')
         
-        # Add organization to data
-        data = request.data.copy()
-        data['organization'] = membership.organization.id
+        if not user_id:
+            return Response({'error': 'User is required'}, status=400)
+        if not cost_rate:
+            return Response({'error': 'Cost rate is required'}, status=400)
         
-        serializer = EmployeeCostRateSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save(organization=membership.organization)
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+        # Check if a rate already exists for this user + date
+        existing = EmployeeCostRate.objects.filter(
+            organization=org,
+            user_id=user_id,
+            effective_date=effective_date
+        ).first()
+        
+        if existing:
+            # Return conflict with option to update
+            return Response({
+                'error': 'duplicate',
+                'message': f'A cost rate already exists for this employee on {effective_date}',
+                'existing_rate': {
+                    'id': existing.id,
+                    'cost_rate': str(existing.hourly_cost),  # API field name
+                    'effective_date': safe_date(existing.effective_date),
+                },
+                'hint': 'Use PATCH /api/billing/cost-rates/{id}/ to update, or choose a different effective date'
+            }, status=409)  # 409 Conflict
+        
+        try:
+            rate = EmployeeCostRate.objects.create(
+                organization=org,
+                user_id=user_id,
+                hourly_cost=Decimal(str(cost_rate)),
+                effective_date=effective_date or None,
+            )
+            
+            return Response({
+                'id': rate.id,
+                'user': rate.user.id,
+                'user_name': rate.user.username,
+                'cost_rate': str(rate.hourly_cost),
+                'effective_date': safe_date(rate.effective_date),
+            }, status=201)
+            
+        except IntegrityError:
+            # Race condition fallback
+            return Response({
+                'error': 'duplicate',
+                'message': 'A cost rate already exists for this employee on this date',
+            }, status=409)
 
 
 class EmployeeCostRateDetailView(APIView):
     """
-    GET: Get single cost rate
-    DELETE: Remove cost rate
+    GET: Get a specific cost rate
+    PUT/PATCH: Update a cost rate
+    DELETE: Delete a cost rate
     """
     permission_classes = [IsAuthenticated]
     
-    def get_membership(self, request):
-        """Get user's organization membership"""
-        return OrganizationMembership.objects.filter(
-            user=request.user,
-        ).select_related('organization').first()
-    
     def get_object(self, pk, org):
-        return get_object_or_404(EmployeeCostRate, pk=pk, organization=org)
+        try:
+            return EmployeeCostRate.objects.get(id=pk, organization=org)
+        except EmployeeCostRate.DoesNotExist:
+            return None
     
     def get(self, request, pk):
-        membership = self.get_membership(request)
-        if not membership:
-            return Response({'error': 'No organization membership'}, status=403)
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
         
-        rate = self.get_object(pk, membership.organization)
-        serializer = EmployeeCostRateSerializer(rate)
-        return Response(serializer.data)
+        rate = self.get_object(pk, org)
+        if not rate:
+            return Response({'error': 'Cost rate not found'}, status=404)
+        
+        return Response({
+            'id': rate.id,
+            'user': rate.user.id,
+            'user_name': rate.user.username,
+            'cost_rate': str(rate.hourly_cost),
+            'effective_date': safe_date(rate.effective_date),
+        })
+    
+    def put(self, request, pk):
+        return self.patch(request, pk)
+    
+    def patch(self, request, pk):
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
+        
+        rate = self.get_object(pk, org)
+        if not rate:
+            return Response({'error': 'Cost rate not found'}, status=404)
+        
+        # Accept both field names
+        cost_rate = request.data.get('cost_rate') or request.data.get('hourly_cost')
+        if cost_rate:
+            rate.hourly_cost = Decimal(str(cost_rate))
+        if 'effective_date' in request.data:
+            rate.effective_date = request.data['effective_date']
+        
+        try:
+            rate.save()
+        except IntegrityError:
+            return Response({
+                'error': 'duplicate',
+                'message': 'A cost rate already exists for this employee on this date',
+            }, status=409)
+        
+        return Response({
+            'id': rate.id,
+            'user': rate.user.id,
+            'user_name': rate.user.username,
+            'cost_rate': str(rate.hourly_cost),
+            'effective_date': safe_date(rate.effective_date),
+        })
     
     def delete(self, request, pk):
-        membership = self.get_membership(request)
-        if not membership:
-            return Response({'error': 'No organization membership'}, status=403)
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
         
-        if membership.role not in ['owner', 'admin']:
-            return Response({'error': 'Permission denied'}, status=403)
+        rate = self.get_object(pk, org)
+        if not rate:
+            return Response({'error': 'Cost rate not found'}, status=404)
         
-        rate = self.get_object(pk, membership.organization)
+        rate_id = rate.id
         rate.delete()
-        return Response(status=204)
+        
+        return Response({
+            'success': True,
+            'message': f'Cost rate {rate_id} deleted',
+        })
 
 
 # Replace your ProfitabilityReportView in views_billing.py with this:

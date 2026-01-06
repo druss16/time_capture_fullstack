@@ -1160,8 +1160,9 @@ function BillingRatesTab({
   );
 }
 
+
 // ============================================================================
-// Employee Cost Rates Tab
+// Employee Cost Rates Tab (with duplicate handling)
 // ============================================================================
 function EmployeeCostRatesTab({
   rates,
@@ -1179,6 +1180,13 @@ function EmployeeCostRatesTab({
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ user: '', cost_rate: '75.00', effective_date: new Date().toISOString().split('T')[0] });
+  
+  // Conflict dialog state
+  const [conflictData, setConflictData] = useState<{
+    existingRate: { id: number; cost_rate: string; effective_date: string };
+    newCost: string;
+    userName: string;
+  } | null>(null);
 
   const resetForm = () => {
     setForm({ user: '', cost_rate: '75.00', effective_date: new Date().toISOString().split('T')[0] });
@@ -1189,16 +1197,72 @@ function EmployeeCostRatesTab({
     if (!form.user) { onError('Please select an employee'); return; }
     setSaving(true);
     try {
-      await safeFetchJson(`${API_BASE}/billing/cost-rates/`, {
+      const response = await fetch(`${API_BASE}/billing/cost-rates/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user: parseInt(form.user, 10), cost_rate: form.cost_rate, effective_date: form.effective_date }),
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        },
+        body: JSON.stringify({ 
+          user: parseInt(form.user, 10), 
+          cost_rate: form.cost_rate, 
+          effective_date: form.effective_date 
+        }),
       });
+      
+      const data = await response.json();
+      
+      if (response.status === 409) {
+        // Duplicate found - show conflict dialog
+        const selectedUser = users.find(u => u.id === parseInt(form.user, 10));
+        setConflictData({
+          existingRate: data.existing_rate,
+          newCost: form.cost_rate,
+          userName: selectedUser ? `${selectedUser.first_name} ${selectedUser.last_name || selectedUser.username}` : 'this employee',
+        });
+        setSaving(false);
+        return;
+      }
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to save');
+      }
+      
       onSuccess('Cost rate added');
       resetForm();
       onRefresh();
     } catch (err: any) {
       onError(err?.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdateExisting = async () => {
+    if (!conflictData) return;
+    setSaving(true);
+    
+    try {
+      const response = await fetch(`${API_BASE}/billing/cost-rates/${conflictData.existingRate.id}/`, {
+        method: 'PATCH',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        },
+        body: JSON.stringify({ cost_rate: conflictData.newCost }),
+      });
+      
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to update');
+      }
+      
+      onSuccess('Cost rate updated');
+      setConflictData(null);
+      resetForm();
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to update');
     } finally {
       setSaving(false);
     }
@@ -1217,6 +1281,51 @@ function EmployeeCostRatesTab({
 
   return (
     <div>
+      {/* Conflict Dialog Modal */}
+      {conflictData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
+                <AlertCircle className="w-5 h-5 text-amber-600" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-900">Rate Already Exists</h3>
+            </div>
+            
+            <p className="text-slate-600 mb-4">
+              A cost rate of <span className="font-bold text-amber-600">${parseFloat(conflictData.existingRate.cost_rate).toFixed(2)}/hr</span> already 
+              exists for <span className="font-bold">{conflictData.userName}</span> on{' '}
+              <span className="font-bold">{new Date(conflictData.existingRate.effective_date).toLocaleDateString()}</span>.
+            </p>
+            
+            <p className="text-slate-600 mb-6">
+              Do you want to update it to <span className="font-bold text-emerald-600">${parseFloat(conflictData.newCost).toFixed(2)}/hr</span>?
+            </p>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConflictData(null)}
+                className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdateExisting}
+                disabled={saving}
+                className="flex-1 px-4 py-2.5 bg-primary hover:opacity-90 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
+              >
+                {saving ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                Update Rate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Users className="w-5 h-5 text-primary" />

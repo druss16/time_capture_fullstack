@@ -1,31 +1,18 @@
 // src/components/onboarding/steps/TeamInviteStep.tsx
 
 import React, { useState } from 'react';
-import { inviteTeam, skipTeamInvites, InviteInput, InviteResponse, InviteResult, Organization } from '../../../services/onboardingApi';
 import { 
   Users, 
-  Mail, 
   Plus, 
   Trash2, 
-  CheckCircle, 
-  AlertCircle,
+  ArrowRight, 
   Loader2,
-  ArrowRight,
-  Copy,
-  Check
+  Mail,
+  CheckCircle2,
+  AlertCircle,
+  Upload
 } from 'lucide-react';
-
-interface Role {
-  value: 'admin' | 'manager' | 'member';
-  label: string;
-  description: string;
-}
-
-const ROLES: Role[] = [
-  { value: 'admin', label: 'Admin', description: 'Full access, can manage team' },
-  { value: 'manager', label: 'Manager', description: 'Approve timesheets, view reports' },
-  { value: 'member', label: 'Member', description: 'Track time, submit timesheets' },
-];
+import { Organization, inviteTeamMembers, importClientsCSV } from '../../../services/onboardingApi';
 
 interface TeamInviteStepProps {
   organization: Organization | null;
@@ -33,218 +20,127 @@ interface TeamInviteStepProps {
   onSkip: () => void;
 }
 
+interface InviteResult {
+  email: string;
+  success: boolean;
+  error?: string;
+}
+
 export default function TeamInviteStep({ organization, onComplete, onSkip }: TeamInviteStepProps) {
-  const [invites, setInvites] = useState<InviteInput[]>([
-    { email: '', role: 'member', name: '' }
-  ]);
-  const [results, setResults] = useState<InviteResponse | { error: string } | null>(null);
+  const [emails, setEmails] = useState<string[]>(['']);
   const [loading, setLoading] = useState(false);
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [results, setResults] = useState<InviteResult[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  
+  // CSV Import
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ clients: number; skipped: number } | null>(null);
 
-  const handleAddRow = () => {
-    setInvites([...invites, { email: '', role: 'member', name: '' }]);
+  const addEmail = () => {
+    setEmails([...emails, '']);
   };
 
-  const handleRemoveRow = (idx: number) => {
-    setInvites(invites.filter((_, i) => i !== idx));
+  const removeEmail = (index: number) => {
+    setEmails(emails.filter((_, i) => i !== index));
   };
 
-  const handleChange = (idx: number, field: keyof InviteInput, value: string) => {
-    const updated = [...invites];
-    if (field === 'role') {
-      updated[idx][field] = value as 'admin' | 'manager' | 'member';
-    } else {
-      updated[idx][field] = value;
-    }
-    setInvites(updated);
+  const updateEmail = (index: number, value: string) => {
+    const newEmails = [...emails];
+    newEmails[index] = value;
+    setEmails(newEmails);
   };
 
-  const handleSubmit = async () => {
-    const validInvites = invites.filter(i => i.email.trim());
+  const handleInvite = async () => {
+    const validEmails = emails.filter(e => e.trim() && e.includes('@'));
     
-    if (validInvites.length === 0) {
-      onSkip();
+    if (validEmails.length === 0) {
+      setError('Please enter at least one valid email address');
       return;
     }
 
     setLoading(true);
-    setResults(null);
+    setError(null);
+    setResults([]);
 
     try {
-      const data = await inviteTeam(validInvites);
-      setResults(data);
+      const response = await inviteTeamMembers(validEmails);
+      setResults(response.results || []);
       
-      if (data.invited === data.total) {
-        setTimeout(() => {
-          onComplete();
-        }, 2000);
+      if (response.invited > 0) {
+        setTimeout(() => onComplete(), 1500);
       }
-    } catch (err) {
-      const error = err as { message?: string };
-      setResults({ error: error.message || 'Failed to send invites' });
+    } catch (err: any) {
+      setError(err.message || 'Failed to send invitations');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCopyCredentials = (result: InviteResult, idx: number) => {
-    const text = `Email: ${result.email}\nPassword: ${result.temp_password}`;
-    navigator.clipboard.writeText(text);
-    setCopiedIdx(idx);
-    setTimeout(() => setCopiedIdx(null), 2000);
-  };
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  const handleSkip = async () => {
+    setImporting(true);
+    setImportResult(null);
+
     try {
-      await skipTeamInvites();
-    } catch (err) {
-      // Continue anyway
+      const result = await importClientsCSV(file);
+      setImportResult({ clients: result.clients, skipped: result.skipped });
+    } catch (err: any) {
+      setError(err.message || 'Failed to import CSV');
+    } finally {
+      setImporting(false);
     }
-    onSkip();
   };
 
-  // Check if results is a success response (has 'ok' property)
-  const isSuccessResponse = (r: typeof results): r is InviteResponse => {
-    return r !== null && 'ok' in r;
-  };
-
-  // Show results screen
-  if (results && isSuccessResponse(results)) {
-    const successResults = results.results?.filter(r => r.success) || [];
-    const failedResults = results.results?.filter(r => !r.success) || [];
-
-    return (
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <CheckCircle className="w-8 h-8 text-green-600" />
-          </div>
-          <h2 className="text-2xl font-bold text-gray-900">
-            {results.invited} Team Member{results.invited !== 1 ? 's' : ''} Invited!
-          </h2>
-          <p className="text-gray-600 mt-2">
-            They'll receive an email with login instructions
-          </p>
-        </div>
-
-        {/* Success Results */}
-        {successResults.length > 0 && (
-          <div className="space-y-3 mb-6">
-            {successResults.map((result, idx) => (
-              <div 
-                key={idx}
-                className="p-4 bg-green-50 border border-green-200 rounded-lg"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-gray-900">{result.email}</p>
-                    <p className="text-sm text-gray-500">Role: {result.role}</p>
-                  </div>
-                  {!result.email_sent && (
-                    <div className="text-right">
-                      <p className="text-xs text-amber-600 mb-1">Email failed - share manually:</p>
-                      <button
-                        onClick={() => handleCopyCredentials(result, idx)}
-                        className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                      >
-                        {copiedIdx === idx ? (
-                          <>
-                            <Check className="w-4 h-4" />
-                            Copied!
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-4 h-4" />
-                            Copy credentials
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Failed Results */}
-        {failedResults.length > 0 && (
-          <div className="space-y-3 mb-6">
-            <p className="text-sm font-medium text-red-600">Failed to invite:</p>
-            {failedResults.map((result, idx) => (
-              <div 
-                key={idx}
-                className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between"
-              >
-                <span className="text-gray-900">{result.email}</span>
-                <span className="text-sm text-red-600">{result.error}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <button
-          onClick={onComplete}
-          className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-        >
-          Continue
-          <ArrowRight className="w-5 h-5" />
-        </button>
-      </div>
-    );
-  }
-
-  const errorMessage = results && 'error' in results ? results.error : null;
+  const successCount = results.filter(r => r.success).length;
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+    <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       <div className="text-center mb-8">
-        <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Users className="w-8 h-8 text-blue-600" />
+        <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <Users className="w-8 h-8 text-emerald-600" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Invite Your Team</h2>
-        <p className="text-gray-600 mt-2">
-          They'll get an email with the desktop app download and login credentials
+        <h2 className="text-2xl font-bold text-slate-900">Invite Your Team</h2>
+        <p className="text-slate-600 mt-2 font-medium">
+          Add team members who will track time
         </p>
       </div>
 
-      {errorMessage && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 mt-0.5" />
-          <p className="text-red-700">{errorMessage}</p>
+          <p className="text-red-700 font-medium">{error}</p>
         </div>
       )}
 
-      {/* Invite Rows */}
-      <div className="space-y-4 mb-6">
-        {invites.map((invite, idx) => (
-          <div key={idx} className="flex gap-3 items-start">
-            <div className="flex-1">
+      {successCount > 0 && (
+        <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-start gap-3">
+          <CheckCircle2 className="w-5 h-5 text-emerald-500 mt-0.5" />
+          <p className="text-emerald-700 font-medium">
+            Successfully invited {successCount} team member{successCount > 1 ? 's' : ''}!
+          </p>
+        </div>
+      )}
+
+      {/* Email Inputs */}
+      <div className="space-y-3 mb-6">
+        {emails.map((email, index) => (
+          <div key={index} className="flex gap-2">
+            <div className="flex-1 relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
               <input
                 type="email"
-                value={invite.email}
-                onChange={(e) => handleChange(idx, 'email', e.target.value)}
-                placeholder="team@yourfirm.com"
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                value={email}
+                onChange={(e) => updateEmail(index, e.target.value)}
+                placeholder="colleague@yourfirm.com"
+                className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl font-medium transition-all focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
               />
             </div>
-            <div className="w-32">
-              <select
-                value={invite.role}
-                onChange={(e) => handleChange(idx, 'role', e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-              >
-                {ROLES.map(role => (
-                  <option key={role.value} value={role.value}>
-                    {role.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {invites.length > 1 && (
+            {emails.length > 1 && (
               <button
-                onClick={() => handleRemoveRow(idx)}
-                className="p-2.5 text-gray-400 hover:text-red-500 transition-colors"
+                onClick={() => removeEmail(index)}
+                className="p-3 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
               >
                 <Trash2 className="w-5 h-5" />
               </button>
@@ -255,31 +151,50 @@ export default function TeamInviteStep({ organization, onComplete, onSkip }: Tea
 
       {/* Add More Button */}
       <button
-        onClick={handleAddRow}
-        className="w-full py-2 border-2 border-dashed border-gray-300 text-gray-500 hover:border-blue-400 hover:text-blue-600 rounded-lg transition-colors flex items-center justify-center gap-2 mb-8"
+        onClick={addEmail}
+        className="w-full py-3 border-2 border-dashed border-slate-300 hover:border-emerald-400 text-slate-600 hover:text-emerald-600 font-semibold rounded-xl transition-all flex items-center justify-center gap-2 mb-6 hover:bg-emerald-50"
       >
         <Plus className="w-5 h-5" />
-        Add Another
+        Add Another Email
       </button>
 
-      {/* Role Descriptions */}
-      <div className="bg-gray-50 rounded-lg p-4 mb-6">
-        <p className="text-sm font-medium text-gray-700 mb-2">Role permissions:</p>
-        <div className="space-y-1 text-sm text-gray-600">
-          {ROLES.map(role => (
-            <p key={role.value}>
-              <span className="font-medium">{role.label}:</span> {role.description}
-            </p>
-          ))}
-        </div>
+      {/* CSV Import Section */}
+      <div className="mb-8 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
+        <h3 className="font-bold text-slate-900 mb-2">Import Clients from CSV</h3>
+        <p className="text-sm text-slate-600 font-medium mb-3">
+          Upload a CSV with columns: name, code, project (optional)
+        </p>
+        
+        <label className="flex items-center justify-center gap-2 px-4 py-3 border-2 border-slate-300 hover:border-emerald-400 rounded-xl cursor-pointer transition-all hover:bg-emerald-50 group">
+          {importing ? (
+            <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+          ) : (
+            <Upload className="w-5 h-5 text-slate-500 group-hover:text-emerald-600" />
+          )}
+          <span className="font-semibold text-slate-700 group-hover:text-emerald-700">
+            {importing ? 'Importing...' : 'Upload CSV'}
+          </span>
+          <input
+            type="file"
+            accept=".csv"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+        </label>
+        
+        {importResult && (
+          <p className="mt-3 text-sm text-emerald-700 font-medium">
+            ✓ Imported {importResult.clients} clients ({importResult.skipped} skipped)
+          </p>
+        )}
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      {/* Actions */}
+      <div className="flex gap-3">
         <button
-          onClick={handleSubmit}
+          onClick={handleInvite}
           disabled={loading}
-          className="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+          className="flex-1 py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-emerald-600/25"
         >
           {loading ? (
             <>
@@ -288,23 +203,22 @@ export default function TeamInviteStep({ organization, onComplete, onSkip }: Tea
             </>
           ) : (
             <>
-              <Mail className="w-5 h-5" />
-              Send Invites
+              Send Invitations
+              <ArrowRight className="w-5 h-5" />
             </>
           )}
         </button>
         
         <button
-          onClick={handleSkip}
-          disabled={loading}
-          className="py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors"
+          onClick={onSkip}
+          className="px-6 py-3.5 border-2 border-slate-200 hover:border-slate-300 text-slate-700 font-bold rounded-xl transition-all hover:bg-slate-50"
         >
-          Skip for Now
+          Skip for now
         </button>
       </div>
 
-      <p className="text-center text-sm text-gray-500 mt-4">
-        You can invite more team members anytime from Settings
+      <p className="mt-4 text-center text-sm text-slate-500 font-medium">
+        You can always invite more team members later from Settings
       </p>
     </div>
   );

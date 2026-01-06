@@ -1,217 +1,223 @@
 // src/components/onboarding/steps/CompleteStep.tsx
 
 import React, { useState, useEffect } from 'react';
-import { completeOnboarding, getDownloadInfo, DownloadInfoResponse, Organization } from '../../../services/onboardingApi';
 import { 
-  CheckCircle, 
   Download, 
+  CheckCircle2, 
   Apple, 
   Monitor,
-  Clock,
-  Users,
-  FileText,
+  Copy,
+  Check,
   ArrowRight,
-  Loader2,
-  ExternalLink,
-  Sparkles
+  Sparkles,
+  Clock,
+  ExternalLink
 } from 'lucide-react';
+import { Organization } from '../../../services/onboardingApi';
 
 interface CompleteStepProps {
   organization: Organization | null;
   onComplete: () => void;
 }
 
+// Update these with your actual GitHub release URLs
+const DOWNLOAD_URLS = {
+  macos: 'https://github.com/YOUR_USERNAME/timetracker-releases/releases/latest/download/TimeTracker.pkg',
+  windows: 'https://github.com/YOUR_USERNAME/timetracker-releases/releases/latest/download/TimeTracker-Setup.exe',
+};
+
 export default function CompleteStep({ organization, onComplete }: CompleteStepProps) {
-  const [downloadInfo, setDownloadInfo] = useState<DownloadInfoResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const [platform, setPlatform] = useState<'macos' | 'windows'>('macos');
+  const [installToken, setInstallToken] = useState<string | null>(null);
 
   useEffect(() => {
-    loadData();
+    // Detect platform
+    const userAgent = navigator.userAgent.toLowerCase();
+    if (userAgent.includes('win')) {
+      setPlatform('windows');
+    }
+    
+    // Load install token
+    loadInstallToken();
   }, []);
 
-  const loadData = async () => {
+  const loadInstallToken = async () => {
     try {
-      const [downloadData] = await Promise.all([
-        getDownloadInfo(),
-        completeOnboarding(),
-      ]);
-      setDownloadInfo(downloadData);
+      const token = localStorage.getItem('auth_token');
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+      const response = await fetch(`${baseUrl}/settings/install-token/`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      const data = await response.json();
+      if (data.token) {
+        setInstallToken(data.token);
+      }
     } catch (err) {
-      console.error('Failed to load completion data:', err);
-    } finally {
-      setLoading(false);
+      console.error('Failed to load install token:', err);
+    }
+  };
+
+  const handleCopyToken = () => {
+    if (installToken) {
+      navigator.clipboard.writeText(installToken);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
   const handleDownload = (os: 'macos' | 'windows') => {
-    const url = downloadInfo?.downloads?.[os]?.url;
-    if (url) {
-      window.open(url, '_blank');
-    }
+    window.open(DOWNLOAD_URLS[os], '_blank');
   };
 
-  if (loading) {
-    return (
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-        </div>
-      </div>
-    );
-  }
-
-  const detectedOS = downloadInfo?.detected_os || 'macos';
-
   return (
-    <div className="space-y-6">
+    <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       {/* Success Header */}
-      <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-8 text-white text-center">
-        <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4">
-          <CheckCircle className="w-10 h-10" />
+      <div className="text-center mb-8">
+        <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 relative">
+          <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+          <Sparkles className="w-6 h-6 text-amber-500 absolute -top-1 -right-1" />
         </div>
-        <h2 className="text-2xl font-bold mb-2">You're All Set! 🎉</h2>
-        <p className="text-green-100">
+        <h2 className="text-2xl font-bold text-slate-900">You're All Set! 🎉</h2>
+        <p className="text-slate-600 mt-2 font-medium">
           {organization?.name} is ready for automatic time tracking
         </p>
       </div>
 
-      {/* Download Section */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-        <div className="text-center mb-6">
-          <h3 className="text-xl font-bold text-gray-900 mb-2">
-            Download the Desktop App
-          </h3>
-          <p className="text-gray-600">
-            The app runs quietly in the background and tracks time automatically
-          </p>
+      {/* Trial Info */}
+      <div className="mb-8 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
+        <div className="flex items-center gap-3">
+          <Clock className="w-6 h-6 text-emerald-600" />
+          <div>
+            <p className="font-bold text-emerald-900">Your 7-day trial has started</p>
+            <p className="text-sm text-emerald-700 font-medium">Full access to all features • No credit card required</p>
+          </div>
         </div>
+      </div>
 
-        {/* OS Download Buttons */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+      {/* Download Section */}
+      <div className="mb-8">
+        <h3 className="text-lg font-bold text-slate-900 mb-4">Download Desktop App</h3>
+        
+        <div className="grid grid-cols-2 gap-4">
           {/* macOS */}
           <button
             onClick={() => handleDownload('macos')}
             className={`
-              p-4 border-2 rounded-xl flex items-center gap-4 transition-all
-              ${detectedOS === 'macos' 
-                ? 'border-blue-500 bg-blue-50' 
-                : 'border-gray-200 hover:border-gray-300'}
+              p-4 border-2 rounded-xl transition-all text-left group
+              ${platform === 'macos' 
+                ? 'border-emerald-500 bg-emerald-50' 
+                : 'border-slate-200 hover:border-slate-300'}
             `}
           >
-            <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
-              <Apple className="w-6 h-6 text-gray-700" />
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 bg-slate-900 rounded-xl flex items-center justify-center">
+                <Apple className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-900">macOS</p>
+                <p className="text-xs text-slate-500 font-medium">Intel & Apple Silicon</p>
+              </div>
             </div>
-            <div className="text-left flex-1">
-              <p className="font-medium text-gray-900">macOS</p>
-              <p className="text-sm text-gray-500">
-                {downloadInfo?.downloads?.macos?.requirements || 'macOS 12+'}
-              </p>
+            <div className="flex items-center gap-1 text-emerald-600 font-semibold text-sm group-hover:underline">
+              <Download className="w-4 h-4" />
+              Download .pkg
             </div>
-            <Download className="w-5 h-5 text-blue-600" />
           </button>
 
           {/* Windows */}
           <button
             onClick={() => handleDownload('windows')}
             className={`
-              p-4 border-2 rounded-xl flex items-center gap-4 transition-all
-              ${detectedOS === 'windows' 
-                ? 'border-blue-500 bg-blue-50' 
-                : 'border-gray-200 hover:border-gray-300'}
+              p-4 border-2 rounded-xl transition-all text-left group
+              ${platform === 'windows' 
+                ? 'border-emerald-500 bg-emerald-50' 
+                : 'border-slate-200 hover:border-slate-300'}
             `}
           >
-            <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
-              <Monitor className="w-6 h-6 text-gray-700" />
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center">
+                <Monitor className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-900">Windows</p>
+                <p className="text-xs text-slate-500 font-medium">Windows 10+</p>
+              </div>
             </div>
-            <div className="text-left flex-1">
-              <p className="font-medium text-gray-900">Windows</p>
-              <p className="text-sm text-gray-500">
-                {downloadInfo?.downloads?.windows?.requirements || 'Windows 10+'}
-              </p>
+            <div className="flex items-center gap-1 text-emerald-600 font-semibold text-sm group-hover:underline">
+              <Download className="w-4 h-4" />
+              Download .exe
             </div>
-            <Download className="w-5 h-5 text-blue-600" />
           </button>
         </div>
+      </div>
 
-        {/* Installation Steps */}
-        <div className="bg-gray-50 rounded-lg p-4">
-          <p className="text-sm font-medium text-gray-700 mb-3">
-            Quick Setup ({detectedOS === 'macos' ? 'macOS' : 'Windows'}):
+      {/* Install Token */}
+      {installToken && (
+        <div className="mb-8 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
+          <h4 className="font-bold text-slate-900 mb-2">Organization Install Token</h4>
+          <p className="text-sm text-slate-600 font-medium mb-3">
+            Use this token during installation to connect your device
           </p>
-          <ol className="space-y-2 text-sm text-gray-600">
-            {(downloadInfo?.instructions?.[detectedOS] || []).map((step, idx) => (
-              <li key={idx} className="flex gap-2">
-                <span className="font-medium text-blue-600">{idx + 1}.</span>
-                {step}
-              </li>
-            ))}
-          </ol>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 bg-white border-2 border-slate-200 rounded-lg px-3 py-2 font-mono text-sm text-slate-700 truncate">
+              {installToken}
+            </code>
+            <button
+              onClick={handleCopyToken}
+              className="p-2.5 border-2 border-slate-200 rounded-lg hover:bg-slate-100 transition-all"
+            >
+              {copied ? (
+                <Check className="w-5 h-5 text-emerald-600" />
+              ) : (
+                <Copy className="w-5 h-5 text-slate-500" />
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Start Steps */}
+      <div className="mb-8">
+        <h3 className="text-lg font-bold text-slate-900 mb-4">Quick Start</h3>
+        <div className="space-y-3">
+          {[
+            { num: 1, text: 'Download and install the desktop app' },
+            { num: 2, text: 'Sign in with your email and password' },
+            { num: 3, text: 'The app runs in the background and tracks automatically' },
+            { num: 4, text: 'Review and categorize your time in the dashboard' },
+          ].map((step) => (
+            <div key={step.num} className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <span className="text-sm font-bold text-emerald-700">{step.num}</span>
+              </div>
+              <p className="text-slate-700 font-medium">{step.text}</p>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Quick Tips */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-        <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-yellow-500" />
-          Quick Tips to Get Started
-        </h3>
-        
-        <div className="space-y-4">
-          <div className="flex gap-4">
-            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
-              <Clock className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">Select your client</p>
-              <p className="text-sm text-gray-600">
-                Click the menu bar icon and select the client you're working on.
-                Time is tracked automatically.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex gap-4">
-            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center flex-shrink-0">
-              <FileText className="w-5 h-5 text-green-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">Review your timesheet</p>
-              <p className="text-sm text-gray-600">
-                Check your weekly timesheet to review and adjust AI-categorized time.
-                You'll get a reminder on Fridays.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex gap-4">
-            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
-              <Users className="w-5 h-5 text-purple-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">Get your team onboard</p>
-              <p className="text-sm text-gray-600">
-                The more people using TimeTracker, the better your firm's utilization
-                insights become.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Action Button */}
+      {/* CTA */}
       <button
         onClick={onComplete}
-        className="w-full py-4 px-6 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 text-lg"
+        className="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25"
       >
         Go to Dashboard
         <ArrowRight className="w-5 h-5" />
       </button>
 
       {/* Help Link */}
-      <p className="text-center text-sm text-gray-500">
+      <p className="mt-4 text-center text-sm text-slate-500 font-medium">
         Need help?{' '}
-        <a href="/help" className="text-blue-600 hover:underline inline-flex items-center gap-1">
-          View our getting started guide
+        <a 
+          href="https://timetracker.mavops.ai/help" 
+          target="_blank" 
+          rel="noopener noreferrer"
+          className="text-emerald-600 hover:text-emerald-700 font-semibold hover:underline inline-flex items-center gap-1"
+        >
+          View documentation
           <ExternalLink className="w-3 h-3" />
         </a>
       </p>

@@ -1,6 +1,6 @@
 // src/components/onboarding/OnboardingWizard.tsx
 /**
- * Self-Service Onboarding Wizard
+ * Self-Service Onboarding Wizard - Green Theme
  */
 
 import React, { useState, useEffect } from 'react';
@@ -25,6 +25,7 @@ import {
   Download,
   Check,
   ChevronRight,
+  Clock,
   LucideIcon
 } from 'lucide-react';
 
@@ -103,25 +104,25 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white border-b border-slate-200 shadow-sm">
         <div className="max-w-5xl mx-auto px-4 py-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-xl">T</span>
+            <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-600/25">
+              <Clock className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">TimeTracker</h1>
+              <h1 className="text-xl font-bold text-slate-900">TimeTracker</h1>
               {organization && (
-                <p className="text-sm text-gray-500">{organization.name}</p>
+                <p className="text-sm text-slate-500 font-medium">{organization.name}</p>
               )}
             </div>
           </div>
@@ -129,7 +130,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
       </header>
 
       {/* Progress Steps */}
-      <div className="bg-white border-b border-gray-200 py-4">
+      <div className="bg-white border-b border-slate-200 py-4">
         <div className="max-w-5xl mx-auto px-4">
           <nav aria-label="Progress">
             <ol className="flex items-center justify-between">
@@ -141,14 +142,16 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
                 return (
                   <li key={step.id} className="flex items-center">
                     <div className={`
-                      flex items-center gap-2 px-3 py-2 rounded-lg transition-colors
-                      ${isCurrent ? 'bg-blue-50 text-blue-700' : ''}
-                      ${isComplete && !isCurrent ? 'text-green-600' : ''}
-                      ${!isComplete && !isCurrent ? 'text-gray-400' : ''}
+                      flex items-center gap-2 px-3 py-2 rounded-xl transition-all
+                      ${isCurrent ? 'bg-emerald-50 text-emerald-700' : ''}
+                      ${isComplete && !isCurrent ? 'text-emerald-600' : ''}
+                      ${!isComplete && !isCurrent ? 'text-slate-400' : ''}
                     `}>
                       <div className={`
-                        w-8 h-8 rounded-full flex items-center justify-center
-                        ${isComplete ? 'bg-green-100' : isCurrent ? 'bg-blue-100' : 'bg-gray-100'}
+                        w-8 h-8 rounded-full flex items-center justify-center transition-all
+                        ${isComplete ? 'bg-emerald-100 text-emerald-600' : ''}
+                        ${isCurrent ? 'bg-emerald-100 text-emerald-600 ring-2 ring-emerald-600 ring-offset-2' : ''}
+                        ${!isComplete && !isCurrent ? 'bg-slate-100 text-slate-400' : ''}
                       `}>
                         {isComplete ? (
                           <Check className="w-4 h-4" />
@@ -156,13 +159,13 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
                           <StepIcon className="w-4 h-4" />
                         )}
                       </div>
-                      <span className="hidden sm:block text-sm font-medium">
+                      <span className="hidden sm:block text-sm font-semibold">
                         {step.name}
                       </span>
                     </div>
                     
                     {idx < STEPS.length - 1 && (
-                      <ChevronRight className="w-5 h-5 text-gray-300 mx-2" />
+                      <ChevronRight className="w-5 h-5 text-slate-300 mx-2" />
                     )}
                   </li>
                 );

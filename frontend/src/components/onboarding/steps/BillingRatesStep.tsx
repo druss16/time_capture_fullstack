@@ -1,10 +1,15 @@
 // src/components/onboarding/steps/BillingRatesStep.tsx
 
-import React, { useState } from 'react';
-import { setDefaultRate, skipRates, Organization } from '../../../services/onboardingApi';
-import { DollarSign, Loader2, ArrowRight, Info } from 'lucide-react';
-
-const COMMON_RATES = [125, 150, 175, 200, 250, 300];
+import React, { useState, useEffect } from 'react';
+import { 
+  DollarSign, 
+  ArrowRight, 
+  Loader2,
+  Info,
+  CheckCircle2,
+  AlertCircle
+} from 'lucide-react';
+import { Organization, setDefaultRates, getDefaultRates } from '../../../services/onboardingApi';
 
 interface BillingRatesStepProps {
   organization: Organization | null;
@@ -13,147 +18,175 @@ interface BillingRatesStepProps {
 }
 
 export default function BillingRatesStep({ organization, onComplete, onSkip }: BillingRatesStepProps) {
-  const [rate, setRate] = useState('150');
+  const [billingRate, setBillingRate] = useState('150.00');
+  const [costRate, setCostRate] = useState('75.00');
   const [loading, setLoading] = useState(false);
+  const [loadingRates, setLoadingRates] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
-  const handleRateClick = (value: number) => {
-    setRate(value.toString());
+  useEffect(() => {
+    loadRates();
+  }, []);
+
+  const loadRates = async () => {
+    try {
+      const rates = await getDefaultRates();
+      if (rates.billing_rate) {
+        setBillingRate(rates.billing_rate);
+      }
+      if (rates.cost_rate) {
+        setCostRate(rates.cost_rate);
+      }
+    } catch (err) {
+      // Use defaults
+    } finally {
+      setLoadingRates(false);
+    }
   };
 
-  const handleSubmit = async () => {
-    const numRate = parseFloat(rate);
-    if (isNaN(numRate) || numRate < 0) {
-      setError('Please enter a valid rate');
-      return;
-    }
-
+  const handleSave = async () => {
     setLoading(true);
     setError(null);
 
     try {
-      await setDefaultRate(numRate);
-      onComplete();
-    } catch (err) {
-      const apiError = err as { message?: string };
-      setError(apiError.message || 'Failed to save rate');
+      await setDefaultRates({
+        billing_rate: billingRate,
+        cost_rate: costRate,
+      });
+      
+      setSuccess(true);
+      setTimeout(() => onComplete(), 1000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to save rates');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSkip = async () => {
-    try {
-      await skipRates();
-    } catch (err) {
-      // Continue anyway
-    }
-    onSkip();
-  };
+  const margin = parseFloat(billingRate) - parseFloat(costRate);
+  const marginPercent = parseFloat(billingRate) > 0 
+    ? ((margin / parseFloat(billingRate)) * 100).toFixed(0)
+    : 0;
 
-  const numericRate = parseFloat(rate) || 0;
+  if (loadingRates) {
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+    <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       <div className="text-center mb-8">
-        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <DollarSign className="w-8 h-8 text-green-600" />
+        <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <DollarSign className="w-8 h-8 text-emerald-600" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Set Your Billing Rate</h2>
-        <p className="text-gray-600 mt-2">
-          This will be the default rate for calculating billable value
+        <h2 className="text-2xl font-bold text-slate-900">Set Default Rates</h2>
+        <p className="text-slate-600 mt-2 font-medium">
+          Configure your firm's default billing and cost rates
         </p>
       </div>
 
-      {/* Rate Input */}
-      <div className="mb-6">
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Default Hourly Rate
-        </label>
-        <div className="relative">
-          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 text-xl">$</span>
-          <input
-            type="number"
-            value={rate}
-            onChange={(e) => setRate(e.target.value)}
-            min="0"
-            step="5"
-            className="w-full pl-10 pr-20 py-4 text-2xl font-semibold border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center"
-          />
-          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">/hour</span>
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 mt-0.5" />
+          <p className="text-red-700 font-medium">{error}</p>
         </div>
-        {error && (
-          <p className="mt-2 text-sm text-red-600">{error}</p>
-        )}
-      </div>
+      )}
 
-      {/* Quick Select Buttons */}
-      <div className="mb-8">
-        <p className="text-sm text-gray-500 mb-3">Quick select:</p>
-        <div className="flex flex-wrap gap-2">
-          {COMMON_RATES.map((r) => (
-            <button
-              key={r}
-              onClick={() => handleRateClick(r)}
-              className={`
-                px-4 py-2 rounded-lg text-sm font-medium transition-colors
-                ${rate === r.toString() 
-                  ? 'bg-blue-600 text-white' 
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}
-              `}
-            >
-              ${r}
-            </button>
-          ))}
+      {success && (
+        <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-start gap-3">
+          <CheckCircle2 className="w-5 h-5 text-emerald-500 mt-0.5" />
+          <p className="text-emerald-700 font-medium">Rates saved successfully!</p>
         </div>
-      </div>
+      )}
 
-      {/* Info Box */}
-      <div className="bg-blue-50 rounded-lg p-4 mb-8 flex gap-3">
-        <Info className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-        <div className="text-sm text-blue-800">
-          <p className="font-medium mb-1">You can customize rates later</p>
-          <p>
-            Set different rates per team member, client, or task type from Settings.
-            This is just your starting default.
+      {/* Rate Inputs */}
+      <div className="space-y-6 mb-8">
+        {/* Billing Rate */}
+        <div>
+          <label className="block text-sm font-bold text-slate-800 mb-2">
+            Default Billing Rate ($/hour)
+          </label>
+          <div className="relative">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold text-lg">$</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={billingRate}
+              onChange={(e) => setBillingRate(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl font-semibold text-lg transition-all focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
+            />
+          </div>
+          <p className="mt-1.5 text-sm text-slate-500 font-medium">
+            What you charge clients per hour
+          </p>
+        </div>
+
+        {/* Cost Rate */}
+        <div>
+          <label className="block text-sm font-bold text-slate-800 mb-2">
+            Default Employee Cost ($/hour)
+          </label>
+          <div className="relative">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold text-lg">$</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={costRate}
+              onChange={(e) => setCostRate(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl font-semibold text-lg transition-all focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
+            />
+          </div>
+          <p className="mt-1.5 text-sm text-slate-500 font-medium">
+            Your loaded labor cost per employee hour
           </p>
         </div>
       </div>
 
-      {/* Example Calculation */}
-      <div className="bg-gray-50 rounded-lg p-4 mb-8">
-        <p className="text-sm font-medium text-gray-700 mb-3">Example monthly value:</p>
-        <div className="grid grid-cols-3 gap-4 text-center">
-          <div>
-            <p className="text-2xl font-bold text-gray-900">
-              ${(numericRate * 40).toLocaleString()}
-            </p>
-            <p className="text-xs text-gray-500">Per week</p>
-          </div>
-          <div>
-            <p className="text-2xl font-bold text-gray-900">
-              ${(numericRate * 160).toLocaleString()}
-            </p>
-            <p className="text-xs text-gray-500">Per month</p>
-          </div>
-          <div>
-            <p className="text-2xl font-bold text-green-600">
-              ${(numericRate * 2000).toLocaleString()}
-            </p>
-            <p className="text-xs text-gray-500">Per year</p>
-          </div>
+      {/* Margin Preview */}
+      <div className="mb-8 p-5 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-sm font-bold text-emerald-800">Profit Margin Preview</span>
+          <span className="text-2xl font-extrabold text-emerald-700">
+            ${margin.toFixed(2)}/hr ({marginPercent}%)
+          </span>
         </div>
-        <p className="text-xs text-gray-400 text-center mt-2">
-          Based on 40 billable hours/week
+        <div className="w-full bg-emerald-200 rounded-full h-3">
+          <div 
+            className="bg-emerald-600 h-3 rounded-full transition-all"
+            style={{ width: `${Math.min(Math.max(Number(marginPercent), 0), 100)}%` }}
+          />
+        </div>
+        <p className="mt-3 text-sm text-emerald-700 font-medium">
+          For every hour billed, your firm earns ${margin.toFixed(2)} in profit
         </p>
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      {/* Info Box */}
+      <div className="mb-8 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
+        <div className="flex items-start gap-3">
+          <Info className="w-5 h-5 text-slate-400 mt-0.5" />
+          <div>
+            <p className="text-sm text-slate-600 font-medium">
+              <strong className="text-slate-800">These are defaults.</strong> You can set different rates per employee, client, or task type in Settings → Billing Rates.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-3">
         <button
-          onClick={handleSubmit}
+          onClick={handleSave}
           disabled={loading}
-          className="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+          className="flex-1 py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-emerald-600/25"
         >
           {loading ? (
             <>
@@ -162,18 +195,17 @@ export default function BillingRatesStep({ organization, onComplete, onSkip }: B
             </>
           ) : (
             <>
-              Save Rate
+              Save Rates
               <ArrowRight className="w-5 h-5" />
             </>
           )}
         </button>
         
         <button
-          onClick={handleSkip}
-          disabled={loading}
-          className="py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors"
+          onClick={onSkip}
+          className="px-6 py-3.5 border-2 border-slate-200 hover:border-slate-300 text-slate-700 font-bold rounded-xl transition-all hover:bg-slate-50"
         >
-          Use Default ($150)
+          Use Defaults
         </button>
       </div>
     </div>

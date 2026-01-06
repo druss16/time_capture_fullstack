@@ -10,9 +10,9 @@ import {
   Mail,
   CheckCircle2,
   AlertCircle,
-  Upload
+  UserPlus
 } from 'lucide-react';
-import { Organization, inviteTeamMembers, importClientsCSV } from '../../../services/onboardingApi';
+import { Organization, inviteTeamMembers } from '../../../services/onboardingApi';
 
 interface TeamInviteStepProps {
   organization: Organization | null;
@@ -31,17 +31,15 @@ export default function TeamInviteStep({ organization, onComplete, onSkip }: Tea
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<InviteResult[]>([]);
   const [error, setError] = useState<string | null>(null);
-  
-  // CSV Import
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ clients: number; skipped: number } | null>(null);
 
   const addEmail = () => {
     setEmails([...emails, '']);
   };
 
   const removeEmail = (index: number) => {
-    setEmails(emails.filter((_, i) => i !== index));
+    if (emails.length > 1) {
+      setEmails(emails.filter((_, i) => i !== index));
+    }
   };
 
   const updateEmail = (index: number, value: string) => {
@@ -67,33 +65,18 @@ export default function TeamInviteStep({ organization, onComplete, onSkip }: Tea
       setResults(response.results || []);
       
       if (response.invited > 0) {
+        // Show success briefly then move on
         setTimeout(() => onComplete(), 1500);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to send invitations');
+      setError(err.message || err.error || 'Failed to send invitations');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setImporting(true);
-    setImportResult(null);
-
-    try {
-      const result = await importClientsCSV(file);
-      setImportResult({ clients: result.clients, skipped: result.skipped });
-    } catch (err: any) {
-      setError(err.message || 'Failed to import CSV');
-    } finally {
-      setImporting(false);
-    }
-  };
-
   const successCount = results.filter(r => r.success).length;
+  const failCount = results.filter(r => !r.success).length;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
@@ -103,23 +86,30 @@ export default function TeamInviteStep({ organization, onComplete, onSkip }: Tea
         </div>
         <h2 className="text-2xl font-bold text-slate-900">Invite Your Team</h2>
         <p className="text-slate-600 mt-2 font-medium">
-          Add team members who will track time
+          Add team members who will track time in {organization?.name || 'your firm'}
         </p>
       </div>
 
       {error && (
         <div className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-red-500 mt-0.5" />
+          <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
           <p className="text-red-700 font-medium">{error}</p>
         </div>
       )}
 
       {successCount > 0 && (
         <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-start gap-3">
-          <CheckCircle2 className="w-5 h-5 text-emerald-500 mt-0.5" />
-          <p className="text-emerald-700 font-medium">
-            Successfully invited {successCount} team member{successCount > 1 ? 's' : ''}!
-          </p>
+          <CheckCircle2 className="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-emerald-700 font-bold">
+              Successfully invited {successCount} team member{successCount > 1 ? 's' : ''}!
+            </p>
+            {failCount > 0 && (
+              <p className="text-emerald-600 text-sm font-medium mt-1">
+                {failCount} invitation{failCount > 1 ? 's' : ''} failed - check email addresses
+              </p>
+            )}
+          </div>
         </div>
       )}
 
@@ -152,41 +142,22 @@ export default function TeamInviteStep({ organization, onComplete, onSkip }: Tea
       {/* Add More Button */}
       <button
         onClick={addEmail}
-        className="w-full py-3 border-2 border-dashed border-slate-300 hover:border-emerald-400 text-slate-600 hover:text-emerald-600 font-semibold rounded-xl transition-all flex items-center justify-center gap-2 mb-6 hover:bg-emerald-50"
+        className="w-full py-3 border-2 border-dashed border-slate-300 hover:border-emerald-400 text-slate-600 hover:text-emerald-600 font-semibold rounded-xl transition-all flex items-center justify-center gap-2 mb-8 hover:bg-emerald-50"
       >
         <Plus className="w-5 h-5" />
         Add Another Email
       </button>
 
-      {/* CSV Import Section */}
+      {/* Info Box */}
       <div className="mb-8 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
-        <h3 className="font-bold text-slate-900 mb-2">Import Clients from CSV</h3>
-        <p className="text-sm text-slate-600 font-medium mb-3">
-          Upload a CSV with columns: name, code, project (optional)
-        </p>
-        
-        <label className="flex items-center justify-center gap-2 px-4 py-3 border-2 border-slate-300 hover:border-emerald-400 rounded-xl cursor-pointer transition-all hover:bg-emerald-50 group">
-          {importing ? (
-            <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
-          ) : (
-            <Upload className="w-5 h-5 text-slate-500 group-hover:text-emerald-600" />
-          )}
-          <span className="font-semibold text-slate-700 group-hover:text-emerald-700">
-            {importing ? 'Importing...' : 'Upload CSV'}
-          </span>
-          <input
-            type="file"
-            accept=".csv"
-            onChange={handleFileUpload}
-            className="hidden"
-          />
-        </label>
-        
-        {importResult && (
-          <p className="mt-3 text-sm text-emerald-700 font-medium">
-            ✓ Imported {importResult.clients} clients ({importResult.skipped} skipped)
-          </p>
-        )}
+        <div className="flex items-start gap-3">
+          <UserPlus className="w-5 h-5 text-slate-400 mt-0.5" />
+          <div>
+            <p className="text-sm text-slate-600 font-medium">
+              <strong className="text-slate-800">What happens next?</strong> Each team member will receive an email with login credentials. They can download the desktop app and start tracking time immediately.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Actions */}
@@ -218,7 +189,7 @@ export default function TeamInviteStep({ organization, onComplete, onSkip }: Tea
       </div>
 
       <p className="mt-4 text-center text-sm text-slate-500 font-medium">
-        You can always invite more team members later from Settings
+        You can always invite more team members later from Settings → Team
       </p>
     </div>
   );

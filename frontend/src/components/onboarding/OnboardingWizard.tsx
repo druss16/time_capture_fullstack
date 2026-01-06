@@ -1,6 +1,7 @@
 // src/components/onboarding/OnboardingWizard.tsx
 /**
  * Self-Service Onboarding Wizard - Green Theme
+ * With clickable step navigation and back button
  */
 
 import React, { useState, useEffect } from 'react';
@@ -25,6 +26,7 @@ import {
   Download,
   Check,
   ChevronRight,
+  ChevronLeft,
   Clock,
   LucideIcon
 } from 'lucide-react';
@@ -52,13 +54,16 @@ interface OnboardingWizardProps {
 export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(initialStep);
+  const [highestStepReached, setHighestStepReached] = useState(initialStep);
   const [status, setStatus] = useState<{ steps: OnboardingSteps; is_complete: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [organization, setOrganization] = useState<Organization | null>(null);
 
+  // Check if user is logged in (has completed step 1)
+  const isLoggedIn = !!localStorage.getItem('auth_token');
+
   useEffect(() => {
-    const token = localStorage.getItem('auth_token');
-    if (token && currentStep > 1) {
+    if (isLoggedIn) {
       loadStatus();
     } else {
       setLoading(false);
@@ -76,9 +81,14 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
         return;
       }
       
-      setCurrentStep(data.current_step);
+      // Set current step from server, but allow navigation back
+      const serverStep = data.current_step || 2;
+      setCurrentStep(serverStep);
+      setHighestStepReached(serverStep);
     } catch (err) {
-      setCurrentStep(1);
+      // If API fails but we have a token, start at step 2
+      setCurrentStep(isLoggedIn ? 2 : 1);
+      setHighestStepReached(isLoggedIn ? 2 : 1);
     } finally {
       setLoading(false);
     }
@@ -90,7 +100,9 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
     }
     
     if (stepNum < 6) {
-      setCurrentStep(stepNum + 1);
+      const nextStep = stepNum + 1;
+      setCurrentStep(nextStep);
+      setHighestStepReached(Math.max(highestStepReached, nextStep));
     } else {
       navigate('/daily');
     }
@@ -98,8 +110,40 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
 
   const handleSkip = (stepNum: number) => {
     if (stepNum < 6) {
-      setCurrentStep(stepNum + 1);
+      const nextStep = stepNum + 1;
+      setCurrentStep(nextStep);
+      setHighestStepReached(Math.max(highestStepReached, nextStep));
     }
+  };
+
+  // Navigate to a specific step
+  const goToStep = (stepId: number) => {
+    // Can't go back to step 1 after signup
+    if (stepId === 1 && isLoggedIn) return;
+    
+    // Can go to any step up to highest reached
+    if (stepId >= 1 && stepId <= highestStepReached) {
+      setCurrentStep(stepId);
+    }
+  };
+
+  // Go back one step
+  const handleBack = () => {
+    const minStep = isLoggedIn ? 2 : 1;
+    if (currentStep > minStep) {
+      setCurrentStep(currentStep - 1);
+    }
+  };
+
+  // Can we go back?
+  const canGoBack = isLoggedIn ? currentStep > 2 : currentStep > 1;
+  
+  // Can this step be clicked?
+  const canClickStep = (stepId: number) => {
+    // Can't click step 1 if logged in
+    if (stepId === 1 && isLoggedIn) return false;
+    // Can click any step we've reached
+    return stepId <= highestStepReached;
   };
 
   if (loading) {
@@ -129,24 +173,33 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
         </div>
       </header>
 
-      {/* Progress Steps */}
+      {/* Progress Steps - Clickable */}
       <div className="bg-white border-b border-slate-200 py-4">
         <div className="max-w-5xl mx-auto px-4">
           <nav aria-label="Progress">
             <ol className="flex items-center justify-between">
               {STEPS.map((step, idx) => {
                 const StepIcon = step.icon;
-                const isComplete = (status?.steps?.[step.key as keyof OnboardingSteps]) || currentStep > step.id;
+                const isComplete = currentStep > step.id;
                 const isCurrent = currentStep === step.id;
+                const isClickable = canClickStep(step.id);
                 
                 return (
                   <li key={step.id} className="flex items-center">
-                    <div className={`
-                      flex items-center gap-2 px-3 py-2 rounded-xl transition-all
-                      ${isCurrent ? 'bg-emerald-50 text-emerald-700' : ''}
-                      ${isComplete && !isCurrent ? 'text-emerald-600' : ''}
-                      ${!isComplete && !isCurrent ? 'text-slate-400' : ''}
-                    `}>
+                    <button
+                      type="button"
+                      onClick={() => goToStep(step.id)}
+                      disabled={!isClickable}
+                      className={`
+                        flex items-center gap-2 px-3 py-2 rounded-xl transition-all
+                        ${isCurrent ? 'bg-emerald-50 text-emerald-700' : ''}
+                        ${isComplete && !isCurrent ? 'text-emerald-600' : ''}
+                        ${!isComplete && !isCurrent ? 'text-slate-400' : ''}
+                        ${isClickable && !isCurrent ? 'cursor-pointer hover:bg-slate-100 hover:text-emerald-600' : ''}
+                        ${!isClickable ? 'cursor-not-allowed opacity-60' : ''}
+                      `}
+                      title={isClickable ? `Go to ${step.name}` : (step.id === 1 && isLoggedIn ? 'Account already created' : 'Complete previous steps first')}
+                    >
                       <div className={`
                         w-8 h-8 rounded-full flex items-center justify-center transition-all
                         ${isComplete ? 'bg-emerald-100 text-emerald-600' : ''}
@@ -162,7 +215,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
                       <span className="hidden sm:block text-sm font-semibold">
                         {step.name}
                       </span>
-                    </div>
+                    </button>
                     
                     {idx < STEPS.length - 1 && (
                       <ChevronRight className="w-5 h-5 text-slate-300 mx-2" />
@@ -177,6 +230,18 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
 
       {/* Step Content */}
       <main className="max-w-2xl mx-auto px-4 py-8">
+        {/* Back Button */}
+        {canGoBack && (
+          <button
+            type="button"
+            onClick={handleBack}
+            className="mb-4 flex items-center gap-2 text-slate-600 hover:text-emerald-600 font-medium transition-colors group"
+          >
+            <ChevronLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
+            Back to {STEPS[currentStep - 2]?.name}
+          </button>
+        )}
+
         {currentStep === 1 && (
           <SignupStep 
             onComplete={(data) => handleStepComplete(1, data)} 

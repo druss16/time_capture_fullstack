@@ -3630,6 +3630,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+# Replace your whoami view in tracker/views.py with this:
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def whoami(request):
@@ -3655,6 +3657,8 @@ def whoami(request):
             "username": user.username,
             "user_id": user.id,
             "email": user.email or "",
+            "first_name": user.first_name or "",   # ✅ NEW
+            "last_name": user.last_name or "",     # ✅ NEW
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser,
             "role": role,  # ← 'owner', 'admin', 'manager', or 'member'
@@ -3712,6 +3716,8 @@ def whoami(request):
         "username": "",
         "user_id": None,
         "email": "",
+        "first_name": "",   # ✅ NEW
+        "last_name": "",    # ✅ NEW
         "is_staff": False,
         "is_superuser": False,
         "role": None,
@@ -3720,7 +3726,7 @@ def whoami(request):
         "host": None,
         "device_id": None,
     })
-
+    
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
@@ -6927,3 +6933,49 @@ class CurrentMembershipView(APIView):
                 'email': request.user.email,
             }
         })
+
+# Add this to tracker/views.py
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def auth_change_password(request):
+    """
+    Change the authenticated user's password.
+    
+    POST body:
+    {
+        "current_password": "oldpassword",
+        "new_password": "newpassword"
+    }
+    """
+    user = request.user
+    
+    current_password = request.data.get('current_password', '')
+    new_password = request.data.get('new_password', '')
+    
+    if not current_password:
+        return Response({'error': 'Current password is required'}, status=400)
+    
+    if not new_password:
+        return Response({'error': 'New password is required'}, status=400)
+    
+    if len(new_password) < 8:
+        return Response({'error': 'New password must be at least 8 characters'}, status=400)
+    
+    # Verify current password
+    if not user.check_password(current_password):
+        return Response({'error': 'Current password is incorrect'}, status=400)
+    
+    # Don't allow same password
+    if current_password == new_password:
+        return Response({'error': 'New password must be different from current password'}, status=400)
+    
+    # Set new password
+    user.set_password(new_password)
+    user.save()
+    
+    return Response({
+        'success': True,
+        'message': 'Password changed successfully'
+    })
+

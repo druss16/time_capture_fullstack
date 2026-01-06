@@ -186,4 +186,6 @@ urlpatterns = [
     # History
     path('billing/timesheet-history/', views_billing.timesheet_history),  # NEW
 
+    path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
+
 ]

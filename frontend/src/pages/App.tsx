@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -23,6 +23,12 @@ import { ClientImport } from '@/components/clients/ClientImport';
 import { ManualClientEntry } from '@/components/clients/ManualClientEntry';
 import OnboardingWizard from '@/components/onboarding/OnboardingWizard';
 
+// ✅ NEW: Account settings pages
+import AccountLayout from '@/pages/account/AccountLayout';
+import ProfilePage from '@/pages/account/ProfilePage';
+import PasswordPage from '@/pages/account/PasswordPage';
+import BillingSettingsPage from '@/pages/account/BillingSettingsPage';
+
 // --------- Lazy pages (code-splitting) ---------
 const DailyReview = lazy(() => import("./DailyReview"));
 const TimecardSummary = lazy(() => import("./TimecardSummary"));
@@ -34,7 +40,7 @@ const Signup = lazy(() => import("./Signup"));
 const NotFound = lazy(() => import("./NotFound"));
 const TimeReview = lazy(() => import("./TimeReview"));
 
-// ✅ NEW: Billing page with timesheets, approvals, and client billing
+// Billing page with timesheets, approvals, and client billing
 const BillingPage = lazy(() => import("./BillingPage"));
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -67,10 +73,6 @@ function ScrollToTop() {
   return null;
 }
 
-interface OnboardingCheckProps {
-  children: React.ReactNode;
-}
-
 // Wrap ProtectedRoute, but bypass if AUTH is disabled (useful in dev)
 function MaybeProtected({ children }: { children: React.ReactNode }) {
   if (AUTH_DISABLED) return <>{children}</>;
@@ -85,6 +87,37 @@ function AppLayout({ children }: { children: React.ReactNode }) {
       <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
     </div>
   );
+}
+
+// ✅ NEW: Owner-only route guard (fetches role from whoami)
+function OwnerRoute({ children }: { children: React.ReactNode }) {
+  const [role, setRole] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    safeFetchJson(`${API_BASE}/whoami/`)
+      .then(data => setRole(data.role))
+      .catch(() => setRole(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="p-6">Loading...</div>;
+  if (role !== 'owner') return <Navigate to="/account" replace />;
+  
+  return <>{children}</>;
+}
+
+// ✅ NEW: Account layout wrapper that fetches role
+function AccountLayoutWrapper() {
+  const [role, setRole] = useState<'owner' | 'admin' | 'manager' | 'member'>('member');
+
+  useEffect(() => {
+    safeFetchJson(`${API_BASE}/whoami/`)
+      .then(data => setRole(data.role || 'member'))
+      .catch(() => setRole('member'));
+  }, []);
+  
+  return <AccountLayout role={role} />;
 }
 
 export default function App() {
@@ -130,7 +163,7 @@ export default function App() {
                   }
                 />
 
-                {/* ✅ NEW: Billing - Timesheets, Approvals, Client Billing */}
+                {/* Billing - Timesheets, Approvals, Client Billing */}
                 <Route
                   path="/billing"
                   element={
@@ -225,7 +258,33 @@ export default function App() {
                   }
                 />
 
-                // In your Routes section, add these two routes:
+                {/* ============================================ */}
+                {/* ✅ NEW: Account Settings Routes              */}
+                {/* ============================================ */}
+                <Route
+                  path="/account"
+                  element={
+                    <MaybeProtected>
+                      <AccountLayoutWrapper />
+                    </MaybeProtected>
+                  }
+                >
+                  {/* /account - Profile page */}
+                  <Route index element={<ProfilePage />} />
+                  
+                  {/* /account/password - Change password */}
+                  <Route path="password" element={<PasswordPage />} />
+                  
+                  {/* /account/billing - Stripe subscription (OWNER ONLY) */}
+                  <Route 
+                    path="billing" 
+                    element={
+                      <OwnerRoute>
+                        <BillingSettingsPage />
+                      </OwnerRoute>
+                    } 
+                  />
+                </Route>
 
                 {/* Self-Service Onboarding (public - no auth required) */}
                 <Route path="/onboarding" element={<OnboardingWizard />} />

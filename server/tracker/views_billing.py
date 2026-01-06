@@ -42,6 +42,12 @@ def get_membership(self, request):
         user=request.user
     ).select_related('organization').first()
 
+def safe_date(d):
+    """Safely convert date to ISO string"""
+    if not d:
+        return None
+    return d.isoformat() if hasattr(d, 'isoformat') else d
+
 # ===============================
 # BILLING RATES VIEWSET
 # ===============================
@@ -1404,7 +1410,8 @@ def billing_rates_list(request):
             'client': rate.client_id,
             'client_name': rate.client.name if rate.client else None,
             'rate': str(rate.rate),
-            'effective_date': rate.effective_date.isoformat() if rate.effective_date else None,
+            'effective_date': safe_date(rate.effective_date),
+
         }, status=201)
 
 
@@ -1436,7 +1443,7 @@ def billing_rates_detail(request, rate_id):
             'client': rate.client_id,
             'client_name': rate.client.name if rate.client else None,
             'rate': str(rate.rate),
-            'effective_date': rate.effective_date.isoformat() if rate.effective_date else None,
+            'effective_date': safe_date(rate.effective_date),
             'end_date': rate.end_date.isoformat() if rate.end_date else None,
         })
     
@@ -1453,7 +1460,7 @@ def billing_rates_detail(request, rate_id):
         return Response({
             'id': rate.id,
             'rate': str(rate.rate),
-            'effective_date': rate.effective_date.isoformat() if rate.effective_date else None,
+            'effective_date': safe_date(rate.effective_date),
         })
     
     elif request.method == 'DELETE':

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 # --- Django ---
 from django.conf import settings
-from django.contrib.auth import authenticate, get_user_model, logout as django_logout
+from django.contrib.auth import authenticate, login, get_user_model, logout as django_logout
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Sum, Q

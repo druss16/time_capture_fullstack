@@ -1,10 +1,16 @@
 // src/services/onboardingApi.ts
 /**
  * API service for self-service onboarding flow
- * Updated to match existing API patterns with CSRF support
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+const RAW_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE.replace(/\/api$/, '/api') : `${RAW_BASE.replace(/\/+$/, '')}/api`;
+
+// Helper to get CSRF token
+const getCSRFToken = (): string | null => {
+  const match = document.cookie.match(/csrftoken=([^;]+)/);
+  return match ? match[1] : null;
+};
 
 // Types
 export interface User {
@@ -54,6 +60,7 @@ export interface OnboardingStatusResponse {
 
 export interface Integration {
   id: string;
+  provider: string;
   name: string;
   description: string;
   icon: string;
@@ -130,34 +137,25 @@ export interface ApiError {
   error?: string;
 }
 
-// Get CSRF token from cookie (Django pattern)
-const getCSRFToken = (): string | null => {
-  const name = 'csrftoken';
-  const cookies = document.cookie.split(';');
-  for (const cookie of cookies) {
-    const [key, value] = cookie.trim().split('=');
-    if (key === name) return value;
-  }
-  return null;
-};
-
-// Helper to get auth headers with CSRF
+// Helper to get auth headers
 const getAuthHeaders = (): HeadersInit => {
-  const token = localStorage.getItem('auth_token');  // ✅ Fixed: was 'authToken'
+  const token = localStorage.getItem('auth_token');
   const csrfToken = getCSRFToken();
   
   return {
     'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),  // ✅ Fixed: was 'Token'
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
   };
 };
 
 // Generic fetch wrapper with error handling
 const apiFetch = async <T>(endpoint: string, options: RequestInit = {}): Promise<T> => {
-  const response = await fetch(`${API_BASE}${endpoint}`, {
+  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE}${endpoint}`;
+  
+  const response = await fetch(url, {
     ...options,
-    credentials: 'include', // Include cookies for session auth
+    credentials: 'include',
     headers: {
       ...getAuthHeaders(),
       ...(options.headers || {}),
@@ -198,7 +196,7 @@ export const signup = async (params: SignupParams): Promise<SignupResponse> => {
   });
   
   if (data.token) {
-    localStorage.setItem('auth_token', data.token);  // ✅ Fixed: was 'authToken'
+    localStorage.setItem('auth_token', data.token);
   }
   
   return data;
@@ -216,8 +214,13 @@ export const getOnboardingStatus = async (): Promise<OnboardingStatusResponse> =
 // STEP 2: INTEGRATIONS
 // ============================================================================
 
-export const getIntegrations = async (): Promise<IntegrationListResponse> => {
-  return apiFetch<IntegrationListResponse>('/onboarding/integrations/');
+export const getIntegrations = async (): Promise<Integration[]> => {
+  const response = await apiFetch<IntegrationListResponse | Integration[]>('/onboarding/integrations/');
+  // Handle both array and object response formats
+  if (Array.isArray(response)) {
+    return response;
+  }
+  return response.integrations || [];
 };
 
 export const connectIntegration = async (provider: string): Promise<{ provider: string; oauth_url: string; state: string }> => {
@@ -249,6 +252,15 @@ export const inviteTeam = async (invites: InviteInput[]): Promise<InviteResponse
   });
 };
 
+// Alias for inviteTeam that accepts simple email array
+export const inviteTeamMembers = async (emails: string[]): Promise<InviteResponse> => {
+  const invites = emails.map(email => ({ email, role: 'member' as const }));
+  return apiFetch<InviteResponse>('/onboarding/team/invite/', {
+    method: 'POST',
+    body: JSON.stringify({ invites }),
+  });
+};
+
 export const getTeamStatus = async (): Promise<TeamStatusResponse> => {
   return apiFetch<TeamStatusResponse>('/onboarding/team/status/');
 };
@@ -260,8 +272,63 @@ export const skipTeamInvites = async (): Promise<{ ok: boolean; next_step: numbe
 };
 
 // ============================================================================
+// CSV IMPORT
+// ============================================================================
+
+export interface CSVImportResponse {
+  ok: boolean;
+  message: string;
+  clients: number;
+  projects: number;
+  skipped: number;
+  errors: string[] | null;
+}
+
+export const importClientsCSV = async (file: File): Promise<CSVImportResponse> => {
+  const token = localStorage.getItem('auth_token');
+  const csrfToken = getCSRFToken();
+  
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const response = await fetch(`${API_BASE}/onboarding/clients/import/`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
+    },
+    body: formData,
+  });
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    throw { status: response.status, ...data } as ApiError;
+  }
+  
+  return data as CSVImportResponse;
+};
+
+// ============================================================================
 // STEP 4: BILLING RATES
 // ============================================================================
+
+export interface DefaultRates {
+  billing_rate: string;
+  cost_rate: string;
+}
+
+export const getDefaultRates = async (): Promise<DefaultRates> => {
+  return apiFetch<DefaultRates>('/onboarding/rates/default/');
+};
+
+export const setDefaultRates = async (rates: { billing_rate: string; cost_rate: string }): Promise<{ ok: boolean }> => {
+  return apiFetch('/onboarding/rates/default/', {
+    method: 'POST',
+    body: JSON.stringify(rates),
+  });
+};
 
 export const setDefaultRate = async (rate: number): Promise<{ ok: boolean; rate: string }> => {
   return apiFetch('/onboarding/rates/default/', {
@@ -295,43 +362,10 @@ export const getDownloadInfo = async (): Promise<DownloadInfoResponse> => {
 };
 
 // ============================================================================
-// CLIENT IMPORT (using existing endpoint)
+// DEFAULT EXPORT
 // ============================================================================
 
-export const importClientsCSV = async (file: File): Promise<{
-  message: string;
-  clients: number;
-  projects: number;
-  skipped: number;
-  errors?: string[];
-}> => {
-  const formData = new FormData();
-  formData.append('file', file);
-  
-  const token = localStorage.getItem('auth_token');  // ✅ Fixed: was 'authToken'
-  const csrfToken = getCSRFToken();
-  
-  const response = await fetch(`${API_BASE}/import-clients-csv/`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),  // ✅ Fixed: was 'Token'
-      ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
-      // Don't set Content-Type - browser will set it with boundary for FormData
-    },
-    body: formData,
-  });
-  
-  const data = await response.json();
-  
-  if (!response.ok) {
-    throw { status: response.status, ...data };
-  }
-  
-  return data;
-};
-
-export default {
+const onboardingApi = {
   signup,
   getOnboardingStatus,
   getIntegrations,
@@ -339,11 +373,16 @@ export default {
   disconnectIntegration,
   skipIntegration,
   inviteTeam,
+  inviteTeamMembers,
   getTeamStatus,
   skipTeamInvites,
+  importClientsCSV,
+  getDefaultRates,
+  setDefaultRates,
   setDefaultRate,
   skipRates,
   completeOnboarding,
   getDownloadInfo,
-  importClientsCSV,
 };
+
+export default onboardingApi;

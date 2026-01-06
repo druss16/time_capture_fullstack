@@ -1,386 +1,197 @@
-// src/pages/BillingPage.tsx
 /**
- * Billing page for subscription management.
- * Shows when trial expired or for managing existing subscription.
+ * BillingPage.tsx - Sidebar layout with STRONGER FONTS
  */
-
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  CreditCard,
-  Check,
-  Zap,
-  Crown,
-  ArrowRight,
-  Clock,
-  AlertTriangle,
-  ExternalLink,
-  Loader2,
-  Shield,
-  Users,
+import { safeFetchJson, API_BASE } from '@/lib/api';
+import WeeklyTimesheet from '@/components/WeeklyTimesheet';
+import ApprovalQueue from '@/components/ApprovalQueue';
+import ClientSummary from '@/components/ClientSummary';
+import ClientProfitability from '@/components/ClientProfitability';
+import TimesheetHistory from '@/components/TimesheetHistory';
+import { 
+  Clock, 
+  CheckSquare, 
+  DollarSign, 
+  TrendingUp, 
+  FileText,
+  ChevronRight
 } from 'lucide-react';
+import { cn, getRoleColor, SKELETON } from '@/lib/design-system';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+type UserRole = 'owner' | 'admin' | 'manager' | 'member';
 
-interface PricingTier {
-  id: 'starter' | 'professional';
-  name: string;
-  price: number;
-  priceId: string;
+interface Tab {
+  id: string;
+  label: string;
+  icon: React.ElementType;
   description: string;
-  popular?: boolean;
-  features: string[];
+  requiredRoles: UserRole[];
 }
 
-const PRICING_TIERS: PricingTier[] = [
-  {
-    id: 'starter',
-    name: 'Starter',
-    price: 29.99,
-    priceId: 'price_starter_monthly',
-    description: 'Essential time tracking',
-    features: [
-      'Automatic time tracking',
-      'AI-powered categorization',
-      'Client & project management',
-      'Weekly timesheets',
-      'Team invites & roles',
-      'Basic reporting',
-    ],
-  },
-  {
-    id: 'professional',
-    name: 'Professional',
-    price: 49.99,
-    priceId: 'price_professional_monthly',
-    description: 'Full suite with profitability',
-    popular: true,
-    features: [
-      'Everything in Starter',
-      'Cost & margin analysis',
-      'Profitability dashboards',
-      'Employee cost tracking',
-      'Advanced analytics',
-      'Priority support',
-    ],
-  },
+interface WhoamiResponse {
+  username: string;
+  email: string;
+  role: UserRole | null;
+  org_name: string | null;
+  is_authenticated: boolean;
+}
+
+const ALL_TABS: Tab[] = [
+  { id: 'timesheet', label: 'My Timesheet', description: 'View and submit your weekly hours', requiredRoles: ['owner', 'admin', 'manager', 'member'], icon: Clock },
+  { id: 'approvals', label: 'Approvals', description: 'Review and approve team timesheets', requiredRoles: ['owner', 'admin', 'manager'], icon: CheckSquare },
+  { id: 'billing', label: 'Client Billing', description: 'Prepare invoices by client', requiredRoles: ['owner', 'admin'], icon: DollarSign },
+  { id: 'profitability', label: 'Profitability', description: 'Analyze margins and efficiency', requiredRoles: ['owner', 'admin'], icon: TrendingUp },
+  { id: 'history', label: 'History', description: 'View approved and locked timesheets', requiredRoles: ['owner', 'admin', 'manager'], icon: FileText },
 ];
 
-export default function BillingPage() {
-  const navigate = useNavigate();
+// Loading skeleton for sidebar
+const SidebarSkeleton = () => (
+  <div className="space-y-2">
+    {[1, 2, 3, 4].map(i => (
+      <div key={i} className={cn(SKELETON.base, 'h-14 w-full rounded-xl')} />
+    ))}
+  </div>
+);
+
+// Loading skeleton for content
+const ContentSkeleton = () => (
+  <div className="space-y-4">
+    <div className={cn(SKELETON.heading, 'w-48')} />
+    <div className="space-y-3">
+      {[1, 2, 3, 4, 5].map(i => (
+        <div key={i} className={cn(SKELETON.row, 'w-full')} />
+      ))}
+    </div>
+  </div>
+);
+
+const BillingPage: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<string>('timesheet');
+  const [userInfo, setUserInfo] = useState<WhoamiResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [subscribing, setSubscribing] = useState(false);
-  const [selectedTier, setSelectedTier] = useState<'starter' | 'professional'>('professional');
-  const [seats, setSeats] = useState(1);
-  const [subscription, setSubscription] = useState<any>(null);
-  const [trialExpired, setTrialExpired] = useState(false);
-
+  
   useEffect(() => {
-    loadSubscriptionStatus();
-  }, []);
-
-  const loadSubscriptionStatus = async () => {
-    try {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE}/billing/subscription/`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setSubscription(data.subscription);
-        setTrialExpired(!data.trial?.active && !data.subscription);
+    const fetchUserInfo = async () => {
+      try {
+        const response = await safeFetchJson<WhoamiResponse>(`${API_BASE}/whoami/`);
+        setUserInfo(response);
         
-        // Get team size for seat count
-        if (data.organization?.team_size) {
-          setSeats(data.organization.team_size);
+        if (response.role) {
+          const currentTab = ALL_TABS.find(t => t.id === activeTab);
+          if (currentTab && !currentTab.requiredRoles.includes(response.role)) {
+            setActiveTab('timesheet');
+          }
         }
-      } else if (response.status === 402) {
-        setTrialExpired(true);
+      } catch (err) {
+        console.error('Failed to fetch user info:', err);
+        setUserInfo({ username: 'Unknown', email: '', role: 'member', org_name: null, is_authenticated: true });
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      console.error('Failed to load subscription:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+    
+    fetchUserInfo();
+  }, []);
+  
+  const userRole = userInfo?.role || 'member';
+  const visibleTabs = ALL_TABS.filter(tab => tab.requiredRoles.includes(userRole));
 
-  const handleSubscribe = async () => {
-    setSubscribing(true);
-    try {
-      const token = localStorage.getItem('auth_token');
-      const selectedPlan = PRICING_TIERS.find(t => t.id === selectedTier)!;
-      
-      const response = await fetch(`${API_BASE}/billing/create-checkout-session/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          price_id: selectedPlan.priceId,
-          quantity: seats,
-          success_url: `${window.location.origin}/daily?subscribed=true`,
-          cancel_url: `${window.location.origin}/billing`,
-        }),
-      });
-
-      const data = await response.json();
-      
-      if (data.checkout_url) {
-        window.location.href = data.checkout_url;
-      } else {
-        alert('Failed to start checkout. Please try again.');
-      }
-    } catch (err) {
-      console.error('Checkout error:', err);
-      alert('Failed to start checkout. Please try again.');
-    } finally {
-      setSubscribing(false);
-    }
-  };
-
-  const handleManageBilling = async () => {
-    try {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE}/billing/portal/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          return_url: `${window.location.origin}/billing`,
-        }),
-      });
-
-      const data = await response.json();
-      
-      if (data.portal_url) {
-        window.location.href = data.portal_url;
-      }
-    } catch (err) {
-      console.error('Portal error:', err);
-    }
-  };
-
-  const selectedPlan = PRICING_TIERS.find(t => t.id === selectedTier)!;
-  const monthlyTotal = selectedPlan.price * seats;
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
-      </div>
-    );
-  }
-
-  // Already subscribed - show management view
-  if (subscription) {
-    return (
-      <div className="min-h-screen bg-slate-50 py-12">
-        <div className="max-w-2xl mx-auto px-4">
-          <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
-            <div className="text-center mb-8">
-              <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                <Check className="w-8 h-8 text-emerald-600" />
-              </div>
-              <h1 className="text-2xl font-bold text-slate-900">Active Subscription</h1>
-              <p className="text-slate-600 mt-2 font-medium">
-                You're on the {subscription.plan || 'Professional'} plan
-              </p>
+  return (
+    <div className="flex min-h-[calc(100vh-56px)]">
+      {/* Sidebar */}
+      <aside className="w-64 bg-white border-r-2 border-slate-200 flex-shrink-0 flex flex-col">
+        {/* Sidebar Header */}
+        <div className="p-4 border-b-2 border-slate-200">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
+              <DollarSign className="w-5 h-5 text-white" />
             </div>
-
-            <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-6 mb-8">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-emerald-700 font-medium">Current Plan</p>
-                  <p className="text-2xl font-bold text-emerald-900">{subscription.plan || 'Professional'}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm text-emerald-700 font-medium">Seats</p>
-                  <p className="text-2xl font-bold text-emerald-900">{subscription.quantity || 1}</p>
-                </div>
-              </div>
+            <div>
+              <h1 className="text-lg font-extrabold text-slate-900 tracking-tight">Billing</h1>
+              <p className="text-sm text-slate-600 font-medium">Time & Invoicing</p>
             </div>
-
-            <button
-              onClick={handleManageBilling}
-              className="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25"
-            >
-              Manage Subscription
-              <ExternalLink className="w-5 h-5" />
-            </button>
-
-            <p className="mt-4 text-center text-sm text-slate-500 font-medium">
-              Update payment method, change plan, or cancel
-            </p>
-
-            <button
-              onClick={() => navigate('/daily')}
-              className="w-full mt-4 py-3 px-6 border-2 border-slate-200 hover:border-slate-300 text-slate-700 font-bold rounded-xl transition-all"
-            >
-              Back to Dashboard
-            </button>
           </div>
         </div>
-      </div>
-    );
-  }
 
-  // Trial expired or no subscription - show pricing
-  return (
-    <div className="min-h-screen bg-slate-50 py-12">
-      <div className="max-w-4xl mx-auto px-4">
-        {/* Trial Expired Warning */}
-        {trialExpired && (
-          <div className="mb-8 p-4 bg-amber-50 border-2 border-amber-200 rounded-xl flex items-start gap-3">
-            <AlertTriangle className="w-6 h-6 text-amber-500 mt-0.5" />
-            <div>
-              <p className="font-bold text-amber-900">Your trial has expired</p>
-              <p className="text-amber-700 font-medium">
-                Subscribe now to regain access to TimeTracker and all your data.
-              </p>
+        {/* Navigation */}
+        <nav className="p-3 space-y-1 flex-1">
+          {loading ? (
+            <SidebarSkeleton />
+          ) : (
+            visibleTabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl',
+                    'text-sm font-bold transition-all duration-200',
+                    'group border-2',
+                    isActive 
+                      ? 'bg-primary/10 text-primary border-primary/30' 
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border-transparent'
+                  )}
+                >
+                  <div className={cn(
+                    'w-8 h-8 rounded-lg flex items-center justify-center transition-colors',
+                    isActive ? 'bg-primary text-white' : 'bg-slate-200 text-slate-600 group-hover:bg-slate-300'
+                  )}>
+                    <Icon className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 text-left">
+                    <span className="block">{tab.label}</span>
+                    <span className={cn(
+                      'text-xs font-semibold',
+                      isActive ? 'text-primary/70' : 'text-slate-500'
+                    )}>{tab.description}</span>
+                  </div>
+                  {isActive && <ChevronRight className="w-4 h-4 text-primary" />}
+                </button>
+              );
+            })
+          )}
+        </nav>
+
+        {/* User Info at Bottom */}
+        {userInfo && (
+          <div className="p-4 border-t-2 border-slate-200 bg-slate-50">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-slate-300 flex items-center justify-center text-sm font-bold text-slate-700">
+                {userInfo.username.charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-slate-900 truncate">{userInfo.username}</p>
+                {userInfo.org_name && <p className="text-xs text-slate-600 font-medium truncate">{userInfo.org_name}</p>}
+              </div>
+              {userRole && userRole !== 'member' && (
+                <span className={cn('text-xs px-2 py-0.5 rounded font-bold', getRoleColor(userRole))}>
+                  {userRole.charAt(0).toUpperCase() + userRole.slice(1)}
+                </span>
+              )}
             </div>
           </div>
         )}
+      </aside>
 
-        <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <CreditCard className="w-8 h-8 text-emerald-600" />
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900">Choose Your Plan</h1>
-            <p className="text-slate-600 mt-2 font-medium">
-              Get unlimited access to automatic time tracking
-            </p>
-          </div>
-
-          {/* Pricing Cards */}
-          <div className="grid md:grid-cols-2 gap-6 mb-8">
-            {PRICING_TIERS.map((tier) => (
-              <div
-                key={tier.id}
-                onClick={() => setSelectedTier(tier.id)}
-                className={`
-                  relative cursor-pointer rounded-2xl border-2 p-6 transition-all
-                  ${selectedTier === tier.id 
-                    ? 'border-emerald-500 bg-emerald-50/50 shadow-lg' 
-                    : 'border-slate-200 hover:border-slate-300'}
-                `}
-              >
-                {tier.popular && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <span className="bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-full">
-                      MOST POPULAR
-                    </span>
-                  </div>
-                )}
-
-                <div className={`
-                  absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center
-                  ${selectedTier === tier.id ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300'}
-                `}>
-                  {selectedTier === tier.id && <Check className="w-4 h-4 text-white" />}
-                </div>
-
-                <div className="flex items-center gap-3 mb-4">
-                  <div className={`
-                    w-12 h-12 rounded-xl flex items-center justify-center
-                    ${tier.id === 'professional' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}
-                  `}>
-                    {tier.id === 'professional' ? <Crown className="w-6 h-6" /> : <Zap className="w-6 h-6" />}
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900">{tier.name}</h3>
-                    <p className="text-sm text-slate-500 font-medium">{tier.description}</p>
-                  </div>
-                </div>
-
-                <div className="mb-6">
-                  <span className="text-4xl font-extrabold text-slate-900">${tier.price}</span>
-                  <span className="text-slate-500 font-medium">/user/month</span>
-                </div>
-
-                <ul className="space-y-2">
-                  {tier.features.map((feature, idx) => (
-                    <li key={idx} className="flex items-center gap-2">
-                      <Check className="w-4 h-4 text-emerald-500" />
-                      <span className="text-sm text-slate-700 font-medium">{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-
-          {/* Seat Selection */}
-          <div className="mb-8 p-5 bg-slate-50 rounded-xl border-2 border-slate-200">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <Users className="w-5 h-5 text-slate-600" />
-                <span className="font-bold text-slate-900">Team Size</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setSeats(Math.max(1, seats - 1))}
-                  className="w-8 h-8 rounded-lg border-2 border-slate-300 flex items-center justify-center hover:bg-slate-100 font-bold"
-                >
-                  -
-                </button>
-                <span className="w-12 text-center font-bold text-lg">{seats}</span>
-                <button
-                  onClick={() => setSeats(seats + 1)}
-                  className="w-8 h-8 rounded-lg border-2 border-slate-300 flex items-center justify-center hover:bg-slate-100 font-bold"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-4 border-t-2 border-slate-200">
-              <div>
-                <p className="text-sm text-slate-500 font-medium">Monthly total</p>
-                <p className="text-2xl font-extrabold text-slate-900">
-                  ${monthlyTotal.toFixed(2)}<span className="text-sm font-medium text-slate-500">/month</span>
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-sm text-emerald-600 font-bold">Save 20% with yearly billing</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Subscribe Button */}
-          <button
-            onClick={handleSubscribe}
-            disabled={subscribing}
-            className="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 disabled:opacity-50"
-          >
-            {subscribing ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <>
-                Subscribe Now
-                <ArrowRight className="w-5 h-5" />
-              </>
-            )}
-          </button>
-
-          {/* Trust Badges */}
-          <div className="mt-6 flex items-center justify-center gap-6 text-sm text-slate-500">
-            <div className="flex items-center gap-2">
-              <Shield className="w-4 h-4" />
-              <span className="font-medium">Secure payment</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4" />
-              <span className="font-medium">Cancel anytime</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* Main Content */}
+      <main className="flex-1 p-6 bg-slate-50">
+        {loading ? (
+          <ContentSkeleton />
+        ) : (
+          <>
+            {activeTab === 'timesheet' && <WeeklyTimesheet />}
+            {activeTab === 'approvals' && <ApprovalQueue />}
+            {activeTab === 'billing' && <ClientSummary />}
+            {activeTab === 'profitability' && <ClientProfitability />}
+            {activeTab === 'history' && <TimesheetHistory />}
+          </>
+        )}
+      </main>
     </div>
   );
-}
+};
+
+export default BillingPage;

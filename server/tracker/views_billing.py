@@ -1415,57 +1415,61 @@ def billing_rates_list(request):
         }, status=201)
 
 
-@api_view(['GET', 'PATCH', 'DELETE'])
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def billing_rates_detail(request, rate_id):
-    """
-    GET: Get a specific billing rate
-    PATCH: Update a billing rate
-    DELETE: Delete a billing rate
-    """
-    from decimal import Decimal
-    from tracker.models import BillingRate
-    
+    """Get, update, or delete a specific billing rate"""
     org = get_user_org(request.user)
     if not org:
         return Response({'error': 'No organization found'}, status=404)
     
+    # Get the rate (must belong to this org)
     try:
         rate = BillingRate.objects.get(id=rate_id, org=org)
     except BillingRate.DoesNotExist:
-        return Response({'error': 'Rate not found'}, status=404)
+        return Response({'error': 'Billing rate not found'}, status=404)
     
     if request.method == 'GET':
         return Response({
             'id': rate.id,
-            'user': rate.user_id,
-            'user_name': f"{rate.user.first_name} {rate.user.last_name}".strip() or rate.user.username if rate.user else None,
-            'client': rate.client_id,
+            'user': rate.user.id if rate.user else None,
+            'user_name': rate.user.username if rate.user else None,
+            'client': rate.client.id if rate.client else None,
             'client_name': rate.client.name if rate.client else None,
-            'rate': str(rate.rate),
+            'hourly_rate': str(rate.hourly_rate),
             'effective_date': safe_date(rate.effective_date),
-            'end_date': rate.end_date.isoformat() if rate.end_date else None,
         })
     
-    elif request.method == 'PATCH':
-        data = request.data
-        if 'rate' in data:
-            rate.rate = Decimal(str(data['rate']))
-        if 'effective_date' in data:
-            rate.effective_date = data['effective_date']
-        if 'end_date' in data:
-            rate.end_date = data['end_date']
+    elif request.method in ['PUT', 'PATCH']:
+        # Update rate
+        if 'hourly_rate' in request.data:
+            rate.hourly_rate = Decimal(str(request.data['hourly_rate']))
+        if 'effective_date' in request.data:
+            rate.effective_date = request.data['effective_date']
+        if 'user' in request.data:
+            rate.user_id = request.data['user'] or None
+        if 'client' in request.data:
+            rate.client_id = request.data['client'] or None
+        
         rate.save()
         
         return Response({
             'id': rate.id,
-            'rate': str(rate.rate),
+            'user': rate.user.id if rate.user else None,
+            'user_name': rate.user.username if rate.user else None,
+            'client': rate.client.id if rate.client else None,
+            'client_name': rate.client.name if rate.client else None,
+            'hourly_rate': str(rate.hourly_rate),
             'effective_date': safe_date(rate.effective_date),
         })
     
     elif request.method == 'DELETE':
+        rate_id = rate.id
         rate.delete()
-        return Response({'status': 'deleted'}, status=204)
+        return Response({
+            'success': True,
+            'message': f'Billing rate {rate_id} deleted',
+        })
 
 
 # tracker/views_billing.py

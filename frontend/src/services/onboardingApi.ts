@@ -291,7 +291,7 @@ export const importClientsCSV = async (file: File): Promise<CSVImportResponse> =
   const formData = new FormData();
   formData.append('file', file);
   
-  const response = await fetch(`${API_BASE}/onboarding/clients/import/`, {
+  const response = await fetch(`${API_BASE}/import-clients-csv/`, {
     method: 'POST',
     credentials: 'include',
     headers: {

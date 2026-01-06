@@ -12,6 +12,10 @@ import secrets  # ✅ add this import
 # ===========================
 # tracker/models.py - Add this new model (or enhance Group)
 
+# Replace your Organization model in tracker/models.py with this:
+
+from decimal import Decimal
+
 class Organization(models.Model):
     """
     Represents a CPA firm - the tenant in multi-tenant setup.
@@ -33,16 +37,27 @@ class Organization(models.Model):
     # Settings
     timezone = models.CharField(max_length=50, default='America/New_York')
     
+    # Default Rates
+    billing_rate_default = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=Decimal('150.00'),
+        help_text="Default hourly billing rate charged to clients"
+    )
+    cost_rate_default = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=Decimal('75.00'),
+        help_text="Default hourly employee cost (for margin calculations)"
+    )
+    
+    # Onboarding tracking (optional - add if you want to track progress)
+    onboarding_completed = models.BooleanField(default=False)
+    onboarding_step = models.IntegerField(default=1)
+    
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
-    billing_rate_default = models.DecimalField(
-    max_digits=10, 
-    decimal_places=2, 
-    default=Decimal('150.00'),
-    help_text="Default hourly billing rate"
-    )  
     
     class Meta:
         verbose_name = "Organization"
@@ -50,7 +65,34 @@ class Organization(models.Model):
     
     def __str__(self):
         return self.name
-
+    
+    @property
+    def default_margin(self):
+        """Calculate default profit margin percentage"""
+        if self.billing_rate_default and self.billing_rate_default > 0:
+            margin = self.billing_rate_default - (self.cost_rate_default or Decimal('0'))
+            return round((margin / self.billing_rate_default) * 100, 1)
+        return 0
+    
+    @property
+    def is_trial_active(self):
+        """Check if trial is still active"""
+        from django.utils import timezone
+        if self.plan != 'trial':
+            return False
+        if not self.trial_ends_at:
+            return False
+        return self.trial_ends_at > timezone.now()
+    
+    @property
+    def trial_days_remaining(self):
+        """Days left in trial"""
+        from django.utils import timezone
+        if not self.trial_ends_at:
+            return 0
+        if self.trial_ends_at < timezone.now():
+            return 0
+        return (self.trial_ends_at - timezone.now()).days
 
 class OrganizationMembership(models.Model):
     """

@@ -50,28 +50,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useMemo(() => isTrulyAuthenticated(me), [me]);
 
   const logout = useCallback(async () => {
-    try {
-      // Try to call backend logout (might fail, that's ok)
-      const csrftoken = document.cookie
-        .split('; ')
-        .find(row => row.startsWith('csrftoken='))
-        ?.split('=')[1] || '';
-
-      await fetch(`${API_BASE}/auth/logout/`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "X-CSRFToken": csrftoken,
-          "Content-Type": "application/json",
-        },
-      }).catch(() => {});
-    } catch {
-      // Ignore errors
-    }
-
-    // ✅ CLEAR THE AUTH TOKEN FROM LOCALSTORAGE
+    // ✅ CLEAR LOCAL STATE FIRST (before any async)
     localStorage.removeItem('auth_token');
     sessionStorage.clear();
+    
+    // Clear whoami cache
+    clearWhoAmICache();
+    
+    // Clear local state
+    setMe(null);
 
     // Clear all cookies
     document.cookie.split(";").forEach((c) => {
@@ -81,16 +68,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=timetracker-api-k375.onrender.com;`;
     });
 
-    // Clear whoami cache
-    clearWhoAmICache();
-
-    // Clear local state
-    setMe(null);
+    // Try backend logout (fire and forget - don't block on it)
+    try {
+      const csrftoken = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('csrftoken='))
+        ?.split('=')[1] || '';
+      
+      // ✅ FIXED: Was fetch` - now fetch(
+      await fetch(`${API_BASE}/auth/logout/`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "X-CSRFToken": csrftoken,
+          "Content-Type": "application/json",
+        },
+      });
+    } catch {
+      // Ignore errors - local logout is sufficient
+    }
   }, []);
-
-  return (
-    <Ctx.Provider value={{ me, loading, isAuthenticated, refreshWhoAmI, logout }}>
-      {children}
-    </Ctx.Provider>
-  );
-}

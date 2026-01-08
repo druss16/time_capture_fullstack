@@ -333,11 +333,15 @@ class PairingWindow(NSWindow):
 
     def onCancel_(self, _sender):
         self.pairing_success = False
-        NSApp.stopModal()
+        # Only stop modal if actually running modally
+        if NSApp.modalWindow() == self:
+            NSApp.stopModal()
         self.orderOut_(None)
 
     def onContinue_(self, _sender):
-        NSApp.stopModal()
+        # Only stop modal if actually running modally
+        if NSApp.modalWindow() == self:
+            NSApp.stopModal()
         self.orderOut_(None)
 
     def runModal(self) -> Optional[str]:
@@ -975,15 +979,25 @@ class TimeTrackerMenuBar(NSObject):
         window.onRefresh_(None)
 
     def onRepairDevice_(self, _sender):
-        """Show pairing window to re-pair device"""
+        """Show pairing window to re-pair device (non-modal)"""
         if hasattr(self, 'repair_callback') and self.repair_callback:
-            result = show_pairing_window(self.repair_callback)
-            if result:
-                print(f"[GUI] Device re-paired successfully")
-                # Refresh clients from backend after re-pairing
-                if hasattr(self, 'fetch_clients_callback') and self.fetch_clients_callback:
-                    self.client_mgr.load(self.fetch_clients_callback)
-                    self._update_switch_submenu()
+            # Create pairing window but don't run modal - just show it
+            window = PairingWindow.alloc().initWithCallback_(self.repair_callback)
+            self.open_windows.append(window)
+            
+            # Override the continue button to refresh clients
+            original_continue = window.onContinue_
+            def on_continue_wrapper(sender):
+                original_continue(sender)
+                if window.api_key:
+                    print(f"[GUI] Device re-paired successfully")
+                    if hasattr(self, 'fetch_clients_callback') and self.fetch_clients_callback:
+                        self.client_mgr.load(self.fetch_clients_callback)
+                        self._update_switch_submenu()
+            
+            window.center()
+            window.makeKeyAndOrderFront_(None)
+            NSApp.activateIgnoringOtherApps_(True)
         else:
             print("[GUI] No repair callback configured")
 

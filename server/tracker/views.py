@@ -3878,23 +3878,47 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-@api_view(["POST"])
-@permission_classes([AllowAny])
-@ensure_csrf_cookie
-# CSRF removed - logout is safe without it (already authenticated via session)
+# views.py
+from django.contrib.auth import logout as django_logout
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+
+@api_view(["POST", "GET"])  # Allow GET for simple redirects/testing
+@permission_classes([AllowAny])  # Allow even if token is invalid/missing
 def auth_logout(request):
     """
-    Logs out the current session (if any). Requires CSRF.
+    Logs out the current session. 
+    AllowAny because logout should never fail - user may already be logged out
+    or have an invalid/expired token.
     """
-    django_logout(request)
+    # Try to logout (will silently do nothing if not authenticated)
+    try:
+        django_logout(request)
+    except Exception:
+        pass  # Ignore any errors during logout
+    
+    # Delete any auth tokens if using token auth
+    if hasattr(request, 'auth') and request.auth:
+        try:
+            request.auth.delete()
+        except Exception:
+            pass
+    
     resp = Response({"ok": True})
-    # Don’t delete the CSRF cookie; it’s useful for the next POST.
+    
+    # Clear session cookie
     resp.delete_cookie("sessionid", path="/")
-    # If you previously set custom identity cookies, clear them:
+    
+    # Clear any custom identity cookies
     for cookie_name in ("mavops_username", "mavops_host", "mavops_ident"):
         resp.delete_cookie(cookie_name, path="/")
+    
+    # Optionally clear CSRF cookie too (fresh start)
+    # resp.delete_cookie("csrftoken", path="/")
+    
     return resp
-
 
 @api_view(["POST"])
 @permission_classes([AllowAny])

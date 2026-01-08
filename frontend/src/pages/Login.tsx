@@ -1,7 +1,5 @@
-/**
- * Login.tsx - Premium Login Page with Laurel-inspired design
- */
-import { useEffect, useState } from "react";
+// Login.tsx - Fixed version
+import { useEffect, useState, useMemo } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
 import { useAuth } from "@/auth/AuthProvider";
@@ -10,14 +8,20 @@ import { Eye, EyeOff, Clock, ArrowRight, Sparkles } from "lucide-react";
 export default function Login() {
   const nav = useNavigate();
   const loc = useLocation();
-  const params = new URLSearchParams(loc.search);
-  const next = params.get("next") || "/daily";
+  
+  // Memoize `next` so it doesn't change on every render
+  const next = useMemo(() => {
+    const params = new URLSearchParams(loc.search);
+    return params.get("next") || "/daily";
+  }, [loc.search]);
+  
   const { refreshWhoAmI } = useAuth();
 
   const [form, setForm] = useState({ username: "", password: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showPw, setShowPw] = useState(false);
+  const [checking, setChecking] = useState(true); // Add loading state
 
   // Check if already logged in
   useEffect(() => {
@@ -35,11 +39,13 @@ export default function Login() {
         }
       } catch {
         // Not logged in - stay on login page
+      } finally {
+        if (alive) setChecking(false);
       }
     })();
     
     return () => { alive = false; };
-  }, []);
+  }, [nav, next]); // Add proper dependencies
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -86,6 +92,16 @@ export default function Login() {
       setBusy(false);
     }
   }
+
+  // Show loading while checking auth
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
+
 
   return (
     <div className="min-h-screen bg-background flex">

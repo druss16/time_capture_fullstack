@@ -9,6 +9,7 @@ Features:
 - Switch clients manually
 - View today's tracked time by client
 - Smart (AI) modal that suggests switching clients
+- Device pairing GUI window
 """
 import os
 import json
@@ -28,7 +29,8 @@ try:
         NSFloatingWindowLevel, NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
         NSWindowStyleMaskResizable, NSBackingStoreBuffered,
         NSApplicationActivationPolicyAccessory, NSApplicationActivationPolicyRegular,
-        NSScreen, NSVariableStatusItemLength, NSTableView, NSTableColumn
+        NSScreen, NSVariableStatusItemLength, NSTableView, NSTableColumn,
+        NSColor, NSFont
     )
     GUI_AVAILABLE = True
 except Exception as e:
@@ -167,6 +169,188 @@ class GUIState:
         self.current_client_id = client_id
         self.current_client_name = client_name
         self.save()
+
+
+# ------------------------------------------------------------
+# Device Pairing Window
+# ------------------------------------------------------------
+class PairingWindow(NSWindow):
+    """Window for entering pairing code to link device with web app"""
+
+    def initWithCallback_(self, callback):
+        width, height = 450, 280
+        try:
+            screen = NSScreen.mainScreen()
+            screen_frame = screen.frame()
+            x = (screen_frame.size.width - width) / 2
+            y = (screen_frame.size.height - height) / 2
+        except Exception:
+            x, y = 100, 100
+
+        frame = NSMakeRect(x, y, width, height)
+
+        self = objc.super(PairingWindow, self).initWithContentRect_styleMask_backing_defer_(
+            frame,
+            NSWindowStyleMaskTitled | NSWindowStyleMaskClosable,
+            NSBackingStoreBuffered,
+            False
+        )
+        if self is None:
+            return None
+
+        self.callback = callback
+        self.pairing_success = False
+        self.api_key = None
+
+        self.setTitle_("TimeTracker - Device Pairing")
+        self.setLevel_(NSFloatingWindowLevel)
+
+        self._setup_ui()
+        return self
+
+    def _setup_ui(self):
+        content = self.contentView()
+
+        # Title
+        title_label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 220, 410, 30))
+        title_label.setStringValue_("🔗 Link This Device")
+        title_label.setBezeled_(False)
+        title_label.setDrawsBackground_(False)
+        title_label.setEditable_(False)
+        title_label.setSelectable_(False)
+        title_label.setFont_(NSFont.boldSystemFontOfSize_(18))
+        content.addSubview_(title_label)
+
+        # Instructions
+        instructions = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 160, 410, 50))
+        instructions.setStringValue_(
+            "Enter the pairing code from the TimeTracker web app.\n"
+            "You can find this in Settings → Devices → Add Device."
+        )
+        instructions.setBezeled_(False)
+        instructions.setDrawsBackground_(False)
+        instructions.setEditable_(False)
+        instructions.setSelectable_(False)
+        content.addSubview_(instructions)
+
+        # Code label
+        code_label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 125, 100, 24))
+        code_label.setStringValue_("Pairing Code:")
+        code_label.setBezeled_(False)
+        code_label.setDrawsBackground_(False)
+        code_label.setEditable_(False)
+        content.addSubview_(code_label)
+
+        # Code input field
+        self.code_field = NSTextField.alloc().initWithFrame_(NSMakeRect(125, 125, 200, 24))
+        self.code_field.setPlaceholderString_("e.g. ABC123")
+        self.code_field.setFont_(NSFont.monospacedSystemFontOfSize_weight_(14, 0.5))
+        content.addSubview_(self.code_field)
+
+        # Pair button
+        self.pair_btn = NSButton.alloc().initWithFrame_(NSMakeRect(335, 123, 90, 28))
+        self.pair_btn.setTitle_("Pair Device")
+        self.pair_btn.setBezelStyle_(1)
+        self.pair_btn.setTarget_(self)
+        self.pair_btn.setAction_("onPair:")
+        content.addSubview_(self.pair_btn)
+
+        # Status label
+        self.status_label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 85, 410, 24))
+        self.status_label.setStringValue_("")
+        self.status_label.setBezeled_(False)
+        self.status_label.setDrawsBackground_(False)
+        self.status_label.setEditable_(False)
+        self.status_label.setSelectable_(False)
+        content.addSubview_(self.status_label)
+
+        # Cancel button
+        cancel_btn = NSButton.alloc().initWithFrame_(NSMakeRect(20, 20, 100, 32))
+        cancel_btn.setTitle_("Cancel")
+        cancel_btn.setBezelStyle_(1)
+        cancel_btn.setTarget_(self)
+        cancel_btn.setAction_("onCancel:")
+        content.addSubview_(cancel_btn)
+
+        # Continue button (hidden until paired)
+        self.continue_btn = NSButton.alloc().initWithFrame_(NSMakeRect(325, 20, 100, 32))
+        self.continue_btn.setTitle_("Continue")
+        self.continue_btn.setBezelStyle_(1)
+        self.continue_btn.setTarget_(self)
+        self.continue_btn.setAction_("onContinue:")
+        self.continue_btn.setHidden_(True)
+        content.addSubview_(self.continue_btn)
+
+    def onPair_(self, _sender):
+        code = str(self.code_field.stringValue()).strip().upper()
+        if not code:
+            self.status_label.setStringValue_("⚠️ Please enter a pairing code")
+            self.status_label.setTextColor_(NSColor.systemOrangeColor())
+            return
+
+        self.status_label.setStringValue_("⏳ Pairing...")
+        self.status_label.setTextColor_(NSColor.systemGrayColor())
+        self.pair_btn.setEnabled_(False)
+
+        # Run pairing in background thread
+        def _do_pair():
+            try:
+                if self.callback:
+                    result = self.callback(code)
+                    self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                        "handlePairResult:", result, False
+                    )
+            except Exception as e:
+                self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    "handlePairResult:", {"error": str(e)}, False
+                )
+
+        threading.Thread(target=_do_pair, daemon=True).start()
+
+    def handlePairResult_(self, result):
+        self.pair_btn.setEnabled_(True)
+
+        if result and result.get("api_key"):
+            self.pairing_success = True
+            self.api_key = result.get("api_key")
+            self.status_label.setStringValue_("✅ Device paired successfully!")
+            self.status_label.setTextColor_(NSColor.systemGreenColor())
+            self.continue_btn.setHidden_(False)
+            self.pair_btn.setHidden_(True)
+            
+            # Show additional info if available
+            username = result.get("username", "")
+            org = result.get("org_name", "")
+            if username or org:
+                info = f"✅ Paired as {username}"
+                if org:
+                    info += f" ({org})"
+                self.status_label.setStringValue_(info)
+        else:
+            error = result.get("error", "Pairing failed") if result else "Pairing failed"
+            self.status_label.setStringValue_(f"❌ {error}")
+            self.status_label.setTextColor_(NSColor.systemRedColor())
+
+    def onCancel_(self, _sender):
+        self.pairing_success = False
+        NSApp.stopModal()
+        self.orderOut_(None)
+
+    def onContinue_(self, _sender):
+        NSApp.stopModal()
+        self.orderOut_(None)
+
+    def runModal(self) -> Optional[str]:
+        """Show window modally and return api_key on success, None on cancel"""
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        self.makeKeyAndOrderFront_(None)
+        NSApp.activateIgnoringOtherApps_(True)
+        NSApp.runModalForWindow_(self)
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        
+        if self.pairing_success:
+            return self.api_key
+        return None
 
 
 # ------------------------------------------------------------
@@ -533,186 +717,6 @@ class TodayTimeWindow(NSWindow):
         return ""
 
     def onClose_(self, _sender):
-        # ✅ FIXED: Just hide - don't change activation policy!
-        self.orderOut_(None)
-
-
-# ------------------------------------------------------------
-# CPA Tools Reference Window
-# ------------------------------------------------------------
-class CPAToolsWindow(NSWindow):
-    """Window showing CPA tool detection patterns"""
-
-    def initWithToolData_(self, tool_data):
-        frame = NSMakeRect(100, 100, 700, 500)
-        self = objc.super(CPAToolsWindow, self).initWithContentRect_styleMask_backing_defer_(
-            frame,
-            NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable,
-            NSBackingStoreBuffered,
-            False
-        )
-        if self is None:
-            return None
-
-        self.tool_data = tool_data or {}
-        self.filtered_data = []
-
-        self.setTitle_("CPA Tools Detection Reference")
-        self.setMinSize_(NSMakeSize(700, 500))
-
-        self._setup_ui()
-        self._refresh_table()
-        return self
-
-    def _setup_ui(self):
-        content = self.contentView()
-
-        # Search field
-        search_label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 460, 60, 24))
-        search_label.setStringValue_("Search:")
-        search_label.setBezeled_(False)
-        search_label.setDrawsBackground_(False)
-        search_label.setEditable_(False)
-        content.addSubview_(search_label)
-
-        self.search_field = NSTextField.alloc().initWithFrame_(NSMakeRect(85, 460, 300, 24))
-        self.search_field.setPlaceholderString_("Filter by category, keyword, or domain...")
-        self.search_field.setTarget_(self)
-        self.search_field.setAction_("onSearch:")
-        content.addSubview_(self.search_field)
-
-        # Clear button
-        clear_btn = NSButton.alloc().initWithFrame_(NSMakeRect(395, 460, 80, 24))
-        clear_btn.setTitle_("Clear")
-        clear_btn.setBezelStyle_(1)
-        clear_btn.setTarget_(self)
-        clear_btn.setAction_("onClear:")
-        content.addSubview_(clear_btn)
-
-        # Results count
-        self.count_label = NSTextField.alloc().initWithFrame_(NSMakeRect(500, 460, 180, 24))
-        self.count_label.setStringValue_("")
-        self.count_label.setBezeled_(False)
-        self.count_label.setDrawsBackground_(False)
-        self.count_label.setEditable_(False)
-        self.count_label.setAlignment_(2)  # Right align
-        content.addSubview_(self.count_label)
-
-        # Table view
-        scroll_view = NSScrollView.alloc().initWithFrame_(NSMakeRect(20, 80, 660, 370))
-        scroll_view.setHasVerticalScroller_(True)
-        scroll_view.setAutohidesScrollers_(True)
-        scroll_view.setBorderType_(1)
-
-        self.table_view = NSTableView.alloc().initWithFrame_(scroll_view.bounds())
-        self.table_view.setDelegate_(self)
-        self.table_view.setDataSource_(self)
-
-        # Columns
-        col1 = NSTableColumn.alloc().initWithIdentifier_("category")
-        col1.setTitle_("Category")
-        col1.setWidth_(180)
-        self.table_view.addTableColumn_(col1)
-
-        col2 = NSTableColumn.alloc().initWithIdentifier_("confidence")
-        col2.setTitle_("Conf")
-        col2.setWidth_(50)
-        self.table_view.addTableColumn_(col2)
-
-        col3 = NSTableColumn.alloc().initWithIdentifier_("patterns")
-        col3.setTitle_("Detection Patterns (Keywords/Domains)")
-        col3.setWidth_(420)
-        self.table_view.addTableColumn_(col3)
-
-        scroll_view.setDocumentView_(self.table_view)
-        content.addSubview_(scroll_view)
-
-        # Info label
-        info_label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 50, 660, 20))
-        info_label.setStringValue_("💡 These patterns are used to auto-classify your activity")
-        info_label.setBezeled_(False)
-        info_label.setDrawsBackground_(False)
-        info_label.setEditable_(False)
-        info_label.setSelectable_(False)
-        content.addSubview_(info_label)
-
-        # Close button
-        close_btn = NSButton.alloc().initWithFrame_(NSMakeRect(580, 10, 100, 32))
-        close_btn.setTitle_("Close")
-        close_btn.setBezelStyle_(1)
-        close_btn.setTarget_(self)
-        close_btn.setAction_("onClose:")
-        content.addSubview_(close_btn)
-
-    def _refresh_table(self, search_term=""):
-        """Refresh table data with optional search filter"""
-        self.filtered_data = []
-        
-        search_lower = search_term.lower().strip()
-        
-        for tool_key, tool_config in sorted(self.tool_data.items()):
-            category = tool_config.get("category", "Unknown")
-            confidence = tool_config.get("confidence", 0)
-            keywords = tool_config.get("keywords", [])
-            domains = tool_config.get("domains", [])
-            
-            # Create pattern summary
-            patterns = []
-            if keywords:
-                patterns.extend(keywords[:3])  # First 3 keywords
-            if domains:
-                patterns.extend(domains[:2])   # First 2 domains
-            
-            pattern_str = ", ".join(patterns)
-            if len(keywords) + len(domains) > 5:
-                pattern_str += f" (+{len(keywords) + len(domains) - 5} more)"
-            
-            # Search filter
-            if search_lower:
-                searchable = f"{category} {pattern_str}".lower()
-                if search_lower not in searchable:
-                    continue
-            
-            self.filtered_data.append({
-                "category": category,
-                "confidence": f"{int(confidence * 100)}%",
-                "patterns": pattern_str or "(no patterns)",
-            })
-        
-        # Update count label
-        total = len(self.tool_data)
-        shown = len(self.filtered_data)
-        if search_lower:
-            self.count_label.setStringValue_(f"Showing {shown} of {total} tools")
-        else:
-            self.count_label.setStringValue_(f"{total} tools")
-        
-        if hasattr(self, 'table_view'):
-            self.table_view.reloadData()
-
-    # Search handlers
-    def onSearch_(self, sender):
-        search_term = str(self.search_field.stringValue())
-        self._refresh_table(search_term)
-
-    def onClear_(self, _sender):
-        self.search_field.setStringValue_("")
-        self._refresh_table()
-
-    # DataSource
-    def numberOfRowsInTableView_(self, _table_view):
-        return len(self.filtered_data)
-
-    def tableView_objectValueForTableColumn_row_(self, _table_view, table_column, row):
-        if row >= len(self.filtered_data):
-            return ""
-        
-        entry = self.filtered_data[row]
-        identifier = table_column.identifier()
-        return entry.get(identifier, "")
-
-    def onClose_(self, _sender):
-        # ✅ FIXED: Just hide - don't change activation policy!
         self.orderOut_(None)
 
 
@@ -722,18 +726,15 @@ class CPAToolsWindow(NSWindow):
 class SmartPromptController:
     """
     Decides when to show a smart (AI) client suggestion modal.
-    - Uses a callback to fetch an AI guess for the current context.
-    - Applies a confidence threshold and cooldown so we don't nag.
-    - Skips if suggestion matches current client.
     """
     def __init__(self, *, get_ai_guess_cb, get_current_client_cb,
                  show_prompt_cb, on_accept_cb, on_reject_cb,
                  min_confidence=0.70, cooldown_seconds=300):
-        self.get_ai_guess_cb = get_ai_guess_cb               # () -> dict|None
-        self.get_current_client_cb = get_current_client_cb   # () -> (id,name)
-        self.show_prompt_cb = show_prompt_cb                 # (id,name,conf,meta) -> None
-        self.on_accept_cb = on_accept_cb                     # (id,name,meta) -> None
-        self.on_reject_cb = on_reject_cb                     # (meta) -> None
+        self.get_ai_guess_cb = get_ai_guess_cb
+        self.get_current_client_cb = get_current_client_cb
+        self.show_prompt_cb = show_prompt_cb
+        self.on_accept_cb = on_accept_cb
+        self.on_reject_cb = on_reject_cb
         self.min_confidence = float(min_confidence)
         self.cooldown_seconds = int(cooldown_seconds)
 
@@ -774,7 +775,6 @@ class SmartPromptController:
             self._pending = False
             self._last_prompt_ts = _time.time()
 
-        # Temporarily intercept callbacks
         self._orig_accept = self.on_accept_cb
         self._orig_reject = self.on_reject_cb
         self.on_accept_cb = _wrap_accept
@@ -809,9 +809,6 @@ class TimeTrackerMenuBar(NSObject):
         self.get_today_time_callback = None
         self.get_ai_guess_callback = None
 
-        # Initialize CPA tools data early
-        self.cpa_tools_data = {}
-
         self._setup_menu_bar()
         self._setup_windows()
 
@@ -825,12 +822,6 @@ class TimeTrackerMenuBar(NSObject):
         )
 
         return self
-
-    def refresh_cpa_tools_window(self):
-        """Refresh CPA tools window with new data"""
-        if hasattr(self, 'cpa_tools_window') and self.cpa_tools_window:
-            self.cpa_tools_window.tool_data = self.cpa_tools_data or {}
-            self.cpa_tools_window._refresh_table()
 
     def _setup_menu_bar(self):
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
@@ -856,12 +847,6 @@ class TimeTrackerMenuBar(NSObject):
 
         self.menu.addItem_(NSMenuItem.separatorItem())
 
-        # manage_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        #     "Manage Clients...", "onManageClients:", ""
-        # )
-        # manage_item.setTarget_(self)
-        # self.menu.addItem_(manage_item)
-
         today_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Today's Time...", "onTodayTime:", ""
         )
@@ -870,12 +855,12 @@ class TimeTrackerMenuBar(NSObject):
 
         self.menu.addItem_(NSMenuItem.separatorItem())
 
-        tools_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "CPA Tools Reference...", "onCPATools:", ""
+        repair_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Re-pair Device...", "onRepairDevice:", ""
         )
-        tools_item.setTarget_(self)
-        self.menu.addItem_(tools_item)
-        
+        repair_item.setTarget_(self)
+        self.menu.addItem_(repair_item)
+
         self.menu.addItem_(NSMenuItem.separatorItem())
 
         quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -891,7 +876,6 @@ class TimeTrackerMenuBar(NSObject):
         self.prompt_window = None
         self.client_mgmt_window = None
         self.today_time_window = None
-        self.cpa_tools_window = None
         
         # Smart controller setup
         def _get_ai_guess():
@@ -977,28 +961,31 @@ class TimeTrackerMenuBar(NSObject):
         window = ClientManagementWindow.alloc().initWithClientManager_callback_(
             self.client_mgr, self._on_clients_changed
         )
-        self.open_windows.append(window)  # ✅ Keep alive
+        self.open_windows.append(window)
         window.center()
         window.makeKeyAndOrderFront_(None)
-        NSApp.activateIgnoringOtherApps_(True)  # ✅ Force to front
+        NSApp.activateIgnoringOtherApps_(True)
 
     def onTodayTime_(self, _sender):
         window = TodayTimeWindow.alloc().initWithApiCallback_(self._get_today_time)
-        self.open_windows.append(window)  # ✅ Keep alive
+        self.open_windows.append(window)
         window.center()
         window.makeKeyAndOrderFront_(None)
-        NSApp.activateIgnoringOtherApps_(True)  # ✅ Force to front
+        NSApp.activateIgnoringOtherApps_(True)
         window.onRefresh_(None)
 
-    def onCPATools_(self, _sender):
-        """Show CPA tools - RECREATE every time"""
-        window = CPAToolsWindow.alloc().initWithToolData_(
-            getattr(self, 'cpa_tools_data', {})
-        )
-        self.open_windows.append(window)  # ✅ Keep alive
-        window.center()
-        window.makeKeyAndOrderFront_(None)
-        NSApp.activateIgnoringOtherApps_(True)  # ✅ Force to front
+    def onRepairDevice_(self, _sender):
+        """Show pairing window to re-pair device"""
+        if hasattr(self, 'repair_callback') and self.repair_callback:
+            result = show_pairing_window(self.repair_callback)
+            if result:
+                print(f"[GUI] Device re-paired successfully")
+                # Refresh clients from backend after re-pairing
+                if hasattr(self, 'fetch_clients_callback') and self.fetch_clients_callback:
+                    self.client_mgr.load(self.fetch_clients_callback)
+                    self._update_switch_submenu()
+        else:
+            print("[GUI] No repair callback configured")
 
     def show_client_prompt(self, client_id: int, client_name: str,
                            confidence: float, prompt_data: dict):
@@ -1006,12 +993,12 @@ class TimeTrackerMenuBar(NSObject):
         window = FloatingPromptWindow.alloc().initWithClientManager_state_callback_(
             self.client_mgr, self.state, self._on_prompt_response
         )
-        self.open_windows.append(window)  # ✅ Keep alive
+        self.open_windows.append(window)
         args = (client_id, client_name, confidence, prompt_data)
         window.performSelectorOnMainThread_withObject_waitUntilDone_(
             "showPromptInternal:", args, True
         )
-        NSApp.activateIgnoringOtherApps_(True)  # ✅ Force to front
+        NSApp.activateIgnoringOtherApps_(True)
     
 
     def _on_clients_changed(self):
@@ -1034,12 +1021,31 @@ class TimeTrackerMenuBar(NSObject):
             return self.get_today_time_callback()
         return []
 
-    # def show_client_prompt(self, client_id: int, client_name: str,
-    #                        confidence: float, prompt_data: dict):
-    #     args = (client_id, client_name, confidence, prompt_data)
-    #     self.prompt_window.performSelectorOnMainThread_withObject_waitUntilDone_(
-    #         "showPromptInternal:", args, True
-    #     )
+
+# ------------------------------------------------------------
+# GUI Pairing Function (called from main.py)
+# ------------------------------------------------------------
+def show_pairing_window(pair_callback: Callable) -> Optional[str]:
+    """
+    Show the pairing window and return the api_key on success.
+    
+    Args:
+        pair_callback: Function that takes (code) and returns 
+                      {"api_key": str, "username": str, "org_name": str} on success
+                      or {"error": str} on failure
+    
+    Returns:
+        api_key string on success, None on cancel/failure
+    """
+    if not GUI_AVAILABLE:
+        print("[GUI] GUI not available for pairing window")
+        return None
+    
+    app = NSApplication.sharedApplication()
+    app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+    
+    window = PairingWindow.alloc().initWithCallback_(pair_callback)
+    return window.runModal()
 
 
 # ------------------------------------------------------------
@@ -1052,7 +1058,8 @@ def run_gui_app(on_client_confirmed: Callable,
                 fetch_clients: Callable = None,
                 set_current_client: Callable = None,
                 get_current_client: Callable = None,
-                cpa_tools_data: dict = None):
+                repair_callback: Callable = None,
+                cpa_tools_data: dict = None):  # Keep param for backwards compat
     """
     Initialize and run the GUI menu bar app.
     """
@@ -1061,7 +1068,6 @@ def run_gui_app(on_client_confirmed: Callable,
         return None
 
     app = NSApplication.sharedApplication()
-    # ✅ FIXED: Stay in Regular mode - windows need this to render properly
     app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
 
     menu_bar = TimeTrackerMenuBar.alloc().init()
@@ -1074,10 +1080,7 @@ def run_gui_app(on_client_confirmed: Callable,
     menu_bar.fetch_clients_callback = fetch_clients
     menu_bar.set_current_client_callback = set_current_client
     menu_bar.get_current_client_callback = get_current_client
-    
-    # Set CPA tools data and refresh window
-    menu_bar.cpa_tools_data = cpa_tools_data or {}
-    menu_bar.refresh_cpa_tools_window()
+    menu_bar.repair_callback = repair_callback
 
     if fetch_clients:
         menu_bar.client_mgr.load(fetch_clients)
@@ -1116,15 +1119,29 @@ if __name__ == "__main__":
             }
         return None
 
-    menu_bar = run_gui_app(test_confirmed, test_rejected, test_get_today, get_ai_guess=test_ai_guess)
+    def test_pair(code):
+        print(f"Test pairing with code: {code}")
+        time.sleep(1)  # Simulate network
+        if code == "TEST123":
+            return {"api_key": "test-key-123", "username": "testuser", "org_name": "Test Org"}
+        else:
+            return {"error": "Invalid pairing code"}
 
-    if menu_bar:
-        def show_test_prompt():
-            time.sleep(3)
-            menu_bar.show_client_prompt(
-                1, "Acme Corp", 0.85,
-                {"client_id": 1, "client_name": "Acme Corp", "confidence": 0.85, "reason": "manual test"}
-            )
-        threading.Thread(target=show_test_prompt, daemon=True).start()
+    # Test pairing window
+    print("Testing pairing window...")
+    result = show_pairing_window(test_pair)
+    print(f"Pairing result: {result}")
 
-        NSApp.run()
+    if result:
+        menu_bar = run_gui_app(test_confirmed, test_rejected, test_get_today, get_ai_guess=test_ai_guess)
+
+        if menu_bar:
+            def show_test_prompt():
+                time.sleep(3)
+                menu_bar.show_client_prompt(
+                    1, "Acme Corp", 0.85,
+                    {"client_id": 1, "client_name": "Acme Corp", "confidence": 0.85, "reason": "manual test"}
+                )
+            threading.Thread(target=show_test_prompt, daemon=True).start()
+
+            NSApp.run()

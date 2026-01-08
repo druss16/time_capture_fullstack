@@ -8,6 +8,7 @@ Mac Activity Agent with device pairing:
 - Authorization: DeviceKey <api_key> on every POST/GET
 - /api/agents/hello2/ heartbeat auto-provisions user/device
 - PID file + context bus + admin kill-switch
+- GUI-based pairing when available
 """
 
 import os
@@ -24,9 +25,10 @@ import getpass
 from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 
-from urllib.parse import urlparse     # <-- ADD THIS AT TOP LEVEL with other imports
-from timetracker_gui import run_gui_app, GUI_AVAILABLE
-from typing import Optional, Dict, Tuple
+from urllib.parse import urlparse
+from timetracker_gui import run_gui_app, show_pairing_window, GUI_AVAILABLE
+import urllib.request
+import urllib.error
 
 
 from Quartz import (
@@ -34,12 +36,10 @@ from Quartz import (
     kCGWindowListOptionOnScreenOnly,
     kCGWindowListOptionOnScreenAboveWindow,
     kCGNullWindowID,
-    # NEW:
     CGEventSourceSecondsSinceLastEventType,
     kCGEventSourceStateCombinedSessionState,
     kCGEventMouseMoved,
 )
-
 
 
 # Notifications (PyObjC)
@@ -54,7 +54,6 @@ try:
 except Exception:
     NOTIF_AVAILABLE = False
 
-# ✅ ADD THIS:
 try:
     import AppKit
     info = AppKit.NSBundle.mainBundle().infoDictionary()
@@ -66,15 +65,12 @@ info = AppKit.NSBundle.mainBundle().infoDictionary()
 info["LSUIElement"] = "1"
 
 
-# ---------------- MDM Config (NEW) ----------------
+# ---------------- MDM Config ----------------
 MDM_CONFIG_PATH_MAC = "/Library/Application Support/TimeTracker/config.plist"
 MDM_CONFIG_PATH_WIN = r"C:\ProgramData\TimeTracker\config.json"
 
 def get_mdm_config() -> Optional[dict]:
-    """
-    Load config from MDM-deployed file.
-    Returns config dict or None if not found.
-    """
+    """Load config from MDM-deployed file."""
     if sys.platform == 'darwin':
         config_path = MDM_CONFIG_PATH_MAC
         if os.path.exists(config_path):
@@ -86,7 +82,6 @@ def get_mdm_config() -> Optional[dict]:
                     return mdm
             except Exception as e:
                 log(f"[MDM] Failed to load plist: {e}")
-    
     elif sys.platform == 'win32':
         config_path = MDM_CONFIG_PATH_WIN
         if os.path.exists(config_path):
@@ -97,16 +92,11 @@ def get_mdm_config() -> Optional[dict]:
                     return mdm
             except Exception as e:
                 log(f"[MDM] Failed to load json: {e}")
-    
     return None
 
 
 def register_with_org_token(mdm_config: dict, hostname: str) -> Optional[str]:
-    """
-    Auto-register device using org token from MDM config.
-    Returns api_key on success, None on failure.
-    """
-    # Get values (support both camelCase from plist and snake_case from json)
+    """Auto-register device using org token from MDM config."""
     api_endpoint = (
         mdm_config.get('ApiEndpoint') or 
         mdm_config.get('api_endpoint') or 
@@ -137,21 +127,16 @@ def register_with_org_token(mdm_config: dict, hostname: str) -> Optional[str]:
         
         agent_key = data.get("agent_key")
         if agent_key:
-            # Save to local config
             config["api_key"] = agent_key
             config["api_base"] = api_endpoint
             save_config(config)
-            
             log(f"[MDM] ✅ Registered successfully!")
             log(f"[MDM]    User: {data.get('username')}")
             log(f"[MDM]    Org: {data.get('org_name')}")
-            log(f"[MDM]    New user: {data.get('is_new_user')}")
             return agent_key
         else:
             log(f"[MDM] ❌ Registration failed: no agent_key in response")
-            log(f"[MDM]    Response: {data}")
             return None
-            
     except Exception as e:
         log(f"[MDM] ❌ Registration error: {e}")
         return None
@@ -180,27 +165,21 @@ def save_config(cfg: dict):
 
 config = load_config()
 
-# Tunables (config then env then defaults)
 def _get(name, default=None, env=None):
     if name in config: return config[name]
     if env and os.getenv(env) is not None: return os.getenv(env)
     return default
 
-# Core API base (dev default -> localhost)
 API_BASE = (_get("api_base", os.getenv("AGENT_API_BASE")) or "http://localhost:7123/api").rstrip("/")
-
-# Derived endpoints (can be overridden in config if you want)
 POST_URL    = _get("post_url", None) or f"{API_BASE}/raw-events/"
 HELLO_URL   = _get("hello_url", None) or f"{API_BASE}/agents/hello2/"
 CONTROL_URL = _get("control_url", None) or f"{API_BASE}/agent/control/"
 PAIR_CLAIM  = _get("pair_claim_url", None) or f"{API_BASE}/agents/pair/claim/"
 
-# Auth/device settings
-API_KEY           = _get("api_key", os.getenv("AGENT_API_KEY"))  # stored after pairing
+API_KEY           = _get("api_key", os.getenv("AGENT_API_KEY"))
 APP_VERSION       = _get("app_version", os.getenv("AGENT_APP_VERSION")) or "1.0.0"
 DEVICE_ID_FILE    = _get("device_id_file", os.path.expanduser("~/.mavops_device_id"))
 
-# Runtime tunables
 POLL_SECONDS      = int(_get("poll_seconds", _get("AGENT_POLL_SECONDS", 5, "AGENT_POLL_SECONDS")) or 5)
 MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS", 15, "AGENT_MIN_DWELL_SECONDS")) or 15)
 VERBOSE           = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
@@ -211,36 +190,25 @@ DB_PATH           = _get("db_path", os.getenv("MAC_AGENT_DB")) or DB_PATH_DEFAUL
 CONTEXT_PORT      = int(_get("context_port", os.getenv("AGENT_CONTEXT_PORT")) or 7321)
 CONTROL_POLL_S    = int(_get("agent_control_poll_seconds", 10))
 
-# ✅ ADD THIS: Exclude Python itself to avoid tracking the GUI
 EXCLUDE_BUNDLES.add("org.python.python")
 EXCLUDE_BUNDLES.add("com.apple.python3")
 
-# Optional: preset pair_code for headless pairing (config/env)
 PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 
-# Runtime tunables
-POLL_SECONDS      = int(_get("poll_seconds", _get("AGENT_POLL_SECONDS", 5, "AGENT_POLL_SECONDS")) or 5)
-MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS", 15, "AGENT_MIN_DWELL_SECONDS")) or 15)
-# NEW: mouse idle threshold (seconds) before pausing tracking
 MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 90))
-
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 
-# ---- Nudge/Guess settings (NEW) ----
 NUDGE_ENABLED        = bool(_get("nudge_enabled", os.getenv("AGENT_NUDGE_ENABLED") == "1") or True)
-GUESS_POLL_SECONDS   = int(_get("guess_poll_seconds", os.getenv("AGENT_GUESS_POLL_SECONDS") or 10))  # every 10s
-GUESS_MIN_CONF       = float(_get("guess_min_conf", os.getenv("AGENT_GUESS_MIN_CONF") or 0.45))      # show nudge at/above
-GUESS_MAX_CONF       = float(_get("guess_max_conf", os.getenv("AGENT_GUESS_MAX_CONF") or 0.80))      # auto-assign above this
-NUDGE_SNOOZE_MIN     = int(_get("nudge_snooze_min", os.getenv("AGENT_NUDGE_SNOOZE_MIN") or 20))      # 20-min snooze per client
-NUDGE_TIMEOUT_SEC    = int(_get("nudge_timeout_sec", os.getenv("AGENT_NUDGE_TIMEOUT_SEC") or 15))     # dialog timeout
+GUESS_POLL_SECONDS   = int(_get("guess_poll_seconds", os.getenv("AGENT_GUESS_POLL_SECONDS") or 10))
+GUESS_MIN_CONF       = float(_get("guess_min_conf", os.getenv("AGENT_GUESS_MIN_CONF") or 0.45))
+GUESS_MAX_CONF       = float(_get("guess_max_conf", os.getenv("AGENT_GUESS_MAX_CONF") or 0.80))
+NUDGE_SNOOZE_MIN     = int(_get("nudge_snooze_min", os.getenv("AGENT_NUDGE_SNOOZE_MIN") or 20))
+NUDGE_TIMEOUT_SEC    = int(_get("nudge_timeout_sec", os.getenv("AGENT_NUDGE_TIMEOUT_SEC") or 15))
 CONTEXT_GUESS_URL    = _get("context_guess_url", None) or f"{API_BASE}/context/guess"
 CONTEXT_CONFIRM_URL  = _get("context_confirm_url", None) or f"{API_BASE}/context/confirm"
 CONTEXT_REJECT_URL   = _get("context_reject_url", None) or f"{API_BASE}/context/reject"
 
-MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 90))
-IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
-
-# --- Tools vs Clients (NEW) ---
+# --- Tools vs Clients ---
 TOOL_BUNDLES = set(
     [b.strip() for b in (_get("tool_bundles", os.getenv("AGENT_TOOL_BUNDLES")) or "").split(",") if b.strip()]
 ) or {
@@ -264,47 +232,25 @@ TOOL_HOSTS = set(
     "stackoverflow.com", "vercel.app", "render.com"
 }
 
-# --- Meeting Apps (NEW) ---
+# --- Meeting Apps ---
 MEETING_BUNDLES = set(
     [b.strip() for b in (_get("meeting_bundles", os.getenv("AGENT_MEETING_BUNDLES")) or "").split(",") if b.strip()]
 ) or {
-    "us.zoom.xos",                    # Zoom
-    "com.microsoft.teams",            # Teams (old)
-    "com.microsoft.teams2",           # Teams (new)
-    "com.google.Chrome",              # For web meetings
-    "com.apple.Safari",               # For web meetings
-    "com.brave.Browser",              # For web meetings
-    "org.mozilla.firefox",            # For web meetings
-    "com.cisco.webexmeetings",        # Webex
-    "com.ringcentral.rcapp",          # RingCentral
-    "com.skype.skype",                # Skype
-    "com.gotomeeting",                # GoToMeeting
-    "com.bluejeans.app",              # BlueJeans
+    "us.zoom.xos", "com.microsoft.teams", "com.microsoft.teams2",
+    "com.google.Chrome", "com.apple.Safari", "com.brave.Browser", "org.mozilla.firefox",
+    "com.cisco.webexmeetings", "com.ringcentral.rcapp", "com.skype.skype",
+    "com.gotomeeting", "com.bluejeans.app",
 }
 
 MEETING_DOMAINS = {
-    "zoom.us",
-    "meet.google.com",
-    "teams.microsoft.com",
-    "teams.live.com",
-    "webex.com",
-    "gotomeeting.com",
-    "bluejeans.com",
-    "whereby.com",
-    "around.co",
+    "zoom.us", "meet.google.com", "teams.microsoft.com", "teams.live.com",
+    "webex.com", "gotomeeting.com", "bluejeans.com", "whereby.com", "around.co",
 }
 
-MEETING_KEYWORDS = {
-    "zoom meeting",
-    "teams meeting",
-    "google meet",
-    "webex meeting",
-}
+MEETING_KEYWORDS = {"zoom meeting", "teams meeting", "google meet", "webex meeting"}
 
-# --- CPA-Specific Tools & Categories (NEW) ---
 # --- CPA-Specific Tools & Categories (COMPREHENSIVE VERSION) ---
 CPA_TOOL_DETECTION = {
-    # ==================== TAX PREPARATION ====================
     "tax_prep_desktop": {
         "category": "Tax Preparation",
         "confidence": 0.95,
@@ -322,7 +268,6 @@ CPA_TOOL_DETECTION = {
         ],
         "urls": []
     },
-    
     "tax_forms": {
         "category": "Tax Preparation",
         "confidence": 0.97,
@@ -335,13 +280,8 @@ CPA_TOOL_DETECTION = {
             "schedule b", "form 4562", "form 8829", "form 6251"
         ],
         "domains": ["irs.gov", "taxformfinder.com"],
-        "urls": [
-            "1040", "1120", "1065", "990", "1099", "w-2", "k-1",
-            "schedule", "tax return", "tax form", "extension"
-        ]
+        "urls": ["1040", "1120", "1065", "990", "1099", "w-2", "k-1", "schedule", "tax return", "tax form", "extension"]
     },
-    
-    # ==================== ACCOUNTING SOFTWARE ====================
     "accounting_cloud": {
         "category": "Accounting/Bookkeeping",
         "confidence": 0.94,
@@ -354,11 +294,8 @@ CPA_TOOL_DETECTION = {
             "freshbooks.com", "waveapps.com", "zoho.com/books",
             "sageintacct.com", "netsuite.com"
         ],
-        "urls": [
-            "dashboard", "reports", "banking", "invoices", "expenses"
-        ]
+        "urls": ["dashboard", "reports", "banking", "invoices", "expenses"]
     },
-    
     "accounting_desktop": {
         "category": "Accounting/Bookkeeping",
         "confidence": 0.93,
@@ -369,7 +306,6 @@ CPA_TOOL_DETECTION = {
         "domains": [],
         "urls": []
     },
-    
     "bookkeeping_tasks": {
         "category": "Accounting/Bookkeeping",
         "confidence": 0.92,
@@ -382,8 +318,6 @@ CPA_TOOL_DETECTION = {
             "income statement", "cash flow statement", "p&l", "profit and loss"
         ]
     },
-    
-    # ==================== AUDIT & ASSURANCE ====================
     "audit_software": {
         "category": "Audit/Assurance",
         "confidence": 0.96,
@@ -404,7 +338,6 @@ CPA_TOOL_DETECTION = {
             "controls testing", "walkthrough", "test of details"
         ]
     },
-    
     "audit_procedures": {
         "category": "Audit/Assurance",
         "confidence": 0.93,
@@ -417,8 +350,6 @@ CPA_TOOL_DETECTION = {
             "sarbanes oxley", "sox", "icfr"
         ]
     },
-    
-    # ==================== TAX RESEARCH ====================
     "research_platforms": {
         "category": "Tax Research",
         "confidence": 0.94,
@@ -440,21 +371,13 @@ CPA_TOOL_DETECTION = {
             "tam", "notice", "publication", "internal revenue code"
         ]
     },
-    
     "tax_authority_sites": {
         "category": "Tax Research",
         "confidence": 0.96,
         "keywords": [],
-        "domains": [
-            "irs.gov", "treasury.gov", "congress.gov",
-            "tax.ny.gov", "ftb.ca.gov", "revenue.state.*.us"
-        ],
-        "urls": [
-            "guidance", "regulations", "statute", "code section"
-        ]
+        "domains": ["irs.gov", "treasury.gov", "congress.gov", "tax.ny.gov", "ftb.ca.gov", "revenue.state.*.us"],
+        "urls": ["guidance", "regulations", "statute", "code section"]
     },
-    
-    # ==================== PAYROLL ====================
     "payroll_platforms": {
         "category": "Payroll Services",
         "confidence": 0.95,
@@ -474,8 +397,6 @@ CPA_TOOL_DETECTION = {
             "wage report", "payroll tax", "fica", "withholding"
         ]
     },
-    
-    # ==================== ADVISORY/CONSULTING ====================
     "financial_planning": {
         "category": "Advisory/Financial Planning",
         "confidence": 0.91,
@@ -493,38 +414,27 @@ CPA_TOOL_DETECTION = {
             "roth conversion", "financial projection"
         ]
     },
-    
     "business_valuation": {
         "category": "Valuation/Advisory",
         "confidence": 0.92,
-        "keywords": [
-            "bizcomps", "pratt stats", "ibis world", "bvresources"
-        ],
-        "domains": [
-            "bizcomps.com", "bvresources.com", "ibisworld.com"
-        ],
+        "keywords": ["bizcomps", "pratt stats", "ibis world", "bvresources"],
+        "domains": ["bizcomps.com", "bvresources.com", "ibisworld.com"],
         "urls": [
             "business valuation", "valuation report", "dcf model",
             "market approach", "income approach", "asset approach",
             "fair market value", "enterprise value"
         ]
     },
-    
     "forensic_fraud": {
         "category": "Forensic/Fraud Investigation",
         "confidence": 0.93,
-        "keywords": [
-            "forensic accounting", "fraud investigation", "benford",
-            "data analytics", "fraud detection"
-        ],
+        "keywords": ["forensic accounting", "fraud investigation", "benford", "data analytics", "fraud detection"],
         "domains": [],
         "urls": [
             "fraud examination", "forensic analysis", "investigation",
             "litigation support", "expert witness", "damages calculation"
         ]
     },
-    
-    # ==================== COMPLIANCE & REGULATORY ====================
     "sec_edgar": {
         "category": "SEC/Regulatory Compliance",
         "confidence": 0.97,
@@ -532,29 +442,16 @@ CPA_TOOL_DETECTION = {
             "edgar", "sec filing", "form 10-k", "form 10-q",
             "form 8-k", "form s-1", "proxy statement", "def 14a"
         ],
-        "domains": [
-            "sec.gov", "edgar.sec.gov", "edgarfilings.com"
-        ],
-        "urls": [
-            "form 10-k", "form 10-q", "form 8-k", "form s-1",
-            "prospectus", "registration statement", "proxy"
-        ]
+        "domains": ["sec.gov", "edgar.sec.gov", "edgarfilings.com"],
+        "urls": ["form 10-k", "form 10-q", "form 8-k", "form s-1", "prospectus", "registration statement", "proxy"]
     },
-    
     "erisa_employee_benefits": {
         "category": "Employee Benefits/ERISA",
         "confidence": 0.92,
-        "keywords": [
-            "form 5500", "erisa", "employee benefit plan",
-            "pension plan", "401k audit"
-        ],
+        "keywords": ["form 5500", "erisa", "employee benefit plan", "pension plan", "401k audit"],
         "domains": ["dol.gov", "efast.dol.gov"],
-        "urls": [
-            "5500", "erisa", "pension", "401k plan", "benefit plan audit"
-        ]
+        "urls": ["5500", "erisa", "pension", "401k plan", "benefit plan audit"]
     },
-    
-    # ==================== PRACTICE MANAGEMENT ====================
     "practice_management": {
         "category": "Administration",
         "confidence": 0.89,
@@ -565,31 +462,20 @@ CPA_TOOL_DETECTION = {
         ],
         "domains": [
             "cchaxcess.com", "cs.thomsonreuters.com", "karbonhq.com",
-            "practiceignition.com", "getcanopy.com", "taxdome.com",
-            "liscio.me"
+            "practiceignition.com", "getcanopy.com", "taxdome.com", "liscio.me"
         ],
         "urls": [
             "client portal", "workflow", "engagement", "billing",
             "engagement letter", "client management", "project management"
         ]
     },
-    
     "time_billing": {
         "category": "Administration",
         "confidence": 0.90,
-        "keywords": [
-            "quickbooks time", "bill4time", "timeslips", "billing matters"
-        ],
-        "domains": [
-            "quickbooks.com/time", "bill4time.com", "timeslips.com"
-        ],
-        "urls": [
-            "timesheet", "time entry", "billing", "invoice",
-            "wip", "work in progress", "realization"
-        ]
+        "keywords": ["quickbooks time", "bill4time", "timeslips", "billing matters"],
+        "domains": ["quickbooks.com/time", "bill4time.com", "timeslips.com"],
+        "urls": ["timesheet", "time entry", "billing", "invoice", "wip", "work in progress", "realization"]
     },
-    
-    # ==================== DOCUMENT MANAGEMENT ====================
     "document_management": {
         "category": "Document Management",
         "confidence": 0.91,
@@ -601,13 +487,8 @@ CPA_TOOL_DETECTION = {
             "sharefile.com", "smartvault.com", "safesendreturns.com",
             "docusign.com", "adobesign.com", "dropbox.com", "box.com"
         ],
-        "urls": [
-            "signature", "e-signature", "esign", "secure file",
-            "client upload", "file sharing", "document portal"
-        ]
+        "urls": ["signature", "e-signature", "esign", "secure file", "client upload", "file sharing", "document portal"]
     },
-    
-    # ==================== SPECIALIZED INDUSTRIES ====================
     "real_estate": {
         "category": "Real Estate/Property",
         "confidence": 0.90,
@@ -615,51 +496,34 @@ CPA_TOOL_DETECTION = {
         "domains": [],
         "urls": [
             "rental property", "real estate", "depreciation schedule",
-            "section 1031", "like kind exchange", "cost segregation",
-            "rental income", "schedule e"
+            "section 1031", "like kind exchange", "cost segregation", "rental income", "schedule e"
         ]
     },
-    
     "nonprofit": {
         "category": "Nonprofit/Form 990",
         "confidence": 0.94,
         "keywords": [],
         "domains": ["guidestar.org", "nonprofitexpert.com"],
-        "urls": [
-            "form 990", "990-n", "990-ez", "990-pf", "nonprofit",
-            "tax exempt", "501c3", "charitable", "exempt organization"
-        ]
+        "urls": ["form 990", "990-n", "990-ez", "990-pf", "nonprofit", "tax exempt", "501c3", "charitable", "exempt organization"]
     },
-    
     "healthcare": {
         "category": "Healthcare/Medical Practice",
         "confidence": 0.91,
         "keywords": [],
         "domains": [],
-        "urls": [
-            "medical practice", "healthcare", "physician", "dental practice",
-            "practice acquisition", "medical billing", "rcm"
-        ]
+        "urls": ["medical practice", "healthcare", "physician", "dental practice", "practice acquisition", "medical billing", "rcm"]
     },
-    
     "construction": {
         "category": "Construction/Contractors",
         "confidence": 0.90,
-        "keywords": [
-            "viewpoint", "spectrum", "foundation", "cmicrays",
-            "jonas construction", "procore"
-        ],
-        "domains": [
-            "viewpoint.com", "procore.com", "cmic.com"
-        ],
+        "keywords": ["viewpoint", "spectrum", "foundation", "cmicrays", "jonas construction", "procore"],
+        "domains": ["viewpoint.com", "procore.com", "cmic.com"],
         "urls": [
             "construction", "contractor", "job costing", "wip schedule",
-            "percentage of completion", "completed contract",
-            "prevailing wage", "certified payroll"
+            "percentage of completion", "completed contract", "prevailing wage", "certified payroll"
         ]
     },
 }
-
 
 
 # ---------------- Logging ----------------
@@ -670,6 +534,7 @@ def log(msg: str):
 # ---------------- Context bus ----------------
 from http.server import BaseHTTPRequestHandler, HTTPServer
 _CONTEXT: Dict[str, dict] = {}
+
 class _CtxHandler(BaseHTTPRequestHandler):
     def log_message(self, *a, **kw): pass
     def do_POST(self):
@@ -699,7 +564,7 @@ def snapshot_ctx() -> dict:
         return {}
 
 # ---------------- macOS frameworks ----------------
-from AppKit import NSWorkspace, NSRunningApplication  # Cocoa
+from AppKit import NSWorkspace, NSRunningApplication
 
 AX_AVAILABLE = False
 if not DISABLE_AX:
@@ -761,31 +626,17 @@ def osa_retry(script: str, tries: int = 2, delay: float = 0.15) -> str:
     return ""
 
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Add these helper functions to main.py (near the top, after imports)
-"""
-
-import json
-import urllib.request
-import urllib.error
-
 # ==============================================================================
-# BACKEND CLIENT SYNC HELPERS (Add to main.py)
+# BACKEND CLIENT SYNC HELPERS
 # ==============================================================================
 
 def get_current_client_from_backend(api_base: str, api_key: str) -> dict:
-    """
-    Fetch current client from backend on startup.
-    Returns: {"client_id": int, "client_name": str} or {"client_id": None}
-    """
+    """Fetch current client from backend on startup."""
     if not api_base or not api_key:
         return {"client_id": None, "client_name": None}
     
     url = f"{api_base}/client/current/"
     req = urllib.request.Request(url, method="GET")
-    # req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Correct!
     req.add_header("Authorization", f"DeviceKey {api_key}") 
     req.add_header("Content-Type", "application/json")
     
@@ -803,27 +654,18 @@ def get_current_client_from_backend(api_base: str, api_key: str) -> dict:
 
 def set_current_client_on_backend(api_base: str, api_key: str, 
                                    client_id: int = None, client_name: str = None) -> bool:
-    """
-    Tell backend about client switch.
-    Returns True on success.
-    """
+    """Tell backend about client switch."""
     if not api_base or not api_key:
         return False
     
     url = f"{api_base}/client/set-current/"
-    
     payload = {}
     if client_id:
         payload["client_id"] = client_id
     if client_name:
         payload["client_name"] = client_name
     
-    req = urllib.request.Request(
-        url, 
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST"
-    )
-    # req.add_header("Authorization", f"Bearer {api_key}")  # ✅ Fixed
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
     req.add_header("Authorization", f"DeviceKey {api_key}") 
     req.add_header("Content-Type", "application/json")
     
@@ -831,7 +673,6 @@ def set_current_client_on_backend(api_base: str, api_key: str,
         with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read())
             log(f"[CLIENT] Backend updated: {data.get('message', 'ok')}")
-            # Also log retroactive blocks
             retro = data.get('retroactive_blocks', 0)
             if retro > 0:
                 log(f"[CLIENT] Retroactively assigned {retro} recent blocks")
@@ -845,16 +686,13 @@ def set_current_client_on_backend(api_base: str, api_key: str,
 
 
 def fetch_clients_from_backend(api_base: str, api_key: str) -> list:
-    """
-    Fetch list of clients from backend for GUI menu.
-    Returns: [{"id": 1, "name": "Acme Corp", "code": "ACME"}, ...]
-    """
+    """Fetch list of clients from backend for GUI menu."""
     if not api_base or not api_key:
         return []
     
     url = f"{api_base}/clients/list/"
     req = urllib.request.Request(url, method="GET")
-    req.add_header("Authorization", f"DeviceKey {api_key}")  # ✅ Fixed
+    req.add_header("Authorization", f"DeviceKey {api_key}")
     req.add_header("Content-Type", "application/json")
     
     try:
@@ -871,13 +709,9 @@ def fetch_clients_from_backend(api_base: str, api_key: str) -> list:
         log(f"[CLIENT] Failed to fetch clients: {e}")
         return []
 
-# Add these functions to main.py after fetch_clients_from_backend (around line 360)
 
 def set_current_client_backend(api_base: str, api_key: str, client_id: int) -> bool:
-    """
-    Set the current client on the backend.
-    POST /api/client/set-current
-    """
+    """Set the current client on the backend."""
     if not api_base or not api_key:
         return False
     
@@ -903,11 +737,7 @@ def set_current_client_backend(api_base: str, api_key: str, client_id: int) -> b
 
 
 def get_current_client_backend(api_base: str, api_key: str) -> dict:
-    """
-    Get the current client from the backend.
-    GET /api/client/current
-    Returns: {"id": 1, "name": "Acme Corp", "code": "ACME"} or {}
-    """
+    """Get the current client from the backend."""
     if not api_base or not api_key:
         return {}
     
@@ -929,12 +759,10 @@ def get_current_client_backend(api_base: str, api_key: str) -> dict:
         log(f"[CLIENT] Error getting current client: {e}")
         return {}
 
-# ---------------- Native notifications (UNUserNotificationCenter) ----------------
+# ---------------- Native notifications ----------------
 _NOTIFICATION_CATEGORY_ID = "MAVOPS_TIME_NUDGE"
 _ACTION_YES = "ACTION_YES"
 _ACTION_NO  = "ACTION_NO"
-
-# storage for in-flight prompts by request id
 _PENDING_PROMPTS = {}
 
 def _post_nudge_decision_async(is_yes: bool, data: dict):
@@ -961,20 +789,15 @@ def _post_nudge_decision_async(is_yes: bool, data: dict):
 
 # ------------- Mouse Idle --------------
 def mouse_idle_seconds() -> float:
-    """
-    Returns seconds since the last mouse move at the session level.
-    Uses Quartz CGEventSourceSecondsSinceLastEventType.
-    """
+    """Returns seconds since the last mouse move."""
     try:
         return float(CGEventSourceSecondsSinceLastEventType(
             kCGEventSourceStateCombinedSessionState,
             kCGEventMouseMoved
         ))
     except Exception:
-        # If Quartz errors for any reason, pretend there is no idle time.
         return 0.0
 
-# Frontmost via System Events
 def get_frontmost_via_system_events() -> Optional[Tuple[str, int]]:
     s = (
         'tell application "System Events" to try\n'
@@ -996,6 +819,7 @@ _OVERLAY_OWNERS = {
     "Spotlight", "ScreenSaverEngine", "PowerChime", "Creative Cloud",
     "Adobe CEF Helper", "Adobe Desktop Service"
 }
+
 def get_frontmost_via_quartz() -> Optional[Tuple[str, int, Optional[str]]]:
     try:
         opts = kCGWindowListOptionOnScreenOnly | kCGWindowListOptionOnScreenAboveWindow
@@ -1074,12 +898,10 @@ def get_window_title_via_ax(pid: int) -> Optional[str]:
         return None
 
 def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
-    # Safari
     if bundle_id == "com.apple.Safari":
         url = osa_retry('tell application "Safari" to try\nset u to URL of current tab of front window\nreturn u\non error\nreturn ""\nend try')
         return {"url": url or None, "file_path": None}
     
-    # Chrome - improved: explicit window 1, more retries
     if bundle_id in ("com.google.Chrome", "com.google.Chrome.canary"):
         script = '''tell application "Google Chrome"
             try
@@ -1094,7 +916,6 @@ def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
         url = osa_retry(script, tries=3, delay=0.1)
         return {"url": url or None, "file_path": None}
     
-    # Brave - same improvement
     if bundle_id == "com.brave.Browser":
         script = '''tell application "Brave Browser"
             try
@@ -1109,23 +930,20 @@ def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
         url = osa_retry(script, tries=3, delay=0.1)
         return {"url": url or None, "file_path": None}
     
-    # Preview
     if bundle_id == "com.apple.Preview":
         path = osa_retry('tell application "Preview" to try\nset theDoc to document 1\nset p to path of theDoc\nPOSIX path of p\non error\nreturn ""\nend try')
         return {"url": None, "file_path": path or None}
     
-    # Excel
     if bundle_id == "com.microsoft.Excel":
         path = osa_retry('tell application "Microsoft Excel" to try\nif not (exists active workbook) then return ""\nset p to (full name of active workbook)\nreturn POSIX path of p\non error\nreturn ""\nend try')
         return {"url": None, "file_path": path or None}
     
-    # Sublime
     if bundle_id in ("com.sublimetext.4", "com.sublimetext.3"):
         path = osa_retry('tell application "Sublime Text" to try\nif not (exists window 1) then return ""\nset theDoc to document of window 1\nif theDoc is missing value then return ""\nset p to (path of theDoc)\nreturn POSIX path of p\non error\nreturn ""\nend try')
         return {"url": None, "file_path": path or None}
     
-    # DEFAULT - must be here!
     return {"url": None, "file_path": None}
+
 # ---------------- PID utils ----------------
 def write_pid():
     try:
@@ -1162,20 +980,18 @@ def api_headers(user: str, host: str) -> dict:
     return h
 
 def http_post_json(url: str, payload: dict, headers: dict, timeout=6):
-    import urllib.request, urllib.error, json as _json
-    req = urllib.request.Request(url, data=_json.dumps(payload).encode("utf-8"), method="POST")
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
     for k,v in headers.items(): req.add_header(k, v)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 def http_get_json(url: str, headers: dict, timeout=6) -> dict:
-    import urllib.request, urllib.error, json as _json
     req = urllib.request.Request(url, method="GET")
     for k,v in headers.items(): req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
-            return _json.loads(raw or b"{}")
+            return json.loads(raw or b"{}")
     except urllib.error.HTTPError as e:
         body = ""
         try: body = e.read().decode("utf-8", errors="ignore")
@@ -1183,7 +999,6 @@ def http_get_json(url: str, headers: dict, timeout=6) -> dict:
         log(f"[CTRL] HTTP {e.code} from control: {body[:200]}")
         return {}
     except Exception as e:
-        # Only log every 60 seconds to avoid spam during Docker restarts
         if not hasattr(http_get_json, '_last_error_log'):
             http_get_json._last_error_log = 0
         now = time.time()
@@ -1191,6 +1006,8 @@ def http_get_json(url: str, headers: dict, timeout=6) -> dict:
             log(f"[CTRL] get error: {e}")
             http_get_json._last_error_log = now
         return {}
+
+_last_control_check = 0.0
 
 def should_stop(control_url: str, user: str, host: str) -> bool:
     global _last_control_check
@@ -1202,12 +1019,11 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
     qs = f"?host={host}"
     headers = api_headers(user, host)
     
-    # Retry up to 2 times with short delay
     for attempt in range(2):
         data = http_get_json(control_url + qs, headers, timeout=3)
-        if data:  # Success
+        if data:
             break
-        if attempt == 0:  # First retry
+        if attempt == 0:
             time.sleep(0.5)
     
     stop = bool(data.get("stop"))
@@ -1233,17 +1049,11 @@ def looks_toolish(bundle_id: Optional[str], url: Optional[str]) -> tuple[bool, s
 
 def is_in_meeting(bundle_id: Optional[str], url: Optional[str], 
                   app_name: Optional[str], title: Optional[str]) -> bool:
-    """
-    Detect if user is in a virtual meeting.
-    Returns True if in Zoom, Teams, Meet, etc.
-    """
-    # Check bundle ID
+    """Detect if user is in a virtual meeting."""
     if bundle_id and bundle_id in MEETING_BUNDLES:
-        # For browsers, need additional URL check
         if bundle_id in {"com.google.Chrome", "com.apple.Safari", "com.brave.Browser", "org.mozilla.firefox"}:
             if not url:
                 return False
-            # Check if URL is a meeting domain
             try:
                 host = (urlparse(url).hostname or "").lower()
                 if any(domain in host for domain in MEETING_DOMAINS):
@@ -1251,10 +1061,8 @@ def is_in_meeting(bundle_id: Optional[str], url: Optional[str],
             except:
                 pass
             return False
-        # Native meeting apps (Zoom, Teams, etc.)
         return True
     
-    # Check URL for web-based meetings
     if url:
         try:
             host = (urlparse(url).hostname or "").lower()
@@ -1263,7 +1071,6 @@ def is_in_meeting(bundle_id: Optional[str], url: Optional[str],
         except:
             pass
     
-    # Check app name and title for meeting keywords
     check_str = f"{app_name or ''} {title or ''}".lower()
     if any(keyword in check_str for keyword in MEETING_KEYWORDS):
         return True
@@ -1305,7 +1112,12 @@ def get_os_username() -> str:
 # ---------------- Pairing ----------------
 _pair_lock = threading.Lock()
 
-def _claim_pair(code: str, hostname: str) -> Optional[str]:
+def _claim_pair(code: str, hostname: str) -> dict:
+    """
+    Claim a pairing code and return result dict.
+    Returns {"api_key": str, "username": str, "org_name": str} on success
+    or {"error": str} on failure.
+    """
     payload = {
         "code": code.strip().upper(),
         "hostname": hostname,
@@ -1319,40 +1131,75 @@ def _claim_pair(code: str, hostname: str) -> Optional[str]:
         key = data.get("api_key")
         if key:
             config["api_key"] = key
-            # clear one-off pair_code if present
-            if "pair_code" in config: del config["pair_code"]
+            if "pair_code" in config: 
+                del config["pair_code"]
             save_config(config)
             print("✅ Device paired; key saved.")
-            return key
+            return {
+                "api_key": key,
+                "username": data.get("username", ""),
+                "org_name": data.get("org_name", ""),
+            }
         else:
-            print("❌ Pair claim response missing api_key.")
-            return None
+            error_msg = data.get("error", "Invalid pairing code")
+            print(f"❌ Pair claim response: {error_msg}")
+            return {"error": error_msg}
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+            data = json.loads(body)
+            error_msg = data.get("error", f"HTTP {e.code}")
+        except:
+            error_msg = f"HTTP {e.code}"
+        print(f"❌ Pair claim failed: {error_msg}")
+        return {"error": error_msg}
     except Exception as e:
         print(f"❌ Pair claim failed: {e}")
-        return None
+        return {"error": str(e)}
+
+
+def _gui_pair_callback(code: str) -> dict:
+    """Callback for GUI pairing window"""
+    hostname = platform.node()
+    return _claim_pair(code, hostname)
+
 
 def ensure_api_key_interactive(hostname: str):
-    """Ensure we have an API key; prompt for code if running in a TTY and key missing."""
+    """Ensure we have an API key; use GUI or terminal prompt if needed."""
     global API_KEY
     key = config.get("api_key") or API_KEY
     if key:
         return key
-    # headless pre-provided code
+    
+    # Headless pre-provided code
     if PAIR_CODE:
         with _pair_lock:
-            key = _claim_pair(PAIR_CODE, hostname)
+            result = _claim_pair(PAIR_CODE, hostname)
+            if result.get("api_key"):
+                API_KEY = result["api_key"]
+                return API_KEY
+            return None
+
+    # Try GUI pairing first if available
+    if GUI_AVAILABLE:
+        print("\n🔗 Opening pairing window...")
+        key = show_pairing_window(_gui_pair_callback)
+        if key:
             API_KEY = key
             return key
+        # User cancelled - fall through to terminal if available
 
-    # Interactive prompt (only if a real TTY)
+    # Interactive terminal prompt (only if a real TTY)
     if sys.stdin.isatty():
         print("\n🧩 Enter pairing code from the web app to link this device:")
         code = input("> ").strip()
         if code:
             with _pair_lock:
-                key = _claim_pair(code, hostname)
-                API_KEY = key
-                return key
+                result = _claim_pair(code, hostname)
+                if result.get("api_key"):
+                    API_KEY = result["api_key"]
+                    return API_KEY
+    
     print("⚠️ No api_key configured; set AGENT_API_KEY, or add 'pair_code' to config.json, or run interactively.")
     return None
 
@@ -1361,7 +1208,6 @@ def drop_api_key():
     if "api_key" in config:
         del config["api_key"]
         save_config(config)
-    # keep global in sync
     global API_KEY
     API_KEY = None
 
@@ -1370,14 +1216,13 @@ def drop_api_key():
 SERVER_USER_ID = None
 
 def hello(server_url: str, user: str, host: str, device_id: str):
-    """Hello using DeviceKey (no need to pass username if device is linked)."""
+    """Hello using DeviceKey."""
     global SERVER_USER_ID
     headers = api_headers(user, host)
     payload = {
         "hostname": host,
         "app_version": APP_VERSION,
         "device_id": device_id,
-        # user is inferred from DeviceKey server-side; we also include a hint:
         "os_username": user,
     }
     try:
@@ -1390,25 +1235,10 @@ def hello(server_url: str, user: str, host: str, device_id: str):
         log(f"[HELLO] failed: {e}")
         return False
 
-_last_control_check = 0.0
-def should_stop(control_url: str, user: str, host: str) -> bool:
-    global _last_control_check
-    now = time.time()
-    if now - _last_control_check < CONTROL_POLL_S:
-        return False
-    _last_control_check = now
-    qs = f"?host={host}"  # user inferred by DeviceKey; host still distinguishes per-machine control
-    headers = api_headers(user, host)
-    data = http_get_json(control_url + qs, headers)
-    stop = bool(data.get("stop"))
-    if stop:
-        log(f"[CTRL] Stop received from server: reason={data.get('reason','')}")
-    return stop
 
-
-# -------------- Guess/Nudge worker (NEW) --------------
+# -------------- Guess/Nudge worker --------------
 _nudge_lock = threading.Lock()
-_last_nudge: Dict[str, float] = {}   # key = f"{user}:{client_id}", val = epoch seconds until allowed again
+_last_nudge: Dict[str, float] = {}
 
 def _snoozed(user: str, client_id: int) -> bool:
     key = f"{user}:{client_id}"
@@ -1419,31 +1249,23 @@ def _snooze(user: str, client_id: int, minutes: int):
     key = f"{user}:{client_id}"
     _last_nudge[key] = time.time() + minutes * 60
 
-# ---- Notification delegate (unique, guarded, verbose) ----
-# ---- Notification delegate (single definition only) ----
-
 
 class _NotificationDelegate(NSObject):
-    """
-    Handles action responses from Notification Center.
-    Maps action → confirm/reject and logs verbosely.
-    """
+    """Handles action responses from Notification Center."""
     def userNotificationCenter_didReceiveNotificationResponse_withCompletionHandler_(self, center, response, completion):
         try:
             req = response.notification().request()
             req_id = str(req.identifier())
             action_id = str(response.actionIdentifier())
 
-            # Make sure we can see *something* in your terminal
             NSLog(f"[NOTIF] delegate fired: req_id={req_id} action_id={action_id}")
 
             data = _PENDING_PROMPTS.pop(req_id, None)
             if not data:
                 NSLog(f"[NOTIF] no pending meta for {req_id} (ignored)")
             else:
-                # Treat default body-tap as YES; dismiss = None
                 DEFAULT = "com.apple.UNNotificationDefaultActionIdentifier"
-                DISMISS  = "com.apple.UNNotificationDismissActionIdentifier"
+                DISMISS = "com.apple.UNNotificationDismissActionIdentifier"
 
                 if action_id == _ACTION_YES or action_id == DEFAULT:
                     _post_nudge_decision_async(True, data)
@@ -1456,7 +1278,6 @@ class _NotificationDelegate(NSObject):
                 else:
                     NSLog(f"[NOTIF] Unhandled action_id={action_id}")
 
-                # If a waiter is present, release it
                 evt = data.get("_evt")
                 if evt:
                     try: evt.set()
@@ -1468,10 +1289,6 @@ class _NotificationDelegate(NSObject):
         if completion:
             completion()
 
-
-_ACTION_YES = "ACTION_YES"
-_ACTION_NO  = "ACTION_NO"
-_NOTIFICATION_CATEGORY_ID = "MAVOPS_TIME_NUDGE"
 
 class NotificationManager:
     def __init__(self):
@@ -1486,12 +1303,10 @@ class NotificationManager:
         try:
             self.center = UNUserNotificationCenter.currentNotificationCenter()
 
-            # Hook delegate once (avoid double-registering)
             if not self.delegate:
                 self.delegate = _NotificationDelegate.alloc().init()
                 self.center.setDelegate_(self.delegate)
 
-            # Register actions + category
             yes_action = UNNotificationAction.actionWithIdentifier_title_options_(
                 _ACTION_YES, "Yes", UNNotificationActionOptionForeground
             )
@@ -1503,7 +1318,6 @@ class NotificationManager:
             )
             self.center.setNotificationCategories_({category})
 
-            # Request authorization (alert + sound)
             evt = threading.Event()
             def _auth(granted, err):
                 log(f"[NOTIF] authorization granted={bool(granted)}")
@@ -1525,7 +1339,6 @@ class NotificationManager:
         try:
             req_id = f"mavops-{prompt_id}"
 
-            # Stash metadata so delegate knows what to post
             _PENDING_PROMPTS[req_id] = {
                 "prompt_id": prompt_id,
                 "client_id": int(client_id),
@@ -1537,7 +1350,7 @@ class NotificationManager:
 
             content = UNMutableNotificationContent.alloc().init()
             content.setTitle_("Time Tracker")
-            content.setSubtitle_(f"Are you working on “{client_name}”?")
+            content.setSubtitle_(f"Are you working on \"{client_name}\"?")
             content.setBody_(f"Confidence {int(confidence*100)}% • Tap Yes or No")
             content.setCategoryIdentifier_(_NOTIFICATION_CATEGORY_ID)
 
@@ -1550,26 +1363,17 @@ class NotificationManager:
             return False
 
 
-
-
-# ---------------------------------------------------------
-# Singleton
 NOTIFIER = NotificationManager()
 
 
-# --- Native Yes/No prompt (AppleScript) with timeout (NEW) ---
 def prompt_yes_no(title: str, message: str, timeout_s: int = 15) -> Optional[bool]:
-    """
-    Returns True if 'Yes', False if 'No', None if timed out or dismissed.
-    Non-throwing. Runs in a background thread safe manner.
-    """
+    """Native Yes/No prompt (AppleScript) with timeout."""
     try:
-        # AppleScript dialog with timeout & custom buttons
         script = f'''
         display dialog {json.dumps(message)} with title {json.dumps(title)}
             buttons {{"No","Yes"}} default button "Yes" giving up after {int(timeout_s)}
         '''
-        out = osa(script)  # e.g., "button returned:Yes, gave up:false"
+        out = osa(script)
         out_l = out.lower()
         if "gave up:true" in out_l:
             return None
@@ -1577,7 +1381,6 @@ def prompt_yes_no(title: str, message: str, timeout_s: int = 15) -> Optional[boo
             return True
         if "button returned:no" in out_l:
             return False
-        # Some localized systems may vary—best-effort parse:
         if "yes" in out_l:
             return True
         if "no" in out_l:
@@ -1585,15 +1388,10 @@ def prompt_yes_no(title: str, message: str, timeout_s: int = 15) -> Optional[boo
         return None
     except Exception:
         return None
-# ---------------------------------------------------------
+
 
 def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_menu_bar=None):
-    """
-    Polls /context/guess. If GUI available, shows prompt in floating window.
-    Otherwise falls back to notification/AppleScript.
-    
-    UPDATED: Now accepts gui_menu_bar parameter
-    """
+    """Polls /context/guess for client suggestions."""
     if not NUDGE_ENABLED:
         log("[NUDGE] Disabled.")
         return
@@ -1605,7 +1403,6 @@ def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_m
         params = f"?host={hostname}&device_id={get_device_id()}"
         return http_get_json(CONTEXT_GUESS_URL + params, headers=headers)
 
-    # Eager first check so the nudge can appear right after launch.
     try:
         data = _fetch()
     except Exception as e:
@@ -1625,25 +1422,21 @@ def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_m
             client_id = data.get("client_id")
             client_name = data.get("client_name") or ""
             conf = float(data.get("confidence") or 0.0)
-            # Reset for next loop iteration
             data = None
 
             if not client_id or conf <= 0:
                 time.sleep(GUESS_POLL_SECONDS)
                 continue
 
-            # Server will auto-assign above max
             if conf >= GUESS_MAX_CONF:
                 log(f"[NUDGE] High confidence {conf:.2f} for {client_name} (id={client_id}) → no prompt.")
                 time.sleep(GUESS_POLL_SECONDS)
                 continue
 
-            # Only prompt in mid window
             if conf < GUESS_MIN_CONF:
                 time.sleep(GUESS_POLL_SECONDS)
                 continue
 
-            # Snooze check
             if _snoozed(os_user, int(client_id)):
                 time.sleep(GUESS_POLL_SECONDS)
                 continue
@@ -1653,7 +1446,6 @@ def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_m
                     time.sleep(GUESS_POLL_SECONDS)
                     continue
 
-                # === TRY GUI FIRST ===
                 if gui_menu_bar:
                     prompt_id = f"{int(time.time())}-{client_id}"
                     prompt_data = {
@@ -1670,9 +1462,7 @@ def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_m
                     log(f"[NUDGE] GUI prompt shown for {client_name} ({conf:.2f})")
                     _snooze(os_user, int(client_id), NUDGE_SNOOZE_MIN)
                     continue
-                # === END GUI prompt ===
 
-                # Fallback: Prefer native interactive notification if available
                 if NOTIFIER and getattr(NOTIFIER, "ready", False):
                     prompt_id = f"{int(time.time())}-{client_id}"
                     did_schedule = NOTIFIER.notify_nudge(
@@ -1690,7 +1480,6 @@ def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_m
                     else:
                         log("[NUDGE] Notification schedule failed; falling back to AppleScript.")
 
-                # Fallback: AppleScript modal (blocking)
                 msg = f"Are you working on {client_name} right now?\n(confidence {int(conf*100)}%)"
                 ans = prompt_yes_no("Time Tracker", msg, timeout_s=NUDGE_TIMEOUT_SEC)
 
@@ -1727,11 +1516,9 @@ def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_m
                         _snooze(os_user, int(client_id), NUDGE_SNOOZE_MIN)
 
                 else:
-                    # Dismissed/timeout -> short snooze so we don't spam
                     _snooze(os_user, int(client_id), max(5, min(NUDGE_SNOOZE_MIN, 10)))
                     log(f"[NUDGE] Dismissed/timeout for {client_name} (id={client_id})")
 
-            # Sleep at end so first iteration can fire immediately after launch
             time.sleep(GUESS_POLL_SECONDS)
 
         except Exception as e:
@@ -1744,10 +1531,9 @@ def post_event_async(event: dict, user: str, host: str):
     if not POST_URL:
         return
     def _run():
-        import urllib.request, urllib.error, json as _json
         headers = api_headers(user, host)
         try:
-            req = urllib.request.Request(POST_URL, data=_json.dumps(event).encode("utf-8"), method="POST")
+            req = urllib.request.Request(POST_URL, data=json.dumps(event).encode("utf-8"), method="POST")
             for k, v in headers.items(): req.add_header(k, v)
             with urllib.request.urlopen(req, timeout=6) as resp:
                 _ = resp.read()
@@ -1757,7 +1543,6 @@ def post_event_async(event: dict, user: str, host: str):
             try: body = e.read().decode("utf-8", errors="ignore")
             except: pass
             log(f"[POST ERROR] HTTP {e.code}: {body[:200]}")
-            # If unauthorized, drop key to trigger re-pair on next loop
             if e.code in (401, 403):
                 log("[AUTH] Device key rejected — will re-pair.")
                 drop_api_key()
@@ -1765,7 +1550,7 @@ def post_event_async(event: dict, user: str, host: str):
             log(f"[POST ERROR] {e}")
     threading.Thread(target=_run, daemon=True).start()
 
-# change signature
+
 def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | None = None):
     app_name, bundle_id, title, url, fpath = sig
 
@@ -1782,7 +1567,6 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
     )
     conn.commit()
 
-    # NEW: Get current client from backend
     api_key = config.get("api_key") or API_KEY
     current_client_id = None
     current_client_name = None
@@ -1806,8 +1590,8 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
         "server_user_id": SERVER_USER_ID,
         "device_id": get_device_id(),
         "ctx": snapshot_ctx(),
-        "current_client_id": current_client_id,  # ← NEW
-        "current_client_name": current_client_name,  # ← NEW (for logging)
+        "current_client_id": current_client_id,
+        "current_client_name": current_client_name,
     }
 
     toolish, tool_reason, tool_host = looks_toolish(bundle_id, url)
@@ -1828,12 +1612,8 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
     )
 
 def handle_client_confirmed(client_id, client_name, prompt_data):
-    """
-    Called when user confirms a client via GUI.
-    MODIFIED: Now updates backend.
-    """
+    """Called when user confirms a client via GUI."""
     try:
-        # Original feedback to backend (you already have this)
         payload = {
             "client_id": client_id,
             "confidence": prompt_data.get("confidence", 0),
@@ -1844,7 +1624,6 @@ def handle_client_confirmed(client_id, client_name, prompt_data):
         http_post_json(CONTEXT_CONFIRM_URL, payload, 
                       api_headers(get_os_username(), platform.node()), timeout=6)
         
-        # NEW: Also set as current client
         api_key = config.get("api_key") or API_KEY
         if api_key and API_BASE:
             set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
@@ -1879,13 +1658,13 @@ def fetch_today_time():
     
     url = f"{API_BASE}/today-time/"
     req = urllib.request.Request(url, method="GET")
-    req.add_header("Authorization", f"DeviceKey {api_key}")  # ✅ Fixed!
+    req.add_header("Authorization", f"DeviceKey {api_key}")
     req.add_header("Content-Type", "application/json")
     
     try:
         with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read())
-            print(f"[GUI] Today's time data: {len(data)} entries")  # Debug
+            print(f"[GUI] Today's time data: {len(data)} entries")
             if isinstance(data, list):
                 return data
             return []
@@ -1897,15 +1676,10 @@ def fetch_today_time():
         return []
 
 def on_client_switch_from_menu(client_id: int, client_name: str):
-    """
-    NEW: Called when user manually switches client from menu bar.
-    This replaces your existing onSwitchClient_ handler.
-    """
-    # Update local state
+    """Called when user manually switches client from menu bar."""
     if hasattr(gui_menu_bar, "state"):
         gui_menu_bar.state.set_client(client_id, client_name)
     
-    # Update backend
     api_key = config.get("api_key") or API_KEY
     if api_key and API_BASE:
         success = set_current_client_on_backend(
@@ -1918,19 +1692,13 @@ def on_client_switch_from_menu(client_id: int, client_name: str):
         else:
             print(f"[CLIENT] Failed to sync switch to backend")
     
-    # Update GUI display
     if hasattr(gui_menu_bar, "updateMenu_"):
         gui_menu_bar.updateMenu_(None)
 
 # ---------------- Main loop ----------------
-# ---------------- Main loop ----------------
 def run_agent():
-    """
-    Main agent function with GUI integration.
-    Starts tracking in background thread, runs GUI in main thread.
-    """
+    """Main agent function with GUI integration."""
 
-    # ✅ ADD THIS LINE RIGHT HERE AT THE TOP
     global API_KEY
 
     try:
@@ -1939,24 +1707,6 @@ def run_agent():
         pass
 
     start_context_bus(CONTEXT_PORT)
-
-    # === GUI INITIALIZATION ===
-    gui_menu_bar = None
-    if GUI_AVAILABLE:
-        try:
-            gui_menu_bar = run_gui_app(
-                on_client_confirmed=handle_client_confirmed,
-                on_client_rejected=handle_client_rejected,
-                get_today_time=fetch_today_time,
-                fetch_clients=lambda: fetch_clients_from_backend(API_BASE, API_KEY),  # ✅ Add this!
-                set_current_client=lambda client_id: set_current_client_backend(API_BASE, API_KEY, client_id),  # ✅ Add this!
-                get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY),  # ✅ Add this!
-                cpa_tools_data=CPA_TOOL_DETECTION  # ✅ NEW: Pass the dictionary
-
-            )
-            log("[GUI] Menu bar initialized")
-        except Exception as e:
-            log(f"[GUI] Failed to initialize: {e}")
 
     log("=== Mac Activity Agent starting… (Ctrl+C to stop) ===")
     if os.path.exists(CONFIG_FILE): 
@@ -1985,21 +1735,19 @@ def run_agent():
     # PID file
     write_pid()
 
-    # Ensure we have a device key (pair if needed)
-    # Ensure we have a device key (MDM → pair code → interactive)
+    # Ensure we have a device key (MDM → GUI → pair code → interactive terminal)
     key = config.get("api_key") or API_KEY
     
     if not key:
-        # === TRY MDM CONFIG FIRST ===
+        # Try MDM config first
         mdm_config = get_mdm_config()
         if mdm_config:
             log("[MDM] Found MDM configuration, attempting auto-registration...")
             key = register_with_org_token(mdm_config, hostname)
             if key:
-                # Update global
                 API_KEY = key
         
-        # === FALLBACK TO INTERACTIVE PAIRING ===
+        # Fallback to interactive pairing (GUI or terminal)
         if not key:
             key = ensure_api_key_interactive(hostname)
         
@@ -2007,7 +1755,7 @@ def run_agent():
             print("Exiting: no device key configured.")
             print("Options:")
             print("  1. Deploy MDM config to /Library/Application Support/TimeTracker/config.plist")
-            print("  2. Run interactively and enter pairing code")
+            print("  2. Run the app to show the pairing window")
             print("  3. Set AGENT_PAIR_CODE environment variable")
             remove_pid()
             return
@@ -2022,7 +1770,24 @@ def run_agent():
             remove_pid()
             return
 
-    # === NEW: RESTORE CLIENT STATE FROM BACKEND ===
+    # === GUI INITIALIZATION (after pairing succeeds) ===
+    gui_menu_bar = None
+    if GUI_AVAILABLE:
+        try:
+            gui_menu_bar = run_gui_app(
+                on_client_confirmed=handle_client_confirmed,
+                on_client_rejected=handle_client_rejected,
+                get_today_time=fetch_today_time,
+                fetch_clients=lambda: fetch_clients_from_backend(API_BASE, API_KEY),
+                set_current_client=lambda client_id: set_current_client_backend(API_BASE, API_KEY, client_id),
+                get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY),
+                repair_callback=_gui_pair_callback,
+            )
+            log("[GUI] Menu bar initialized")
+        except Exception as e:
+            log(f"[GUI] Failed to initialize: {e}")
+
+    # Restore client state from backend
     api_key = config.get("api_key") or API_KEY
     if api_key and API_BASE and gui_menu_bar:
         try:
@@ -2039,24 +1804,13 @@ def run_agent():
             else:
                 log("[CLIENT] No current client set on backend")
             
-            # # Set up backend sync callbacks
-            # if hasattr(gui_menu_bar, 'fetch_clients_callback'):
-            #     gui_menu_bar.fetch_clients_callback = lambda: fetch_clients_from_backend(API_BASE, api_key)
-            
-            # if hasattr(gui_menu_bar, 'set_current_client_callback'):
-            #     gui_menu_bar.set_current_client_callback = lambda cid, cname: set_current_client_on_backend(API_BASE, api_key, cid, cname)
-            
-            # if hasattr(gui_menu_bar, 'get_current_client_callback'):
-            #     gui_menu_bar.get_current_client_callback = lambda: get_current_client_from_backend(API_BASE, api_key)
-            
-            # Trigger initial sync
             if hasattr(gui_menu_bar, '_sync_from_backend'):
                 gui_menu_bar._sync_from_backend()
             
         except Exception as e:
             log(f"[CLIENT] Failed to restore client state: {e}")
 
-    # --- Notifications: set up after hello, before worker ---
+    # Notifications setup
     try:
         if NOTIFIER.setup():
             log("[NOTIF] Ready (UNUserNotificationCenter).")
@@ -2065,14 +1819,14 @@ def run_agent():
     except Exception as e:
         log(f"[NOTIF] setup exception: {e}")
 
-    # --- Guess/Nudge worker ---
+    # Guess/Nudge worker
     stop_flag = threading.Event()
     t_guess = None
     try:
         if NUDGE_ENABLED:
             t_guess = threading.Thread(
                 target=guess_worker,
-                args=(hostname, os_user, stop_flag, gui_menu_bar),  # ← PASS gui_menu_bar
+                args=(hostname, os_user, stop_flag, gui_menu_bar),
                 daemon=True
             )
             t_guess.start()
@@ -2097,13 +1851,11 @@ def run_agent():
 
                 idle = mouse_idle_seconds()
                 
-                # ✅ NEW: Check if in meeting before marking idle
                 in_meeting = False
                 if current_sig and current_sig != IDLE_SIG:
                     app_name, bundle_id, title, url, fpath = current_sig
                     in_meeting = is_in_meeting(bundle_id, url, app_name, title)
                 
-                # Only enter idle if NOT in a meeting
                 if idle >= MOUSE_IDLE_PAUSE_S and not in_meeting:
                     if current_sig != IDLE_SIG:
                         if current_sig and dwell_start:
@@ -2120,13 +1872,11 @@ def run_agent():
                     time.sleep(POLL_SECONDS)
                     continue
                 elif in_meeting and idle >= MOUSE_IDLE_PAUSE_S:
-                    # ✅ NEW: Log that we're skipping idle because of meeting
-                    if PRINT_EVERY_POLL or (int(idle) % 60 < POLL_SECONDS):  # Log roughly every minute
+                    if PRINT_EVERY_POLL or (int(idle) % 60 < POLL_SECONDS):
                         log(f"[MEETING] In meeting ({current_sig[0]}), skipping idle check (mouse idle {int(idle)}s)")
                     time.sleep(POLL_SECONDS)
                     continue
                 else:
-                    # Exiting idle (mouse activity detected)
                     if current_sig == IDLE_SIG and dwell_start:
                         dwell = time.time() - dwell_start
                         if dwell >= MIN_DWELL_SECONDS:
@@ -2175,7 +1925,6 @@ def run_agent():
                     current_sig = sig
                     dwell_start = time.time()
                     
-                    # ✅ NEW: Log if entering a meeting
                     if is_in_meeting(bundle_id, url, app_name, title):
                         log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} • [MEETING]")
                     else:
@@ -2194,7 +1943,7 @@ def run_agent():
                     write_event(conn, cur, os_user, hostname, current_sig)
         finally:
             try:
-                conn.close()  # Close connection
+                conn.close()
                 if stop_flag:
                     stop_flag.set()
                 if t_guess is not None:
@@ -2202,7 +1951,6 @@ def run_agent():
             except Exception:
                 pass
             remove_pid()
-    # === END tracking_loop() ===
 
     # === START TRACKING THREAD ===
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
@@ -2214,7 +1962,7 @@ def run_agent():
         from AppKit import NSApp
         log("[GUI] Starting GUI event loop...")
         try:
-            NSApp.run()  # Blocks here until user quits from menu
+            NSApp.run()
         except KeyboardInterrupt:
             log("[GUI] Interrupted")
     else:
@@ -2225,7 +1973,6 @@ def run_agent():
             log("[TRACKING] Interrupted")
 
     log("[AGENT] Shutdown complete")
-
 
 
 # ---------------- CLI ----------------

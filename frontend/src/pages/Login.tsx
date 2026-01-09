@@ -1,4 +1,4 @@
-// Login.tsx - Fixed infinite loop
+// Login.tsx - Simplified, no hanging spinner
 import { useEffect, useState, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
@@ -9,56 +9,32 @@ export default function Login() {
   const nav = useNavigate();
   const loc = useLocation();
   const { refreshWhoAmI } = useAuth();
-
-  // Get next URL once
   const next = new URLSearchParams(loc.search).get("next") || "/daily";
 
   const [form, setForm] = useState({ username: "", password: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showPw, setShowPw] = useState(false);
-  const [checking, setChecking] = useState(true);
   
-  // Prevent multiple auth checks
   const hasChecked = useRef(false);
 
-  // Check if already logged in - ONCE only
+  // Check if already logged in - redirect silently, don't block UI
   useEffect(() => {
     if (hasChecked.current) return;
     hasChecked.current = true;
 
-    let alive = true;
-    
-    const checkAuth = async () => {
-      try {
-        const j = await safeFetchJson<{ is_authenticated?: boolean }>(
-          API_ENDPOINTS.whoami,
-          { credentials: "include" }
-        );
-        
-        if (alive && j?.is_authenticated === true) {
-          nav(next, { replace: true });
-          return;
-        }
-      } catch {
-        // Not logged in - show form
+    // Fire and forget - don't block rendering
+    safeFetchJson<{ is_authenticated?: boolean }>(
+      API_ENDPOINTS.whoami,
+      { credentials: "include" }
+    ).then(j => {
+      if (j?.is_authenticated === true) {
+        nav(next, { replace: true });
       }
-      
-      if (alive) setChecking(false);
-    };
-    
-    // Timeout fallback - always show form after 2s
-    const timeout = setTimeout(() => {
-      if (alive) setChecking(false);
-    }, 2000);
-    
-    checkAuth();
-    
-    return () => { 
-      alive = false;
-      clearTimeout(timeout);
-    };
-  }, []); // Empty deps - run ONCE
+    }).catch(() => {
+      // Ignore errors - just show login form
+    });
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -106,15 +82,7 @@ export default function Login() {
     }
   }
 
-  // Show loading while checking auth (max 2s)
-  if (checking) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-      </div>
-    );
-  }
-
+  // NO checking state - render form immediately
   return (
     <div className="min-h-screen bg-background flex">
       {/* Left Panel - Branding */}
@@ -125,20 +93,14 @@ export default function Login() {
         p-12
         relative overflow-hidden
       ">
-        {/* Background Pattern */}
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-20 left-20 w-72 h-72 bg-white rounded-full blur-3xl" />
           <div className="absolute bottom-20 right-20 w-96 h-96 bg-white rounded-full blur-3xl" />
         </div>
         
-        {/* Logo */}
         <div className="relative z-10">
           <div className="flex items-center gap-3">
-            <div className="
-              w-12 h-12 rounded-xl 
-              bg-white/20 backdrop-blur
-              flex items-center justify-center
-            ">
+            <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
               <Clock className="w-6 h-6 text-white" />
             </div>
             <div>
@@ -148,7 +110,6 @@ export default function Login() {
           </div>
         </div>
 
-        {/* Hero Content */}
         <div className="relative z-10 space-y-6">
           <h1 className="text-4xl font-bold text-white leading-tight">
             Your time is finite.<br />
@@ -159,13 +120,8 @@ export default function Login() {
             and gain insights into how your time is really spent.
           </p>
           
-          {/* Features */}
           <div className="space-y-4 pt-4">
-            {[
-              "AI-powered time categorization",
-              "Automatic activity tracking",
-              "Client billing integration"
-            ].map((feature, i) => (
+            {["AI-powered time categorization", "Automatic activity tracking", "Client billing integration"].map((feature, i) => (
               <div key={i} className="flex items-center gap-3 text-white/90">
                 <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
                   <Sparkles className="w-3.5 h-3.5 text-white" />
@@ -176,7 +132,6 @@ export default function Login() {
           </div>
         </div>
 
-        {/* Footer */}
         <div className="relative z-10 text-white/50 text-sm">
           © {new Date().getFullYear()} MavOps. All rights reserved.
         </div>
@@ -185,47 +140,27 @@ export default function Login() {
       {/* Right Panel - Login Form */}
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="w-full max-w-md space-y-8">
-          {/* Mobile Logo */}
           <div className="lg:hidden flex items-center justify-center gap-3 mb-8">
-            <div className="
-              w-12 h-12 rounded-xl 
-              bg-primary
-              flex items-center justify-center
-              shadow-lg shadow-primary/25
-            ">
+            <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
               <Clock className="w-6 h-6 text-white" />
             </div>
             <span className="text-2xl font-bold text-foreground">TimeTracker</span>
           </div>
 
-          {/* Header */}
           <div className="text-center lg:text-left">
-            <h2 className="text-3xl font-bold text-foreground tracking-tight">
-              Welcome back
-            </h2>
-            <p className="text-muted-foreground mt-2">
-              Sign in to continue to your dashboard
-            </p>
+            <h2 className="text-3xl font-bold text-foreground tracking-tight">Welcome back</h2>
+            <p className="text-muted-foreground mt-2">Sign in to continue to your dashboard</p>
           </div>
 
-          {/* Error Banner */}
           {err && (
-            <div className="
-              p-4 rounded-xl 
-              bg-destructive/10 border border-destructive/20
-              text-destructive text-sm
-            ">
+            <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm">
               {err}
             </div>
           )}
 
-          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Username */}
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-foreground">
-                Username or Email
-              </label>
+              <label className="text-sm font-semibold text-foreground">Username or Email</label>
               <input
                 type="text"
                 name="username"
@@ -233,25 +168,14 @@ export default function Login() {
                 disabled={busy}
                 value={form.username}
                 onChange={(e) => setForm({ ...form, username: e.target.value })}
-                className="
-                  w-full px-4 py-3.5 rounded-xl
-                  bg-muted/50 border border-border/50
-                  text-foreground font-medium
-                  placeholder:text-muted-foreground/60
-                  transition-all duration-200
-                  focus:bg-card focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none
-                  disabled:opacity-50
-                "
+                className="w-full px-4 py-3.5 rounded-xl bg-muted/50 border border-border/50 text-foreground font-medium placeholder:text-muted-foreground/60 transition-all duration-200 focus:bg-card focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none disabled:opacity-50"
                 placeholder="Enter your username"
                 required
               />
             </div>
 
-            {/* Password */}
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-foreground">
-                Password
-              </label>
+              <label className="text-sm font-semibold text-foreground">Password</label>
               <div className="relative">
                 <input
                   type={showPw ? "text" : "password"}
@@ -260,50 +184,24 @@ export default function Login() {
                   disabled={busy}
                   value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })}
-                  className="
-                    w-full px-4 py-3.5 pr-12 rounded-xl
-                    bg-muted/50 border border-border/50
-                    text-foreground font-medium
-                    placeholder:text-muted-foreground/60
-                    transition-all duration-200
-                    focus:bg-card focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none
-                    disabled:opacity-50
-                  "
+                  className="w-full px-4 py-3.5 pr-12 rounded-xl bg-muted/50 border border-border/50 text-foreground font-medium placeholder:text-muted-foreground/60 transition-all duration-200 focus:bg-card focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none disabled:opacity-50"
                   placeholder="Enter your password"
                   required
                 />
                 <button
                   type="button"
                   onClick={() => setShowPw(!showPw)}
-                  className="
-                    absolute right-3 top-1/2 -translate-y-1/2
-                    p-2 rounded-lg
-                    text-muted-foreground hover:text-foreground
-                    hover:bg-muted
-                    transition-colors
-                  "
-                  aria-label={showPw ? "Hide password" : "Show password"}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                 >
                   {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
 
-            {/* Submit */}
             <button
               type="submit"
               disabled={busy}
-              className="
-                w-full flex items-center justify-center gap-2
-                px-6 py-3.5 rounded-xl
-                bg-primary text-primary-foreground
-                font-semibold
-                shadow-lg shadow-primary/25
-                hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30
-                focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2
-                disabled:opacity-50 disabled:cursor-not-allowed
-                transition-all duration-200
-              "
+              className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-primary text-primary-foreground font-semibold shadow-lg shadow-primary/25 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
             >
               {busy ? (
                 <>
@@ -319,13 +217,9 @@ export default function Login() {
             </button>
           </form>
 
-          {/* Sign Up Link */}
           <p className="text-center text-sm text-muted-foreground">
             Don't have an account?{" "}
-            <Link 
-              className="font-semibold text-primary hover:text-primary/80 transition-colors" 
-              to={`/signup?next=${encodeURIComponent(next)}`}
-            >
+            <Link className="font-semibold text-primary hover:text-primary/80 transition-colors" to={`/signup?next=${encodeURIComponent(next)}`}>
               Sign up
             </Link>
           </p>

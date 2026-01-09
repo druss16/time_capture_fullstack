@@ -4058,7 +4058,11 @@ from .models import Client, CurrentClient, Block
 # CURRENT CLIENT MANAGEMENT (Add these to your views.py)
 # ==============================================================================
 
+from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
+
+
 @api_view(["POST"])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])  # Only these, no Session
 @permission_classes([IsAuthenticated])
 def set_current_client(request):
     """

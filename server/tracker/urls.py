@@ -1,6 +1,7 @@
 # tracker/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from django.views.decorators.csrf import csrf_exempt
 from . import views
 from . import views_billing  # ✅ ADD THIS IMPORT
 
@@ -32,8 +33,8 @@ urlpatterns = [
     # -------------------------------
     # Client Selection (Agent)
     # -------------------------------
-    path("client/set-current/", views.set_current_client, name="set_current_client"),
-    path("client/current/", views.get_current_client, name="get_current_client"),
+    path("client/set-current/", csrf_exempt(views.set_current_client), name="set_current_client"),
+    path("client/current/", csrf_exempt(views.get_current_client), name="get_current_client"),
     path("clients/list/", views.list_clients, name="list_clients"),
     path("context/guess/", views.context_guess, name="context_guess"),
     path("context/confirm/", views.context_confirm, name="context_confirm"),

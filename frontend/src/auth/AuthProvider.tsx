@@ -3,7 +3,7 @@ import React, { createContext, useContext, useMemo, useState, useCallback, useEf
 import { fetchWhoAmI, clearWhoAmICache, isTrulyAuthenticated, type WhoAmI } from "@/lib/whoami";
 
 function resolveApiBase() {
-  const raw = import.meta.env.VITE_API_BASE_URL || "http://localhost:5173";
+  const raw = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123";
   const noTrail = raw.replace(/\/+$/, "");
   return noTrail.endsWith("/api") ? noTrail : `${noTrail}/api`;
 }
@@ -42,7 +42,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Only run once on mount
   useEffect(() => {
     refreshWhoAmI();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -50,14 +49,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useMemo(() => isTrulyAuthenticated(me), [me]);
 
   const logout = useCallback(async () => {
-    // ✅ CLEAR LOCAL STATE FIRST (before any async)
+    // Clear local state first
     localStorage.removeItem('auth_token');
     sessionStorage.clear();
-    
-    // Clear whoami cache
     clearWhoAmICache();
-    
-    // Clear local state
     setMe(null);
 
     // Clear all cookies
@@ -68,14 +63,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=timetracker-api-k375.onrender.com;`;
     });
 
-    // Try backend logout (fire and forget - don't block on it)
+    // Try backend logout (fire and forget)
     try {
       const csrftoken = document.cookie
         .split('; ')
         .find(row => row.startsWith('csrftoken='))
         ?.split('=')[1] || '';
       
-      // ✅ FIXED: Was fetch` - now fetch(
       await fetch(`${API_BASE}/auth/logout/`, {
         method: "POST",
         credentials: "include",
@@ -85,6 +79,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         },
       });
     } catch {
-      // Ignore errors - local logout is sufficient
+      // Ignore - local logout is sufficient
     }
   }, []);
+
+  return (
+    <Ctx.Provider value={{ me, loading, isAuthenticated, refreshWhoAmI, logout }}>
+      {children}
+    </Ctx.Provider>
+  );
+}

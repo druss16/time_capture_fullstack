@@ -51,15 +51,27 @@ const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
 const queryClient = new QueryClient();
 
 // Sign-out helper route (clears server session, then bounce to /login)
+// Sign-out helper route - FIXED
 function Logout() {
   const { logout } = useAuth();
+  const hasLoggedOut = useRef(false);
 
   useEffect(() => {
-    (async () => {
-      await logout();
+    if (hasLoggedOut.current) return;
+    hasLoggedOut.current = true;
+
+    // Clear everything locally first
+    localStorage.removeItem('auth_token');
+    sessionStorage.clear();
+    
+    // Try server logout (don't await - fire and forget)
+    logout().catch(() => {});
+    
+    // Redirect after small delay
+    setTimeout(() => {
       window.location.href = '/login';
-    })();
-  }, [logout]);
+    }, 100);
+  }, []); // Empty deps - run ONCE
 
   return <div className="p-6">Logging out...</div>;
 }

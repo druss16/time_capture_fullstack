@@ -1,5 +1,5 @@
-// Login.tsx - Fixed version
-import { useEffect, useState, useMemo } from "react";
+// Login.tsx - Fixed infinite loop
+import { useEffect, useState, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
 import { useAuth } from "@/auth/AuthProvider";
@@ -8,26 +8,28 @@ import { Eye, EyeOff, Clock, ArrowRight, Sparkles } from "lucide-react";
 export default function Login() {
   const nav = useNavigate();
   const loc = useLocation();
-  
-  // Memoize `next` so it doesn't change on every render
-  const next = useMemo(() => {
-    const params = new URLSearchParams(loc.search);
-    return params.get("next") || "/daily";
-  }, [loc.search]);
-  
   const { refreshWhoAmI } = useAuth();
+
+  // Get next URL once
+  const next = new URLSearchParams(loc.search).get("next") || "/daily";
 
   const [form, setForm] = useState({ username: "", password: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showPw, setShowPw] = useState(false);
-  const [checking, setChecking] = useState(true); // Add loading state
+  const [checking, setChecking] = useState(true);
+  
+  // Prevent multiple auth checks
+  const hasChecked = useRef(false);
 
-  // Check if already logged in
+  // Check if already logged in - ONCE only
   useEffect(() => {
+    if (hasChecked.current) return;
+    hasChecked.current = true;
+
     let alive = true;
     
-    (async () => {
+    const checkAuth = async () => {
       try {
         const j = await safeFetchJson<{ is_authenticated?: boolean }>(
           API_ENDPOINTS.whoami,
@@ -36,16 +38,27 @@ export default function Login() {
         
         if (alive && j?.is_authenticated === true) {
           nav(next, { replace: true });
+          return;
         }
       } catch {
-        // Not logged in - stay on login page
-      } finally {
-        if (alive) setChecking(false);
+        // Not logged in - show form
       }
-    })();
+      
+      if (alive) setChecking(false);
+    };
     
-    return () => { alive = false; };
-  }, [nav, next]); // Add proper dependencies
+    // Timeout fallback - always show form after 2s
+    const timeout = setTimeout(() => {
+      if (alive) setChecking(false);
+    }, 2000);
+    
+    checkAuth();
+    
+    return () => { 
+      alive = false;
+      clearTimeout(timeout);
+    };
+  }, []); // Empty deps - run ONCE
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -93,7 +106,7 @@ export default function Login() {
     }
   }
 
-  // Show loading while checking auth
+  // Show loading while checking auth (max 2s)
   if (checking) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -101,7 +114,6 @@ export default function Login() {
       </div>
     );
   }
-
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -202,7 +214,6 @@ export default function Login() {
               p-4 rounded-xl 
               bg-destructive/10 border border-destructive/20
               text-destructive text-sm
-              animate-slide-up
             ">
               {err}
             </div>

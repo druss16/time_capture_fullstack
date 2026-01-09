@@ -3884,39 +3884,27 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 
-@api_view(["POST", "GET"])  # Allow GET for simple redirects/testing
-@permission_classes([AllowAny])  # Allow even if token is invalid/missing
+@api_view(["POST", "GET"])
+@authentication_classes([])  # ← Add this - NO authentication required
+@permission_classes([AllowAny])
 def auth_logout(request):
-    """
-    Logs out the current session. 
-    AllowAny because logout should never fail - user may already be logged out
-    or have an invalid/expired token.
-    """
-    # Try to logout (will silently do nothing if not authenticated)
+    """Logout - always succeeds"""
     try:
         django_logout(request)
-    except Exception:
-        pass  # Ignore any errors during logout
+    except:
+        pass
     
-    # Delete any auth tokens if using token auth
     if hasattr(request, 'auth') and request.auth:
         try:
             request.auth.delete()
-        except Exception:
+        except:
             pass
     
     resp = Response({"ok": True})
-    
-    # Clear session cookie
     resp.delete_cookie("sessionid", path="/")
-    
-    # Clear any custom identity cookies
-    for cookie_name in ("mavops_username", "mavops_host", "mavops_ident"):
-        resp.delete_cookie(cookie_name, path="/")
-    
-    # Optionally clear CSRF cookie too (fresh start)
-    # resp.delete_cookie("csrftoken", path="/")
-    
+    resp.delete_cookie("mavops_username", path="/")
+    resp.delete_cookie("mavops_host", path="/")
+    resp.delete_cookie("mavops_ident", path="/")
     return resp
 
 @api_view(["POST"])

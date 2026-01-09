@@ -52,30 +52,45 @@ const queryClient = new QueryClient();
 
 // Sign-out helper route (clears server session, then bounce to /login)
 // Sign-out helper route - FIXED
+import { Suspense, lazy, useEffect, useState, useRef } from "react";
+// ... other imports
+
+// Sign-out helper - doesn't care if server logout fails
 function Logout() {
-  const { logout } = useAuth();
   const hasLoggedOut = useRef(false);
 
   useEffect(() => {
     if (hasLoggedOut.current) return;
     hasLoggedOut.current = true;
 
-    // Clear everything locally first
-    localStorage.removeItem('auth_token');
+    // 1. Clear ALL local state immediately
+    localStorage.clear();
     sessionStorage.clear();
     
-    // Try server logout (don't await - fire and forget)
-    logout().catch(() => {});
-    
-    // Redirect after small delay
+    // 2. Clear all cookies
+    document.cookie.split(";").forEach((c) => {
+      const name = c.trim().split("=")[0];
+      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+    });
+
+    // 3. Try server logout (fire and forget - ignore errors)
+    fetch(`${API_BASE}/auth/logout/`, {
+      method: "POST",
+      credentials: "include",
+    }).catch(() => {}); // Ignore any errors
+
+    // 4. Redirect to login
     setTimeout(() => {
-      window.location.href = '/login';
-    }, 100);
-  }, []); // Empty deps - run ONCE
+      window.location.replace('/login');
+    }, 50);
+  }, []);
 
-  return <div className="p-6">Logging out...</div>;
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="text-muted-foreground">Logging out...</div>
+    </div>
+  );
 }
-
 // Scroll to top on route change (nice UX)
 function ScrollToTop() {
   const { pathname } = useLocation();

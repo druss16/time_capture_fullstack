@@ -3,7 +3,7 @@ import React, { createContext, useContext, useMemo, useState, useCallback, useEf
 import { fetchWhoAmI, clearWhoAmICache, isTrulyAuthenticated, type WhoAmI } from "@/lib/whoami";
 
 function resolveApiBase() {
-  const raw = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123";
+  const raw = import.meta.env.VITE_API_BASE_URL || "http://localhost:5173";
   const noTrail = raw.replace(/\/+$/, "");
   return noTrail.endsWith("/api") ? noTrail : `${noTrail}/api`;
 }

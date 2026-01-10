@@ -22,6 +22,7 @@ from .serializers_billing import (
 )
 
 from rest_framework.response import Response
+from functools import wraps  # Add this import
 
 PROFESSIONAL_PLANS = ['professional', 'enterprise']
 

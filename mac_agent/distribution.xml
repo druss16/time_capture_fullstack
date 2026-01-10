@@ -11,5 +11,5 @@
     <choice id="com.mavops.timetracker" visible="false">
         <pkg-ref id="com.mavops.timetracker"/>
     </choice>
-    <pkg-ref id="com.mavops.timetracker" version="1.0.1" onConclusion="none">TimeTrackerAgent.component.pkg</pkg-ref>
+    <pkg-ref id="com.mavops.timetracker" version="1.0.3" onConclusion="none">TimeTrackerAgent.component.pkg</pkg-ref>
 </installer-gui-script>

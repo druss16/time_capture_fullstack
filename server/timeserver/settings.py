@@ -86,6 +86,22 @@ CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "False").lower(
 CELERY_TASK_TIME_LIMIT = 60 * 3
 CELERY_ACKS_LATE = True
 
+# celery.py or settings
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'visibility_timeout': 3600,
+    'socket_keepalive': True,
+    'retry_on_timeout': True,
+}
+
+CELERY_BROKER_USE_SSL = {
+    'ssl_cert_reqs': ssl.CERT_REQUIRED
+}
+CELERY_RESULT_BACKEND_USE_SSL = {
+    'ssl_cert_reqs': ssl.CERT_REQUIRED
+}
+
 # -----------------------------------------------------
 # URL / WSGI / ASGI
 # -----------------------------------------------------

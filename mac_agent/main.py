@@ -181,7 +181,7 @@ APP_VERSION       = _get("app_version", os.getenv("AGENT_APP_VERSION")) or "1.0.
 DEVICE_ID_FILE    = _get("device_id_file", os.path.expanduser("~/.mavops_device_id"))
 
 POLL_SECONDS      = int(_get("poll_seconds", _get("AGENT_POLL_SECONDS", 5, "AGENT_POLL_SECONDS")) or 5)
-MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS", 15, "AGENT_MIN_DWELL_SECONDS")) or 15)
+MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS", 5, "AGENT_MIN_DWELL_SECONDS")) or 5)
 VERBOSE           = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
 PRINT_EVERY_POLL  = bool(_get("print_every", os.getenv("AGENT_PRINT_EVERY") == "1"))
 DISABLE_AX        = bool(_get("disable_ax", os.getenv("AGENT_DISABLE_AX") == "1"))
@@ -195,7 +195,7 @@ EXCLUDE_BUNDLES.add("com.apple.python3")
 
 PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 
-MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 90))
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 180))
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 
 NUDGE_ENABLED        = bool(_get("nudge_enabled", os.getenv("AGENT_NUDGE_ENABLED") == "1") or True)

@@ -268,7 +268,7 @@
  [],
  False,
  False,
- 1767989475,
+ 1768068898,
  [('run',
    '/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/PyInstaller/bootloader/Darwin-64bit/run',
    'EXECUTABLE')],

@@ -20,10 +20,9 @@ interface CompleteStepProps {
   onComplete: () => void;
 }
 
-// Update these with your actual GitHub release URLs
 const DOWNLOAD_URLS = {
-  macos: 'https://github.com/YOUR_USERNAME/timetracker-releases/releases/latest/download/TimeTracker.pkg',
-  windows: 'https://github.com/YOUR_USERNAME/timetracker-releases/releases/latest/download/TimeTracker-Setup.exe',
+  macos: 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker.pkg',
+  windows: 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker-Setup.exe',
 };
 
 export default function CompleteStep({ organization, onComplete }: CompleteStepProps) {
@@ -69,8 +68,16 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
   };
 
   const handleDownload = (os: 'macos' | 'windows') => {
-    window.open(DOWNLOAD_URLS[os], '_blank');
+    const url = DOWNLOAD_URLS[os];
+    if (url) {
+      window.open(url, '_blank');
+    } else {
+      alert('Windows installer coming soon!');
+    }
   };
+
+  // Check if Windows is available
+  const windowsAvailable = !!DOWNLOAD_URLS.windows;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
@@ -130,11 +137,13 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
           {/* Windows */}
           <button
             onClick={() => handleDownload('windows')}
+            disabled={!windowsAvailable}
             className={`
               p-4 border-2 rounded-xl transition-all text-left group
-              ${platform === 'windows' 
+              ${platform === 'windows' && windowsAvailable
                 ? 'border-emerald-500 bg-emerald-50' 
                 : 'border-slate-200 hover:border-slate-300'}
+              ${!windowsAvailable ? 'opacity-60 cursor-not-allowed' : ''}
             `}
           >
             <div className="flex items-center gap-3 mb-2">
@@ -148,7 +157,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
             </div>
             <div className="flex items-center gap-1 text-emerald-600 font-semibold text-sm group-hover:underline">
               <Download className="w-4 h-4" />
-              Download .exe
+              {windowsAvailable ? 'Download .exe' : 'Coming Soon'}
             </div>
           </button>
         </div>

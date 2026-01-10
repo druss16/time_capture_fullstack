@@ -19,9 +19,15 @@
 <span class="moduletype">Script</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#AppKit.NSApp">AppKit.NSApp</a>
  &#8226;   <a href="#AppKit.NSRunningApplication">AppKit.NSRunningApplication</a>
  &#8226;   <a href="#AppKit.NSWorkspace">AppKit.NSWorkspace</a>
  &#8226;   <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#ApplicationServices.AXUIElementCopyAttributeValue">ApplicationServices.AXUIElementCopyAttributeValue</a>
+ &#8226;   <a href="#ApplicationServices.AXUIElementCreateApplication">ApplicationServices.AXUIElementCreateApplication</a>
+ &#8226;   <a href="#ApplicationServices.kAXErrorSuccess">ApplicationServices.kAXErrorSuccess</a>
+ &#8226;   <a href="#ApplicationServices.kAXFocusedWindowAttribute">ApplicationServices.kAXFocusedWindowAttribute</a>
+ &#8226;   <a href="#ApplicationServices.kAXTitleAttribute">ApplicationServices.kAXTitleAttribute</a>
  &#8226;   <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#Foundation.NSLog">Foundation.NSLog</a>
  &#8226;   <a href="#Foundation.NSObject">Foundation.NSObject</a>
@@ -186,6 +192,7 @@ imports:
  &#8226;   <a href="#operator">operator</a>
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#platform">platform</a>
+ &#8226;   <a href="#plistlib">plistlib</a>
  &#8226;   <a href="#posixpath">posixpath</a>
  &#8226;   <a href="#pyi_rth_inspect.py">pyi_rth_inspect.py</a>
  &#8226;   <a href="#re">re</a>
@@ -204,6 +211,7 @@ imports:
  &#8226;   <a href="#sys">sys</a>
  &#8226;   <a href="#threading">threading</a>
  &#8226;   <a href="#time">time</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
  &#8226;   <a href="#traceback">traceback</a>
  &#8226;   <a href="#types">types</a>
  &#8226;   <a href="#typing">typing</a>
@@ -220,7 +228,7 @@ imports:
 
 <div class="node">
   <a name="pyi_rth_inspect.py"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/PyInstaller/hooks/rthooks/pyi_rth_inspect.py" type="text/plain"><tt>pyi_rth_inspect.py</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/PyInstaller/hooks/rthooks/pyi_rth_inspect.py" type="text/plain"><tt>pyi_rth_inspect.py</tt></a>
 <span class="moduletype">Script</span>  <div class="import">
 imports:
     <a href="#inspect">inspect</a>
@@ -250,11 +258,34 @@ imported by:
 
 <div class="node">
   <a name="AppKit"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/AppKit/__init__.py" type="text/plain"><tt>AppKit</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/AppKit/__init__.py" type="text/plain"><tt>AppKit</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#AppKit.NSApp">AppKit.NSApp</a>
+ &#8226;   <a href="#AppKit.NSApplication">AppKit.NSApplication</a>
+ &#8226;   <a href="#AppKit.NSApplicationActivationPolicyAccessory">AppKit.NSApplicationActivationPolicyAccessory</a>
+ &#8226;   <a href="#AppKit.NSApplicationActivationPolicyRegular">AppKit.NSApplicationActivationPolicyRegular</a>
+ &#8226;   <a href="#AppKit.NSBackingStoreBuffered">AppKit.NSBackingStoreBuffered</a>
+ &#8226;   <a href="#AppKit.NSButton">AppKit.NSButton</a>
+ &#8226;   <a href="#AppKit.NSColor">AppKit.NSColor</a>
+ &#8226;   <a href="#AppKit.NSFloatingWindowLevel">AppKit.NSFloatingWindowLevel</a>
+ &#8226;   <a href="#AppKit.NSFont">AppKit.NSFont</a>
+ &#8226;   <a href="#AppKit.NSMenu">AppKit.NSMenu</a>
+ &#8226;   <a href="#AppKit.NSMenuItem">AppKit.NSMenuItem</a>
+ &#8226;   <a href="#AppKit.NSPopUpButton">AppKit.NSPopUpButton</a>
  &#8226;   <a href="#AppKit.NSRunningApplication">AppKit.NSRunningApplication</a>
+ &#8226;   <a href="#AppKit.NSScreen">AppKit.NSScreen</a>
+ &#8226;   <a href="#AppKit.NSScrollView">AppKit.NSScrollView</a>
+ &#8226;   <a href="#AppKit.NSStatusBar">AppKit.NSStatusBar</a>
+ &#8226;   <a href="#AppKit.NSTableColumn">AppKit.NSTableColumn</a>
+ &#8226;   <a href="#AppKit.NSTableView">AppKit.NSTableView</a>
+ &#8226;   <a href="#AppKit.NSTextField">AppKit.NSTextField</a>
+ &#8226;   <a href="#AppKit.NSVariableStatusItemLength">AppKit.NSVariableStatusItemLength</a>
+ &#8226;   <a href="#AppKit.NSWindow">AppKit.NSWindow</a>
+ &#8226;   <a href="#AppKit.NSWindowStyleMaskClosable">AppKit.NSWindowStyleMaskClosable</a>
+ &#8226;   <a href="#AppKit.NSWindowStyleMaskResizable">AppKit.NSWindowStyleMaskResizable</a>
+ &#8226;   <a href="#AppKit.NSWindowStyleMaskTitled">AppKit.NSWindowStyleMaskTitled</a>
  &#8226;   <a href="#AppKit.NSWorkspace">AppKit.NSWorkspace</a>
  &#8226;   <a href="#AppKit._AppKit">AppKit._AppKit</a>
  &#8226;   <a href="#AppKit._inlines">AppKit._inlines</a>
@@ -272,11 +303,158 @@ imported by:
  &#8226;   <a href="#AppKit._inlines">AppKit._inlines</a>
  &#8226;   <a href="#AppKit._metadata">AppKit._metadata</a>
  &#8226;   <a href="#AppKit._nsapp">AppKit._nsapp</a>
+ &#8226;   <a href="#Cocoa">Cocoa</a>
  &#8226;   <a href="#Quartz">Quartz</a>
  &#8226;   <a href="#Quartz.ImageKit">Quartz.ImageKit</a>
  &#8226;   <a href="#Quartz.PDFKit">Quartz.PDFKit</a>
  &#8226;   <a href="#Quartz.QuickLookUI">Quartz.QuickLookUI</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSApp"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSApp</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSApplication"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSApplication</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSApplicationActivationPolicyAccessory"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSApplicationActivationPolicyAccessory</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSApplicationActivationPolicyRegular"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSApplicationActivationPolicyRegular</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSBackingStoreBuffered"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSBackingStoreBuffered</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSButton"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSButton</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSColor"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSColor</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSFloatingWindowLevel"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSFloatingWindowLevel</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSFont"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSFont</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSMenu"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSMenu</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSMenuItem"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSMenuItem</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSPopUpButton"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSPopUpButton</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
 
   </div>
 
@@ -289,6 +467,138 @@ imported by:
 imported by:
     <a href="#AppKit">AppKit</a>
  &#8226;   <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSScreen"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSScreen</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSScrollView"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSScrollView</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSStatusBar"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSStatusBar</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSTableColumn"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSTableColumn</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSTableView"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSTableView</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSTextField"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSTextField</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSVariableStatusItemLength"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSVariableStatusItemLength</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSWindow"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSWindow</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSWindowStyleMaskClosable"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSWindowStyleMaskClosable</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSWindowStyleMaskResizable"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSWindowStyleMaskResizable</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="AppKit.NSWindowStyleMaskTitled"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSWindowStyleMaskTitled</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
 
   </div>
 
@@ -308,7 +618,7 @@ imported by:
 
 <div class="node">
   <a name="AppKit._AppKit"></a>
-  <tt>AppKit._AppKit</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/AppKit/_AppKit.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>AppKit._AppKit</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/AppKit/_AppKit.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
 
@@ -323,7 +633,7 @@ imported by:
 
 <div class="node">
   <a name="AppKit._inlines"></a>
-  <tt>AppKit._inlines</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/AppKit/_inlines.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>AppKit._inlines</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/AppKit/_inlines.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
 
@@ -338,7 +648,7 @@ imported by:
 
 <div class="node">
   <a name="AppKit._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/AppKit/_metadata.py" type="text/plain"><tt>AppKit._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/AppKit/_metadata.py" type="text/plain"><tt>AppKit._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
@@ -357,7 +667,7 @@ imported by:
 
 <div class="node">
   <a name="AppKit._nsapp"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/AppKit/_nsapp.py" type="text/plain"><tt>AppKit._nsapp</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/AppKit/_nsapp.py" type="text/plain"><tt>AppKit._nsapp</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
@@ -374,8 +684,21 @@ imported by:
 
 <div class="node">
   <a name="ApplicationServices"></a>
-  <a target="code" href="" type="text/plain"><tt>ApplicationServices</tt></a>
-<span class="moduletype">MissingModule</span>  <div class="import">
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/ApplicationServices/__init__.py" type="text/plain"><tt>ApplicationServices</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#ApplicationServices.AXUIElementCopyAttributeValue">ApplicationServices.AXUIElementCopyAttributeValue</a>
+ &#8226;   <a href="#ApplicationServices.AXUIElementCreateApplication">ApplicationServices.AXUIElementCreateApplication</a>
+ &#8226;   <a href="#ApplicationServices.kAXErrorSuccess">ApplicationServices.kAXErrorSuccess</a>
+ &#8226;   <a href="#ApplicationServices.kAXFocusedWindowAttribute">ApplicationServices.kAXFocusedWindowAttribute</a>
+ &#8226;   <a href="#ApplicationServices.kAXTitleAttribute">ApplicationServices.kAXTitleAttribute</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#Quartz">Quartz</a>
+ &#8226;   <a href="#objc">objc</a>
+
+  </div>
+  <div class="import">
 imported by:
     <a href="#main.py">main.py</a>
 
@@ -384,8 +707,85 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="ApplicationServices.AXUIElementCopyAttributeValue"></a>
+  <a target="code" href="" type="text/plain"><tt>ApplicationServices.AXUIElementCopyAttributeValue</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="ApplicationServices.AXUIElementCreateApplication"></a>
+  <a target="code" href="" type="text/plain"><tt>ApplicationServices.AXUIElementCreateApplication</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="ApplicationServices.kAXErrorSuccess"></a>
+  <a target="code" href="" type="text/plain"><tt>ApplicationServices.kAXErrorSuccess</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="ApplicationServices.kAXFocusedWindowAttribute"></a>
+  <a target="code" href="" type="text/plain"><tt>ApplicationServices.kAXFocusedWindowAttribute</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="ApplicationServices.kAXTitleAttribute"></a>
+  <a target="code" href="" type="text/plain"><tt>ApplicationServices.kAXTitleAttribute</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="Cocoa"></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Cocoa/__init__.py" type="text/plain"><tt>Cocoa</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#objc">objc</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#HIServices">HIServices</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="CoreFoundation"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/CoreFoundation/__init__.py" type="text/plain"><tt>CoreFoundation</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/CoreFoundation/__init__.py" type="text/plain"><tt>CoreFoundation</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#CoreFoundation">CoreFoundation</a>
@@ -404,6 +804,7 @@ imported by:
  &#8226;   <a href="#CoreFoundation._inlines">CoreFoundation._inlines</a>
  &#8226;   <a href="#CoreFoundation._metadata">CoreFoundation._metadata</a>
  &#8226;   <a href="#CoreFoundation._static">CoreFoundation._static</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
  &#8226;   <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
  &#8226;   <a href="#Quartz.CoreVideo">Quartz.CoreVideo</a>
@@ -414,7 +815,7 @@ imported by:
 
 <div class="node">
   <a name="CoreFoundation._CoreFoundation"></a>
-  <tt>CoreFoundation._CoreFoundation</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/CoreFoundation/_CoreFoundation.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>CoreFoundation._CoreFoundation</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/CoreFoundation/_CoreFoundation.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#CoreFoundation">CoreFoundation</a>
 
@@ -429,7 +830,7 @@ imported by:
 
 <div class="node">
   <a name="CoreFoundation._inlines"></a>
-  <tt>CoreFoundation._inlines</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/CoreFoundation/_inlines.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>CoreFoundation._inlines</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/CoreFoundation/_inlines.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#CoreFoundation">CoreFoundation</a>
 
@@ -444,7 +845,7 @@ imported by:
 
 <div class="node">
   <a name="CoreFoundation._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/CoreFoundation/_metadata.py" type="text/plain"><tt>CoreFoundation._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/CoreFoundation/_metadata.py" type="text/plain"><tt>CoreFoundation._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#CoreFoundation">CoreFoundation</a>
@@ -463,7 +864,7 @@ imported by:
 
 <div class="node">
   <a name="CoreFoundation._static"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/CoreFoundation/_static.py" type="text/plain"><tt>CoreFoundation._static</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/CoreFoundation/_static.py" type="text/plain"><tt>CoreFoundation._static</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#CoreFoundation">CoreFoundation</a>
@@ -479,14 +880,76 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="CoreText"></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/CoreText/__init__.py" type="text/plain"><tt>CoreText</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#CoreFoundation">CoreFoundation</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#CoreText._manual">CoreText._manual</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
+ &#8226;   <a href="#Quartz">Quartz</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#sys">sys</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#CoreText._manual">CoreText._manual</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="CoreText._manual"></a>
+  <tt>CoreText._manual</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/CoreText/_manual.cpython-312-darwin.so</tt></span>  <div class="import">
+imports:
+    <a href="#CoreText">CoreText</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#CoreText">CoreText</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="CoreText._metadata"></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/CoreText/_metadata.py" type="text/plain"><tt>CoreText._metadata</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#CoreText">CoreText</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="Foundation"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/__init__.py" type="text/plain"><tt>Foundation</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/__init__.py" type="text/plain"><tt>Foundation</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#CoreFoundation">CoreFoundation</a>
  &#8226;   <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#Foundation.NSLog">Foundation.NSLog</a>
+ &#8226;   <a href="#Foundation.NSMakeRect">Foundation.NSMakeRect</a>
+ &#8226;   <a href="#Foundation.NSMakeSize">Foundation.NSMakeSize</a>
  &#8226;   <a href="#Foundation.NSObject">Foundation.NSObject</a>
+ &#8226;   <a href="#Foundation.NSTimer">Foundation.NSTimer</a>
  &#8226;   <a href="#Foundation._Foundation">Foundation._Foundation</a>
  &#8226;   <a href="#Foundation._context">Foundation._context</a>
  &#8226;   <a href="#Foundation._functiondefines">Foundation._functiondefines</a>
@@ -516,6 +979,7 @@ imported by:
  &#8226;   <a href="#Quartz.QuartzFilters">Quartz.QuartzFilters</a>
  &#8226;   <a href="#UserNotifications">UserNotifications</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
 
   </div>
 
@@ -534,12 +998,49 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="Foundation.NSMakeRect"></a>
+  <a target="code" href="" type="text/plain"><tt>Foundation.NSMakeRect</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#Foundation">Foundation</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="Foundation.NSMakeSize"></a>
+  <a target="code" href="" type="text/plain"><tt>Foundation.NSMakeSize</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#Foundation">Foundation</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="Foundation.NSObject"></a>
   <a target="code" href="" type="text/plain"><tt>Foundation.NSObject</tt></a>
 <span class="moduletype">MissingModule</span>  <div class="import">
 imported by:
     <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="Foundation.NSTimer"></a>
+  <a target="code" href="" type="text/plain"><tt>Foundation.NSTimer</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#Foundation">Foundation</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
 
   </div>
 
@@ -547,7 +1048,7 @@ imported by:
 
 <div class="node">
   <a name="Foundation._Foundation"></a>
-  <tt>Foundation._Foundation</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/_Foundation.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Foundation._Foundation</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/_Foundation.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
 
@@ -562,7 +1063,7 @@ imported by:
 
 <div class="node">
   <a name="Foundation._context"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/_context.py" type="text/plain"><tt>Foundation._context</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/_context.py" type="text/plain"><tt>Foundation._context</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -578,7 +1079,7 @@ imported by:
 
 <div class="node">
   <a name="Foundation._functiondefines"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/_functiondefines.py" type="text/plain"><tt>Foundation._functiondefines</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/_functiondefines.py" type="text/plain"><tt>Foundation._functiondefines</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -594,7 +1095,7 @@ imported by:
 
 <div class="node">
   <a name="Foundation._inlines"></a>
-  <tt>Foundation._inlines</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/_inlines.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Foundation._inlines</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/_inlines.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
 
@@ -609,7 +1110,7 @@ imported by:
 
 <div class="node">
   <a name="Foundation._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/_metadata.py" type="text/plain"><tt>Foundation._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/_metadata.py" type="text/plain"><tt>Foundation._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -628,7 +1129,7 @@ imported by:
 
 <div class="node">
   <a name="Foundation._nsindexset"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/_nsindexset.py" type="text/plain"><tt>Foundation._nsindexset</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/_nsindexset.py" type="text/plain"><tt>Foundation._nsindexset</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -645,7 +1146,7 @@ imported by:
 
 <div class="node">
   <a name="Foundation._nsobject"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/_nsobject.py" type="text/plain"><tt>Foundation._nsobject</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/_nsobject.py" type="text/plain"><tt>Foundation._nsobject</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -664,7 +1165,7 @@ imported by:
 
 <div class="node">
   <a name="Foundation._nsurl"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Foundation/_nsurl.py" type="text/plain"><tt>Foundation._nsurl</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Foundation/_nsurl.py" type="text/plain"><tt>Foundation._nsurl</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -675,6 +1176,64 @@ imports:
   <div class="import">
 imported by:
     <a href="#Foundation">Foundation</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="HIServices"></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/HIServices/__init__.py" type="text/plain"><tt>HIServices</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#Cocoa">Cocoa</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#HIServices._HIServices">HIServices._HIServices</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#sys">sys</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#HIServices._HIServices">HIServices._HIServices</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="HIServices._HIServices"></a>
+  <tt>HIServices._HIServices</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/HIServices/_HIServices.abi3.so</tt></span>  <div class="import">
+imports:
+    <a href="#HIServices">HIServices</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#HIServices">HIServices</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="HIServices._metadata"></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/HIServices/_metadata.py" type="text/plain"><tt>HIServices._metadata</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#HIServices">HIServices</a>
 
   </div>
 
@@ -693,7 +1252,7 @@ imported by:
 
 <div class="node">
   <a name="PyObjCTools.KeyValueCoding"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/PyObjCTools/KeyValueCoding.py" type="text/plain"><tt>PyObjCTools.KeyValueCoding</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/PyObjCTools/KeyValueCoding.py" type="text/plain"><tt>PyObjCTools.KeyValueCoding</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#PyObjCTools">PyObjCTools</a>
@@ -712,7 +1271,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/__init__.py" type="text/plain"><tt>Quartz</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/__init__.py" type="text/plain"><tt>Quartz</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
@@ -738,7 +1297,9 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#Quartz">Quartz</a>
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#Quartz">Quartz</a>
  &#8226;   <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
  &#8226;   <a href="#Quartz.CoreGraphics._contextmanager">Quartz.CoreGraphics._contextmanager</a>
  &#8226;   <a href="#Quartz.CoreVideo">Quartz.CoreVideo</a>
@@ -781,7 +1342,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreGraphics"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreGraphics/__init__.py" type="text/plain"><tt>Quartz.CoreGraphics</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreGraphics/__init__.py" type="text/plain"><tt>Quartz.CoreGraphics</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#CoreFoundation">CoreFoundation</a>
@@ -831,7 +1392,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreGraphics._callbacks"></a>
-  <tt>Quartz.CoreGraphics._callbacks</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreGraphics/_callbacks.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.CoreGraphics._callbacks</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreGraphics/_callbacks.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
 
@@ -846,7 +1407,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreGraphics._contextmanager"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreGraphics/_contextmanager.py" type="text/plain"><tt>Quartz.CoreGraphics._contextmanager</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreGraphics/_contextmanager.py" type="text/plain"><tt>Quartz.CoreGraphics._contextmanager</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz">Quartz</a>
@@ -863,7 +1424,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreGraphics._coregraphics"></a>
-  <tt>Quartz.CoreGraphics._coregraphics</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreGraphics/_coregraphics.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.CoreGraphics._coregraphics</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreGraphics/_coregraphics.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
 
@@ -878,7 +1439,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreGraphics._doubleindirect"></a>
-  <tt>Quartz.CoreGraphics._doubleindirect</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreGraphics/_doubleindirect.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.CoreGraphics._doubleindirect</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreGraphics/_doubleindirect.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
 
@@ -893,7 +1454,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreGraphics._inlines"></a>
-  <tt>Quartz.CoreGraphics._inlines</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreGraphics/_inlines.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.CoreGraphics._inlines</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreGraphics/_inlines.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
 
@@ -908,7 +1469,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreGraphics._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreGraphics/_metadata.py" type="text/plain"><tt>Quartz.CoreGraphics._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreGraphics/_metadata.py" type="text/plain"><tt>Quartz.CoreGraphics._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
@@ -927,7 +1488,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreGraphics._sortandmap"></a>
-  <tt>Quartz.CoreGraphics._sortandmap</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreGraphics/_sortandmap.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.CoreGraphics._sortandmap</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreGraphics/_sortandmap.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
 
@@ -942,7 +1503,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreVideo"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreVideo/__init__.py" type="text/plain"><tt>Quartz.CoreVideo</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreVideo/__init__.py" type="text/plain"><tt>Quartz.CoreVideo</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#CoreFoundation">CoreFoundation</a>
@@ -967,7 +1528,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreVideo._CVPixelBuffer"></a>
-  <tt>Quartz.CoreVideo._CVPixelBuffer</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreVideo/_CVPixelBuffer.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.CoreVideo._CVPixelBuffer</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreVideo/_CVPixelBuffer.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.CoreVideo">Quartz.CoreVideo</a>
 
@@ -982,7 +1543,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.CoreVideo._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/CoreVideo/_metadata.py" type="text/plain"><tt>Quartz.CoreVideo._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/CoreVideo/_metadata.py" type="text/plain"><tt>Quartz.CoreVideo._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.CoreVideo">Quartz.CoreVideo</a>
@@ -1001,7 +1562,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.ImageIO"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/ImageIO/__init__.py" type="text/plain"><tt>Quartz.ImageIO</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/ImageIO/__init__.py" type="text/plain"><tt>Quartz.ImageIO</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#Quartz">Quartz</a>
@@ -1024,7 +1585,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.ImageIO._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/ImageIO/_metadata.py" type="text/plain"><tt>Quartz.ImageIO._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/ImageIO/_metadata.py" type="text/plain"><tt>Quartz.ImageIO._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.ImageIO">Quartz.ImageIO</a>
@@ -1043,7 +1604,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.ImageKit"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/ImageKit/__init__.py" type="text/plain"><tt>Quartz.ImageKit</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/ImageKit/__init__.py" type="text/plain"><tt>Quartz.ImageKit</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
@@ -1068,7 +1629,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.ImageKit._imagekit"></a>
-  <tt>Quartz.ImageKit._imagekit</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/ImageKit/_imagekit.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.ImageKit._imagekit</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/ImageKit/_imagekit.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.ImageKit">Quartz.ImageKit</a>
 
@@ -1083,7 +1644,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.ImageKit._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/ImageKit/_metadata.py" type="text/plain"><tt>Quartz.ImageKit._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/ImageKit/_metadata.py" type="text/plain"><tt>Quartz.ImageKit._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.ImageKit">Quartz.ImageKit</a>
@@ -1102,7 +1663,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.PDFKit"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/PDFKit/__init__.py" type="text/plain"><tt>Quartz.PDFKit</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/PDFKit/__init__.py" type="text/plain"><tt>Quartz.PDFKit</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
@@ -1128,7 +1689,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.PDFKit._PDFKit"></a>
-  <tt>Quartz.PDFKit._PDFKit</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/PDFKit/_PDFKit.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.PDFKit._PDFKit</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/PDFKit/_PDFKit.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.PDFKit">Quartz.PDFKit</a>
 
@@ -1143,7 +1704,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.PDFKit._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/PDFKit/_metadata.py" type="text/plain"><tt>Quartz.PDFKit._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/PDFKit/_metadata.py" type="text/plain"><tt>Quartz.PDFKit._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.PDFKit">Quartz.PDFKit</a>
@@ -1162,7 +1723,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuartzComposer"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuartzComposer/__init__.py" type="text/plain"><tt>Quartz.QuartzComposer</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuartzComposer/__init__.py" type="text/plain"><tt>Quartz.QuartzComposer</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -1186,7 +1747,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuartzComposer._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuartzComposer/_metadata.py" type="text/plain"><tt>Quartz.QuartzComposer._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuartzComposer/_metadata.py" type="text/plain"><tt>Quartz.QuartzComposer._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.QuartzComposer">Quartz.QuartzComposer</a>
@@ -1205,7 +1766,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuartzCore"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuartzCore/__init__.py" type="text/plain"><tt>Quartz.QuartzCore</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuartzCore/__init__.py" type="text/plain"><tt>Quartz.QuartzCore</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -1230,7 +1791,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuartzCore._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuartzCore/_metadata.py" type="text/plain"><tt>Quartz.QuartzCore._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuartzCore/_metadata.py" type="text/plain"><tt>Quartz.QuartzCore._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.QuartzCore">Quartz.QuartzCore</a>
@@ -1249,7 +1810,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuartzCore._quartzcore"></a>
-  <tt>Quartz.QuartzCore._quartzcore</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuartzCore/_quartzcore.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.QuartzCore._quartzcore</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuartzCore/_quartzcore.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.QuartzCore">Quartz.QuartzCore</a>
 
@@ -1264,7 +1825,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuartzFilters"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuartzFilters/__init__.py" type="text/plain"><tt>Quartz.QuartzFilters</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuartzFilters/__init__.py" type="text/plain"><tt>Quartz.QuartzFilters</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -1287,7 +1848,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuartzFilters._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuartzFilters/_metadata.py" type="text/plain"><tt>Quartz.QuartzFilters._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuartzFilters/_metadata.py" type="text/plain"><tt>Quartz.QuartzFilters._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.QuartzFilters">Quartz.QuartzFilters</a>
@@ -1306,7 +1867,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuickLookUI"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuickLookUI/__init__.py" type="text/plain"><tt>Quartz.QuickLookUI</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuickLookUI/__init__.py" type="text/plain"><tt>Quartz.QuickLookUI</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
@@ -1332,7 +1893,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuickLookUI._QuickLookUI"></a>
-  <tt>Quartz.QuickLookUI._QuickLookUI</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuickLookUI/_QuickLookUI.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>Quartz.QuickLookUI._QuickLookUI</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuickLookUI/_QuickLookUI.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#Quartz.QuickLookUI">Quartz.QuickLookUI</a>
 
@@ -1347,7 +1908,7 @@ imported by:
 
 <div class="node">
   <a name="Quartz.QuickLookUI._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/Quartz/QuickLookUI/_metadata.py" type="text/plain"><tt>Quartz.QuickLookUI._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/Quartz/QuickLookUI/_metadata.py" type="text/plain"><tt>Quartz.QuickLookUI._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#Quartz.QuickLookUI">Quartz.QuickLookUI</a>
@@ -1426,7 +1987,7 @@ imported by:
 
 <div class="node">
   <a name="UserNotifications"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/UserNotifications/__init__.py" type="text/plain"><tt>UserNotifications</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/UserNotifications/__init__.py" type="text/plain"><tt>UserNotifications</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#Foundation">Foundation</a>
@@ -1528,7 +2089,7 @@ imported by:
 
 <div class="node">
   <a name="UserNotifications._UserNotifications"></a>
-  <tt>UserNotifications._UserNotifications</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/UserNotifications/_UserNotifications.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>UserNotifications._UserNotifications</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/UserNotifications/_UserNotifications.abi3.so</tt></span>  <div class="import">
 imports:
     <a href="#UserNotifications">UserNotifications</a>
 
@@ -1543,7 +2104,7 @@ imported by:
 
 <div class="node">
   <a name="UserNotifications._metadata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/UserNotifications/_metadata.py" type="text/plain"><tt>UserNotifications._metadata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/UserNotifications/_metadata.py" type="text/plain"><tt>UserNotifications._metadata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#UserNotifications">UserNotifications</a>
@@ -2525,8 +3086,7 @@ imported by:
   <a name="array"></a>
   <tt>array</tt> <span class="moduletype"><tt>/opt/homebrew/Cellar/python@3.12/3.12.5/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/array.cpython-312-darwin.so</tt></span>  <div class="import">
 imported by:
-    <a href="#objc._convenience">objc._convenience</a>
- &#8226;   <a href="#socket">socket</a>
+    <a href="#socket">socket</a>
 
   </div>
 
@@ -3041,7 +3601,6 @@ imported by:
  &#8226;   <a href="#gettext">gettext</a>
  &#8226;   <a href="#http.cookiejar">http.cookiejar</a>
  &#8226;   <a href="#http.server">http.server</a>
- &#8226;   <a href="#objc._convenience">objc._convenience</a>
  &#8226;   <a href="#objc._properties">objc._properties</a>
  &#8226;   <a href="#objc._pycoder">objc._pycoder</a>
  &#8226;   <a href="#tarfile">tarfile</a>
@@ -3112,7 +3671,6 @@ imports:
 imported by:
     <a href="#ctypes._endian">ctypes._endian</a>
  &#8226;   <a href="#objc._bridgesupport">objc._bridgesupport</a>
- &#8226;   <a href="#objc._convenience">objc._convenience</a>
 
   </div>
 
@@ -3181,6 +3739,7 @@ imported by:
  &#8226;   <a href="#objc._bridges">objc._bridges</a>
  &#8226;   <a href="#plistlib">plistlib</a>
  &#8226;   <a href="#sqlite3.dbapi2">sqlite3.dbapi2</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
 
   </div>
 
@@ -7408,6 +7967,7 @@ imported by:
  &#8226;   <a href="#json.encoder">json.encoder</a>
  &#8226;   <a href="#json.scanner">json.scanner</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
 
   </div>
 
@@ -7745,7 +8305,7 @@ imported by:
 
 <div class="node">
   <a name="objc"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/__init__.py" type="text/plain"><tt>objc</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/__init__.py" type="text/plain"><tt>objc</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -7780,7 +8340,6 @@ imports:
  &#8226;   <a href="#objc._pythonify">objc._pythonify</a>
  &#8226;   <a href="#objc._structtype">objc._structtype</a>
  &#8226;   <a href="#objc._transform">objc._transform</a>
- &#8226;   <a href="#objc._types">objc._types</a>
  &#8226;   <a href="#objc.getClassList">objc.getClassList</a>
  &#8226;   <a href="#objc.loadBundle">objc.loadBundle</a>
  &#8226;   <a href="#objc.nosuchclass_error">objc.nosuchclass_error</a>
@@ -7791,14 +8350,20 @@ imported by:
     <a href="#AppKit">AppKit</a>
  &#8226;   <a href="#AppKit._metadata">AppKit._metadata</a>
  &#8226;   <a href="#AppKit._nsapp">AppKit._nsapp</a>
+ &#8226;   <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#Cocoa">Cocoa</a>
  &#8226;   <a href="#CoreFoundation">CoreFoundation</a>
  &#8226;   <a href="#CoreFoundation._metadata">CoreFoundation._metadata</a>
  &#8226;   <a href="#CoreFoundation._static">CoreFoundation._static</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
  &#8226;   <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#Foundation._metadata">Foundation._metadata</a>
  &#8226;   <a href="#Foundation._nsindexset">Foundation._nsindexset</a>
  &#8226;   <a href="#Foundation._nsobject">Foundation._nsobject</a>
  &#8226;   <a href="#Foundation._nsurl">Foundation._nsurl</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
  &#8226;   <a href="#PyObjCTools.KeyValueCoding">PyObjCTools.KeyValueCoding</a>
  &#8226;   <a href="#Quartz">Quartz</a>
  &#8226;   <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
@@ -7853,7 +8418,7 @@ imported by:
  &#8226;   <a href="#objc._pythonify">objc._pythonify</a>
  &#8226;   <a href="#objc._structtype">objc._structtype</a>
  &#8226;   <a href="#objc._transform">objc._transform</a>
- &#8226;   <a href="#objc._types">objc._types</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
 
   </div>
 
@@ -7885,7 +8450,7 @@ imported by:
 
 <div class="node">
   <a name="objc._bridges"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_bridges.py" type="text/plain"><tt>objc._bridges</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_bridges.py" type="text/plain"><tt>objc._bridges</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections.abc">collections.abc</a>
@@ -7905,7 +8470,7 @@ imported by:
 
 <div class="node">
   <a name="objc._bridgesupport"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_bridgesupport.py" type="text/plain"><tt>objc._bridgesupport</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_bridgesupport.py" type="text/plain"><tt>objc._bridgesupport</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#ctypes">ctypes</a>
@@ -7929,7 +8494,7 @@ imported by:
 
 <div class="node">
   <a name="objc._callable_docstr"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_callable_docstr.py" type="text/plain"><tt>objc._callable_docstr</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_callable_docstr.py" type="text/plain"><tt>objc._callable_docstr</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#inspect">inspect</a>
@@ -7947,7 +8512,7 @@ imported by:
 
 <div class="node">
   <a name="objc._category"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_category.py" type="text/plain"><tt>objc._category</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_category.py" type="text/plain"><tt>objc._category</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -7965,7 +8530,7 @@ imported by:
 
 <div class="node">
   <a name="objc._compat"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_compat.py" type="text/plain"><tt>objc._compat</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_compat.py" type="text/plain"><tt>objc._compat</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -7982,7 +8547,7 @@ imported by:
 
 <div class="node">
   <a name="objc._context"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_context.py" type="text/plain"><tt>objc._context</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_context.py" type="text/plain"><tt>objc._context</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -7999,18 +8564,14 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience.py" type="text/plain"><tt>objc._convenience</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience.py" type="text/plain"><tt>objc._convenience</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#PyObjCTools.KeyValueCoding">PyObjCTools.KeyValueCoding</a>
- &#8226;   <a href="#array">array</a>
- &#8226;   <a href="#copy">copy</a>
- &#8226;   <a href="#ctypes">ctypes</a>
  &#8226;   <a href="#objc">objc</a>
  &#8226;   <a href="#objc._new">objc._new</a>
  &#8226;   <a href="#objc._objc">objc._objc</a>
  &#8226;   <a href="#objc._transform">objc._transform</a>
- &#8226;   <a href="#socket">socket</a>
 
   </div>
   <div class="import">
@@ -8032,7 +8593,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_mapping"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_mapping.py" type="text/plain"><tt>objc._convenience_mapping</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_mapping.py" type="text/plain"><tt>objc._convenience_mapping</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections.abc">collections.abc</a>
@@ -8051,7 +8612,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_nsarray"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_nsarray.py" type="text/plain"><tt>objc._convenience_nsarray</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_nsarray.py" type="text/plain"><tt>objc._convenience_nsarray</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections.abc">collections.abc</a>
@@ -8072,7 +8633,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_nsdata"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_nsdata.py" type="text/plain"><tt>objc._convenience_nsdata</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_nsdata.py" type="text/plain"><tt>objc._convenience_nsdata</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8093,7 +8654,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_nsdecimal"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_nsdecimal.py" type="text/plain"><tt>objc._convenience_nsdecimal</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_nsdecimal.py" type="text/plain"><tt>objc._convenience_nsdecimal</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8113,7 +8674,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_nsdictionary"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_nsdictionary.py" type="text/plain"><tt>objc._convenience_nsdictionary</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_nsdictionary.py" type="text/plain"><tt>objc._convenience_nsdictionary</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections.abc">collections.abc</a>
@@ -8133,7 +8694,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_nsobject"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_nsobject.py" type="text/plain"><tt>objc._convenience_nsobject</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_nsobject.py" type="text/plain"><tt>objc._convenience_nsobject</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8151,7 +8712,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_nsset"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_nsset.py" type="text/plain"><tt>objc._convenience_nsset</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_nsset.py" type="text/plain"><tt>objc._convenience_nsset</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections.abc">collections.abc</a>
@@ -8171,7 +8732,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_nsstring"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_nsstring.py" type="text/plain"><tt>objc._convenience_nsstring</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_nsstring.py" type="text/plain"><tt>objc._convenience_nsstring</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8189,7 +8750,7 @@ imported by:
 
 <div class="node">
   <a name="objc._convenience_sequence"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_convenience_sequence.py" type="text/plain"><tt>objc._convenience_sequence</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_convenience_sequence.py" type="text/plain"><tt>objc._convenience_sequence</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8206,7 +8767,7 @@ imported by:
 
 <div class="node">
   <a name="objc._descriptors"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_descriptors.py" type="text/plain"><tt>objc._descriptors</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_descriptors.py" type="text/plain"><tt>objc._descriptors</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#inspect">inspect</a>
@@ -8227,7 +8788,7 @@ imported by:
 
 <div class="node">
   <a name="objc._dyld"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_dyld.py" type="text/plain"><tt>objc._dyld</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_dyld.py" type="text/plain"><tt>objc._dyld</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8246,7 +8807,7 @@ imported by:
 
 <div class="node">
   <a name="objc._framework"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_framework.py" type="text/plain"><tt>objc._framework</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_framework.py" type="text/plain"><tt>objc._framework</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8263,7 +8824,7 @@ imported by:
 
 <div class="node">
   <a name="objc._informal_protocol"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_informal_protocol.py" type="text/plain"><tt>objc._informal_protocol</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_informal_protocol.py" type="text/plain"><tt>objc._informal_protocol</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections">collections</a>
@@ -8281,7 +8842,7 @@ imported by:
 
 <div class="node">
   <a name="objc._lazyimport"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_lazyimport.py" type="text/plain"><tt>objc._lazyimport</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_lazyimport.py" type="text/plain"><tt>objc._lazyimport</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections">collections</a>
@@ -8306,7 +8867,7 @@ imported by:
 
 <div class="node">
   <a name="objc._locking"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_locking.py" type="text/plain"><tt>objc._locking</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_locking.py" type="text/plain"><tt>objc._locking</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8322,7 +8883,7 @@ imported by:
 
 <div class="node">
   <a name="objc._new"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_new.py" type="text/plain"><tt>objc._new</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_new.py" type="text/plain"><tt>objc._new</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8345,7 +8906,7 @@ imported by:
 
 <div class="node">
   <a name="objc._objc"></a>
-  <tt>objc._objc</tt> <span class="moduletype"><tt>/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_objc.cpython-312-darwin.so</tt></span>  <div class="import">
+  <tt>objc._objc</tt> <span class="moduletype"><tt>/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_objc.cpython-312-darwin.so</tt></span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
 
@@ -8373,7 +8934,7 @@ imported by:
 
 <div class="node">
   <a name="objc._properties"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_properties.py" type="text/plain"><tt>objc._properties</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_properties.py" type="text/plain"><tt>objc._properties</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections.abc">collections.abc</a>
@@ -8393,7 +8954,7 @@ imported by:
 
 <div class="node">
   <a name="objc._protocols"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_protocols.py" type="text/plain"><tt>objc._protocols</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_protocols.py" type="text/plain"><tt>objc._protocols</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8410,7 +8971,7 @@ imported by:
 
 <div class="node">
   <a name="objc._pycoder"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_pycoder.py" type="text/plain"><tt>objc._pycoder</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_pycoder.py" type="text/plain"><tt>objc._pycoder</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#collections.abc">collections.abc</a>
@@ -8431,7 +8992,7 @@ imported by:
 
 <div class="node">
   <a name="objc._pythonify"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_pythonify.py" type="text/plain"><tt>objc._pythonify</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_pythonify.py" type="text/plain"><tt>objc._pythonify</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#objc">objc</a>
@@ -8449,7 +9010,7 @@ imported by:
 
 <div class="node">
   <a name="objc._structtype"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_structtype.py" type="text/plain"><tt>objc._structtype</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_structtype.py" type="text/plain"><tt>objc._structtype</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#functools">functools</a>
@@ -8467,7 +9028,7 @@ imported by:
 
 <div class="node">
   <a name="objc._transform"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_transform.py" type="text/plain"><tt>objc._transform</tt></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/.venv/lib/python3.12/site-packages/objc/_transform.py" type="text/plain"><tt>objc._transform</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#dis">dis</a>
@@ -8485,22 +9046,6 @@ imports:
 imported by:
     <a href="#objc">objc</a>
  &#8226;   <a href="#objc._convenience">objc._convenience</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="objc._types"></a>
-  <a target="code" href="/Users/danrussell/.venvs/timetracker/lib/python3.12/site-packages/objc/_types.py" type="text/plain"><tt>objc._types</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#objc">objc</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#objc">objc</a>
 
   </div>
 
@@ -8659,6 +9204,7 @@ imported by:
  &#8226;   <a href="#tarfile">tarfile</a>
  &#8226;   <a href="#tempfile">tempfile</a>
  &#8226;   <a href="#threading">threading</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
  &#8226;   <a href="#uuid">uuid</a>
  &#8226;   <a href="#xml.sax">xml.sax</a>
@@ -8804,7 +9350,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#platform">platform</a>
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#platform">platform</a>
 
   </div>
 
@@ -8978,6 +9525,7 @@ imported by:
  &#8226;   <a href="#email.utils">email.utils</a>
  &#8226;   <a href="#statistics">statistics</a>
  &#8226;   <a href="#tempfile">tempfile</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
  &#8226;   <a href="#uuid">uuid</a>
 
   </div>
@@ -9307,7 +9855,6 @@ imported by:
  &#8226;   <a href="#ftplib">ftplib</a>
  &#8226;   <a href="#http.client">http.client</a>
  &#8226;   <a href="#http.server">http.server</a>
- &#8226;   <a href="#objc._convenience">objc._convenience</a>
  &#8226;   <a href="#platform">platform</a>
  &#8226;   <a href="#socketserver">socketserver</a>
  &#8226;   <a href="#ssl">ssl</a>
@@ -9668,10 +10215,14 @@ imported by:
  &#8226;   <a href="#AppKit._metadata">AppKit._metadata</a>
  &#8226;   <a href="#CoreFoundation">CoreFoundation</a>
  &#8226;   <a href="#CoreFoundation._metadata">CoreFoundation._metadata</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
  &#8226;   <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#Foundation._metadata">Foundation._metadata</a>
  &#8226;   <a href="#Foundation._nsobject">Foundation._nsobject</a>
  &#8226;   <a href="#Foundation._nsurl">Foundation._nsurl</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
  &#8226;   <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
  &#8226;   <a href="#Quartz.CoreGraphics._metadata">Quartz.CoreGraphics._metadata</a>
  &#8226;   <a href="#Quartz.CoreVideo">Quartz.CoreVideo</a>
@@ -9904,6 +10455,7 @@ imported by:
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#socketserver">socketserver</a>
  &#8226;   <a href="#subprocess">subprocess</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
  &#8226;   <a href="#zipfile">zipfile</a>
 
   </div>
@@ -9939,9 +10491,62 @@ imported by:
  &#8226;   <a href="#subprocess">subprocess</a>
  &#8226;   <a href="#tarfile">tarfile</a>
  &#8226;   <a href="#threading">threading</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
  &#8226;   <a href="#uuid">uuid</a>
  &#8226;   <a href="#zipfile">zipfile</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="timetracker_gui"></a>
+  <a target="code" href="/Users/danrussell/Projects/time_capture_fullstack/mac_agent/timetracker_gui.py" type="text/plain"><tt>timetracker_gui</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#AppKit.NSApp">AppKit.NSApp</a>
+ &#8226;   <a href="#AppKit.NSApplication">AppKit.NSApplication</a>
+ &#8226;   <a href="#AppKit.NSApplicationActivationPolicyAccessory">AppKit.NSApplicationActivationPolicyAccessory</a>
+ &#8226;   <a href="#AppKit.NSApplicationActivationPolicyRegular">AppKit.NSApplicationActivationPolicyRegular</a>
+ &#8226;   <a href="#AppKit.NSBackingStoreBuffered">AppKit.NSBackingStoreBuffered</a>
+ &#8226;   <a href="#AppKit.NSButton">AppKit.NSButton</a>
+ &#8226;   <a href="#AppKit.NSColor">AppKit.NSColor</a>
+ &#8226;   <a href="#AppKit.NSFloatingWindowLevel">AppKit.NSFloatingWindowLevel</a>
+ &#8226;   <a href="#AppKit.NSFont">AppKit.NSFont</a>
+ &#8226;   <a href="#AppKit.NSMenu">AppKit.NSMenu</a>
+ &#8226;   <a href="#AppKit.NSMenuItem">AppKit.NSMenuItem</a>
+ &#8226;   <a href="#AppKit.NSPopUpButton">AppKit.NSPopUpButton</a>
+ &#8226;   <a href="#AppKit.NSScreen">AppKit.NSScreen</a>
+ &#8226;   <a href="#AppKit.NSScrollView">AppKit.NSScrollView</a>
+ &#8226;   <a href="#AppKit.NSStatusBar">AppKit.NSStatusBar</a>
+ &#8226;   <a href="#AppKit.NSTableColumn">AppKit.NSTableColumn</a>
+ &#8226;   <a href="#AppKit.NSTableView">AppKit.NSTableView</a>
+ &#8226;   <a href="#AppKit.NSTextField">AppKit.NSTextField</a>
+ &#8226;   <a href="#AppKit.NSVariableStatusItemLength">AppKit.NSVariableStatusItemLength</a>
+ &#8226;   <a href="#AppKit.NSWindow">AppKit.NSWindow</a>
+ &#8226;   <a href="#AppKit.NSWindowStyleMaskClosable">AppKit.NSWindowStyleMaskClosable</a>
+ &#8226;   <a href="#AppKit.NSWindowStyleMaskResizable">AppKit.NSWindowStyleMaskResizable</a>
+ &#8226;   <a href="#AppKit.NSWindowStyleMaskTitled">AppKit.NSWindowStyleMaskTitled</a>
+ &#8226;   <a href="#Foundation">Foundation</a>
+ &#8226;   <a href="#Foundation.NSMakeRect">Foundation.NSMakeRect</a>
+ &#8226;   <a href="#Foundation.NSMakeSize">Foundation.NSMakeSize</a>
+ &#8226;   <a href="#Foundation.NSObject">Foundation.NSObject</a>
+ &#8226;   <a href="#Foundation.NSTimer">Foundation.NSTimer</a>
+ &#8226;   <a href="#datetime">datetime</a>
+ &#8226;   <a href="#json">json</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#random">random</a>
+ &#8226;   <a href="#threading">threading</a>
+ &#8226;   <a href="#time">time</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
 
   </div>
 
@@ -10108,7 +10713,9 @@ imports:
 imported by:
     <a href="#AppKit._metadata">AppKit._metadata</a>
  &#8226;   <a href="#CoreFoundation._metadata">CoreFoundation._metadata</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
  &#8226;   <a href="#Foundation._metadata">Foundation._metadata</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
  &#8226;   <a href="#Quartz.CoreGraphics._metadata">Quartz.CoreGraphics._metadata</a>
  &#8226;   <a href="#Quartz.CoreVideo._metadata">Quartz.CoreVideo._metadata</a>
  &#8226;   <a href="#Quartz.ImageIO._metadata">Quartz.ImageIO._metadata</a>
@@ -10127,6 +10734,7 @@ imported by:
  &#8226;   <a href="#importlib.resources.abc">importlib.resources.abc</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#objc._context">objc._context</a>
+ &#8226;   <a href="#timetracker_gui">timetracker_gui</a>
 
   </div>
 

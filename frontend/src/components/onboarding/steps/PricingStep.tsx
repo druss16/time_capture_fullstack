@@ -27,7 +27,7 @@ const PRICING_TIERS: PricingTier[] = [
     id: 'starter',
     name: 'Starter',
     price: 29.99,
-    priceId: 'price_starter_monthly',
+    priceId: 'price_1SnryXKdcg3wPfHV3FymP9kw',
     description: 'Essential time tracking for growing firms',
     icon: <Zap className="w-6 h-6" />,
     features: [
@@ -50,7 +50,7 @@ const PRICING_TIERS: PricingTier[] = [
     id: 'professional',
     name: 'Professional',
     price: 49.99,
-    priceId: 'price_professional_monthly',
+    priceId: 'price_1SnrzDKdcg3wPfHVydp72wac',
     description: 'Full suite with profitability insights',
     icon: <Crown className="w-6 h-6" />,
     popular: true,

@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import dj_database_url
 import sentry_sdk
+import ssl
 from sentry_sdk.integrations.django import DjangoIntegration
 from corsheaders.defaults import default_headers
 

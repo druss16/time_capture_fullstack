@@ -6244,11 +6244,14 @@ import secrets
 
 # Replace your settings_org function in tracker/views.py with this:
 
+# Add this updated settings_org function to your views.py
+# Replace the existing settings_org function with this one
+
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_org(request):
     """
-    GET: Return organization info
+    GET: Return organization info including plan
     PATCH: Update organization info
     """
     from decimal import Decimal
@@ -6261,7 +6264,17 @@ def settings_org(request):
         response_data = {
             "id": org.id,
             "name": org.name,
+            "slug": getattr(org, 'slug', ''),
         }
+        
+        # Plan info (critical for feature gating)
+        response_data["plan"] = getattr(org, 'plan', 'starter') or 'starter'
+        
+        # Trial info
+        if hasattr(org, 'trial_ends_at') and org.trial_ends_at:
+            response_data["trial_ends_at"] = org.trial_ends_at.isoformat()
+        else:
+            response_data["trial_ends_at"] = None
         
         # Billing email
         if hasattr(org, 'billing_email'):
@@ -6281,7 +6294,7 @@ def settings_org(request):
         else:
             response_data["billing_rate_default"] = "150.00"
         
-        # ✅ NEW: Default cost rate
+        # Default cost rate
         if hasattr(org, 'cost_rate_default'):
             response_data["cost_rate_default"] = str(org.cost_rate_default or "75.00")
         else:
@@ -6308,7 +6321,7 @@ def settings_org(request):
         if "billing_rate_default" in request.data and hasattr(org, 'billing_rate_default'):
             org.billing_rate_default = Decimal(str(request.data["billing_rate_default"]))
         
-        # ✅ NEW: Default cost rate
+        # Default cost rate
         if "cost_rate_default" in request.data and hasattr(org, 'cost_rate_default'):
             org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
         
@@ -6318,7 +6331,14 @@ def settings_org(request):
         response_data = {
             "id": org.id,
             "name": org.name,
+            "slug": getattr(org, 'slug', ''),
+            "plan": getattr(org, 'plan', 'starter') or 'starter',
         }
+        
+        if hasattr(org, 'trial_ends_at') and org.trial_ends_at:
+            response_data["trial_ends_at"] = org.trial_ends_at.isoformat()
+        else:
+            response_data["trial_ends_at"] = None
         
         if hasattr(org, 'billing_email'):
             response_data["billing_email"] = org.billing_email or ""
@@ -6335,7 +6355,6 @@ def settings_org(request):
         else:
             response_data["billing_rate_default"] = "150.00"
         
-        # ✅ NEW: Default cost rate
         if hasattr(org, 'cost_rate_default'):
             response_data["cost_rate_default"] = str(org.cost_rate_default or "75.00")
         else:

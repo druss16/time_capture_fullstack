@@ -21,6 +21,55 @@ from .serializers_billing import (
     EmployeeCostRateSerializer,  # ← ADD THIS
 )
 
+from rest_framework.response import Response
+
+PROFESSIONAL_PLANS = ['professional', 'enterprise']
+
+class RequireProfessionalPlanMixin:
+    """Mixin that restricts view to Professional/Enterprise plans"""
+    
+    def dispatch(self, request, *args, **kwargs):
+        # Skip check for unauthenticated (let IsAuthenticated handle it)
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+        
+        org = get_user_org(request.user)
+        if not org:
+            return Response({"error": "No organization found"}, status=404)
+        
+        plan = getattr(org, 'plan', 'starter') or 'starter'
+        
+        if plan not in PROFESSIONAL_PLANS:
+            return Response({
+                "error": "upgrade_required",
+                "message": "This feature requires a Professional or Enterprise plan.",
+                "current_plan": plan,
+                "upgrade_url": "/account/billing"
+            }, status=403)
+        
+        return super().dispatch(request, *args, **kwargs)
+
+def require_professional_plan(view_func):
+    """Decorator that restricts endpoint to Professional/Enterprise plans"""
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        org = get_user_org(request.user)
+        if not org:
+            return Response({"error": "No organization found"}, status=404)
+        
+        plan = getattr(org, 'plan', 'starter') or 'starter'
+        
+        if plan not in PROFESSIONAL_PLANS:
+            return Response({
+                "error": "upgrade_required",
+                "message": "This feature requires a Professional or Enterprise plan.",
+                "current_plan": plan,
+                "upgrade_url": "/account/billing"
+            }, status=403)
+        
+        return view_func(request, *args, **kwargs)
+    return wrapped
+
 def get_user_org(user):
     """Get the user's Organization from OrganizationMembership."""
     try:
@@ -49,13 +98,13 @@ def safe_date(d):
     return d.isoformat() if hasattr(d, 'isoformat') else d
 
 # ===============================
-# BILLING RATES VIEWSET
+# BILLING RATES VIEWSET (Professional Plan Only)
 # ===============================
-
-class BillingRateViewSet(viewsets.ModelViewSet):
+class BillingRateViewSet(RequireProfessionalPlanMixin, viewsets.ModelViewSet):
     """
     CRUD for billing rates.
     Managers/Admins only.
+    RESTRICTED TO: Professional and Enterprise plans.
     """
     serializer_class = BillingRateSerializer
     permission_classes = [IsAuthenticated]
@@ -79,6 +128,7 @@ class BillingRateViewSet(viewsets.ModelViewSet):
         
         rates = self.get_queryset().filter(user_id=user_id)
         return Response(BillingRateSerializer(rates, many=True).data)
+
 
 
 # ===============================
@@ -735,10 +785,14 @@ from django.db import IntegrityError
 
 from django.db import IntegrityError
 
-class EmployeeCostRateListView(APIView):
+# ===============================
+# EMPLOYEE COST RATES (Professional Plan Only)
+# ===============================
+class EmployeeCostRateListView(RequireProfessionalPlanMixin, APIView):
     """
     GET: List all employee cost rates for the org
     POST: Create a new cost rate (or return conflict if duplicate)
+    RESTRICTED TO: Professional and Enterprise plans.
     """
     permission_classes = [IsAuthenticated]
     
@@ -784,7 +838,6 @@ class EmployeeCostRateListView(APIView):
         ).first()
         
         if existing:
-            # Return conflict with option to update
             return Response({
                 'error': 'duplicate',
                 'message': f'A cost rate already exists for this employee on {effective_date}',
@@ -794,7 +847,7 @@ class EmployeeCostRateListView(APIView):
                     'effective_date': safe_date(existing.effective_date),
                 },
                 'hint': 'Use PATCH /api/billing/cost-rates/{id}/ to update, or choose a different effective date'
-            }, status=409)  # 409 Conflict
+            }, status=409)
         
         try:
             rate = EmployeeCostRate.objects.create(
@@ -813,101 +866,17 @@ class EmployeeCostRateListView(APIView):
             }, status=201)
             
         except IntegrityError:
-            # Race condition fallback
             return Response({
                 'error': 'duplicate',
                 'message': 'A cost rate already exists for this employee on this date',
             }, status=409)
 
-
-class EmployeeCostRateDetailView(APIView):
+class EmployeeCostRateDetailView(RequireProfessionalPlanMixin, APIView):
     """
     GET: Get a specific cost rate
     PUT/PATCH: Update a cost rate
     DELETE: Delete a cost rate
-    """
-    permission_classes = [IsAuthenticated]
-    
-    def get_object(self, pk, org):
-        try:
-            return EmployeeCostRate.objects.get(id=pk, organization=org)
-        except EmployeeCostRate.DoesNotExist:
-            return None
-    
-    def get(self, request, pk):
-        org = get_user_org(request.user)
-        if not org:
-            return Response({'error': 'No organization found'}, status=404)
-        
-        rate = self.get_object(pk, org)
-        if not rate:
-            return Response({'error': 'Cost rate not found'}, status=404)
-        
-        return Response({
-            'id': rate.id,
-            'user': rate.user.id,
-            'user_name': rate.user.username,
-            'cost_rate': str(rate.cost_rate),
-            'effective_date': safe_date(rate.effective_date),
-        })
-    
-    def put(self, request, pk):
-        return self.patch(request, pk)
-    
-    def patch(self, request, pk):
-        org = get_user_org(request.user)
-        if not org:
-            return Response({'error': 'No organization found'}, status=404)
-        
-        rate = self.get_object(pk, org)
-        if not rate:
-            return Response({'error': 'Cost rate not found'}, status=404)
-        
-        if 'cost_rate' in request.data:
-            rate.cost_rate = Decimal(str(request.data['cost_rate']))
-        if 'effective_date' in request.data:
-            rate.effective_date = request.data['effective_date']
-        
-        try:
-            rate.save()
-        except IntegrityError:
-            return Response({
-                'error': 'duplicate',
-                'message': 'A cost rate already exists for this employee on this date',
-            }, status=409)
-        
-        return Response({
-            'id': rate.id,
-            'user': rate.user.id,
-            'user_name': rate.user.username,
-            'cost_rate': str(rate.cost_rate),
-            'effective_date': safe_date(rate.effective_date),
-        })
-    
-    def delete(self, request, pk):
-        org = get_user_org(request.user)
-        if not org:
-            return Response({'error': 'No organization found'}, status=404)
-        
-        rate = self.get_object(pk, org)
-        if not rate:
-            return Response({'error': 'Cost rate not found'}, status=404)
-        
-        rate_id = rate.id
-        rate.delete()
-        
-        return Response({
-            'success': True,
-            'message': f'Cost rate {rate_id} deleted',
-        })
-
-
-
-class EmployeeCostRateDetailView(APIView):
-    """
-    GET: Get a specific cost rate
-    PUT/PATCH: Update a cost rate
-    DELETE: Delete a cost rate
+    RESTRICTED TO: Professional and Enterprise plans.
     """
     permission_classes = [IsAuthenticated]
     
@@ -946,7 +915,6 @@ class EmployeeCostRateDetailView(APIView):
         if not rate:
             return Response({'error': 'Cost rate not found'}, status=404)
         
-        # Accept both field names
         cost_rate = request.data.get('cost_rate') or request.data.get('hourly_cost')
         if cost_rate:
             rate.hourly_cost = Decimal(str(cost_rate))
@@ -987,9 +955,10 @@ class EmployeeCostRateDetailView(APIView):
         })
 
 
-# Replace your ProfitabilityReportView in views_billing.py with this:
-
-class ProfitabilityReportView(APIView):
+## ===============================
+# PROFITABILITY REPORT (Professional Plan Only)
+# ===============================
+class ProfitabilityReportView(RequireProfessionalPlanMixin, APIView):
     """
     GET: Calculate profit margins by client
     
@@ -997,6 +966,8 @@ class ProfitabilityReportView(APIView):
     - start_date: YYYY-MM-DD
     - end_date: YYYY-MM-DD
     - only_approved: true/false
+    
+    RESTRICTED TO: Professional and Enterprise plans.
     """
     permission_classes = [IsAuthenticated]
     
@@ -1021,16 +992,14 @@ class ProfitabilityReportView(APIView):
         if not start_date or not end_date:
             return Response({'error': 'start_date and end_date required'}, status=400)
         
-        # Build query - FIXED: use 'org' not 'organization'
         blocks = Block.objects.filter(
-            org=org,  # ← CORRECT field name
-            day__gte=start_date,  # ← Use 'day' field for date filtering
+            org=org,
+            day__gte=start_date,
             day__lte=end_date,
             is_billable=True,
         )
         
         if only_approved:
-            # Filter for approved timesheets OR blocks with no timesheet (legacy data)
             blocks = blocks.filter(
                 Q(timesheet__status__in=['approved', 'locked']) | 
                 Q(timesheet__isnull=True)
@@ -1043,17 +1012,13 @@ class ProfitabilityReportView(APIView):
                 organization=org,
                 effective_date__lte=end_date
             ).select_related('user').order_by('user_id', '-effective_date'):
-                # Only keep first (most recent) rate per user
                 if rate.user_id not in cost_rates:
                     cost_rates[rate.user_id] = rate.cost_rate
         except Exception:
-            # EmployeeCostRate might not exist yet
             pass
         
-        # Default cost rate if not set
         default_cost_rate = Decimal('50.00')
         
-        # Aggregate by client, then by user
         clients_data = {}
         totals = {
             'total_hours': Decimal('0'),
@@ -1070,20 +1035,17 @@ class ProfitabilityReportView(APIView):
             user_id = block.user_id
             user_name = f"{block.user.first_name} {block.user.last_name}".strip() or block.user.username
             
-            # Calculate hours from minutes
             if block.minutes:
                 hours = Decimal(str(block.minutes)) / Decimal('60')
             else:
                 hours = Decimal('0')
             
-            # Get rates
             billing_rate = Decimal(str(block.billing_rate)) if block.billing_rate else Decimal('0')
             cost_rate = cost_rates.get(user_id, default_cost_rate)
             
             revenue = hours * billing_rate
             cost = hours * cost_rate
             
-            # Initialize client if needed
             if client_id not in clients_data:
                 clients_data[client_id] = {
                     'client_id': client_id,
@@ -1096,7 +1058,6 @@ class ProfitabilityReportView(APIView):
                     'staff': {}
                 }
             
-            # Initialize staff if needed
             if user_id not in clients_data[client_id]['staff']:
                 clients_data[client_id]['staff'][user_id] = {
                     'user_id': user_id,
@@ -1108,7 +1069,6 @@ class ProfitabilityReportView(APIView):
                     'cost': Decimal('0'),
                 }
             
-            # Accumulate
             clients_data[client_id]['total_hours'] += hours
             clients_data[client_id]['billable_hours'] += hours
             clients_data[client_id]['total_revenue'] += revenue
@@ -1123,7 +1083,6 @@ class ProfitabilityReportView(APIView):
             totals['total_revenue'] += revenue
             totals['total_cost'] += cost
         
-        # Format response
         clients_list = []
         for client_id, client in clients_data.items():
             gross_margin = client['total_revenue'] - client['total_cost']
@@ -1132,7 +1091,6 @@ class ProfitabilityReportView(APIView):
                 if client['total_revenue'] > 0 else 0
             )
             
-            # Format staff details
             staff_details = []
             for user_id, staff in client['staff'].items():
                 staff_margin = staff['revenue'] - staff['cost']
@@ -1165,10 +1123,8 @@ class ProfitabilityReportView(APIView):
                 'staff_details': staff_details,
             })
         
-        # Sort by revenue descending
         clients_list.sort(key=lambda x: x['total_revenue'], reverse=True)
         
-        # Calculate total margin
         total_margin = totals['total_revenue'] - totals['total_cost']
         total_margin_pct = (
             float(total_margin / totals['total_revenue'] * 100)
@@ -1446,6 +1402,7 @@ class TimesheetLockView(APIView):
 
 
 @api_view(['GET'])
+@require_professional_plan
 def timesheet_history(request):
     """
     Get all approved/locked timesheets with totals calculated from blocks.
@@ -1533,6 +1490,7 @@ def timesheet_history(request):
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
+@require_professional_plan
 def billing_rates_list(request):
     """
     GET: List all billing rates for the org
@@ -1599,6 +1557,7 @@ def billing_rates_list(request):
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
+@require_professional_plan
 def billing_rates_detail(request, rate_id):
     """Get, update, or delete a specific billing rate"""
     org = get_user_org(request.user)

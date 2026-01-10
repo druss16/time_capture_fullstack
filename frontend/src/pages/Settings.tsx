@@ -1,6 +1,8 @@
 /**
  * Settings.tsx — Org Admin Settings Page
- * STRONGER FONTS - darker text, bolder weights
+ * With Plan-Based Feature Gating
+ * Starter plan: Organization, Team, Clients, Devices, Token
+ * Professional plan: All features including Billing Rates & Employee Costs
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -25,6 +27,8 @@ import {
   Eye,
   EyeOff,
   DollarSign,
+  Lock,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -33,12 +37,18 @@ const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
 // Types
+type PlanType = 'trial' | 'starter' | 'professional' | 'enterprise';
+
 type OrgInfo = {
   id: number;
   name: string;
+  slug?: string;
+  plan: PlanType;
+  trial_ends_at: string | null;
   billing_email: string;
   billing_contact: string;
   billing_rate_default: string;
+  cost_rate_default?: string;
   created_at: string;
 };
 
@@ -107,6 +117,68 @@ type EmployeeCostRate = {
 
 type Tab = 'organization' | 'team' | 'clients' | 'billing' | 'costs' | 'devices' | 'token';
 
+// Define which plans can access which features
+const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'enterprise'];
+
+interface TabConfig {
+  id: Tab;
+  label: string;
+  icon: React.ReactNode;
+  requiredPlan?: PlanType[]; // If undefined, all plans can access
+}
+
+// ============================================================================
+// Upgrade Prompt Component
+// ============================================================================
+function UpgradePrompt({ featureName }: { featureName: string }) {
+  return (
+    <div className="relative flex items-center justify-center min-h-[400px]">
+      {/* Blurred background placeholder */}
+      <div className="absolute inset-0 overflow-hidden rounded-2xl">
+        <div className="w-full h-full bg-gradient-to-br from-slate-100 to-slate-200 opacity-60 blur-sm" />
+        {/* Fake content behind blur */}
+        <div className="absolute inset-0 p-6 opacity-30 blur-[2px]">
+          <div className="h-8 w-48 bg-slate-300 rounded mb-4" />
+          <div className="h-20 bg-emerald-100 rounded-xl mb-4" />
+          <div className="h-16 bg-blue-50 rounded-xl mb-6" />
+          <div className="space-y-3">
+            <div className="h-12 bg-slate-200 rounded-lg" />
+            <div className="h-12 bg-slate-200 rounded-lg" />
+            <div className="h-12 bg-slate-200 rounded-lg" />
+          </div>
+        </div>
+      </div>
+      
+      {/* Lock overlay */}
+      <div className="relative z-10 text-center p-8 bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border-2 border-slate-200 max-w-md">
+        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Lock className="w-8 h-8 text-slate-400" />
+        </div>
+        <h3 className="text-xl font-extrabold text-slate-900 mb-2">
+          {featureName}
+        </h3>
+        <p className="text-slate-600 font-medium mb-6">
+          This feature is available on the <span className="font-bold text-primary">Professional</span> plan.
+          Upgrade to unlock advanced billing rate management and profitability tracking.
+        </p>
+        <button
+          onClick={() => {
+            // Could open Stripe checkout or a modal
+            window.location.href = '/billing?upgrade=true';
+          }}
+          className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25"
+        >
+          <Sparkles className="w-5 h-5" />
+          Upgrade to Professional
+        </button>
+        <p className="text-sm text-slate-500 font-medium mt-4">
+          Starting at $49.99/user/month
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ============================================================================
 // Component
 // ============================================================================
@@ -118,6 +190,7 @@ export default function Settings() {
 
   // Data states
   const [orgInfo, setOrgInfo] = useState<OrgInfo | null>(null);
+  const [orgPlan, setOrgPlan] = useState<PlanType>('starter');
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
@@ -150,6 +223,21 @@ export default function Settings() {
     loadUserInfo();
   }, []);
 
+  // Load org info on mount to get plan
+  useEffect(() => {
+    const loadOrgPlan = async () => {
+      try {
+        const org = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`);
+        setOrgInfo(org);
+        setOrgPlan(org.plan || 'starter');
+      } catch (err) {
+        console.error('Failed to load org plan:', err);
+        setOrgPlan('starter');
+      }
+    };
+    loadOrgPlan();
+  }, []);
+
   const loadTabData = useCallback(async (tab: Tab) => {
     setLoading(true);
     setError(null);
@@ -158,6 +246,7 @@ export default function Settings() {
         case 'organization':
           const org = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`);
           setOrgInfo(org);
+          setOrgPlan(org.plan || 'starter');
           break;
         case 'team':
           const team = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`);
@@ -174,20 +263,26 @@ export default function Settings() {
           setClients(clientList || []);
           break;
         case 'billing':
-          const rates = await safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`);
-          setBillingRates(rates || []);
-          const [clientsForRates, teamForRates] = await Promise.all([
-            safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
-            safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
-          ]);
-          setClients(clientsForRates || []);
-          setTeamMembers(teamForRates || []);
+          // Only load if plan allows
+          if (PROFESSIONAL_PLANS.includes(orgPlan)) {
+            const rates = await safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`);
+            setBillingRates(rates || []);
+            const [clientsForRates, teamForRates] = await Promise.all([
+              safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
+              safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
+            ]);
+            setClients(clientsForRates || []);
+            setTeamMembers(teamForRates || []);
+          }
           break;
         case 'costs':
-          const costRates = await safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []);
-          setEmployeeCostRates(costRates || []);
-          const teamForCosts = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []);
-          setTeamMembers(teamForCosts || []);
+          // Only load if plan allows
+          if (PROFESSIONAL_PLANS.includes(orgPlan)) {
+            const costRates = await safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []);
+            setEmployeeCostRates(costRates || []);
+            const teamForCosts = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []);
+            setTeamMembers(teamForCosts || []);
+          }
           break;
         case 'devices':
           const deviceList = await safeFetchJson<Device[]>(`${API_BASE}/settings/devices/`);
@@ -203,21 +298,36 @@ export default function Settings() {
     } finally {
       setLoading(false);
     }
-  }, [currentUserId]);
+  }, [currentUserId, orgPlan]);
 
   useEffect(() => {
     loadTabData(activeTab);
   }, [activeTab, loadTabData]);
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  const tabs: TabConfig[] = [
     { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
     { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
     { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
-    { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" /> },
-    { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" /> },
+    { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: PROFESSIONAL_PLANS },
+    { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: PROFESSIONAL_PLANS },
     { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
     { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
   ];
+
+  // Check if a tab is locked due to plan restrictions
+  const isTabLocked = (tab: TabConfig): boolean => {
+    if (!tab.requiredPlan) return false;
+    return !tab.requiredPlan.includes(orgPlan);
+  };
+
+  // Get feature name for locked display
+  const getLockedFeatureName = (tabId: Tab): string => {
+    switch (tabId) {
+      case 'billing': return 'Billing Rates';
+      case 'costs': return 'Employee Cost Rates';
+      default: return 'This Feature';
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -251,22 +361,65 @@ export default function Settings() {
           {/* Sidebar Tabs */}
           <div className="w-56 flex-shrink-0">
             <nav className="space-y-1">
-              {tabs.map(tab => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={cn(
-                    'w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold transition-all',
-                    activeTab === tab.id
-                      ? 'bg-primary text-white shadow-lg shadow-primary/25'
-                      : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
-                  )}
-                >
-                  {tab.icon}
-                  {tab.label}
-                </button>
-              ))}
+              {tabs.map(tab => {
+                const isLocked = isTabLocked(tab);
+                
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={cn(
+                      'w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold transition-all',
+                      isLocked
+                        ? 'text-slate-400 hover:bg-slate-100'
+                        : activeTab === tab.id
+                          ? 'bg-primary text-white shadow-lg shadow-primary/25'
+                          : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                    )}
+                  >
+                    <span className="relative">
+                      {tab.icon}
+                      {isLocked && (
+                        <Lock className="w-2.5 h-2.5 absolute -top-1 -right-1 text-slate-400" />
+                      )}
+                    </span>
+                    <span className="flex-1 text-left">{tab.label}</span>
+                    {isLocked && (
+                      <Lock className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                );
+              })}
             </nav>
+
+            {/* Plan Badge */}
+            <div className="mt-4">
+              <div className={cn(
+                'px-4 py-3 rounded-xl text-center',
+                orgPlan === 'professional' || orgPlan === 'enterprise'
+                  ? 'bg-primary/10 border-2 border-primary/20'
+                  : 'bg-amber-50 border-2 border-amber-200'
+              )}>
+                <p className={cn(
+                  'text-sm font-bold',
+                  orgPlan === 'professional' || orgPlan === 'enterprise'
+                    ? 'text-primary'
+                    : 'text-amber-700'
+                )}>
+                  {orgPlan === 'trial' ? '🎁 Trial Plan' : 
+                   orgPlan === 'starter' ? '⭐ Starter Plan' :
+                   orgPlan === 'professional' ? '💎 Professional' : '🏢 Enterprise'}
+                </p>
+                {(orgPlan === 'starter' || orgPlan === 'trial') && (
+                  <button 
+                    onClick={() => window.location.href = '/billing?upgrade=true'}
+                    className="text-xs text-amber-600 font-semibold hover:underline mt-1"
+                  >
+                    Upgrade for more features →
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Content Area */}
@@ -281,67 +434,77 @@ export default function Settings() {
                 </div>
               ) : (
                 <>
-                  {activeTab === 'organization' && (
-                    <OrganizationTab
-                      orgInfo={orgInfo}
-                      onUpdate={(updated) => setOrgInfo(updated)}
-                      onSuccess={showSuccess}
-                      onError={showError}
-                    />
-                  )}
-                  {activeTab === 'team' && (
-                    <TeamTab
-                      members={teamMembers}
-                      currentUserId={currentUserId}
-                      currentUserRole={currentUserRole}
-                      onRefresh={() => loadTabData('team')}
-                      onSuccess={showSuccess}
-                      onError={showError}
-                    />
-                  )}
-                  {activeTab === 'clients' && (
-                    <ClientsTab
-                      clients={clients}
-                      onRefresh={() => loadTabData('clients')}
-                      onSuccess={showSuccess}
-                      onError={showError}
-                    />
-                  )}
-                  {activeTab === 'billing' && (
-                    <BillingRatesTab
-                      rates={billingRates}
-                      users={teamMembers}
-                      clients={clients}
-                      orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
-                      onRefresh={() => loadTabData('billing')}
-                      onSuccess={showSuccess}
-                      onError={showError}
-                    />
-                  )}
-                  {activeTab === 'costs' && (
-                    <EmployeeCostRatesTab
-                      rates={employeeCostRates}
-                      users={teamMembers}
-                      onRefresh={() => loadTabData('costs')}
-                      onSuccess={showSuccess}
-                      onError={showError}
-                    />
-                  )}
-                  {activeTab === 'devices' && (
-                    <DevicesTab
-                      devices={devices}
-                      onRefresh={() => loadTabData('devices')}
-                      onSuccess={showSuccess}
-                      onError={showError}
-                    />
-                  )}
-                  {activeTab === 'token' && (
-                    <TokenTab
-                      token={installToken}
-                      onRefresh={() => loadTabData('token')}
-                      onSuccess={showSuccess}
-                      onError={showError}
-                    />
+                  {/* Check if tab is locked */}
+                  {isTabLocked(tabs.find(t => t.id === activeTab)!) ? (
+                    <UpgradePrompt featureName={getLockedFeatureName(activeTab)} />
+                  ) : (
+                    <>
+                      {activeTab === 'organization' && (
+                        <OrganizationTab
+                          orgInfo={orgInfo}
+                          onUpdate={(updated) => {
+                            setOrgInfo(updated);
+                            setOrgPlan(updated.plan || 'starter');
+                          }}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                        />
+                      )}
+                      {activeTab === 'team' && (
+                        <TeamTab
+                          members={teamMembers}
+                          currentUserId={currentUserId}
+                          currentUserRole={currentUserRole}
+                          onRefresh={() => loadTabData('team')}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                        />
+                      )}
+                      {activeTab === 'clients' && (
+                        <ClientsTab
+                          clients={clients}
+                          onRefresh={() => loadTabData('clients')}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                        />
+                      )}
+                      {activeTab === 'billing' && (
+                        <BillingRatesTab
+                          rates={billingRates}
+                          users={teamMembers}
+                          clients={clients}
+                          orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
+                          onRefresh={() => loadTabData('billing')}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                        />
+                      )}
+                      {activeTab === 'costs' && (
+                        <EmployeeCostRatesTab
+                          rates={employeeCostRates}
+                          users={teamMembers}
+                          onRefresh={() => loadTabData('costs')}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                        />
+                      )}
+                      {activeTab === 'devices' && (
+                        <DevicesTab
+                          devices={devices}
+                          onRefresh={() => loadTabData('devices')}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                        />
+                      )}
+                      {activeTab === 'token' && (
+                        <TokenTab
+                          token={installToken}
+                          onRefresh={() => loadTabData('token')}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                        />
+                      )}
+                    </>
                   )}
                 </>
               )}
@@ -514,6 +677,53 @@ function OrganizationTab({
             <div>
               <p className="text-sm text-slate-500 font-semibold mb-1">Billing Contact</p>
               <p className="text-slate-900 font-bold">{orgInfo.billing_contact || '—'}</p>
+            </div>
+          </div>
+          
+          {/* Plan Info */}
+          <div className="pt-4 border-t-2 border-slate-200">
+            <div className={cn(
+              'rounded-xl p-4 border-2',
+              orgInfo.plan === 'professional' || orgInfo.plan === 'enterprise'
+                ? 'bg-primary/5 border-primary/20'
+                : 'bg-amber-50 border-amber-200'
+            )}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className={cn(
+                    'text-sm font-bold',
+                    orgInfo.plan === 'professional' || orgInfo.plan === 'enterprise'
+                      ? 'text-primary'
+                      : 'text-amber-700'
+                  )}>
+                    Current Plan
+                  </p>
+                  <p className={cn(
+                    'text-2xl font-extrabold mt-1',
+                    orgInfo.plan === 'professional' || orgInfo.plan === 'enterprise'
+                      ? 'text-primary'
+                      : 'text-amber-700'
+                  )}>
+                    {orgInfo.plan === 'trial' ? '🎁 Trial' : 
+                     orgInfo.plan === 'starter' ? '⭐ Starter' :
+                     orgInfo.plan === 'professional' ? '💎 Professional' : '🏢 Enterprise'}
+                  </p>
+                </div>
+                {(orgInfo.plan === 'starter' || orgInfo.plan === 'trial') && (
+                  <button
+                    onClick={() => window.location.href = '/billing?upgrade=true'}
+                    className="px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25 flex items-center gap-2"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Upgrade
+                  </button>
+                )}
+              </div>
+              {orgInfo.trial_ends_at && orgInfo.plan === 'trial' && (
+                <p className="text-sm text-amber-600 font-medium mt-2">
+                  Trial ends: {new Date(orgInfo.trial_ends_at).toLocaleDateString()}
+                </p>
+              )}
             </div>
           </div>
           
@@ -1162,7 +1372,7 @@ function BillingRatesTab({
 
 
 // ============================================================================
-// Employee Cost Rates Tab (with duplicate handling)
+// Employee Cost Rates Tab
 // ============================================================================
 function EmployeeCostRatesTab({
   rates,

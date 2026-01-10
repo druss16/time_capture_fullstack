@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getOnboardingStatus, Organization, OnboardingSteps } from '../../services/onboardingApi';
 
 // Step components
@@ -53,6 +53,7 @@ interface OnboardingWizardProps {
 
 export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [currentStep, setCurrentStep] = useState(initialStep);
   const [highestStepReached, setHighestStepReached] = useState(initialStep);
   const [status, setStatus] = useState<{ steps: OnboardingSteps; is_complete: boolean } | null>(null);
@@ -63,12 +64,39 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
   const isLoggedIn = !!localStorage.getItem('auth_token');
 
   useEffect(() => {
+    // Check for step override from URL (e.g., after Stripe checkout)
+    const stepParam = searchParams.get('step');
+    const sessionId = searchParams.get('session_id');
+    
+    // If returning from Stripe checkout with step=complete
+    if (stepParam === 'complete' || sessionId) {
+      setCurrentStep(6);
+      setHighestStepReached(6);
+      setLoading(false);
+      
+      // Load organization data for CompleteStep
+      if (isLoggedIn) {
+        loadOrganizationOnly();
+      }
+      return;
+    }
+    
+    // Normal flow - load status from server
     if (isLoggedIn) {
       loadStatus();
     } else {
       setLoading(false);
     }
-  }, []);
+  }, [searchParams]);
+
+  const loadOrganizationOnly = async () => {
+    try {
+      const data = await getOnboardingStatus();
+      setOrganization(data.organization);
+    } catch (err) {
+      console.error('Failed to load organization:', err);
+    }
+  };
 
   const loadStatus = async () => {
     try {

@@ -289,7 +289,7 @@ REST_FRAMEWORK = {
 # Stripe
 # -----------------------------------------------------
 
-STSTRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY')
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY')
 STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://timetracker.mavops.ai')

@@ -1,7 +1,7 @@
 // src/components/onboarding/steps/PricingStep.tsx
 
 import React, { useState } from 'react';
-import { Check, Zap, Crown, ArrowRight, Shield, Clock, Users, BarChart3, Loader2 } from 'lucide-react';
+import { Check, Zap, Crown, ArrowRight, Shield, Clock, Users, BarChart3, Loader2, CreditCard } from 'lucide-react';
 
 interface PricingStepProps {
   onComplete: () => void;
@@ -83,31 +83,8 @@ export default function PricingStep({
   const selectedPlan = PRICING_TIERS.find(t => t.id === selectedTier)!;
   const monthlyTotal = selectedPlan.price * seats;
 
+  // Start trial WITH credit card - Stripe handles the 7-day free period
   const handleStartTrial = async () => {
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('auth_token');
-      await fetch(`${API_BASE}/onboarding/select-plan/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          plan: selectedTier,
-          seats: seats,
-        }),
-      });
-      onStartTrial();
-    } catch (err) {
-      console.error('Failed to select plan:', err);
-      onStartTrial();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubscribeNow = async () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('auth_token');
@@ -120,6 +97,7 @@ export default function PricingStep({
         body: JSON.stringify({
           price_id: selectedPlan.priceId,
           quantity: seats,
+          trial_days: 7,  // ← Request 7-day trial
           success_url: `${window.location.origin}/onboarding?step=complete&session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${window.location.origin}/onboarding?step=pricing`,
         }),
@@ -134,7 +112,42 @@ export default function PricingStep({
       }
     } catch (err) {
       console.error('Failed to create checkout session:', err);
-      alert('Unable to start checkout. Please try again or start your free trial.');
+      alert('Unable to start checkout. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Subscribe immediately - no trial, charge now
+  const handleSubscribeNow = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const response = await fetch(`${API_BASE}/billing/create-checkout-session/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          price_id: selectedPlan.priceId,
+          quantity: seats,
+          trial_days: 0,  // ← No trial, charge immediately
+          success_url: `${window.location.origin}/onboarding?step=complete&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${window.location.origin}/onboarding?step=pricing`,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.checkout_url) {
+        window.location.href = data.checkout_url;
+      } else {
+        throw new Error('No checkout URL returned');
+      }
+    } catch (err) {
+      console.error('Failed to create checkout session:', err);
+      alert('Unable to start checkout. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -149,7 +162,7 @@ export default function PricingStep({
         </div>
         <h2 className="text-2xl font-bold text-slate-900">Choose Your Plan</h2>
         <p className="text-slate-600 mt-2 font-medium">
-          Start with a 7-day free trial • No credit card required
+          Start with a 7-day free trial • Cancel anytime
         </p>
       </div>
 
@@ -162,7 +175,7 @@ export default function PricingStep({
             </div>
             <div>
               <p className="font-bold text-emerald-900">7-Day Free Trial</p>
-              <p className="text-sm text-emerald-700 font-medium">Full access to all features • Cancel anytime</p>
+              <p className="text-sm text-emerald-700 font-medium">Full access to all features • You won't be charged until day 8</p>
             </div>
           </div>
           <Shield className="w-8 h-8 text-emerald-400" />
@@ -221,7 +234,7 @@ export default function PricingStep({
                 <span className="text-4xl font-extrabold text-slate-900">${tier.price}</span>
                 <span className="text-slate-500 font-medium">/user/month</span>
               </div>
-              <p className="text-sm text-slate-500 mt-1 font-medium">Billed monthly</p>
+              <p className="text-sm text-slate-500 mt-1 font-medium">Billed monthly after trial</p>
             </div>
 
             {/* Features */}
@@ -295,6 +308,7 @@ export default function PricingStep({
             <Loader2 className="w-5 h-5 animate-spin" />
           ) : (
             <>
+              <CreditCard className="w-5 h-5" />
               Start 7-Day Free Trial
               <ArrowRight className="w-5 h-5" />
             </>
@@ -328,15 +342,11 @@ export default function PricingStep({
         </div>
       </div>
 
-      {/* Skip Link */}
-      <div className="mt-6 text-center">
-        <button
-          onClick={onStartTrial}
-          className="text-sm text-slate-500 hover:text-slate-700 font-medium underline"
-        >
-          Continue with free trial, choose plan later
-        </button>
-      </div>
+      {/* Fine Print */}
+      <p className="mt-4 text-center text-xs text-slate-400">
+        Your card will be charged ${monthlyTotal.toFixed(2)}/month after the 7-day trial ends.
+        <br />Cancel anytime before then and you won't be charged.
+      </p>
     </div>
   );
 }

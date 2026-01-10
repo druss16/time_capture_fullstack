@@ -1690,6 +1690,8 @@ STRIPE_PRICES = getattr(settings, 'STRIPE_PRICES', {
 # CHECKOUT SESSION
 # ============================================================================
 
+# Replace the create_checkout_session function in views_billing.py with this:
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def create_checkout_session(request):
@@ -1700,6 +1702,7 @@ def create_checkout_session(request):
     {
         "price_id": "price_xxx",  // Stripe Price ID
         "quantity": 5,            // Number of seats
+        "trial_days": 7,          // Optional: days of trial (0 = no trial)
         "success_url": "https://...",
         "cancel_url": "https://..."
     }
@@ -1728,12 +1731,25 @@ def create_checkout_session(request):
             org.stripe_customer_id = customer.id
             org.save(update_fields=['stripe_customer_id'])
         
-        # Create checkout session
+        # Get request data
         price_id = request.data.get('price_id')
         quantity = request.data.get('quantity', 1)
+        trial_days = request.data.get('trial_days', 7)  # Default to 7-day trial
         success_url = request.data.get('success_url', f"{settings.FRONTEND_URL}/onboarding?step=complete")
         cancel_url = request.data.get('cancel_url', f"{settings.FRONTEND_URL}/onboarding?step=pricing")
         
+        # Build subscription_data
+        subscription_data = {
+            'metadata': {
+                'organization_id': org.id,
+            },
+        }
+        
+        # Add trial period if requested
+        if trial_days and trial_days > 0:
+            subscription_data['trial_period_days'] = trial_days
+        
+        # Create checkout session
         session = stripe.checkout.Session.create(
             customer=org.stripe_customer_id,
             payment_method_types=['card'],
@@ -1748,11 +1764,7 @@ def create_checkout_session(request):
                 'organization_id': org.id,
                 'user_id': request.user.id,
             },
-            subscription_data={
-                'metadata': {
-                    'organization_id': org.id,
-                },
-            },
+            subscription_data=subscription_data,
             allow_promotion_codes=True,
         )
         

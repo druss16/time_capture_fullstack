@@ -110,7 +110,7 @@ export default function BillingSettingsPage() {
     setUpgrading(true);
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE}/billing/checkout/`, {
+      const response = await fetch(`${API_BASE}/billing/create-checkout-session/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

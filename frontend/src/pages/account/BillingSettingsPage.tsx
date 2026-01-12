@@ -37,14 +37,25 @@ interface SubscriptionData {
   has_payment_method: boolean;
 }
 
-// Plan structure: Professional ($29.99) and Executive ($49.99)
-const PLANS = [
+type PlanId = 'professional' | 'executive';
+type BillingInterval = 'monthly' | 'yearly';
+
+type Plan = {
+  id: PlanId;
+  name: string;
+  emoji: string;
+  price: number;
+  icon: any;
+  popular?: boolean;
+  features: string[];
+};
+
+const PLANS: Plan[] = [
   {
     id: 'professional',
     name: 'Professional',
     emoji: '⭐',
     price: 29.99,
-    priceId: 'price_1SnryXKdcg3wPfHV3FymP9kw',
     icon: Star,
     features: [
       'Automatic time tracking',
@@ -63,7 +74,6 @@ const PLANS = [
     name: 'Executive',
     emoji: '💎',
     price: 49.99,
-    priceId: 'price_1SnrzDKdcg3wPfHVydp72wac',
     icon: Crown,
     popular: true,
     features: [
@@ -80,6 +90,7 @@ const PLANS = [
     ],
   },
 ];
+
 
 export default function BillingSettingsPage() {
   const [subscription, setSubscription] = useState<SubscriptionData | null>(null);
@@ -112,10 +123,16 @@ export default function BillingSettingsPage() {
     }
   };
 
-  const handleSubscribe = async (priceId: string) => {
+  const handleSubscribe = async (plan: PlanId, interval: BillingInterval = 'monthly') => {
     setUpgrading(true);
+    setError(null);
+
     try {
       const token = localStorage.getItem('auth_token');
+      if (!token) {
+        throw new Error('You are not logged in. Please sign in again.');
+      }
+
       const response = await fetch(`${API_BASE}/billing/create-checkout-session/`, {
         method: 'POST',
         headers: {
@@ -123,7 +140,8 @@ export default function BillingSettingsPage() {
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          price_id: priceId,
+          plan,
+          interval,
           quantity: 1,
           success_url: `${window.location.origin}/account/billing?success=true`,
           cancel_url: `${window.location.origin}/account/billing`,
@@ -131,51 +149,33 @@ export default function BillingSettingsPage() {
       });
 
       const data = await response.json();
-
       if (!response.ok) throw new Error(data.error || 'Failed to create checkout');
+      if (!data.checkout_url) throw new Error('No checkout_url returned');
 
-      // Redirect to Stripe Checkout
       window.location.href = data.checkout_url;
     } catch (err: any) {
       setError(err.message);
+    } finally {
       setUpgrading(false);
     }
   };
 
-  const handleUpgrade = async (priceId: string) => {
-    setUpgrading(true);
-    try {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE}/billing/create-checkout-session/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          price_id: priceId,
-          quantity: 1,
-          success_url: `${window.location.origin}/account/billing?success=true`,
-          cancel_url: `${window.location.origin}/account/billing`,
-        }),
-      });
 
-      const data = await response.json();
+  const handleUpgrade = async () => handleSubscribe('executive', 'monthly');
 
-      if (!response.ok) throw new Error(data.error || 'Failed to create checkout');
 
-      // Redirect to Stripe Checkout
-      window.location.href = data.checkout_url;
-    } catch (err: any) {
-      setError(err.message);
-      setUpgrading(false);
-    }
-  };
+
 
   const handleManageBilling = async () => {
     setManagingBilling(true);
+    setError(null);
+
     try {
       const token = localStorage.getItem('auth_token');
+      if (!token) {
+        throw new Error('You are not logged in. Please sign in again.');
+      }
+
       const response = await fetch(`${API_BASE}/billing/portal/`, {
         method: 'POST',
         headers: {
@@ -188,16 +188,17 @@ export default function BillingSettingsPage() {
       });
 
       const data = await response.json();
-
       if (!response.ok) throw new Error(data.error || 'Failed to open billing portal');
+      if (!data.portal_url) throw new Error('No portal_url returned');
 
-      // Redirect to Stripe Customer Portal
       window.location.href = data.portal_url;
     } catch (err: any) {
       setError(err.message);
+    } finally {
       setManagingBilling(false);
     }
   };
+
 
   if (loading) {
     return (
@@ -209,7 +210,7 @@ export default function BillingSettingsPage() {
     );
   }
 
-  const currentPlan = subscription?.organization?.plan || 'none';
+  const currentPlan = (subscription?.organization?.plan || 'none').toLowerCase();
   const hasActiveSubscription = subscription?.subscription?.status === 'active';
   
   // Check if user has no plan at all (not subscribed)
@@ -388,7 +389,7 @@ export default function BillingSettingsPage() {
                   {/* Subscribe button for users with no plan */}
                   {canSubscribe && (
                     <button
-                      onClick={() => handleSubscribe(plan.priceId)}
+                      onClick={() => handleSubscribe(plan.id)}
                       disabled={upgrading}
                       className={`
                         w-full py-2.5 px-4 font-bold rounded-xl transition-all flex items-center justify-center gap-2
@@ -411,7 +412,7 @@ export default function BillingSettingsPage() {
                   {/* Upgrade button for Professional → Executive */}
                   {canUpgrade && (
                     <button
-                      onClick={() => handleUpgrade(plan.priceId)}
+                      onClick={() => handleUpgrade()}
                       disabled={upgrading}
                       className="w-full py-2.5 px-4 font-bold rounded-xl transition-all flex items-center justify-center gap-2 bg-primary hover:opacity-90 text-white shadow-lg shadow-primary/25"
                     >

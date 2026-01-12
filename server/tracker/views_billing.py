@@ -24,7 +24,12 @@ from .serializers_billing import (
 from rest_framework.response import Response
 from functools import wraps  # Add this import
 
+stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", None) or ""
+
+
 EXECUTIVE_PLANS = ['executive']
+PROFESSIONAL_PLANS = ['professional', 'executive']  # ← ADD THIS
+
 
 class RequireExecutivePlanMixin:
     """Mixin that restricts view to Executive/Enterprise plans"""
@@ -57,7 +62,8 @@ def require_professional_plan(view_func):
         if not org:
             return Response({"error": "No organization found"}, status=404)
         
-        plan = getattr(org, 'plan', 'starter') or 'starter'
+        plan = getattr(org, 'plan', 'none') or 'none'
+
         
         if plan not in PROFESSIONAL_PLANS:
             return Response({
@@ -1633,97 +1639,76 @@ from rest_framework import status
 
 from .models import Organization, OrganizationMembership
 
-# Initialize Stripe
-stripe.api_key = settings.STRIPE_SECRET_KEY
-
 STRIPE_PRICES = {
-    'professional_monthly': settings.STRIPE_PRICE_PROFESSIONAL_MONTHLY,
-    'professional_yearly': getattr(settings, 'STRIPE_PRICE_PROFESSIONAL_YEARLY', None),
-    'executive_monthly': settings.STRIPE_PRICE_EXECUTIVE_MONTHLY,
-    'executive_yearly': getattr(settings, 'STRIPE_PRICE_EXECUTIVE_YEARLY', None),
+    "professional_monthly": getattr(settings, "STRIPE_PRICE_PROFESSIONAL_MONTHLY", None),
+    "professional_yearly": getattr(settings, "STRIPE_PRICE_PROFESSIONAL_YEARLY", None),
+    "executive_monthly": getattr(settings, "STRIPE_PRICE_EXECUTIVE_MONTHLY", None),
+    "executive_yearly": getattr(settings, "STRIPE_PRICE_EXECUTIVE_YEARLY", None),
 }
+
 # ============================================================================
 # CHECKOUT SESSION
 # ============================================================================
 
 # Replace the create_checkout_session function in views_billing.py with this:
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_checkout_session(request):
-    """
-    Create a Stripe Checkout session for subscription.
-    
-    POST body:
-    {
-        "price_id": "price_xxx",  // Stripe Price ID
-        "quantity": 5,            // Number of seats
-        "success_url": "https://...",
-        "cancel_url": "https://..."
-    }
-    """
-    try:
-        # Get user's org
-        membership = OrganizationMembership.objects.filter(
-            user=request.user
-        ).select_related('organization').first()
-        
-        if not membership:
-            return Response({'error': 'No organization found'}, status=400)
-        
-        org = membership.organization
-        
-        # Get or create Stripe customer
-        if not org.stripe_customer_id:
-            customer = stripe.Customer.create(
-                email=request.user.email,
-                name=org.name,
-                metadata={
-                    'organization_id': org.id,
-                    'organization_slug': org.slug,
-                }
-            )
-            org.stripe_customer_id = customer.id
-            org.save(update_fields=['stripe_customer_id'])
-        
-        # Get request data
-        price_id = request.data.get('price_id')
-        quantity = request.data.get('quantity', 1)
-        success_url = request.data.get('success_url', f"{settings.FRONTEND_URL}/onboarding?step=complete")
-        cancel_url = request.data.get('cancel_url', f"{settings.FRONTEND_URL}/onboarding?step=pricing")
-        
-        # Create checkout session
-        session = stripe.checkout.Session.create(
-            customer=org.stripe_customer_id,
-            payment_method_types=['card'],
-            line_items=[{
-                'price': price_id,
-                'quantity': quantity,
-            }],
-            mode='subscription',
-            success_url=success_url,
-            cancel_url=cancel_url,
-            metadata={
-                'organization_id': org.id,
-                'user_id': request.user.id,
-            },
-            subscription_data={
-                'metadata': {
-                    'organization_id': org.id,
-                },
-            },
-            allow_promotion_codes=True,
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related("organization").first()
+
+    if not membership:
+        return Response({"error": "No organization found"}, status=400)
+
+    org = membership.organization
+
+    # ✅ read plan/interval from frontend
+    plan = (request.data.get("plan") or "professional").strip().lower()
+    interval = (request.data.get("interval") or "monthly").strip().lower()
+    quantity = int(request.data.get("quantity") or 1)
+
+    # ✅ validate allowed values
+    if plan not in ("professional", "executive"):
+        return Response({"error": "Invalid plan"}, status=400)
+    if interval not in ("monthly", "yearly"):
+        return Response({"error": "Invalid interval"}, status=400)
+
+    # ✅ map to your stored Stripe Price IDs
+    key = f"{plan}_{interval}"          # professional_monthly
+    price_id = STRIPE_PRICES.get(key)
+
+    # ✅ enforce config
+    if not price_id:
+        return Response({"error": f"Stripe price not configured for {key}"}, status=500)
+
+    # create customer if needed
+    if not org.stripe_customer_id:
+        customer = stripe.Customer.create(
+            email=request.user.email,
+            name=org.name,
+            metadata={"organization_id": org.id, "organization_slug": org.slug},
         )
-        
-        return Response({
-            'checkout_url': session.url,
-            'session_id': session.id,
-        })
-        
-    except stripe.error.StripeError as e:
-        return Response({'error': str(e)}, status=400)
-    except Exception as e:
-        return Response({'error': str(e)}, status=500)
+        org.stripe_customer_id = customer.id
+        org.save(update_fields=["stripe_customer_id"])
+
+    success_url = request.data.get("success_url") or f"{settings.FRONTEND_URL}/billing/success"
+    cancel_url = request.data.get("cancel_url") or f"{settings.FRONTEND_URL}/billing"
+
+    session = stripe.checkout.Session.create(
+        customer=org.stripe_customer_id,
+        mode="subscription",
+        line_items=[{"price": price_id, "quantity": quantity}],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        allow_promotion_codes=True,
+        metadata={"organization_id": org.id, "user_id": request.user.id, "plan": plan, "interval": interval},
+        subscription_data={"metadata": {"organization_id": org.id}},
+    )
+
+    return Response({"checkout_url": session.url, "session_id": session.id})
+
 
 
 @api_view(['POST'])
@@ -1900,11 +1885,13 @@ def handle_checkout_completed(session):
             price_id = subscription.items.data[0].price.id if subscription.items.data else None
             
             # Map price to plan
-            if price_id in [STRIPE_PRICES.get('professional_monthly'), STRIPE_PRICES.get('professional_yearly')]:
+            if price_id in [STRIPE_PRICES.get('executive_monthly'), STRIPE_PRICES.get('executive_yearly')]:
+                org.plan = 'executive'
+            elif price_id in [STRIPE_PRICES.get('professional_monthly'), STRIPE_PRICES.get('professional_yearly')]:
                 org.plan = 'professional'
             else:
-                org.plan = 'starter'
-        
+                org.plan = 'professional'  # Default fallback
+                    
         # Clear trial (they're now paying)
         org.trial_ends_at = None
         org.save(update_fields=['plan', 'trial_ends_at'])
@@ -1926,11 +1913,15 @@ def handle_subscription_updated(subscription):
         if subscription['status'] in ['active', 'trialing']:
             price_id = subscription['items']['data'][0]['price']['id'] if subscription['items']['data'] else None
             
-            if price_id in [STRIPE_PRICES.get('professional_monthly'), STRIPE_PRICES.get('professional_yearly')]:
+            # ✅ Now inside the if block
+            if price_id in [STRIPE_PRICES.get('executive_monthly'), STRIPE_PRICES.get('executive_yearly')]:
+                org.plan = 'executive'
+            elif price_id in [STRIPE_PRICES.get('professional_monthly'), STRIPE_PRICES.get('professional_yearly')]:
                 org.plan = 'professional'
             else:
-                org.plan = 'starter'
+                org.plan = 'professional'  # Default fallback
             
+            # ✅ Now outside the if/elif/else, but inside the status check
             org.save(update_fields=['plan'])
             print(f"[Stripe] Updated {org.name} to {org.plan}")
         
@@ -1944,9 +1935,8 @@ def handle_subscription_deleted(subscription):
     
     try:
         org = Organization.objects.get(stripe_customer_id=customer_id)
-        org.plan = 'trial'
-        # Give them 7 days to resubscribe
-        org.trial_ends_at = timezone.now() + timedelta(days=7)
+        org.plan = 'none'
+        org.trial_ends_at = None  # No grace period
         org.save(update_fields=['plan', 'trial_ends_at'])
         
         print(f"[Stripe] Subscription cancelled for {org.name}")
@@ -1999,7 +1989,7 @@ def select_plan(request):
         
         # Store intended plan (will apply after trial or payment)
         # For now, just validate and acknowledge
-        if plan not in ['starter', 'professional']:
+        if plan not in ['professional', 'executive']:
             return Response({'error': 'Invalid plan'}, status=400)
         
         # You could store this in a separate field like `intended_plan`

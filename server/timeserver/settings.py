@@ -311,12 +311,12 @@ STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://timetracker.mavops.ai')
 
-# Stripe Price IDs
-# Stripe Price IDs (Professional = $29.99, Executive = $49.99)
-STRIPE_PRICES = {
-    'professional': os.environ.get('STRIPE_PRICE_PROFESSIONAL_MONTHLY'),      # $29.99
-    'executive': os.environ.get('STRIPE_PRICE_EXECUTIVE_MONTHLY'),    # $49.99
-}
+STRIPE_PRICE_PROFESSIONAL_MONTHLY = os.environ.get("STRIPE_PRICE_PROFESSIONAL_MONTHLY")
+STRIPE_PRICE_PROFESSIONAL_YEARLY  = os.environ.get("STRIPE_PRICE_PROFESSIONAL_YEARLY")
+
+STRIPE_PRICE_EXECUTIVE_MONTHLY    = os.environ.get("STRIPE_PRICE_EXECUTIVE_MONTHLY")
+STRIPE_PRICE_EXECUTIVE_YEARLY     = os.environ.get("STRIPE_PRICE_EXECUTIVE_YEARLY")
+
 # -----------------------------------------------------
 # Logging
 # -----------------------------------------------------

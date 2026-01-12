@@ -14,7 +14,6 @@ interface PricingTier {
   id: 'professional' | 'executive';
   name: string;
   price: number;
-  priceId: string;
   description: string;
   icon: React.ReactNode;
   emoji: string;
@@ -22,6 +21,7 @@ interface PricingTier {
   features: string[];
   notIncluded?: string[];
 }
+
 
 const PRICING_TIERS: PricingTier[] = [
   {
@@ -93,6 +93,7 @@ export default function PricingStep({
     setLoading(true);
     try {
       const token = localStorage.getItem('auth_token');
+
       const response = await fetch(`${API_BASE}/billing/create-checkout-session/`, {
         method: 'POST',
         headers: {
@@ -100,21 +101,20 @@ export default function PricingStep({
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          price_id: selectedPlan.priceId,
+          plan: selectedTier,          // ✅ professional | executive
+          interval: 'monthly',         // ✅ or 'yearly' later
           quantity: seats,
-          trial_days: 7,  // ← Request 7-day trial
+          trial_days: 7,
           success_url: `${window.location.origin}/onboarding?step=complete&session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${window.location.origin}/onboarding?step=pricing`,
         }),
       });
-      
+
       const data = await response.json();
-      
-      if (data.checkout_url) {
-        window.location.href = data.checkout_url;
-      } else {
-        throw new Error('No checkout URL returned');
-      }
+      if (!response.ok) throw new Error(data.error || 'Failed to create checkout session');
+
+      if (data.checkout_url) window.location.href = data.checkout_url;
+      else throw new Error('No checkout URL returned');
     } catch (err) {
       console.error('Failed to create checkout session:', err);
       alert('Unable to start checkout. Please try again.');
@@ -123,11 +123,11 @@ export default function PricingStep({
     }
   };
 
-  // Subscribe immediately - no trial, charge now
   const handleSubscribeNow = async () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('auth_token');
+
       const response = await fetch(`${API_BASE}/billing/create-checkout-session/`, {
         method: 'POST',
         headers: {
@@ -135,21 +135,20 @@ export default function PricingStep({
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          price_id: selectedPlan.priceId,
+          plan: selectedTier,
+          interval: 'monthly',
           quantity: seats,
-          trial_days: 0,  // ← No trial, charge immediately
+          trial_days: 0,
           success_url: `${window.location.origin}/onboarding?step=complete&session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${window.location.origin}/onboarding?step=pricing`,
         }),
       });
-      
+
       const data = await response.json();
-      
-      if (data.checkout_url) {
-        window.location.href = data.checkout_url;
-      } else {
-        throw new Error('No checkout URL returned');
-      }
+      if (!response.ok) throw new Error(data.error || 'Failed to create checkout session');
+
+      if (data.checkout_url) window.location.href = data.checkout_url;
+      else throw new Error('No checkout URL returned');
     } catch (err) {
       console.error('Failed to create checkout session:', err);
       alert('Unable to start checkout. Please try again.');
@@ -157,6 +156,7 @@ export default function PricingStep({
       setLoading(false);
     }
   };
+
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">

@@ -210,14 +210,11 @@ export default function BillingSettingsPage() {
     );
   }
 
+  const currentPlan = (subscription?.organization?.plan || 'none').toLowerCase();
   const hasActiveSubscription = subscription?.subscription?.status === 'active';
-
-  // If no active subscription, treat as 'none' regardless of database value
-  const currentPlan = hasActiveSubscription 
-    ? (subscription?.organization?.plan || 'none').toLowerCase()
-    : 'none';
-
-  const hasNoPlan = !hasActiveSubscription;
+  
+  // Check if user has no plan at all (not subscribed)
+  const hasNoPlan = !hasActiveSubscription && (currentPlan === 'none' || !currentPlan);
 
   // Get plan display info
   const getPlanDisplay = (plan: string) => {

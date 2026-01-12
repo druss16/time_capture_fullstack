@@ -24,6 +24,9 @@ from .serializers_billing import (
 from rest_framework.response import Response
 from functools import wraps  # Add this import
 
+from django.conf import settings
+import stripe
+
 stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", None) or ""
 
 

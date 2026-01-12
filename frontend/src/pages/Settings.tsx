@@ -1,8 +1,8 @@
 /**
  * Settings.tsx — Org Admin Settings Page
  * With Plan-Based Feature Gating
- * Starter plan: Organization, Team, Clients, Devices, Token
- * Professional plan: All features including Billing Rates & Employee Costs
+ * Professional plan: Organization, Team, Clients, Devices, Token
+ * Executive plan: All features including Billing Rates & Employee Costs
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -37,7 +37,7 @@ const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
 // Types
-type PlanType = 'trial' | 'starter' | 'professional' | 'enterprise';
+type PlanType = 'professional' | 'executive';
 
 type OrgInfo = {
   id: number;
@@ -118,7 +118,8 @@ type EmployeeCostRate = {
 type Tab = 'organization' | 'team' | 'clients' | 'billing' | 'costs' | 'devices' | 'token';
 
 // Define which plans can access which features
-const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'enterprise'];
+const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive'];
+const EXECUTIVE_PLANS: PlanType[] = ['executive'];
 
 interface TabConfig {
   id: Tab;
@@ -158,21 +159,18 @@ function UpgradePrompt({ featureName }: { featureName: string }) {
           {featureName}
         </h3>
         <p className="text-slate-600 font-medium mb-6">
-          This feature is available on the <span className="font-bold text-primary">Professional</span> plan.
+          This feature is available on the <span className="font-bold text-primary">Executive</span> plan.
           Upgrade to unlock advanced billing rate management and profitability tracking.
         </p>
-        <button
-          onClick={() => {
-            // Could open Stripe checkout or a modal
-            window.location.href = '/billing?upgrade=true';
-          }}
+        <a
+          href="/account/billing"
           className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25"
         >
           <Sparkles className="w-5 h-5" />
-          Upgrade to Professional
-        </button>
+          Upgrade to Executive
+        </a>
         <p className="text-sm text-slate-500 font-medium mt-4">
-          Starting at $49.99/user/month
+          See pricing in Billing
         </p>
       </div>
     </div>
@@ -190,7 +188,7 @@ export default function Settings() {
 
   // Data states
   const [orgInfo, setOrgInfo] = useState<OrgInfo | null>(null);
-  const [orgPlan, setOrgPlan] = useState<PlanType>('starter');
+  const [orgPlan, setOrgPlan] = useState<PlanType>('professional');
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
@@ -229,10 +227,10 @@ export default function Settings() {
       try {
         const org = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`);
         setOrgInfo(org);
-        setOrgPlan(org.plan || 'starter');
+        setOrgPlan(org.plan || 'professional');
       } catch (err) {
         console.error('Failed to load org plan:', err);
-        setOrgPlan('starter');
+        setOrgPlan('professional');
       }
     };
     loadOrgPlan();
@@ -246,7 +244,7 @@ export default function Settings() {
         case 'organization':
           const org = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`);
           setOrgInfo(org);
-          setOrgPlan(org.plan || 'starter');
+          setOrgPlan(org.plan || 'professional');
           break;
         case 'team':
           const team = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`);
@@ -264,7 +262,7 @@ export default function Settings() {
           break;
         case 'billing':
           // Only load if plan allows
-          if (PROFESSIONAL_PLANS.includes(orgPlan)) {
+          if (EXECUTIVE_PLANS.includes(orgPlan)) {
             const rates = await safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`);
             setBillingRates(rates || []);
             const [clientsForRates, teamForRates] = await Promise.all([
@@ -277,7 +275,7 @@ export default function Settings() {
           break;
         case 'costs':
           // Only load if plan allows
-          if (PROFESSIONAL_PLANS.includes(orgPlan)) {
+          if (EXECUTIVE_PLANS.includes(orgPlan)) {
             const costRates = await safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []);
             setEmployeeCostRates(costRates || []);
             const teamForCosts = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []);
@@ -308,8 +306,8 @@ export default function Settings() {
     { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
     { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
     { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
-    { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: PROFESSIONAL_PLANS },
-    { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: PROFESSIONAL_PLANS },
+    { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
+    { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
     { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
     { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
   ];
@@ -328,6 +326,8 @@ export default function Settings() {
       default: return 'This Feature';
     }
   };
+
+  const planLabel = orgPlan === 'professional' ? '⭐ Professional' : '💎 Executive';
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -395,28 +395,24 @@ export default function Settings() {
             {/* Plan Badge */}
             <div className="mt-4">
               <div className={cn(
-                'px-4 py-3 rounded-xl text-center',
-                orgPlan === 'professional' || orgPlan === 'enterprise'
-                  ? 'bg-primary/10 border-2 border-primary/20'
-                  : 'bg-amber-50 border-2 border-amber-200'
+                'px-4 py-3 rounded-xl text-center border-2',
+                orgPlan === 'executive'
+                  ? 'bg-primary/10 border-primary/20'
+                  : 'bg-amber-50 border-amber-200'
               )}>
                 <p className={cn(
                   'text-sm font-bold',
-                  orgPlan === 'professional' || orgPlan === 'enterprise'
-                    ? 'text-primary'
-                    : 'text-amber-700'
+                  orgPlan === 'executive' ? 'text-primary' : 'text-amber-700'
                 )}>
-                  {orgPlan === 'trial' ? '🎁 Trial Plan' : 
-                   orgPlan === 'starter' ? '⭐ Starter Plan' :
-                   orgPlan === 'professional' ? '💎 Professional' : '🏢 Enterprise'}
+                  {planLabel}
                 </p>
-                {(orgPlan === 'starter' || orgPlan === 'trial') && (
-                  <button 
-                    onClick={() => window.location.href = '/billing?upgrade=true'}
-                    className="text-xs text-amber-600 font-semibold hover:underline mt-1"
+                {orgPlan === 'professional' && (
+                  <a 
+                    href="/account/billing"
+                    className="text-xs text-amber-600 font-semibold hover:underline mt-1 block"
                   >
                     Upgrade for more features →
-                  </button>
+                  </a>
                 )}
               </div>
             </div>
@@ -444,7 +440,7 @@ export default function Settings() {
                           orgInfo={orgInfo}
                           onUpdate={(updated) => {
                             setOrgInfo(updated);
-                            setOrgPlan(updated.plan || 'starter');
+                            setOrgPlan(updated.plan || 'professional');
                           }}
                           onSuccess={showSuccess}
                           onError={showError}
@@ -572,6 +568,8 @@ function OrganizationTab({
     return <div className="text-slate-500 font-medium">No organization data</div>;
   }
 
+  const planLabel = orgInfo.plan === 'professional' ? '⭐ Professional' : '💎 Executive';
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -684,7 +682,7 @@ function OrganizationTab({
           <div className="pt-4 border-t-2 border-slate-200">
             <div className={cn(
               'rounded-xl p-4 border-2',
-              orgInfo.plan === 'professional' || orgInfo.plan === 'enterprise'
+              orgInfo.plan === 'executive'
                 ? 'bg-primary/5 border-primary/20'
                 : 'bg-amber-50 border-amber-200'
             )}>
@@ -692,34 +690,28 @@ function OrganizationTab({
                 <div>
                   <p className={cn(
                     'text-sm font-bold',
-                    orgInfo.plan === 'professional' || orgInfo.plan === 'enterprise'
-                      ? 'text-primary'
-                      : 'text-amber-700'
+                    orgInfo.plan === 'executive' ? 'text-primary' : 'text-amber-700'
                   )}>
                     Current Plan
                   </p>
                   <p className={cn(
                     'text-2xl font-extrabold mt-1',
-                    orgInfo.plan === 'professional' || orgInfo.plan === 'enterprise'
-                      ? 'text-primary'
-                      : 'text-amber-700'
+                    orgInfo.plan === 'executive' ? 'text-primary' : 'text-amber-700'
                   )}>
-                    {orgInfo.plan === 'trial' ? '🎁 Trial' : 
-                     orgInfo.plan === 'starter' ? '⭐ Starter' :
-                     orgInfo.plan === 'professional' ? '💎 Professional' : '🏢 Enterprise'}
+                    {planLabel}
                   </p>
                 </div>
-                {(orgInfo.plan === 'starter' || orgInfo.plan === 'trial') && (
-                  <button
-                    onClick={() => window.location.href = '/billing?upgrade=true'}
+                {orgInfo.plan === 'professional' && (
+                  <a
+                    href="/account/billing"
                     className="px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25 flex items-center gap-2"
                   >
                     <Sparkles className="w-4 h-4" />
                     Upgrade
-                  </button>
+                  </a>
                 )}
               </div>
-              {orgInfo.trial_ends_at && orgInfo.plan === 'trial' && (
+              {orgInfo.trial_ends_at && (
                 <p className="text-sm text-amber-600 font-medium mt-2">
                   Trial ends: {new Date(orgInfo.trial_ends_at).toLocaleDateString()}
                 </p>

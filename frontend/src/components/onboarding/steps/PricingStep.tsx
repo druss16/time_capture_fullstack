@@ -1,7 +1,7 @@
 // src/components/onboarding/steps/PricingStep.tsx
 
 import React, { useState } from 'react';
-import { Check, Zap, Crown, ArrowRight, Shield, Clock, Users, BarChart3, Loader2, CreditCard } from 'lucide-react';
+import { Check, Star, Crown, ArrowRight, Shield, Clock, Users, BarChart3, Loader2, CreditCard } from 'lucide-react';
 
 interface PricingStepProps {
   onComplete: () => void;
@@ -11,12 +11,13 @@ interface PricingStepProps {
 }
 
 interface PricingTier {
-  id: 'starter' | 'professional';
+  id: 'professional' | 'executive';
   name: string;
   price: number;
   priceId: string;
   description: string;
   icon: React.ReactNode;
+  emoji: string;
   popular?: boolean;
   features: string[];
   notIncluded?: string[];
@@ -24,44 +25,48 @@ interface PricingTier {
 
 const PRICING_TIERS: PricingTier[] = [
   {
-    id: 'starter',
-    name: 'Starter',
+    id: 'professional',
+    name: 'Professional',
     price: 29.99,
     priceId: 'price_1SnryXKdcg3wPfHV3FymP9kw',
     description: 'Essential time tracking for growing firms',
-    icon: <Zap className="w-6 h-6" />,
+    icon: <Star className="w-6 h-6" />,
+    emoji: '⭐',
     features: [
       'Automatic time tracking',
       'AI-powered categorization',
       'Client & project management',
       'Weekly timesheets',
+      'Timesheet approvals',
       'Team invites & roles',
       'Basic reporting',
       'Desktop app (Mac & Windows)',
       'Email support',
     ],
     notIncluded: [
-      'Cost & margin analysis',
+      'Billing rates management',
+      'Employee cost tracking',
       'Profitability dashboards',
-      'Advanced analytics',
     ],
   },
   {
-    id: 'professional',
-    name: 'Professional',
+    id: 'executive',
+    name: 'Executive',
     price: 49.99,
     priceId: 'price_1SnrzDKdcg3wPfHVydp72wac',
     description: 'Full suite with profitability insights',
     icon: <Crown className="w-6 h-6" />,
+    emoji: '💎',
     popular: true,
     features: [
-      'Everything in Starter, plus:',
-      'Cost & margin analysis',
-      'Profitability dashboards',
-      'Employee cost tracking',
-      'Client profitability reports',
-      'Advanced analytics',
+      'Everything in Professional, plus:',
+      'Client billing & invoicing',
       'Custom billing rates',
+      'Employee cost tracking',
+      'Profitability dashboards',
+      'Client profitability reports',
+      'Timesheet history & archive',
+      'Advanced analytics',
       'Priority support',
       'API access',
     ],
@@ -76,7 +81,7 @@ export default function PricingStep({
   organizationId,
   userCount = 1 
 }: PricingStepProps) {
-  const [selectedTier, setSelectedTier] = useState<'starter' | 'professional'>('professional');
+  const [selectedTier, setSelectedTier] = useState<'professional' | 'executive'>('executive');
   const [loading, setLoading] = useState(false);
   const [seats, setSeats] = useState(userCount);
 
@@ -157,8 +162,8 @@ export default function PricingStep({
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       {/* Header */}
       <div className="text-center mb-8">
-        <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <Crown className="w-8 h-8 text-emerald-600" />
+        <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <Crown className="w-8 h-8 text-primary" />
         </div>
         <h2 className="text-2xl font-bold text-slate-900">Choose Your Plan</h2>
         <p className="text-slate-600 mt-2 font-medium">
@@ -191,14 +196,14 @@ export default function PricingStep({
             className={`
               relative cursor-pointer rounded-2xl border-2 p-6 transition-all
               ${selectedTier === tier.id 
-                ? 'border-emerald-500 bg-emerald-50/50 shadow-lg shadow-emerald-500/10' 
+                ? 'border-primary bg-primary/5 shadow-lg shadow-primary/10' 
                 : 'border-slate-200 hover:border-slate-300 hover:shadow-md'}
             `}
           >
             {/* Popular Badge */}
             {tier.popular && (
               <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                <span className="bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">
+                <span className="bg-primary text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">
                   MOST POPULAR
                 </span>
               </div>
@@ -207,7 +212,7 @@ export default function PricingStep({
             {/* Selection Indicator */}
             <div className={`
               absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all
-              ${selectedTier === tier.id ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300'}
+              ${selectedTier === tier.id ? 'border-primary bg-primary' : 'border-slate-300'}
             `}>
               {selectedTier === tier.id && <Check className="w-4 h-4 text-white" />}
             </div>
@@ -216,14 +221,16 @@ export default function PricingStep({
             <div className="flex items-center gap-3 mb-4">
               <div className={`
                 w-12 h-12 rounded-xl flex items-center justify-center
-                ${tier.id === 'professional' 
-                  ? 'bg-emerald-600 text-white' 
-                  : 'bg-slate-100 text-slate-600'}
+                ${tier.id === 'executive' 
+                  ? 'bg-primary text-white' 
+                  : 'bg-amber-100 text-amber-600'}
               `}>
                 {tier.icon}
               </div>
               <div>
-                <h3 className="text-lg font-bold text-slate-900">{tier.name}</h3>
+                <h3 className="text-lg font-bold text-slate-900">
+                  {tier.emoji} {tier.name}
+                </h3>
                 <p className="text-sm text-slate-500 font-medium">{tier.description}</p>
               </div>
             </div>
@@ -242,7 +249,7 @@ export default function PricingStep({
               {tier.features.map((feature, idx) => (
                 <li key={idx} className="flex items-start gap-2">
                   <Check className={`w-5 h-5 mt-0.5 flex-shrink-0 ${
-                    tier.id === 'professional' ? 'text-emerald-500' : 'text-emerald-500'
+                    tier.id === 'executive' ? 'text-primary' : 'text-emerald-500'
                   }`} />
                   <span className="text-sm text-slate-700 font-medium">{feature}</span>
                 </li>
@@ -292,7 +299,7 @@ export default function PricingStep({
           </div>
           <div className="text-right">
             <p className="text-xs text-slate-500 font-medium">Annual pricing available</p>
-            <p className="text-sm text-emerald-600 font-bold">Save 20% with yearly billing</p>
+            <p className="text-sm text-primary font-bold">Save 20% with yearly billing</p>
           </div>
         </div>
       </div>
@@ -302,7 +309,7 @@ export default function PricingStep({
         <button
           onClick={handleStartTrial}
           disabled={loading}
-          className="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 disabled:opacity-50"
+          className="w-full py-4 px-6 bg-primary hover:opacity-90 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/25 disabled:opacity-50"
         >
           {loading ? (
             <Loader2 className="w-5 h-5 animate-spin" />

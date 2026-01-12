@@ -24,13 +24,12 @@ from .serializers_billing import (
 from rest_framework.response import Response
 from functools import wraps  # Add this import
 
-PROFESSIONAL_PLANS = ['professional', 'enterprise']
+EXECUTIVE_PLANS = ['executive']
 
-class RequireProfessionalPlanMixin:
-    """Mixin that restricts view to Professional/Enterprise plans"""
+class RequireExecutivePlanMixin:
+    """Mixin that restricts view to Executive/Enterprise plans"""
     
     def dispatch(self, request, *args, **kwargs):
-        # Skip check for unauthenticated (let IsAuthenticated handle it)
         if not request.user.is_authenticated:
             return super().dispatch(request, *args, **kwargs)
         
@@ -38,12 +37,12 @@ class RequireProfessionalPlanMixin:
         if not org:
             return Response({"error": "No organization found"}, status=404)
         
-        plan = getattr(org, 'plan', 'starter') or 'starter'
+        plan = getattr(org, 'plan', 'professional') or 'professional'
         
-        if plan not in PROFESSIONAL_PLANS:
+        if plan not in EXECUTIVE_PLANS:
             return Response({
                 "error": "upgrade_required",
-                "message": "This feature requires a Professional or Enterprise plan.",
+                "message": "This feature requires an Executive or Enterprise plan.",
                 "current_plan": plan,
                 "upgrade_url": "/account/billing"
             }, status=403)
@@ -101,7 +100,7 @@ def safe_date(d):
 # ===============================
 # BILLING RATES VIEWSET (Professional Plan Only)
 # ===============================
-class BillingRateViewSet(RequireProfessionalPlanMixin, viewsets.ModelViewSet):
+class BillingRateViewSet(RequireExecutivePlanMixin, viewsets.ModelViewSet):
     """
     CRUD for billing rates.
     Managers/Admins only.
@@ -789,7 +788,7 @@ from django.db import IntegrityError
 # ===============================
 # EMPLOYEE COST RATES (Professional Plan Only)
 # ===============================
-class EmployeeCostRateListView(RequireProfessionalPlanMixin, APIView):
+class EmployeeCostRateListView(RequireExecutivePlanMixin, APIView):
     """
     GET: List all employee cost rates for the org
     POST: Create a new cost rate (or return conflict if duplicate)
@@ -872,7 +871,7 @@ class EmployeeCostRateListView(RequireProfessionalPlanMixin, APIView):
                 'message': 'A cost rate already exists for this employee on this date',
             }, status=409)
 
-class EmployeeCostRateDetailView(RequireProfessionalPlanMixin, APIView):
+class EmployeeCostRateDetailView(RequireExecutivePlanMixin, APIView):
     """
     GET: Get a specific cost rate
     PUT/PATCH: Update a cost rate
@@ -959,7 +958,7 @@ class EmployeeCostRateDetailView(RequireProfessionalPlanMixin, APIView):
 ## ===============================
 # PROFITABILITY REPORT (Professional Plan Only)
 # ===============================
-class ProfitabilityReportView(RequireProfessionalPlanMixin, APIView):
+class ProfitabilityReportView(RequireExecutivePlanMixin, APIView):
     """
     GET: Calculate profit margins by client
     
@@ -1637,15 +1636,12 @@ from .models import Organization, OrganizationMembership
 # Initialize Stripe
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
-# Price IDs - Replace with your real Stripe Price IDs
-STRIPE_PRICES = getattr(settings, 'STRIPE_PRICES', {
-    'starter_monthly': 'price_starter_monthly',      # $29.99/user/month
-    'starter_yearly': 'price_starter_yearly',        # $287.90/user/year (20% off)
-    'professional_monthly': 'price_professional_monthly',  # $49.99/user/month
-    'professional_yearly': 'price_professional_yearly',    # $479.90/user/year (20% off)
-})
-
-
+STRIPE_PRICES = {
+    'professional_monthly': settings.STRIPE_PRICE_PROFESSIONAL_MONTHLY,
+    'professional_yearly': getattr(settings, 'STRIPE_PRICE_PROFESSIONAL_YEARLY', None),
+    'executive_monthly': settings.STRIPE_PRICE_EXECUTIVE_MONTHLY,
+    'executive_yearly': getattr(settings, 'STRIPE_PRICE_EXECUTIVE_YEARLY', None),
+}
 # ============================================================================
 # CHECKOUT SESSION
 # ============================================================================

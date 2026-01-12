@@ -327,7 +327,14 @@ export default function Settings() {
     }
   };
 
-  const planLabel = orgPlan === 'professional' ? '⭐ Professional' : '💎 Executive';
+  const getPlanLabel = (plan: PlanType) => {
+    switch (plan) {
+      case 'executive': return '💎 Executive';
+      case 'professional': return '⭐ Professional';
+      default: return '🚫 No Plan';
+    }
+  };
+  const planLabel = getPlanLabel(orgPlan);
 
   return (
     <div className="min-h-screen bg-slate-50">

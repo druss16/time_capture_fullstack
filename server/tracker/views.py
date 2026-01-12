@@ -6246,7 +6246,6 @@ import secrets
 
 # Add this updated settings_org function to your views.py
 # Replace the existing settings_org function with this one
-
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_org(request):
@@ -6255,6 +6254,8 @@ def settings_org(request):
     PATCH: Update organization info
     """
     from decimal import Decimal
+    import stripe
+    from django.conf import settings as django_settings
     
     org = get_user_org(request.user)
     if not org:
@@ -6267,8 +6268,26 @@ def settings_org(request):
             "slug": getattr(org, 'slug', ''),
         }
         
-        # Plan info (critical for feature gating)
-        response_data["plan"] = getattr(org, 'plan', 'starter') or 'starter'
+        # =====================================================
+        # Plan info - ONLY trust DB plan if active subscription
+        # =====================================================
+        actual_plan = 'none'
+        if org.stripe_customer_id:
+            try:
+                stripe.api_key = getattr(django_settings, 'STRIPE_SECRET_KEY', None)
+                subs = stripe.Subscription.list(
+                    customer=org.stripe_customer_id,
+                    status='active',
+                    limit=1
+                )
+                if subs.data:
+                    # Active subscription exists - trust the DB plan
+                    actual_plan = getattr(org, 'plan', 'professional') or 'professional'
+            except Exception as e:
+                print(f"[settings_org] Stripe check failed: {e}")
+                actual_plan = 'none'
+        
+        response_data["plan"] = actual_plan
         
         # Trial info
         if hasattr(org, 'trial_ends_at') and org.trial_ends_at:
@@ -6327,12 +6346,26 @@ def settings_org(request):
         
         org.save()
         
-        # Build response
+        # Build response - also check Stripe for PATCH response
+        actual_plan = 'none'
+        if org.stripe_customer_id:
+            try:
+                stripe.api_key = getattr(django_settings, 'STRIPE_SECRET_KEY', None)
+                subs = stripe.Subscription.list(
+                    customer=org.stripe_customer_id,
+                    status='active',
+                    limit=1
+                )
+                if subs.data:
+                    actual_plan = getattr(org, 'plan', 'professional') or 'professional'
+            except:
+                actual_plan = 'none'
+        
         response_data = {
             "id": org.id,
             "name": org.name,
             "slug": getattr(org, 'slug', ''),
-            "plan": getattr(org, 'plan', 'starter') or 'starter',
+            "plan": actual_plan,
         }
         
         if hasattr(org, 'trial_ends_at') and org.trial_ends_at:
@@ -6366,7 +6399,7 @@ def settings_org(request):
             response_data["created_at"] = None
         
         return Response(response_data)
-
+        
 # ============================================================================
 # Team Members
 # ============================================================================

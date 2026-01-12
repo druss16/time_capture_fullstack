@@ -314,8 +314,8 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://timetracker.mavops.ai')
 # Stripe Price IDs
 # Stripe Price IDs (Professional = $29.99, Executive = $49.99)
 STRIPE_PRICES = {
-    'professional': os.environ.get('STRIPE_PRICE_STARTER_MONTHLY'),      # $29.99
-    'executive': os.environ.get('STRIPE_PRICE_PROFESSIONAL_MONTHLY'),    # $49.99
+    'professional': os.environ.get('STRIPE_PRICE_PROFESSIONAL_MONTHLY'),      # $29.99
+    'executive': os.environ.get('STRIPE_PRICE_EXECUTIVE_MONTHLY'),    # $49.99
 }
 # -----------------------------------------------------
 # Logging

@@ -259,17 +259,30 @@ def quickbooks_callback(request):
     logger.info(f"QuickBooks connected for org {integration.organization_id}, realm {realm_id}")
     
     return HttpResponse(f"""
-        <html>
-        <script>
-            window.opener.postMessage({{
-                type: 'oauth_callback',
-                integration: 'quickbooks',
-                success: true
-            }}, '{settings.FRONTEND_URL}');
-            window.close();
-        </script>
-        </html>
-    """)
+            <!DOCTYPE html>
+            <html>
+            <head><title>Connected!</title></head>
+            <body>
+            <script>
+                const message = {{
+                    type: 'oauth_callback',
+                    integration: 'quickbooks',
+                    success: true
+                }};
+                
+                if (window.opener && !window.opener.closed) {{
+                    window.opener.postMessage(message, '{settings.FRONTEND_URL}');
+                    window.close();
+                }} else {{
+                    // Fallback: redirect to frontend
+                    window.location.href = '{settings.FRONTEND_URL}/settings?qb_connected=true';
+                }}
+            </script>
+            <p>Connected successfully! Redirecting...</p>
+            <p>If not redirected, <a href="{settings.FRONTEND_URL}/settings">click here</a>.</p>
+            </body>
+            </html>
+        """)
 
 
 @api_view(['GET'])
@@ -585,17 +598,30 @@ def xero_callback(request):
     logger.info(f"Xero connected for org {integration.organization_id}, tenant {integration.tenant_id}")
     
     return HttpResponse(f"""
-        <html>
-        <script>
-            window.opener.postMessage({{
-                type: 'oauth_callback',
-                integration: 'xero',
-                success: true
-            }}, '{settings.FRONTEND_URL}');
-            window.close();
-        </script>
-        </html>
-    """)
+            <!DOCTYPE html>
+            <html>
+            <head><title>Connected!</title></head>
+            <body>
+            <script>
+                const message = {{
+                    type: 'oauth_callback',
+                    integration: 'xero',
+                    success: true
+                }};
+                
+                if (window.opener && !window.opener.closed) {{
+                    window.opener.postMessage(message, '{settings.FRONTEND_URL}');
+                    window.close();
+                }} else {{
+                    // Fallback: redirect to frontend
+                    window.location.href = '{settings.FRONTEND_URL}/settings?xero_connected=true';
+                }}
+            </script>
+            <p>Connected successfully! Redirecting...</p>
+            <p>If not redirected, <a href="{settings.FRONTEND_URL}/settings">click here</a>.</p>
+            </body>
+            </html>
+        """)
 
 
 @api_view(['GET'])

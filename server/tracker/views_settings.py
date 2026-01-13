@@ -260,17 +260,12 @@ def bulk_assign_clients(request):
     })
 
 
+# views_settings.py - Update import_client_assignments_csv
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def import_client_assignments_csv(request):
-    """
-    Import client assignments from CSV.
-    
-    Expected format (flexible column names):
-    email,client_code
-    john@firm.com,ACME
-    jane@firm.com,BIGCO
-    """
+    """Import client assignments from CSV."""
     org = get_user_org(request.user)
     if not org:
         return Response({'error': 'No organization found'}, status=404)
@@ -280,18 +275,43 @@ def import_client_assignments_csv(request):
         return Response({'error': 'Permission denied'}, status=403)
     
     csv_content = request.data.get('csv_content', '')
-    if not csv_content:
-        return Response({'error': 'csv_content required'}, status=400)
+    if not csv_content or not csv_content.strip():
+        return Response({
+            'error': 'csv_content required',
+            'message': 'Please paste CSV content with email and client_code columns'
+        }, status=400)
+    
+    # Clean up the content
+    csv_content = csv_content.strip()
+    lines = csv_content.split('\n')
+    
+    if not lines:
+        return Response({'error': 'CSV is empty'}, status=400)
+    
+    # Check if first line looks like a header or data
+    first_line = lines[0].strip().lower()
+    known_headers = ['email', 'user_email', 'user', 'client', 'client_code', 'code', 'employee']
+    has_header = any(h in first_line for h in known_headers)
+    
+    # If no header detected, add a default header
+    if not has_header:
+        csv_content = "email,client_code\n" + csv_content
     
     # Parse CSV
     try:
         reader = csv.DictReader(StringIO(csv_content))
         rows = list(reader)
     except Exception as e:
-        return Response({'error': f'Invalid CSV format: {str(e)}'}, status=400)
+        return Response({
+            'error': 'Invalid CSV format',
+            'message': str(e)
+        }, status=400)
     
     if not rows:
-        return Response({'error': 'CSV is empty'}, status=400)
+        return Response({
+            'error': 'CSV is empty',
+            'message': 'No data rows found in CSV.'
+        }, status=400)
     
     # Build lookup caches
     users_by_email = {
@@ -306,7 +326,6 @@ def import_client_assignments_csv(request):
         if c.code
     }
     
-    # Also lookup by name (lowercase) as fallback
     clients_by_name = {
         c.name.lower(): c 
         for c in Client.objects.filter(org=org)
@@ -316,7 +335,6 @@ def import_client_assignments_csv(request):
     skipped = 0
     errors = []
     
-    # Flexible column name mapping
     def get_value(row, possible_names, default=''):
         for name in possible_names:
             if name in row and row[name]:
@@ -324,10 +342,7 @@ def import_client_assignments_csv(request):
         return default
     
     for i, row in enumerate(rows, start=2):
-        # Try various column names for email
         email = get_value(row, ['user_email', 'email', 'Email', 'user', 'User', 'employee', 'Employee']).lower()
-        
-        # Try various column names for client
         client_ref = get_value(row, ['client_code', 'client', 'Client', 'code', 'Code', 'client_name', 'Client Name'])
         
         if not email or not client_ref:
@@ -339,7 +354,6 @@ def import_client_assignments_csv(request):
             errors.append(f"Row {i}: User not found: {email}")
             continue
         
-        # Try to find client by code first, then by name
         client = clients_by_code.get(client_ref.upper()) or clients_by_name.get(client_ref.lower())
         if not client:
             errors.append(f"Row {i}: Client not found: {client_ref}")

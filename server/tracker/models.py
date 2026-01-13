@@ -458,7 +458,13 @@ class Client(models.Model):
         ('confidential', 'Confidential'),  # Only assigned users, even admins need assignment
     ]
 
-    visibility = models.CharField(max_length=20, choices=VISIBILITY_CHOICES, default='all')
+    visibility = models.CharField(
+    max_length=20, 
+    choices=[('all', 'All'), ('assigned', 'Assigned'), ('confidential', 'Confidential')],
+    default='all',
+    null=True,  # Allow null for existing clients
+    blank=True
+)
     
     class Meta:
         # ✅ ADD THIS - Prevents duplicate codes per org

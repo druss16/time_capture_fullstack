@@ -6300,21 +6300,28 @@ import secrets
 # Add this updated settings_org function to your views.py
 # Replace the existing settings_org function with this one
 @api_view(["GET", "PATCH"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated])  # ← Changed: removed IsOrgAdmin so all members can GET
 def settings_org(request):
     """
-    GET: Return organization info including plan
-    PATCH: Update organization info
+    GET: Return organization info including plan (all members)
+    PATCH: Update organization info (owner/admin only)
     """
     from decimal import Decimal
     import stripe
     from django.conf import settings as django_settings
     
-    org = get_user_org(request.user)
-    if not org:
+    # Get user's membership and org
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related('organization').first()
+    
+    if not membership:
         return Response({"error": "No organization found"}, status=404)
     
+    org = membership.organization
+    
     if request.method == "GET":
+        # ✅ All members can read org info
         response_data = {
             "id": org.id,
             "name": org.name,
@@ -6341,6 +6348,7 @@ def settings_org(request):
                 actual_plan = 'none'
         
         response_data["plan"] = actual_plan
+        response_data["seat_count"] = getattr(org, 'seat_count', 1)
         
         # Trial info
         if hasattr(org, 'trial_ends_at') and org.trial_ends_at:
@@ -6348,29 +6356,30 @@ def settings_org(request):
         else:
             response_data["trial_ends_at"] = None
         
-        # Billing email
+        # Only show sensitive billing info to owner/admin
+        is_admin_or_owner = membership.role in ['owner', 'admin']
+        
         if hasattr(org, 'billing_email'):
-            response_data["billing_email"] = org.billing_email or ""
+            response_data["billing_email"] = org.billing_email or "" if is_admin_or_owner else ""
         else:
             response_data["billing_email"] = ""
             
-        # Billing contact
         if hasattr(org, 'billing_contact'):
-            response_data["billing_contact"] = org.billing_contact or ""
+            response_data["billing_contact"] = org.billing_contact or "" if is_admin_or_owner else ""
         else:
             response_data["billing_contact"] = ""
         
-        # Default billing rate
+        # Default billing rate - visible to all (needed for time tracking)
         if hasattr(org, 'billing_rate_default'):
             response_data["billing_rate_default"] = str(org.billing_rate_default or "150.00")
         else:
             response_data["billing_rate_default"] = "150.00"
         
-        # Default cost rate
+        # Default cost rate - only for admin/owner
         if hasattr(org, 'cost_rate_default'):
-            response_data["cost_rate_default"] = str(org.cost_rate_default or "75.00")
+            response_data["cost_rate_default"] = str(org.cost_rate_default or "75.00") if is_admin_or_owner else "0.00"
         else:
-            response_data["cost_rate_default"] = "75.00"
+            response_data["cost_rate_default"] = "0.00"
             
         if hasattr(org, 'created_at'):
             response_data["created_at"] = org.created_at.isoformat()
@@ -6380,6 +6389,10 @@ def settings_org(request):
         return Response(response_data)
     
     elif request.method == "PATCH":
+        # ❌ Only owner/admin can update
+        if membership.role not in ['owner', 'admin']:
+            return Response({"error": "Only owner or admin can update organization settings"}, status=403)
+        
         if "name" in request.data:
             org.name = request.data["name"]
         
@@ -6419,6 +6432,7 @@ def settings_org(request):
             "name": org.name,
             "slug": getattr(org, 'slug', ''),
             "plan": actual_plan,
+            "seat_count": getattr(org, 'seat_count', 1),
         }
         
         if hasattr(org, 'trial_ends_at') and org.trial_ends_at:
@@ -6452,7 +6466,6 @@ def settings_org(request):
             response_data["created_at"] = None
         
         return Response(response_data)
-
 # ============================================================================
 # Team Members
 # ============================================================================

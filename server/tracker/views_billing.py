@@ -1816,6 +1816,7 @@ def get_subscription_status(request):
                 'id': org.id,
                 'name': org.name,
                 'plan': org.plan,
+                'seat_count': org.seat_count, 
             },
             'trial': {
                 'active': trial_active,
@@ -1824,6 +1825,7 @@ def get_subscription_status(request):
             },
             'subscription': subscription_data,
             'has_payment_method': bool(org.stripe_customer_id and subscription_data),
+            'is_owner': membership.role == 'owner',
         })
         
     except stripe.error.StripeError as e:

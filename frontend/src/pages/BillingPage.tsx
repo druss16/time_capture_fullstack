@@ -216,45 +216,42 @@ const BillingPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // In BillingPage.tsx - update fetchUserInfo
     const fetchUserInfo = async () => {
       try {
         const response = await safeFetchJson<WhoamiResponse>(`${API_BASE}/whoami/`);
         setUserInfo(response);
 
-        // Fetch org info to get plan
+        // Try to get org plan - multiple fallback methods
         if (response.org_id) {
           try {
+            // Method 1: settings/org (may fail for non-admins)
             const orgResponse = await safeFetchJson<OrgResponse>(`${API_BASE}/settings/org/`);
-            // Normalize plan - only accept 'professional' or 'executive', otherwise 'none'
             const plan = orgResponse.plan;
             if (plan === 'professional' || plan === 'executive') {
               setOrgPlan(plan);
-            } else {
-              setOrgPlan('none');
+              return;
             }
           } catch (err) {
-            console.error('Failed to fetch org info:', err);
-            setOrgPlan('none');
+            console.log('settings/org failed, trying subscription endpoint');
+          }
+          
+          // Method 2: Fallback to subscription endpoint (works for all members)
+          try {
+            const subResponse = await safeFetchJson<any>(`${API_BASE}/billing/subscription/`);
+            const plan = subResponse?.organization?.plan;
+            if (plan === 'professional' || plan === 'executive') {
+              setOrgPlan(plan);
+              return;
+            }
+          } catch (err) {
+            console.error('subscription endpoint also failed:', err);
           }
         }
-
-        // If user role cannot access current tab, reset
-        if (response.role) {
-          const currentTab = ALL_TABS.find((t) => t.id === activeTab);
-          if (currentTab && !currentTab.requiredRoles.includes(response.role)) {
-            setActiveTab('timesheet');
-          }
-        }
+        
+        setOrgPlan('none');
       } catch (err) {
         console.error('Failed to fetch user info:', err);
-        setUserInfo({
-          username: 'Unknown',
-          email: '',
-          role: 'member',
-          org_name: null,
-          org_id: null,
-          is_authenticated: true,
-        });
         setOrgPlan('none');
       } finally {
         setLoading(false);

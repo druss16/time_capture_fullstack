@@ -15,6 +15,11 @@ from .models import Integration, OrganizationMembership, Client
 
 logger = logging.getLogger(__name__)
 
+from django.conf import settings
+
+# Add this constant near the top
+QB_API_BASE = settings.QUICKBOOKS_API_BASE
+
 
 def get_user_org(user):
     """Get the user's organization."""
@@ -342,7 +347,8 @@ def quickbooks_customers(request):
         return Response({'error': 'Token refresh failed. Please reconnect QuickBooks.'}, status=401)
     
     # Fetch customers from QuickBooks API
-    api_url = f"https://quickbooks.api.intuit.com/v3/company/{integration.realm_id}/query"
+    api_url = f"{QB_API_BASE}/v3/company/{integration.realm_id}/query"
+
     
     headers = {
         'Authorization': f'Bearer {integration.access_token}',
@@ -424,7 +430,8 @@ def quickbooks_import(request):
         return Response({'error': 'Token refresh failed. Please reconnect QuickBooks.'}, status=401)
     
     # Fetch specific customers from QuickBooks
-    api_url = f"https://quickbooks.api.intuit.com/v3/company/{integration.realm_id}/query"
+    api_url = f"{QB_API_BASE}/v3/company/{integration.realm_id}/query"
+
     
     headers = {
         'Authorization': f'Bearer {integration.access_token}',

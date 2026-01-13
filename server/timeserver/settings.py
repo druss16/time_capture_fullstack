@@ -323,6 +323,9 @@ QUICKBOOKS_CLIENT_ID = os.environ.get('QUICKBOOKS_CLIENT_ID', default='')
 QUICKBOOKS_CLIENT_SECRET = os.environ.get('QUICKBOOKS_CLIENT_SECRET', default='')
 QUICKBOOKS_REDIRECT_URI = os.environ.get('QUICKBOOKS_REDIRECT_URI', default='')
 
+QUICKBOOKS_API_BASE = os.getenv('QUICKBOOKS_API_BASE', 'https://quickbooks.api.intuit.com')
+
+
 # Xero
 XERO_CLIENT_ID = os.environ.get('XERO_CLIENT_ID', default='')
 XERO_CLIENT_SECRET = os.environ.get('XERO_CLIENT_SECRET', default='')

@@ -8,14 +8,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   X,
   Upload,
-  Check,
   CheckCircle2,
   AlertCircle,
   Loader2,
   RefreshCw,
   Search,
-  ExternalLink,
-  Building2,
   Users,
   ArrowRight,
   ArrowLeft,
@@ -27,6 +24,7 @@ import {
   MinusSquare,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
+import { safeFetchJson } from '@/lib/api';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -146,37 +144,18 @@ export default function ClientImportWizard({ onClose, onSuccess, users }: Props)
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
   // ============================================================================
-  // API Helpers
-  // ============================================================================
-
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem('auth_token');
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    };
-  };
-
-  // ============================================================================
   // Load Integration Status
   // ============================================================================
 
   const loadIntegrationStatus = useCallback(async () => {
     try {
-      const [qbRes, xeroRes] = await Promise.all([
-        fetch(`${API_BASE}/integrations/quickbooks/status/`, { headers: getAuthHeaders() }),
-        fetch(`${API_BASE}/integrations/xero/status/`, { headers: getAuthHeaders() }),
+      const [qbData, xeroData] = await Promise.all([
+        safeFetchJson(`${API_BASE}/integrations/quickbooks/status/`).catch(() => ({ connected: false })),
+        safeFetchJson(`${API_BASE}/integrations/xero/status/`).catch(() => ({ connected: false })),
       ]);
       
-      if (qbRes.ok) {
-        const qbData = await qbRes.json();
-        setQbStatus(qbData);
-      }
-      
-      if (xeroRes.ok) {
-        const xeroData = await xeroRes.json();
-        setXeroStatus(xeroData);
-      }
+      setQbStatus(qbData);
+      setXeroStatus(xeroData);
     } catch (err) {
       console.error('Failed to load integration status:', err);
     }
@@ -199,15 +178,11 @@ export default function ClientImportWizard({ onClose, onSuccess, users }: Props)
         ? '/integrations/quickbooks/connect/'
         : '/integrations/xero/connect/';
       
-      const response = await fetch(`${API_BASE}${endpoint}`, {
-        headers: getAuthHeaders(),
-      });
+      const data = await safeFetchJson(`${API_BASE}${endpoint}`);
       
-      if (!response.ok) {
-        throw new Error('Failed to start OAuth flow');
+      if (!data.auth_url) {
+        throw new Error('Failed to get authorization URL');
       }
-      
-      const data = await response.json();
       
       // Open OAuth popup
       const popup = window.open(
@@ -264,11 +239,7 @@ export default function ClientImportWizard({ onClose, onSuccess, users }: Props)
         ? '/integrations/quickbooks/disconnect/'
         : '/integrations/xero/disconnect/';
       
-      await fetch(`${API_BASE}${endpoint}`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-      });
-      
+      await safeFetchJson(`${API_BASE}${endpoint}`, { method: 'POST' });
       await loadIntegrationStatus();
     } catch (err: any) {
       setError(err.message || 'Failed to disconnect');
@@ -292,16 +263,7 @@ export default function ClientImportWizard({ onClose, onSuccess, users }: Props)
         ? '/integrations/quickbooks/customers/'
         : '/integrations/xero/contacts/';
       
-      const response = await fetch(`${API_BASE}${endpoint}`, {
-        headers: getAuthHeaders(),
-      });
-      
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to fetch customers');
-      }
-      
-      const data = await response.json();
+      const data = await safeFetchJson(`${API_BASE}${endpoint}`);
       const customerList = data.customers || data.contacts || [];
       
       setCustomers(customerList);
@@ -340,20 +302,13 @@ export default function ClientImportWizard({ onClose, onSuccess, users }: Props)
       
       const bodyKey = provider === 'quickbooks' ? 'customer_ids' : 'contact_ids';
       
-      const response = await fetch(`${API_BASE}${endpoint}`, {
+      const result: ImportResult = await safeFetchJson(`${API_BASE}${endpoint}`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           [bodyKey]: Array.from(selectedIds),
         }),
       });
       
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Import failed');
-      }
-      
-      const result: ImportResult = await response.json();
       setImportResult(result);
       setStep('complete');
       

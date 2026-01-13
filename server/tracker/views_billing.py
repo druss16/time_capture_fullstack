@@ -12,7 +12,7 @@ from decimal import Decimal
 from .models import (
     BillingRate, Timesheet, Block, BlockAuditLog, 
     Client, TaskType, Organization, OrganizationMembership,
-    EmployeeCostRate,  # ← ADD THIS
+    EmployeeCostRate, Invitation  # ← ADD THIS
 )
 from .serializers_billing import (
     BillingRateSerializer, TimesheetSummarySerializer, TimesheetDetailSerializer,
@@ -1806,8 +1806,9 @@ def get_subscription_status(request):
                     'status': sub.status,
                     'current_period_end': sub.current_period_end,
                     'cancel_at_period_end': sub.cancel_at_period_end,
-                    'plan': sub.items.data[0].price.nickname if sub.items.data else None,
-                    'quantity': sub.items.data[0].quantity if sub.items.data else 1,
+                    'plan': sub['items']['data'][0]['price']['nickname'] if sub['items']['data'] else None,
+                    'quantity': sub['items']['data'][0]['quantity'] if sub['items']['data'] else 1,
+
                 }
         
         return Response({

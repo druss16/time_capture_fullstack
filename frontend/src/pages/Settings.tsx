@@ -962,7 +962,7 @@ function TeamTab({
                 </span>
               )}
               {!seatInfo.can_invite && (
-                <a>  
+                <a  
                   href="/account/billing"
                   className="flex items-center gap-2 px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 text-sm shadow-lg shadow-primary/25"
                 >

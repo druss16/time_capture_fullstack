@@ -1658,47 +1658,53 @@ STRIPE_PRICES = {
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_checkout_session(request):
+    """Only org OWNER can create checkout session."""
     membership = OrganizationMembership.objects.filter(
         user=request.user
     ).select_related("organization").first()
-
+    
     if not membership:
         return Response({"error": "No organization found"}, status=400)
-
+    
+    # ✅ Only owner can manage billing
+    if membership.role != 'owner':
+        return Response({
+            "error": "Only the organization owner can manage billing"
+        }, status=403)
+    
     org = membership.organization
-
-    # ✅ read plan/interval from frontend
+    
     plan = (request.data.get("plan") or "professional").strip().lower()
     interval = (request.data.get("interval") or "monthly").strip().lower()
-    quantity = int(request.data.get("quantity") or 1)
-
-    # ✅ validate allowed values
+    quantity = max(1, int(request.data.get("quantity") or 1))  # Minimum 1 seat
+    
     if plan not in ("professional", "executive"):
         return Response({"error": "Invalid plan"}, status=400)
     if interval not in ("monthly", "yearly"):
         return Response({"error": "Invalid interval"}, status=400)
-
-    # ✅ map to your stored Stripe Price IDs
-    key = f"{plan}_{interval}"          # professional_monthly
+    
+    key = f"{plan}_{interval}"
     price_id = STRIPE_PRICES.get(key)
-
-    # ✅ enforce config
+    
     if not price_id:
         return Response({"error": f"Stripe price not configured for {key}"}, status=500)
-
-    # create customer if needed
+    
+    # Create/get Stripe customer for ORG
     if not org.stripe_customer_id:
         customer = stripe.Customer.create(
             email=request.user.email,
             name=org.name,
-            metadata={"organization_id": org.id, "organization_slug": org.slug},
+            metadata={
+                "organization_id": str(org.id),
+                "organization_slug": org.slug,
+            },
         )
         org.stripe_customer_id = customer.id
         org.save(update_fields=["stripe_customer_id"])
-
-    success_url = request.data.get("success_url") or f"{settings.FRONTEND_URL}/billing/success"
-    cancel_url = request.data.get("cancel_url") or f"{settings.FRONTEND_URL}/billing"
-
+    
+    success_url = request.data.get("success_url") or f"{settings.FRONTEND_URL}/account/billing?success=true"
+    cancel_url = request.data.get("cancel_url") or f"{settings.FRONTEND_URL}/account/billing"
+    
     session = stripe.checkout.Session.create(
         customer=org.stripe_customer_id,
         mode="subscription",
@@ -1706,12 +1712,20 @@ def create_checkout_session(request):
         success_url=success_url,
         cancel_url=cancel_url,
         allow_promotion_codes=True,
-        metadata={"organization_id": org.id, "user_id": request.user.id, "plan": plan, "interval": interval},
-        subscription_data={"metadata": {"organization_id": org.id}},
+        metadata={
+            "organization_id": str(org.id),
+            "plan": plan,
+            "seats": str(quantity),
+        },
+        subscription_data={
+            "metadata": {
+                "organization_id": str(org.id),
+                "plan": plan,
+            }
+        },
     )
-
+    
     return Response({"checkout_url": session.url, "session_id": session.id})
-
 
 
 @api_view(['POST'])
@@ -1865,11 +1879,10 @@ def stripe_webhook(request):
 
 
 def handle_checkout_completed(session):
-    """Handle successful checkout - activate subscription."""
+    """Handle successful checkout - activate subscription with seat count."""
     org_id = session.get('metadata', {}).get('organization_id')
     
     if not org_id:
-        # Try to find org by customer ID
         customer_id = session.get('customer')
         try:
             org = Organization.objects.get(stripe_customer_id=customer_id)
@@ -1881,70 +1894,78 @@ def handle_checkout_completed(session):
     try:
         org = Organization.objects.get(id=org_id)
         
-        # Determine plan from the subscription
         subscription_id = session.get('subscription')
         if subscription_id:
             subscription = stripe.Subscription.retrieve(subscription_id)
-            price_id = subscription.items.data[0].price.id if subscription.items.data else None
             
-            # Map price to plan
-            if price_id in [STRIPE_PRICES.get('executive_monthly'), STRIPE_PRICES.get('executive_yearly')]:
-                org.plan = 'executive'
-            elif price_id in [STRIPE_PRICES.get('professional_monthly'), STRIPE_PRICES.get('professional_yearly')]:
-                org.plan = 'professional'
-            else:
-                org.plan = 'professional'  # Default fallback
-                    
-        # Clear trial (they're now paying)
-        org.trial_ends_at = None
-        org.save(update_fields=['plan', 'trial_ends_at'])
-        
-        print(f"[Stripe] Activated {org.plan} plan for org {org.name}")
+            # Get price and quantity
+            item = subscription['items']['data'][0] if subscription['items']['data'] else None
+            if item:
+                price_id = item['price']['id']
+                quantity = item['quantity']  # ✅ Get seat count
+                
+                # Map price to plan
+                if price_id in [STRIPE_PRICES.get('executive_monthly'), STRIPE_PRICES.get('executive_yearly')]:
+                    plan = 'executive'
+                else:
+                    plan = 'professional'
+                
+                # ✅ Save subscription ID, plan, AND seat count
+                org.stripe_subscription_id = subscription_id
+                org.plan = plan
+                org.seat_count = quantity
+                org.trial_ends_at = None
+                org.save(update_fields=['stripe_subscription_id', 'plan', 'seat_count', 'trial_ends_at'])
+                
+                print(f"[Stripe] Activated {plan} plan for {org.name} with {quantity} seats")
         
     except Organization.DoesNotExist:
         print(f"[Stripe] Organization {org_id} not found")
 
 
 def handle_subscription_updated(subscription):
-    """Handle subscription changes (upgrades, downgrades, quantity changes)."""
+    """Handle subscription changes (upgrades, downgrades, seat changes)."""
     customer_id = subscription.get('customer')
     
     try:
         org = Organization.objects.get(stripe_customer_id=customer_id)
         
-        # Check if subscription is still active
         if subscription['status'] in ['active', 'trialing']:
-            price_id = subscription['items']['data'][0]['price']['id'] if subscription['items']['data'] else None
+            item = subscription['items']['data'][0] if subscription['items']['data'] else None
             
-            # ✅ Now inside the if block
-            if price_id in [STRIPE_PRICES.get('executive_monthly'), STRIPE_PRICES.get('executive_yearly')]:
-                org.plan = 'executive'
-            elif price_id in [STRIPE_PRICES.get('professional_monthly'), STRIPE_PRICES.get('professional_yearly')]:
-                org.plan = 'professional'
-            else:
-                org.plan = 'professional'  # Default fallback
-            
-            # ✅ Now outside the if/elif/else, but inside the status check
-            org.save(update_fields=['plan'])
-            print(f"[Stripe] Updated {org.name} to {org.plan}")
+            if item:
+                price_id = item['price']['id']
+                quantity = item['quantity']  # ✅ Get updated seat count
+                
+                if price_id in [STRIPE_PRICES.get('executive_monthly'), STRIPE_PRICES.get('executive_yearly')]:
+                    plan = 'executive'
+                else:
+                    plan = 'professional'
+                
+                # ✅ Update plan AND seat count
+                org.plan = plan
+                org.seat_count = quantity
+                org.stripe_subscription_id = subscription['id']
+                org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id'])
+                
+                print(f"[Stripe] Updated {org.name}: {plan} plan, {quantity} seats")
         
     except Organization.DoesNotExist:
         print(f"[Stripe] Organization not found for customer {customer_id}")
 
 
 def handle_subscription_deleted(subscription):
-    """Handle subscription cancellation - downgrade to trial/free."""
+    """Handle subscription cancellation."""
     customer_id = subscription.get('customer')
     
     try:
         org = Organization.objects.get(stripe_customer_id=customer_id)
         org.plan = 'none'
-        org.trial_ends_at = None  # No grace period
-        org.save(update_fields=['plan', 'trial_ends_at'])
+        org.seat_count = 0
+        org.stripe_subscription_id = None
+        org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id'])
         
         print(f"[Stripe] Subscription cancelled for {org.name}")
-        
-        # TODO: Send email notification about cancellation
         
     except Organization.DoesNotExist:
         print(f"[Stripe] Organization not found for customer {customer_id}")
@@ -2007,3 +2028,88 @@ def select_plan(request):
         
     except Exception as e:
         return Response({'error': str(e)}, status=500)
+
+# ============================================================================
+# ADD SEATS
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def add_seats(request):
+    """Add more seats to existing subscription. Owner only."""
+    membership = OrganizationMembership.objects.filter(
+        user=request.user,
+        role='owner'
+    ).select_related('organization').first()
+    
+    if not membership:
+        return Response({'error': 'Only organization owner can add seats'}, status=403)
+    
+    org = membership.organization
+    
+    if not org.stripe_subscription_id:
+        return Response({'error': 'No active subscription. Please subscribe first.'}, status=400)
+    
+    additional_seats = max(1, int(request.data.get('seats', 1)))
+    new_quantity = org.seat_count + additional_seats
+    
+    try:
+        # Get current subscription
+        subscription = stripe.Subscription.retrieve(org.stripe_subscription_id)
+        
+        # Update quantity
+        stripe.Subscription.modify(
+            org.stripe_subscription_id,
+            items=[{
+                'id': subscription['items']['data'][0]['id'],
+                'quantity': new_quantity,
+            }],
+            proration_behavior='create_prorations',  # Charge prorated amount immediately
+        )
+        
+        # Update local record (webhook will also update, but this gives immediate feedback)
+        org.seat_count = new_quantity
+        org.save(update_fields=['seat_count'])
+        
+        return Response({
+            'success': True,
+            'previous_seats': org.seat_count - additional_seats,
+            'added_seats': additional_seats,
+            'new_seat_count': new_quantity,
+            'message': f'Successfully added {additional_seats} seat(s). New total: {new_quantity}'
+        })
+        
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_seat_usage(request):
+    """Get current seat usage for the org."""
+    membership = request.user.memberships.select_related('organization').first()
+    
+    if not membership:
+        return Response({'error': 'No organization'}, status=404)
+    
+    org = membership.organization
+    
+    current_members = OrganizationMembership.objects.filter(
+        organization=org
+    ).count()
+    
+    pending_invites = Invitation.objects.filter(
+        organization=org,
+        accepted=False,
+        expires_at__gt=timezone.now()
+    ).count()
+    
+    return Response({
+        'seat_count': org.seat_count,
+        'members': current_members,
+        'pending_invites': pending_invites,
+        'total_allocated': current_members + pending_invites,
+        'seats_available': max(0, org.seat_count - current_members - pending_invites),
+        'can_invite': (current_members + pending_invites) < org.seat_count,
+        'plan': org.plan,
+    })

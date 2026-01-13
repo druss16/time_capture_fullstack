@@ -146,6 +146,10 @@ urlpatterns = [
     path("settings/team/<int:user_id>/set-manager/", views.settings_team_set_manager),
     path('settings/membership/', views.CurrentMembershipView.as_view(), name='current-membership'),
 
+    # Seat management (in settings, but functions live in views_billing)
+    path("settings/seats/", views_billing.get_seat_usage, name="seat-usage"),
+    path("settings/seats/add/", views_billing.add_seats, name="add-seats"),
+
     # ===============================
     # ✅ NEW: BILLING & TIMESHEETS
     # ===============================
@@ -186,6 +190,7 @@ urlpatterns = [
 
     # History
     path('billing/timesheet-history/', views_billing.timesheet_history),  # NEW
+
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
 

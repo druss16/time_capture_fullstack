@@ -768,6 +768,9 @@ function OrganizationTab({
 // ============================================================================
 // Team Tab
 // ============================================================================
+// ============================================================================
+// Team Tab (with Seat Management)
+// ============================================================================
 function TeamTab({
   members,
   currentUserId,
@@ -786,6 +789,26 @@ function TeamTab({
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviting, setInviting] = useState(false);
+  const [seatInfo, setSeatInfo] = useState<{
+    seat_count: number;
+    members: number;
+    pending_invites: number;
+    seats_available: number;
+    can_invite: boolean;
+  } | null>(null);
+
+  // Load seat info
+  useEffect(() => {
+    const loadSeatInfo = async () => {
+      try {
+        const data = await safeFetchJson<any>(`${API_BASE}/settings/seats/`);
+        setSeatInfo(data);
+      } catch (err) {
+        console.error('Failed to load seat info:', err);
+      }
+    };
+    loadSeatInfo();
+  }, [members]);
 
   const handleInvite = async () => {
     if (!inviteEmail.trim()) return;
@@ -805,8 +828,16 @@ function TeamTab({
       setInviteEmail('');
       setShowInvite(false);
       onRefresh();
+      // Reload seat info
+      const seatData = await safeFetchJson<any>(`${API_BASE}/settings/seats/`);
+      setSeatInfo(seatData);
     } catch (err: any) {
-      onError(err?.message || 'Failed to invite');
+      // Handle seat limit error
+      if (err?.upgrade_required) {
+        onError(`No seats available. You have ${err.seat_count} seats with ${err.current_members} members. Add more seats to invite team members.`);
+      } else {
+        onError(err?.message || 'Failed to invite');
+      }
     } finally {
       setInviting(false);
     }
@@ -855,6 +886,9 @@ function TeamTab({
       await safeFetchJson(`${API_BASE}/settings/team/${userId}/`, { method: 'DELETE' });
       onSuccess('Team member removed');
       onRefresh();
+      // Reload seat info
+      const seatData = await safeFetchJson<any>(`${API_BASE}/settings/seats/`);
+      setSeatInfo(seatData);
     } catch (err: any) {
       onError(err?.message || 'Failed to remove');
     }
@@ -897,12 +931,81 @@ function TeamTab({
         </h2>
         <button
           onClick={() => setShowInvite(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
+          disabled={seatInfo !== null && !seatInfo.can_invite}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all",
+            seatInfo && !seatInfo.can_invite
+              ? "bg-slate-200 text-slate-500 cursor-not-allowed"
+              : "bg-primary text-white hover:opacity-90 shadow-lg shadow-primary/25"
+          )}
         >
           <UserPlus className="w-4 h-4" />
           Invite Member
         </button>
       </div>
+
+      {/* Seat Usage Bar */}
+      {seatInfo && seatInfo.seat_count > 0 && (
+        <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-sm text-slate-600 font-semibold">Team Seats</p>
+              <p className="text-2xl font-extrabold text-slate-900">
+                {seatInfo.members} / {seatInfo.seat_count}
+                <span className="text-sm font-medium text-slate-500 ml-2">used</span>
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              {seatInfo.pending_invites > 0 && (
+                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-bold">
+                  {seatInfo.pending_invites} pending
+                </span>
+              )}
+              {!seatInfo.can_invite && (
+                
+                  href="/account/billing"
+                  className="flex items-center gap-2 px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 text-sm shadow-lg shadow-primary/25"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Seats
+                </a>
+              )}
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+            <div
+              className={cn(
+                "h-full rounded-full transition-all",
+                seatInfo.members >= seatInfo.seat_count 
+                  ? "bg-red-500" 
+                  : seatInfo.members >= seatInfo.seat_count * 0.8 
+                    ? "bg-amber-500" 
+                    : "bg-emerald-500"
+              )}
+              style={{ width: `${Math.min(100, (seatInfo.members / seatInfo.seat_count) * 100)}%` }}
+            />
+          </div>
+          <p className="text-xs text-slate-500 font-medium mt-2">
+            {seatInfo.seats_available} seat(s) available
+          </p>
+        </div>
+      )}
+
+      {/* No seats warning */}
+      {seatInfo && !seatInfo.can_invite && (
+        <div className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-xl">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-500 mt-0.5" />
+            <div>
+              <p className="font-bold text-red-800">No seats available</p>
+              <p className="text-sm text-red-700 font-medium">
+                All {seatInfo.seat_count} seats are in use. <a href="/account/billing" className="underline font-bold">Add more seats</a> to invite team members.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showInvite && (
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">

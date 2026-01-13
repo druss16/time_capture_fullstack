@@ -26,13 +26,16 @@ class Organization(models.Model):
     
     # Subscription/billing
     plan = models.CharField(max_length=20, choices=[
-        ('trial', 'Trial'),
-        ('starter', 'Starter'),
+        ('none', 'No Plan'),
         ('professional', 'Professional'),
-        ('enterprise', 'Enterprise'),
-    ], default='trial')
+        ('executive', 'Executive'),
+    ], default='none')
     trial_ends_at = models.DateTimeField(null=True, blank=True)
     stripe_customer_id = models.CharField(max_length=100, blank=True)
+
+    # ADD these fields
+    stripe_subscription_id = models.CharField(max_length=100, blank=True, null=True)
+    seat_count = models.IntegerField(default=1, help_text="Number of paid seats")
     
     # Settings
     timezone = models.CharField(max_length=50, default='America/New_York')

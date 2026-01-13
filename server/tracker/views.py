@@ -4675,7 +4675,7 @@ def user_profile(request):
             "first_name": user.first_name,
             "last_name": user.last_name,
         })
-        
+
 @api_view(["POST"])
 @permission_classes([PermUI])  # ← Use this instead
 def complete_onboarding(request):
@@ -5685,7 +5685,7 @@ def firm_signup(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def invite_team_member(request):
-    """Owner/Admin invites a team member"""
+    """Owner/Admin invites a team member - enforces seat limits"""
     email = request.data.get('email')
     role = request.data.get('role', 'member')
     
@@ -5696,16 +5696,72 @@ def invite_team_member(request):
     
     org = membership.organization
     
+    # ✅ CHECK SEAT AVAILABILITY
+    current_member_count = OrganizationMembership.objects.filter(
+        organization=org
+    ).count()
+    
+    # Also count pending invitations (optional but recommended)
+    pending_invites = Invitation.objects.filter(
+        organization=org,
+        accepted=False,
+        expires_at__gt=timezone.now()  # Not expired
+    ).count()
+    
+    total_allocated = current_member_count + pending_invites
+    
+    if total_allocated >= org.seat_count:
+        return Response({
+            'error': 'No seats available',
+            'message': f'Your plan has {org.seat_count} seat(s). Currently {current_member_count} member(s) and {pending_invites} pending invite(s).',
+            'current_members': current_member_count,
+            'pending_invites': pending_invites,
+            'seat_count': org.seat_count,
+            'seats_available': max(0, org.seat_count - total_allocated),
+            'upgrade_required': True,
+        }, status=403)
+    
+    # Check if email already has pending invite
+    existing_invite = Invitation.objects.filter(
+        organization=org,
+        email=email,
+        accepted=False,
+        expires_at__gt=timezone.now()
+    ).first()
+    
+    if existing_invite:
+        return Response({
+            'error': 'Invitation already sent',
+            'message': f'An invitation was already sent to {email}',
+        }, status=400)
+    
+    # Check if user is already a member
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    existing_user = User.objects.filter(email=email).first()
+    if existing_user:
+        existing_membership = OrganizationMembership.objects.filter(
+            user=existing_user,
+            organization=org
+        ).exists()
+        if existing_membership:
+            return Response({
+                'error': 'Already a member',
+                'message': f'{email} is already a member of this organization',
+            }, status=400)
+    
     # Create invitation
     invite = Invitation.create_invite(org, email, role, request.user)
     
     # Send email (implement with your email service)
-    invite_url = f"https://yourapp.com/invite/{invite.token}"
+    invite_url = f"{settings.FRONTEND_URL}/invite/{invite.token}"
     # send_invite_email(email, invite_url, org.name, request.user.get_full_name())
     
     return Response({
         'success': True,
+        'message': f'Invitation sent to {email}',
         'invite_url': invite_url,  # For testing - remove in production
+        'seats_remaining': org.seat_count - total_allocated - 1,
     })
 
 

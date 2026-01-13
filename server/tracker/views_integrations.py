@@ -7,7 +7,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from urllib.parse import urlencode
-
+from django.http import HttpResponse
 from .models import Integration, OrganizationMembership
 
 
@@ -198,4 +198,107 @@ def xero_connect(request):
     return Response({'auth_url': auth_url})
 
 
-# ... Similar callback/status/clients endpoints for Xero
+# Add these to the end of views_integrations.py
+
+from django.http import HttpResponse  # Add this import at the top if missing
+
+@api_view(['GET'])
+def xero_callback(request):
+    """Handle Xero OAuth callback."""
+    code = request.GET.get('code')
+    state = request.GET.get('state')
+    error = request.GET.get('error')
+    
+    if error:
+        return redirect(f"{settings.FRONTEND_URL}/settings?integration_error={error}")
+    
+    try:
+        integration = Integration.objects.get(oauth_state=state, provider='xero')
+    except Integration.DoesNotExist:
+        return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=invalid_state")
+    
+    # Exchange code for tokens
+    token_url = "https://identity.xero.com/connect/token"
+    
+    response = requests.post(token_url, data={
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': settings.XERO_REDIRECT_URI,
+    }, auth=(settings.XERO_CLIENT_ID, settings.XERO_CLIENT_SECRET))
+    
+    if response.status_code != 200:
+        return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=token_exchange_failed")
+    
+    tokens = response.json()
+    
+    integration.access_token = tokens['access_token']
+    integration.refresh_token = tokens.get('refresh_token', '')
+    integration.is_connected = True
+    integration.save()
+    
+    return HttpResponse(f"""
+        <html>
+        <script>
+            window.opener.postMessage({{
+                type: 'oauth_callback',
+                integration: 'xero',
+                success: true
+            }}, '{settings.FRONTEND_URL}');
+            window.close();
+        </script>
+        </html>
+    """)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def xero_status(request):
+    """Check Xero connection status."""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'connected': False})
+    
+    try:
+        integration = Integration.objects.get(organization=org, provider='xero')
+        return Response({'connected': integration.is_connected})
+    except Integration.DoesNotExist:
+        return Response({'connected': False})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def xero_clients(request):
+    """Fetch contacts from Xero."""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    try:
+        integration = Integration.objects.get(organization=org, provider='xero', is_connected=True)
+    except Integration.DoesNotExist:
+        return Response({'error': 'Not connected to Xero'}, status=400)
+    
+    # Fetch contacts from Xero API
+    api_url = "https://api.xero.com/api.xro/2.0/Contacts"
+    
+    headers = {
+        'Authorization': f'Bearer {integration.access_token}',
+        'Accept': 'application/json',
+        'Xero-tenant-id': integration.tenant_id or '',
+    }
+    
+    response = requests.get(api_url, headers=headers)
+    
+    if response.status_code != 200:
+        return Response({'error': 'Failed to fetch contacts'}, status=500)
+    
+    data = response.json()
+    contacts = data.get('Contacts', [])
+    
+    clients = [{
+        'id': c['ContactID'],
+        'name': c.get('Name', ''),
+        'email': c.get('EmailAddress', ''),
+    } for c in contacts if c.get('IsCustomer', False)]
+    
+    return Response({'clients': clients})

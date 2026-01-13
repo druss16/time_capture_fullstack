@@ -547,6 +547,36 @@ class ClientRequest(models.Model):
     class Meta:
         ordering = ['-created_at']
 
+# tracker/models.py - Add Integration model
+
+class Integration(models.Model):
+    """OAuth integrations with external services."""
+    PROVIDER_CHOICES = [
+        ('quickbooks', 'QuickBooks Online'),
+        ('xero', 'Xero'),
+        ('karbon', 'Karbon'),
+    ]
+    
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='integrations')
+    provider = models.CharField(max_length=50, choices=PROVIDER_CHOICES)
+    
+    is_connected = models.BooleanField(default=False)
+    access_token = models.TextField(blank=True)
+    refresh_token = models.TextField(blank=True)
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    
+    # Provider-specific
+    realm_id = models.CharField(max_length=100, blank=True)  # QuickBooks
+    tenant_id = models.CharField(max_length=100, blank=True)  # Xero
+    
+    oauth_state = models.CharField(max_length=100, blank=True)  # For OAuth flow
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['organization', 'provider']
+
 class Project(models.Model):
     org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="projects")

@@ -18,8 +18,11 @@ import {
   Sparkles,
   Users,
   Plus,
+  Minus,
   RefreshCw,
-  X
+  X,
+  ArrowDown,
+  ArrowUp
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -40,6 +43,7 @@ interface SubscriptionData {
     quantity: number;
   } | null;
   has_payment_method: boolean;
+  is_owner: boolean;
 }
 
 interface SeatInfo {
@@ -120,6 +124,15 @@ export default function BillingSettingsPage() {
   const [showAddSeats, setShowAddSeats] = useState(false);
   const [seatsToAdd, setSeatsToAdd] = useState(1);
   const [addingSeats, setAddingSeats] = useState(false);
+  
+  // Manage seats modal state (for reducing)
+  const [showManageSeats, setShowManageSeats] = useState(false);
+  const [newSeatCount, setNewSeatCount] = useState(1);
+  const [reducingSeats, setReducingSeats] = useState(false);
+  
+  // Change plan modal state
+  const [showChangePlan, setShowChangePlan] = useState(false);
+  const [changingPlan, setChangingPlan] = useState(false);
 
   useEffect(() => {
     loadSubscription();
@@ -158,6 +171,7 @@ export default function BillingSettingsPage() {
       if (response.ok) {
         const data = await response.json();
         setSeatInfo(data);
+        setNewSeatCount(data.seat_count);
       }
     } catch (err) {
       console.error('Failed to load seat info:', err);
@@ -234,6 +248,79 @@ export default function BillingSettingsPage() {
       setError(err.message);
     } finally {
       setAddingSeats(false);
+    }
+  };
+
+  const handleReduceSeats = async () => {
+    setReducingSeats(true);
+    setError(null);
+
+    try {
+      const token = localStorage.getItem('auth_token');
+      const response = await fetch(`${API_BASE}/settings/seats/reduce/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ seats: newSeatCount }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        // Handle the "cannot reduce below usage" error with details
+        if (data.current_members) {
+          throw new Error(data.message || `Cannot reduce below ${data.total_allocated} seats in use`);
+        }
+        throw new Error(data.error || 'Failed to reduce seats');
+      }
+
+      setSuccess(`Reduced to ${data.new_seat_count} seat(s). You'll receive a prorated credit.`);
+      setShowManageSeats(false);
+      
+      // Reload data
+      loadSubscription();
+      loadSeatInfo();
+      
+      setTimeout(() => setSuccess(null), 5000);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setReducingSeats(false);
+    }
+  };
+
+  const handleChangePlan = async (newPlan: PlanId) => {
+    setChangingPlan(true);
+    setError(null);
+
+    try {
+      const token = localStorage.getItem('auth_token');
+      const response = await fetch(`${API_BASE}/settings/plan/change/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ plan: newPlan }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to change plan');
+
+      const action = newPlan === 'executive' ? 'Upgraded' : 'Downgraded';
+      setSuccess(`${action} to ${newPlan.charAt(0).toUpperCase() + newPlan.slice(1)} plan successfully!`);
+      setShowChangePlan(false);
+      
+      // Reload data
+      loadSubscription();
+      loadSeatInfo();
+      
+      setTimeout(() => setSuccess(null), 5000);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setChangingPlan(false);
     }
   };
 
@@ -370,6 +457,229 @@ export default function BillingSettingsPage() {
         </div>
       )}
 
+      {/* Manage Seats Modal (Reduce) */}
+      {showManageSeats && seatInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-extrabold text-slate-900">Manage Seats</h3>
+              <button
+                onClick={() => setShowManageSeats(false)}
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            
+            {/* Current usage info */}
+            <div className="bg-slate-50 rounded-xl p-4 mb-4">
+              <div className="flex justify-between text-sm font-medium text-slate-600 mb-1">
+                <span>Current seats</span>
+                <span className="font-bold text-slate-900">{seatInfo.seat_count}</span>
+              </div>
+              <div className="flex justify-between text-sm font-medium text-slate-600 mb-1">
+                <span>Active members</span>
+                <span className="font-bold text-slate-900">{seatInfo.members}</span>
+              </div>
+              {seatInfo.pending_invites > 0 && (
+                <div className="flex justify-between text-sm font-medium text-amber-600">
+                  <span>Pending invites</span>
+                  <span className="font-bold">{seatInfo.pending_invites}</span>
+                </div>
+              )}
+              <div className="border-t border-slate-200 mt-2 pt-2">
+                <div className="flex justify-between text-sm font-bold">
+                  <span className="text-slate-700">Minimum seats needed</span>
+                  <span className="text-primary">{seatInfo.total_allocated}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-sm font-bold text-slate-700 mb-2">
+                New seat count
+              </label>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setNewSeatCount(Math.max(seatInfo.total_allocated, newSeatCount - 1))}
+                  disabled={newSeatCount <= seatInfo.total_allocated}
+                  className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Minus className="w-5 h-5 text-slate-600" />
+                </button>
+                <input
+                  type="number"
+                  min={seatInfo.total_allocated}
+                  max="1000"
+                  value={newSeatCount}
+                  onChange={(e) => setNewSeatCount(Math.max(seatInfo.total_allocated, parseInt(e.target.value) || seatInfo.total_allocated))}
+                  className="flex-1 border-2 border-slate-200 rounded-xl px-4 py-3 text-lg font-bold text-center focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                />
+                <button
+                  onClick={() => setNewSeatCount(newSeatCount + 1)}
+                  className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-colors"
+                >
+                  <Plus className="w-5 h-5 text-slate-600" />
+                </button>
+              </div>
+              {newSeatCount < seatInfo.total_allocated && (
+                <p className="text-sm text-red-600 font-medium mt-2">
+                  ⚠️ Cannot reduce below {seatInfo.total_allocated} (current usage)
+                </p>
+              )}
+            </div>
+            
+            {newSeatCount < seatInfo.seat_count && (
+              <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 mb-6">
+                <p className="text-sm text-emerald-700 font-medium">
+                  💰 Reducing by {seatInfo.seat_count - newSeatCount} seat(s) will save you{' '}
+                  <span className="font-bold">${((seatInfo.seat_count - newSeatCount) * pricePerSeat).toFixed(2)}/mo</span>
+                </p>
+                <p className="text-xs text-emerald-600 mt-1">
+                  You'll receive a prorated credit for the current billing period.
+                </p>
+              </div>
+            )}
+            
+            {newSeatCount > seatInfo.seat_count && (
+              <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4 mb-6">
+                <p className="text-sm text-blue-700 font-medium">
+                  Adding {newSeatCount - seatInfo.seat_count} seat(s) will cost{' '}
+                  <span className="font-bold">${((newSeatCount - seatInfo.seat_count) * pricePerSeat).toFixed(2)}/mo</span> more
+                </p>
+              </div>
+            )}
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowManageSeats(false)}
+                className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReduceSeats}
+                disabled={reducingSeats || newSeatCount === seatInfo.seat_count || newSeatCount < seatInfo.total_allocated}
+                className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/25 disabled:opacity-50"
+              >
+                {reducingSeats ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : newSeatCount < seatInfo.seat_count ? (
+                  <Minus className="w-4 h-4" />
+                ) : (
+                  <Plus className="w-4 h-4" />
+                )}
+                {newSeatCount === seatInfo.seat_count 
+                  ? 'No Change' 
+                  : newSeatCount < seatInfo.seat_count 
+                    ? `Reduce to ${newSeatCount}` 
+                    : `Increase to ${newSeatCount}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Plan Modal */}
+      {showChangePlan && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-extrabold text-slate-900">Change Plan</h3>
+              <button
+                onClick={() => setShowChangePlan(false)}
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            
+            <div className="mb-6">
+              <p className="text-slate-600 font-medium">
+                You're currently on the <span className="font-bold">{planDisplay.name}</span> plan.
+              </p>
+            </div>
+
+            {currentPlan === 'executive' ? (
+              // Downgrade option
+              <div className="border-2 border-amber-200 bg-amber-50 rounded-xl p-5 mb-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <Star className="w-6 h-6 text-amber-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-bold text-slate-900">⭐ Professional</h4>
+                    <p className="text-2xl font-extrabold text-slate-900 mt-1">
+                      $29.99<span className="text-sm font-medium text-slate-500">/user/month</span>
+                    </p>
+                    <p className="text-sm text-amber-700 font-medium mt-2">
+                      You'll lose access to: Billing rates, Employee costs, Profitability reports, Advanced analytics
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="mt-4 p-3 bg-amber-100 rounded-lg">
+                  <p className="text-sm text-amber-800 font-medium">
+                    ⚠️ Downgrading will take effect immediately. Any custom billing rates and cost configurations will be preserved but inaccessible until you upgrade again.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => handleChangePlan('professional')}
+                  disabled={changingPlan}
+                  className="w-full mt-4 px-4 py-3 bg-amber-500 text-white rounded-xl font-bold hover:bg-amber-600 transition-all flex items-center justify-center gap-2"
+                >
+                  {changingPlan ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <ArrowDown className="w-4 h-4" />
+                  )}
+                  Downgrade to Professional
+                </button>
+              </div>
+            ) : (
+              // Upgrade option
+              <div className="border-2 border-primary bg-primary/5 rounded-xl p-5 mb-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center flex-shrink-0">
+                    <Crown className="w-6 h-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-bold text-slate-900">💎 Executive</h4>
+                    <p className="text-2xl font-extrabold text-slate-900 mt-1">
+                      $49.99<span className="text-sm font-medium text-slate-500">/user/month</span>
+                    </p>
+                    <p className="text-sm text-primary font-medium mt-2">
+                      Unlock: Billing rates, Employee costs, Profitability reports, Advanced analytics, API access
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => handleChangePlan('executive')}
+                  disabled={changingPlan}
+                  className="w-full mt-4 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
+                >
+                  {changingPlan ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <ArrowUp className="w-4 h-4" />
+                  )}
+                  Upgrade to Executive
+                </button>
+              </div>
+            )}
+            
+            <button
+              onClick={() => setShowChangePlan(false)}
+              className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-colors"
+            >
+              Keep Current Plan
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Current Plan Card */}
       <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
         <div className="flex items-center gap-4 mb-6">
@@ -430,16 +740,26 @@ export default function BillingSettingsPage() {
               </div>
             </div>
 
-            {hasActiveSubscription && (
-              <div className="text-right">
-                <p className="text-sm text-slate-500 font-medium">Next billing date</p>
-                <p className="font-bold text-slate-900">
-                  {subscription?.subscription?.current_period_end 
-                    ? new Date(subscription.subscription.current_period_end * 1000).toLocaleDateString()
-                    : '-'}
-                </p>
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {hasActiveSubscription && (
+                <button
+                  onClick={() => setShowChangePlan(true)}
+                  className="px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
+                >
+                  Change Plan
+                </button>
+              )}
+              {hasActiveSubscription && (
+                <div className="text-right">
+                  <p className="text-sm text-slate-500 font-medium">Next billing date</p>
+                  <p className="font-bold text-slate-900">
+                    {subscription?.subscription?.current_period_end 
+                      ? new Date(subscription.subscription.current_period_end * 1000).toLocaleDateString()
+                      : '-'}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           {subscription?.subscription?.cancel_at_period_end && (
@@ -464,13 +784,25 @@ export default function BillingSettingsPage() {
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => setShowAddSeats(true)}
-                className="flex items-center gap-2 px-4 py-2 border-2 border-primary text-primary font-bold rounded-xl hover:bg-primary/10 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Seats
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setNewSeatCount(seatInfo.seat_count);
+                    setShowManageSeats(true);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 border-2 border-slate-200 text-slate-700 font-bold rounded-xl hover:bg-slate-100 transition-colors"
+                >
+                  <Minus className="w-4 h-4" />
+                  Manage
+                </button>
+                <button
+                  onClick={() => setShowAddSeats(true)}
+                  className="flex items-center gap-2 px-4 py-2 border-2 border-primary text-primary font-bold rounded-xl hover:bg-primary/10 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Seats
+                </button>
+              </div>
             </div>
             
             {/* Progress bar */}
@@ -602,11 +934,11 @@ export default function BillingSettingsPage() {
                   {/* Upgrade button for Professional → Executive */}
                   {canUpgrade && (
                     <button
-                      onClick={() => handleUpgrade()}
-                      disabled={upgrading}
+                      onClick={() => handleChangePlan('executive')}
+                      disabled={changingPlan}
                       className="w-full py-2.5 px-4 font-bold rounded-xl transition-all flex items-center justify-center gap-2 bg-primary hover:opacity-90 text-white shadow-lg shadow-primary/25"
                     >
-                      {upgrading ? (
+                      {changingPlan ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
                         <>

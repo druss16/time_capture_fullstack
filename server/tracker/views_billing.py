@@ -2086,6 +2086,143 @@ def add_seats(request):
         return Response({'error': str(e)}, status=400)
 
 
+# Add these to views_billing.py
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reduce_seats(request):
+    """Remove seats from existing subscription. Owner only."""
+    membership = OrganizationMembership.objects.filter(
+        user=request.user,
+        role='owner'
+    ).select_related('organization').first()
+    
+    if not membership:
+        return Response({'error': 'Only organization owner can manage seats'}, status=403)
+    
+    org = membership.organization
+    
+    if not org.stripe_subscription_id:
+        return Response({'error': 'No active subscription'}, status=400)
+    
+    new_quantity = max(1, int(request.data.get('seats', 1)))  # Minimum 1 seat
+    
+    # Check current usage
+    current_members = OrganizationMembership.objects.filter(organization=org).count()
+    pending_invites = Invitation.objects.filter(
+        organization=org,
+        accepted_at__isnull=True,
+        expires_at__gt=timezone.now()
+    ).count()
+    
+    total_allocated = current_members + pending_invites
+    
+    if new_quantity < total_allocated:
+        return Response({
+            'error': 'Cannot reduce below current usage',
+            'current_members': current_members,
+            'pending_invites': pending_invites,
+            'total_allocated': total_allocated,
+            'requested_seats': new_quantity,
+            'message': f'You have {total_allocated} seats in use. Remove {total_allocated - new_quantity} member(s) or cancel pending invites first.'
+        }, status=400)
+    
+    try:
+        subscription = stripe.Subscription.retrieve(org.stripe_subscription_id)
+        
+        stripe.Subscription.modify(
+            org.stripe_subscription_id,
+            items=[{
+                'id': subscription['items']['data'][0]['id'],
+                'quantity': new_quantity,
+            }],
+            proration_behavior='create_prorations',  # Credit for unused time
+        )
+        
+        previous_seats = org.seat_count
+        org.seat_count = new_quantity
+        org.save(update_fields=['seat_count'])
+        
+        return Response({
+            'success': True,
+            'previous_seats': previous_seats,
+            'new_seat_count': new_quantity,
+            'seats_removed': previous_seats - new_quantity,
+            'message': f'Reduced to {new_quantity} seat(s). You\'ll receive a prorated credit.'
+        })
+        
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_plan(request):
+    """Switch between Professional and Executive plans. Owner only."""
+    membership = OrganizationMembership.objects.filter(
+        user=request.user,
+        role='owner'
+    ).select_related('organization').first()
+    
+    if not membership:
+        return Response({'error': 'Only organization owner can change plan'}, status=403)
+    
+    org = membership.organization
+    
+    if not org.stripe_subscription_id:
+        return Response({'error': 'No active subscription'}, status=400)
+    
+    new_plan = request.data.get('plan', '').lower()
+    if new_plan not in ('professional', 'executive'):
+        return Response({'error': 'Invalid plan. Choose "professional" or "executive"'}, status=400)
+    
+    if new_plan == org.plan:
+        return Response({'error': f'Already on {new_plan} plan'}, status=400)
+    
+    # Determine billing interval from current subscription
+    try:
+        subscription = stripe.Subscription.retrieve(org.stripe_subscription_id)
+        current_price_id = subscription['items']['data'][0]['price']['id']
+        
+        # Figure out if monthly or yearly
+        if current_price_id in [STRIPE_PRICES.get('professional_yearly'), STRIPE_PRICES.get('executive_yearly')]:
+            interval = 'yearly'
+        else:
+            interval = 'monthly'
+        
+        new_price_id = STRIPE_PRICES.get(f'{new_plan}_{interval}')
+        
+        if not new_price_id:
+            return Response({'error': f'Price not configured for {new_plan}_{interval}'}, status=500)
+        
+        # Update subscription with new price, keep same quantity
+        stripe.Subscription.modify(
+            org.stripe_subscription_id,
+            items=[{
+                'id': subscription['items']['data'][0]['id'],
+                'price': new_price_id,
+            }],
+            proration_behavior='create_prorations',
+        )
+        
+        previous_plan = org.plan
+        org.plan = new_plan
+        org.save(update_fields=['plan'])
+        
+        action = 'Upgraded' if new_plan == 'executive' else 'Downgraded'
+        
+        return Response({
+            'success': True,
+            'previous_plan': previous_plan,
+            'new_plan': new_plan,
+            'interval': interval,
+            'message': f'{action} to {new_plan.title()} plan. Changes effective immediately.'
+        })
+        
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_seat_usage(request):

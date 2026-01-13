@@ -150,6 +150,10 @@ urlpatterns = [
     path("settings/seats/", views_billing.get_seat_usage, name="seat-usage"),
     path("settings/seats/add/", views_billing.add_seats, name="add-seats"),
 
+    # In urls.py, add:
+    path('settings/seats/reduce/', views_billing.reduce_seats, name='reduce-seats'),
+    path('settings/plan/change/', views_billing.change_plan, name='change-plan'),
+
     # ===============================
     # ✅ NEW: BILLING & TIMESHEETS
     # ===============================

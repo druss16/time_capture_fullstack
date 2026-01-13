@@ -218,11 +218,17 @@ export default function Settings() {
     setTimeout(() => setError(null), 5000);
   };
 
+  // In Settings.tsx, update the useEffect that loads user info:
+  const [roleLoaded, setRoleLoaded] = useState(false);
+
   useEffect(() => {
     const loadUserInfo = async () => {
       try {
         const whoami = await safeFetchJson<any>(`${API_BASE}/whoami/`);
+        console.log('🔍 whoami response:', whoami);  // ← ADD THIS
         setCurrentUserId(whoami.user_id);
+        setCurrentUserRole(whoami.role || 'member');
+        console.log('🔍 Setting currentUserRole to:', whoami.role);  // ← ADD THIS
       } catch (err) {
         console.error('Failed to load user info:', err);
       }
@@ -1196,8 +1202,11 @@ function ClientsTab({
   const [form, setForm] = useState({ name: '', code: '', visibility: 'all' });
   const [saving, setSaving] = useState(false);
 
-  // Only owners and admins can create/edit/delete clients
+  // Owners AND admins can manage clients
   const canManageClients = ['owner', 'admin'].includes(currentUserRole);
+  
+  // Debug - remove after testing
+  console.log('ClientsTab - currentUserRole:', currentUserRole, 'canManageClients:', canManageClients);
 
   const resetForm = () => {
     setForm({ name: '', code: '', visibility: 'all' });
@@ -1265,7 +1274,7 @@ function ClientsTab({
           <span className="text-sm font-bold text-slate-500">({clients.length})</span>
         </h2>
         
-        {/* Only show buttons for admins/owners */}
+        {/* Show buttons for owners AND admins */}
         {canManageClients && (
           <div className="flex items-center gap-2">
             <button
@@ -1286,7 +1295,7 @@ function ClientsTab({
         )}
       </div>
 
-      {/* Info banner for non-admins */}
+      {/* Info banner for managers/members only (not owners or admins) */}
       {!canManageClients && (
         <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
           <p className="text-sm text-blue-700 font-medium">
@@ -1335,7 +1344,6 @@ function ClientsTab({
             </div>
           </div>
           
-          {/* Visibility explanation */}
           <div className="mt-3 text-xs text-slate-500 font-medium">
             {form.visibility === 'all' && '👥 Everyone in the organization can see and log time to this client.'}
             {form.visibility === 'assigned' && '🔒 Only users assigned via Client Access can see this client. Admins can still see it.'}
@@ -1361,7 +1369,7 @@ function ClientsTab({
         </div>
       )}
 
-      {/* Clients Table */}
+      {/* Clients Table - REMOVED "Added" column */}
       <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
         <table className="w-full">
           <thead className="bg-slate-100">

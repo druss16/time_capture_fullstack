@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing  # ✅ ADD THIS IMPORT
+from . import views_billing, views_settings  # ✅ ADD THIS IMPORT
 
 # ========================================
 # Router for ViewSet-based endpoints

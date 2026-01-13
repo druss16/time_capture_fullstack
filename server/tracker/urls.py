@@ -208,15 +208,22 @@ urlpatterns = [
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
 
         # QuickBooks
-    path('integrations/quickbooks/connect/', views_integrations.quickbooks_connect),
-    path('integrations/quickbooks/callback/', views_integrations.quickbooks_callback),
-    path('integrations/quickbooks/status/', views_integrations.quickbooks_status),
-    path('integrations/quickbooks/clients/', views_integrations.quickbooks_clients),
+    path('integrations/status/', views_integrations.integrations_status, name='integrations-status'),
+    
+    # QuickBooks
+    path('integrations/quickbooks/connect/', views_integrations.quickbooks_connect, name='quickbooks-connect'),
+    path('integrations/quickbooks/callback/', views_integrations.quickbooks_callback, name='quickbooks-callback'),
+    path('integrations/quickbooks/status/', views_integrations.quickbooks_status, name='quickbooks-status'),
+    path('integrations/quickbooks/disconnect/', views_integrations.quickbooks_disconnect, name='quickbooks-disconnect'),
+    path('integrations/quickbooks/customers/', views_integrations.quickbooks_customers, name='quickbooks-customers'),
+    path('integrations/quickbooks/import/', views_integrations.quickbooks_import, name='quickbooks-import'),
     
     # Xero
-    path('integrations/xero/connect/', views_integrations.xero_connect),
-    path('integrations/xero/callback/', views_integrations.xero_callback),
-    path('integrations/xero/status/', views_integrations.xero_status),
-    path('integrations/xero/clients/', views_integrations.xero_clients),
+    path('integrations/xero/connect/', views_integrations.xero_connect, name='xero-connect'),
+    path('integrations/xero/callback/', views_integrations.xero_callback, name='xero-callback'),
+    path('integrations/xero/status/', views_integrations.xero_status, name='xero-status'),
+    path('integrations/xero/disconnect/', views_integrations.xero_disconnect, name='xero-disconnect'),
+    path('integrations/xero/contacts/', views_integrations.xero_contacts, name='xero-contacts'),
+    path('integrations/xero/import/', views_integrations.xero_import, name='xero-import'),
 
 ]

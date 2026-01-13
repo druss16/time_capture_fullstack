@@ -438,11 +438,13 @@ class AuthToken(models.Model):
 # ===========================
 # ======  CORE MODELS  ======
 # ===========================
+# UPDATE YOUR Client MODEL in tracker/models.py
+# Add these fields after the existing fields:
+
 class Client(models.Model):
     org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
     
-    # ✅ ADD THIS FIELD
     code = models.CharField(
         max_length=50,
         blank=True,
@@ -452,30 +454,74 @@ class Client(models.Model):
     
     is_active = models.BooleanField(default=True)
 
-    VISIBILITY_CHOICES = [
-        ('all', 'All Team Members'),      # Everyone in org can see
-        ('assigned', 'Assigned Only'),     # Only assigned users + admins
-        ('confidential', 'Confidential'),  # Only assigned users, even admins need assignment
-    ]
-
     visibility = models.CharField(
-    max_length=20, 
-    choices=[('all', 'All'), ('assigned', 'Assigned'), ('confidential', 'Confidential')],
-    default='all',
-    null=True,  # Allow null for existing clients
-    blank=True
-)
+        max_length=20, 
+        choices=[('all', 'All'), ('assigned', 'Assigned'), ('confidential', 'Confidential')],
+        default='all',
+        null=True,
+        blank=True
+    )
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # ADD THESE NEW FIELDS FOR INTEGRATIONS
+    # ═══════════════════════════════════════════════════════════════════════
+    
+    quickbooks_id = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='QuickBooks Customer ID'
+    )
+    
+    xero_id = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='Xero Contact ID'
+    )
+    
+    IMPORT_SOURCE_CHOICES = [
+        ('', 'Manual'),
+        ('quickbooks', 'QuickBooks'),
+        ('xero', 'Xero'),
+    ]
+    imported_from = models.CharField(
+        max_length=20,
+        choices=IMPORT_SOURCE_CHOICES,
+        blank=True,
+        default='',
+        help_text='Integration source this client was imported from'
+    )
+    
+    # ═══════════════════════════════════════════════════════════════════════
     
     class Meta:
-        # ✅ ADD THIS - Prevents duplicate codes per org
         unique_together = [['org', 'code']]
+        constraints = [
+            # Prevent duplicate QB imports per org
+            models.UniqueConstraint(
+                fields=['org', 'quickbooks_id'],
+                name='unique_quickbooks_client',
+                condition=models.Q(quickbooks_id__isnull=False),
+            ),
+            # Prevent duplicate Xero imports per org
+            models.UniqueConstraint(
+                fields=['org', 'xero_id'],
+                name='unique_xero_client',
+                condition=models.Q(xero_id__isnull=False),
+            ),
+        ]
     
     def save(self, *args, **kwargs):
-        # ✅ AUTO-GENERATE CODE IF EMPTY
         if not self.code and self.name:
-            # Take first 4 letters, uppercase, remove spaces
             self.code = self.name[:10].upper().replace(' ', '')[:10]
         super().save(*args, **kwargs)
+    
+    def __str__(self):
+        source = f" [{self.imported_from.upper()}]" if self.imported_from else ""
+        return f"{self.name}{source}"
 
 
 # tracker/models.py - Update ClientAssignment

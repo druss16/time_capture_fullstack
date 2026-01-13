@@ -317,6 +317,17 @@ STRIPE_PRICE_PROFESSIONAL_YEARLY  = os.environ.get("STRIPE_PRICE_PROFESSIONAL_YE
 STRIPE_PRICE_EXECUTIVE_MONTHLY    = os.environ.get("STRIPE_PRICE_EXECUTIVE_MONTHLY")
 STRIPE_PRICE_EXECUTIVE_YEARLY     = os.environ.get("STRIPE_PRICE_EXECUTIVE_YEARLY")
 
+
+# QuickBooks
+QUICKBOOKS_CLIENT_ID = env('QUICKBOOKS_CLIENT_ID', default='')
+QUICKBOOKS_CLIENT_SECRET = env('QUICKBOOKS_CLIENT_SECRET', default='')
+QUICKBOOKS_REDIRECT_URI = env('QUICKBOOKS_REDIRECT_URI', default='')
+
+# Xero
+XERO_CLIENT_ID = env('XERO_CLIENT_ID', default='')
+XERO_CLIENT_SECRET = env('XERO_CLIENT_SECRET', default='')
+XERO_REDIRECT_URI = env('XERO_REDIRECT_URI', default='')
+
 # -----------------------------------------------------
 # Logging
 # -----------------------------------------------------

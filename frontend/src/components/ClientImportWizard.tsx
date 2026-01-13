@@ -1,942 +1,955 @@
-// src/components/ClientImportWizard.tsx - Add integration step
+// src/components/ClientImportWizard.tsx
+/**
+ * Client Import Wizard - Import clients from QuickBooks Online or Xero
+ * Handles OAuth connection, customer fetching, selection, and import
+ */
 
-import { useState, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
+  X,
   Upload,
   Check,
-  ChevronRight,
-  ChevronLeft,
+  CheckCircle2,
   AlertCircle,
-  Download,
   Loader2,
-  X,
-  FileSpreadsheet,
-  Link,
+  RefreshCw,
+  Search,
   ExternalLink,
+  Building2,
+  Users,
+  ArrowRight,
+  ArrowLeft,
+  Link2,
+  Unlink,
+  FileSpreadsheet,
+  CheckSquare,
+  Square,
+  MinusSquare,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
-import { safeFetchJson } from '@/lib/api';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
-// Integration logos (you can replace with actual logos)
-const INTEGRATIONS = [
-  {
-    id: 'quickbooks',
-    name: 'QuickBooks Online',
-    description: 'Import customers from QuickBooks',
-    logo: '📗',
-    status: 'available' as const,
-    color: 'bg-green-50 border-green-200 hover:border-green-400',
-  },
-  {
-    id: 'xero',
-    name: 'Xero',
-    description: 'Import contacts from Xero',
-    logo: '🔵',
-    status: 'available' as const,
-    color: 'bg-blue-50 border-blue-200 hover:border-blue-400',
-  },
-  {
-    id: 'karbon',
-    name: 'Karbon',
-    description: 'Import clients from Karbon',
-    logo: '🟠',
-    status: 'coming_soon' as const,
-    color: 'bg-orange-50 border-orange-200',
-  },
-  {
-    id: 'cch',
-    name: 'CCH Axcess',
-    description: 'Import clients from CCH',
-    logo: '🔴',
-    status: 'coming_soon' as const,
-    color: 'bg-red-50 border-red-200',
-  },
-  {
-    id: 'lacerte',
-    name: 'Lacerte / ProConnect',
-    description: 'Import from Intuit Tax',
-    logo: '💜',
-    status: 'coming_soon' as const,
-    color: 'bg-purple-50 border-purple-200',
-  },
-  {
-    id: 'thomson',
-    name: 'Thomson Reuters',
-    description: 'UltraTax CS, Practice CS',
-    logo: '🟤',
-    status: 'coming_soon' as const,
-    color: 'bg-amber-50 border-amber-200',
-  },
-];
+// ============================================================================
+// Types
+// ============================================================================
+
+interface TeamMember {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+}
+
+interface IntegrationStatus {
+  connected: boolean;
+  realm_id?: string;
+  tenant_id?: string;
+  last_synced?: string;
+}
+
+interface ExternalCustomer {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  company_name?: string;
+  balance?: number;
+  already_imported: boolean;
+}
+
+interface ImportResult {
+  imported: Array<{
+    id: number;
+    name: string;
+    quickbooks_id?: string;
+    xero_id?: string;
+    linked_existing: boolean;
+  }>;
+  skipped: Array<{
+    id: string;
+    name: string;
+    reason: string;
+  }>;
+  errors: Array<{
+    id: string;
+    name?: string;
+    error: string;
+  }>;
+  summary: {
+    imported_count: number;
+    skipped_count: number;
+    error_count: number;
+  };
+}
+
+type Provider = 'quickbooks' | 'xero';
+type Step = 'select-source' | 'connect' | 'select-customers' | 'importing' | 'complete';
 
 interface Props {
   onClose: () => void;
   onSuccess: () => void;
-  users: Array<{ id: number; email: string; first_name: string; last_name: string; username: string }>;
+  users: TeamMember[];
 }
 
-type Step = 'method' | 'import' | 'integration' | 'visibility' | 'assign' | 'done';
+// ============================================================================
+// Provider Config
+// ============================================================================
+
+const PROVIDERS = {
+  quickbooks: {
+    name: 'QuickBooks Online',
+    shortName: 'QuickBooks',
+    icon: '📗',
+    color: 'emerald',
+    bgColor: 'bg-emerald-50',
+    borderColor: 'border-emerald-200',
+    textColor: 'text-emerald-700',
+    buttonColor: 'bg-emerald-600 hover:bg-emerald-700',
+    description: 'Import customers from QuickBooks Online',
+  },
+  xero: {
+    name: 'Xero',
+    shortName: 'Xero',
+    icon: '📘',
+    color: 'blue',
+    bgColor: 'bg-blue-50',
+    borderColor: 'border-blue-200',
+    textColor: 'text-blue-700',
+    buttonColor: 'bg-blue-600 hover:bg-blue-700',
+    description: 'Import contacts from Xero',
+  },
+};
+
+// ============================================================================
+// Component
+// ============================================================================
 
 export default function ClientImportWizard({ onClose, onSuccess, users }: Props) {
-  const [step, setStep] = useState<Step>('method');
-  const [importMethod, setImportMethod] = useState<'file' | 'integration' | null>(null);
-  const [selectedIntegration, setSelectedIntegration] = useState<string | null>(null);
-  const [csvContent, setCsvContent] = useState('');
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<any>(null);
-  const [defaultVisibility, setDefaultVisibility] = useState<'all' | 'assigned'>('all');
-  const [assignmentCsv, setAssignmentCsv] = useState('');
-  const [assignResult, setAssignResult] = useState<any>(null);
-  const [integrationClients, setIntegrationClients] = useState<any[]>([]);
-  const [selectedClients, setSelectedClients] = useState<Set<string>>(new Set());
+  // State
+  const [step, setStep] = useState<Step>('select-source');
+  const [provider, setProvider] = useState<Provider | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
-  // Drag & drop states
-  const [dragActiveClient, setDragActiveClient] = useState(false);
-  const [dragActiveAssign, setDragActiveAssign] = useState(false);
+  // Integration status
+  const [qbStatus, setQbStatus] = useState<IntegrationStatus>({ connected: false });
+  const [xeroStatus, setXeroStatus] = useState<IntegrationStatus>({ connected: false });
   
-  // File input refs
-  const clientFileInputRef = useRef<HTMLInputElement>(null);
-  const assignFileInputRef = useRef<HTMLInputElement>(null);
-
-  // ============================================================================
-  // Integration Handlers
-  // ============================================================================
+  // Customers
+  const [customers, setCustomers] = useState<ExternalCustomer[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
   
-  const handleConnectIntegration = async (integrationId: string) => {
-    setSelectedIntegration(integrationId);
-    setImporting(true);
-    
-    try {
-      // Start OAuth flow - this will redirect
-      const response = await safeFetchJson<{ auth_url: string }>(
-        `${API_BASE}/integrations/${integrationId}/connect/`
-      );
-      
-      if (response.auth_url) {
-        // Open OAuth in popup or redirect
-        const width = 600;
-        const height = 700;
-        const left = window.screenX + (window.outerWidth - width) / 2;
-        const top = window.screenY + (window.outerHeight - height) / 2;
-        
-        const popup = window.open(
-          response.auth_url,
-          `Connect to ${integrationId}`,
-          `width=${width},height=${height},left=${left},top=${top}`
-        );
-        
-        // Listen for OAuth callback
-        const handleMessage = async (event: MessageEvent) => {
-          if (event.data?.type === 'oauth_callback' && event.data?.integration === integrationId) {
-            window.removeEventListener('message', handleMessage);
-            popup?.close();
-            
-            if (event.data.success) {
-              // Fetch clients from the integration
-              await fetchIntegrationClients(integrationId);
-            } else {
-              setImportResult({ error: event.data.error || 'Connection failed' });
-              setImporting(false);
-            }
-          }
-        };
-        
-        window.addEventListener('message', handleMessage);
-        
-        // Also poll for connection status (backup for popup blockers)
-        const pollInterval = setInterval(async () => {
-          try {
-            const status = await safeFetchJson<{ connected: boolean }>(
-              `${API_BASE}/integrations/${integrationId}/status/`
-            );
-            if (status.connected) {
-              clearInterval(pollInterval);
-              window.removeEventListener('message', handleMessage);
-              await fetchIntegrationClients(integrationId);
-            }
-          } catch (e) {
-            // Ignore polling errors
-          }
-        }, 2000);
-        
-        // Stop polling after 5 minutes
-        setTimeout(() => clearInterval(pollInterval), 300000);
-      }
-    } catch (err: any) {
-      setImportResult({ error: err.message || 'Failed to connect' });
-      setImporting(false);
-    }
-  };
-
-  const fetchIntegrationClients = async (integrationId: string) => {
-    try {
-      const response = await safeFetchJson<{ clients: any[] }>(
-        `${API_BASE}/integrations/${integrationId}/clients/`
-      );
-      
-      setIntegrationClients(response.clients || []);
-      setSelectedClients(new Set(response.clients?.map((c: any) => c.id) || []));
-      setStep('integration');
-    } catch (err: any) {
-      setImportResult({ error: err.message || 'Failed to fetch clients' });
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const handleImportFromIntegration = async () => {
-    if (selectedClients.size === 0) return;
-    
-    setImporting(true);
-    setImportResult(null);
-    
-    try {
-      const clientsToImport = integrationClients.filter(c => selectedClients.has(c.id));
-      
-      let created = 0;
-      let skipped = 0;
-      let errors: string[] = [];
-      
-      for (const client of clientsToImport) {
-        try {
-          await safeFetchJson(`${API_BASE}/settings/clients/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: client.name || client.displayName || client.companyName,
-              code: (client.code || client.name?.substring(0, 4) || '').toUpperCase().replace(/\s/g, ''),
-              visibility: defaultVisibility,
-              external_id: client.id,
-              external_source: selectedIntegration,
-            }),
-          });
-          created++;
-        } catch (err: any) {
-          if (err.message?.includes('already exists')) {
-            skipped++;
-          } else {
-            errors.push(`${client.name}: ${err.message}`);
-          }
-        }
-      }
-      
-      setImportResult({ created, skipped, errors, total: clientsToImport.length });
-      
-      if (created > 0 || skipped > 0) {
-        if (defaultVisibility === 'assigned') {
-          setStep('assign');
-        } else {
-          setStep('done');
-        }
-      }
-    } catch (err: any) {
-      setImportResult({ error: err.message });
-    } finally {
-      setImporting(false);
-    }
-  };
+  // Import results
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
   // ============================================================================
-  // Template Downloads
+  // API Helpers
   // ============================================================================
-  
-  const downloadClientTemplate = () => {
-    const template = 'name,code\nAcme Corporation,ACME\nBigCo Industries,BIGCO\nSmith Family Trust,SMITH';
-    const blob = new Blob([template], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'client_import_template.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
-  const downloadAssignmentTemplate = () => {
-    let template = 'email,client_code\n';
-    if (users.length > 0) {
-      const sampleEmail = users[0].email || 'user@yourfirm.com';
-      template += `${sampleEmail},ACME\n${sampleEmail},BIGCO`;
-    } else {
-      template += 'john@yourfirm.com,ACME\njane@yourfirm.com,BIGCO';
-    }
-    
-    const blob = new Blob([template], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'client_assignments_template.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // ============================================================================
-  // File Handling
-  // ============================================================================
-  
-  const handleFileRead = (file: File, setContent: (content: string) => void, setError?: (err: any) => void) => {
-    if (!file) return;
-    
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      setContent(content);
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('auth_token');
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
     };
-    reader.onerror = () => {
-      if (setError) setError({ error: 'Failed to read file' });
-    };
-    reader.readAsText(file);
-  };
-
-  const handleDragClient = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActiveClient(true);
-    } else if (e.type === 'dragleave') {
-      setDragActiveClient(false);
-    }
-  };
-
-  const handleDropClient = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActiveClient(false);
-    if (e.dataTransfer.files?.[0]) {
-      handleFileRead(e.dataTransfer.files[0], setCsvContent);
-    }
-  };
-
-  const handleDragAssign = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActiveAssign(true);
-    } else if (e.type === 'dragleave') {
-      setDragActiveAssign(false);
-    }
-  };
-
-  const handleDropAssign = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActiveAssign(false);
-    if (e.dataTransfer.files?.[0]) {
-      handleFileRead(e.dataTransfer.files[0], setAssignmentCsv, setAssignResult);
-    }
   };
 
   // ============================================================================
-  // Import Handlers
+  // Load Integration Status
   // ============================================================================
-  
-  const handleImportClients = async () => {
-    if (!csvContent.trim()) return;
-    
-    setImporting(true);
-    setImportResult(null);
-    
-    try {
-      const lines = csvContent.trim().split('\n');
-      const firstLine = lines[0].toLowerCase();
-      const knownHeaders = ['name', 'client', 'code', 'client_name', 'client_code'];
-      const hasHeader = knownHeaders.some(h => firstLine.includes(h));
-      
-      const dataLines = hasHeader ? lines.slice(1) : lines;
-      
-      let created = 0;
-      let skipped = 0;
-      let errors: string[] = [];
-      
-      for (let i = 0; i < dataLines.length; i++) {
-        const line = dataLines[i].trim();
-        if (!line) continue;
-        
-        const parts = line.match(/(?:^|,)("(?:[^"]*(?:""[^"]*)*)"|[^,]*)/g)?.map(p => 
-          p.replace(/^,/, '').replace(/^"|"$/g, '').replace(/""/g, '"').trim()
-        ) || line.split(',').map(p => p.trim());
-        
-        const name = parts[0];
-        const code = parts[1] || name?.substring(0, 4).toUpperCase().replace(/\s/g, '');
-        
-        if (!name) {
-          errors.push(`Row ${i + (hasHeader ? 2 : 1)}: Missing name`);
-          continue;
-        }
-        
-        try {
-          await safeFetchJson(`${API_BASE}/settings/clients/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, code, visibility: defaultVisibility }),
-          });
-          created++;
-        } catch (err: any) {
-          if (err.message?.includes('already exists') || err.message?.includes('duplicate')) {
-            skipped++;
-          } else {
-            errors.push(`Row ${i + (hasHeader ? 2 : 1)}: ${err.message || 'Failed'}`);
-          }
-        }
-      }
-      
-      setImportResult({ created, skipped, errors, total: dataLines.length });
-      
-      if (created > 0 || skipped > 0) {
-        if (defaultVisibility === 'assigned') {
-          setStep('assign');
-        } else {
-          setStep('done');
-        }
-      }
-    } catch (err: any) {
-      setImportResult({ error: err.message });
-    } finally {
-      setImporting(false);
-    }
-  };
 
-  const handleImportAssignments = async () => {
-    if (!assignmentCsv.trim()) {
-      setStep('done');
-      return;
+  const loadIntegrationStatus = useCallback(async () => {
+    try {
+      const [qbRes, xeroRes] = await Promise.all([
+        fetch(`${API_BASE}/integrations/quickbooks/status/`, { headers: getAuthHeaders() }),
+        fetch(`${API_BASE}/integrations/xero/status/`, { headers: getAuthHeaders() }),
+      ]);
+      
+      if (qbRes.ok) {
+        const qbData = await qbRes.json();
+        setQbStatus(qbData);
+      }
+      
+      if (xeroRes.ok) {
+        const xeroData = await xeroRes.json();
+        setXeroStatus(xeroData);
+      }
+    } catch (err) {
+      console.error('Failed to load integration status:', err);
     }
-    
-    setImporting(true);
-    setAssignResult(null);
+  }, []);
+
+  useEffect(() => {
+    loadIntegrationStatus();
+  }, [loadIntegrationStatus]);
+
+  // ============================================================================
+  // OAuth Connection
+  // ============================================================================
+
+  const handleConnect = async (targetProvider: Provider) => {
+    setLoading(true);
+    setError(null);
     
     try {
-      const response = await fetch(`${API_BASE}/settings/client-assignments/import/`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
-        },
-        body: JSON.stringify({ csv_content: assignmentCsv }),
+      const endpoint = targetProvider === 'quickbooks' 
+        ? '/integrations/quickbooks/connect/'
+        : '/integrations/xero/connect/';
+      
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        headers: getAuthHeaders(),
       });
+      
+      if (!response.ok) {
+        throw new Error('Failed to start OAuth flow');
+      }
       
       const data = await response.json();
       
-      if (!response.ok) {
-        setAssignResult({ error: data.error || `Server error: ${response.status}`, message: data.message });
-        return;
-      }
+      // Open OAuth popup
+      const popup = window.open(
+        data.auth_url,
+        `${targetProvider}_oauth`,
+        'width=600,height=700,scrollbars=yes'
+      );
       
-      setAssignResult(data);
+      // Listen for OAuth callback message
+      const handleMessage = (event: MessageEvent) => {
+        if (event.data?.type === 'oauth_callback' && event.data?.integration === targetProvider) {
+          window.removeEventListener('message', handleMessage);
+          
+          if (event.data.success) {
+            loadIntegrationStatus();
+            // Auto-advance to customer selection
+            setTimeout(() => {
+              loadCustomers(targetProvider);
+            }, 500);
+          } else {
+            setError('OAuth connection failed. Please try again.');
+          }
+          
+          setLoading(false);
+        }
+      };
       
-      if (data.created > 0 || data.skipped_duplicates >= 0) {
-        setStep('done');
-      }
+      window.addEventListener('message', handleMessage);
+      
+      // Cleanup if popup is closed without completing
+      const checkClosed = setInterval(() => {
+        if (popup?.closed) {
+          clearInterval(checkClosed);
+          window.removeEventListener('message', handleMessage);
+          setLoading(false);
+        }
+      }, 1000);
+      
     } catch (err: any) {
-      setAssignResult({ error: err.message || 'Network error' });
+      setError(err.message || 'Failed to connect');
+      setLoading(false);
+    }
+  };
+
+  const handleDisconnect = async (targetProvider: Provider) => {
+    if (!confirm(`Disconnect from ${PROVIDERS[targetProvider].name}? You can reconnect anytime.`)) {
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const endpoint = targetProvider === 'quickbooks'
+        ? '/integrations/quickbooks/disconnect/'
+        : '/integrations/xero/disconnect/';
+      
+      await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      
+      await loadIntegrationStatus();
+    } catch (err: any) {
+      setError(err.message || 'Failed to disconnect');
     } finally {
-      setImporting(false);
+      setLoading(false);
     }
   };
 
   // ============================================================================
-  // Progress calculation
+  // Load Customers
   // ============================================================================
-  
-  const getStepNumber = (s: Step): number => {
-    const steps: Step[] = ['method', 'import', 'integration', 'visibility', 'assign', 'done'];
-    // Adjust based on path taken
-    if (importMethod === 'file') {
-      const fileSteps = ['method', 'import', 'visibility', 'assign', 'done'];
-      return fileSteps.indexOf(s) + 1;
+
+  const loadCustomers = async (targetProvider: Provider) => {
+    setLoading(true);
+    setError(null);
+    setCustomers([]);
+    setSelectedIds(new Set());
+    
+    try {
+      const endpoint = targetProvider === 'quickbooks'
+        ? '/integrations/quickbooks/customers/'
+        : '/integrations/xero/contacts/';
+      
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        headers: getAuthHeaders(),
+      });
+      
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to fetch customers');
+      }
+      
+      const data = await response.json();
+      const customerList = data.customers || data.contacts || [];
+      
+      setCustomers(customerList);
+      setStep('select-customers');
+      
+      // Pre-select customers that haven't been imported yet
+      const unimportedIds = new Set(
+        customerList
+          .filter((c: ExternalCustomer) => !c.already_imported)
+          .map((c: ExternalCustomer) => c.id)
+      );
+      setSelectedIds(unimportedIds);
+      
+    } catch (err: any) {
+      setError(err.message || 'Failed to load customers');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ============================================================================
+  // Import Customers
+  // ============================================================================
+
+  const handleImport = async () => {
+    if (!provider || selectedIds.size === 0) return;
+    
+    setStep('importing');
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const endpoint = provider === 'quickbooks'
+        ? '/integrations/quickbooks/import/'
+        : '/integrations/xero/import/';
+      
+      const bodyKey = provider === 'quickbooks' ? 'customer_ids' : 'contact_ids';
+      
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          [bodyKey]: Array.from(selectedIds),
+        }),
+      });
+      
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Import failed');
+      }
+      
+      const result: ImportResult = await response.json();
+      setImportResult(result);
+      setStep('complete');
+      
+    } catch (err: any) {
+      setError(err.message || 'Import failed');
+      setStep('select-customers');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ============================================================================
+  // Selection Helpers
+  // ============================================================================
+
+  const filteredCustomers = customers.filter(c =>
+    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (c.email?.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (c.company_name?.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
+  const importableCustomers = filteredCustomers.filter(c => !c.already_imported);
+  const allImportableSelected = importableCustomers.length > 0 && 
+    importableCustomers.every(c => selectedIds.has(c.id));
+  const someImportableSelected = importableCustomers.some(c => selectedIds.has(c.id));
+
+  const toggleSelectAll = () => {
+    if (allImportableSelected) {
+      // Deselect all importable
+      const newSelected = new Set(selectedIds);
+      importableCustomers.forEach(c => newSelected.delete(c.id));
+      setSelectedIds(newSelected);
     } else {
-      const intSteps = ['method', 'integration', 'visibility', 'assign', 'done'];
-      return intSteps.indexOf(s) + 1;
+      // Select all importable
+      const newSelected = new Set(selectedIds);
+      importableCustomers.forEach(c => newSelected.add(c.id));
+      setSelectedIds(newSelected);
     }
   };
 
-  const totalSteps = defaultVisibility === 'assigned' ? 4 : 3;
+  const toggleCustomer = (id: string) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedIds(newSelected);
+  };
 
   // ============================================================================
-  // Render
+  // Render Steps
   // ============================================================================
-  
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl p-6 max-w-2xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+
+  const renderSelectSource = () => (
+    <div className="p-6">
+      <h3 className="text-lg font-bold text-slate-900 mb-2">Import Clients</h3>
+      <p className="text-slate-600 font-medium mb-6">
+        Connect your accounting software to import your client list automatically.
+      </p>
+
+      <div className="grid grid-cols-2 gap-4">
+        {/* QuickBooks Card */}
+        <button
+          onClick={() => {
+            setProvider('quickbooks');
+            if (qbStatus.connected) {
+              loadCustomers('quickbooks');
+            } else {
+              setStep('connect');
+            }
+          }}
+          className={cn(
+            'p-5 rounded-xl border-2 text-left transition-all hover:shadow-md',
+            'border-emerald-200 hover:border-emerald-400 bg-emerald-50/50'
+          )}
+        >
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-3xl">📗</span>
+            <div>
+              <h4 className="font-bold text-slate-900">QuickBooks Online</h4>
+              {qbStatus.connected ? (
+                <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">
+                  ✓ Connected
+                </span>
+              ) : (
+                <span className="text-xs text-slate-500 font-medium">Not connected</span>
+              )}
+            </div>
+          </div>
+          <p className="text-sm text-slate-600 font-medium">
+            Import customers from QuickBooks Online
+          </p>
+        </button>
+
+        {/* Xero Card */}
+        <button
+          onClick={() => {
+            setProvider('xero');
+            if (xeroStatus.connected) {
+              loadCustomers('xero');
+            } else {
+              setStep('connect');
+            }
+          }}
+          className={cn(
+            'p-5 rounded-xl border-2 text-left transition-all hover:shadow-md',
+            'border-blue-200 hover:border-blue-400 bg-blue-50/50'
+          )}
+        >
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-3xl">📘</span>
+            <div>
+              <h4 className="font-bold text-slate-900">Xero</h4>
+              {xeroStatus.connected ? (
+                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">
+                  ✓ Connected
+                </span>
+              ) : (
+                <span className="text-xs text-slate-500 font-medium">Not connected</span>
+              )}
+            </div>
+          </div>
+          <p className="text-sm text-slate-600 font-medium">
+            Import contacts from Xero
+          </p>
+        </button>
+      </div>
+
+      {/* CSV Import Option (future) */}
+      <div className="mt-6 pt-6 border-t-2 border-slate-200">
+        <button
+          disabled
+          className="w-full p-4 rounded-xl border-2 border-dashed border-slate-300 text-left opacity-50 cursor-not-allowed"
+        >
+          <div className="flex items-center gap-3">
+            <FileSpreadsheet className="w-8 h-8 text-slate-400" />
+            <div>
+              <h4 className="font-bold text-slate-700">Import from CSV</h4>
+              <p className="text-sm text-slate-500 font-medium">Coming soon</p>
+            </div>
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderConnect = () => {
+    if (!provider) return null;
+    const config = PROVIDERS[provider];
+    const isConnected = provider === 'quickbooks' ? qbStatus.connected : xeroStatus.connected;
+
+    return (
+      <div className="p-6">
+        <button
+          onClick={() => {
+            setProvider(null);
+            setStep('select-source');
+          }}
+          className="flex items-center gap-2 text-slate-600 hover:text-slate-900 font-medium mb-4"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back
+        </button>
+
+        <div className={cn('p-6 rounded-xl border-2', config.bgColor, config.borderColor)}>
+          <div className="flex items-center gap-4 mb-4">
+            <span className="text-4xl">{config.icon}</span>
+            <div>
+              <h3 className="text-xl font-bold text-slate-900">{config.name}</h3>
+              <p className={cn('text-sm font-medium', config.textColor)}>
+                {isConnected ? 'Connected' : 'Not connected'}
+              </p>
+            </div>
+          </div>
+
+          {isConnected ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-emerald-700 bg-emerald-100 px-4 py-3 rounded-xl">
+                <CheckCircle2 className="w-5 h-5" />
+                <span className="font-bold">Connected to {config.name}</span>
+              </div>
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={() => loadCustomers(provider)}
+                  disabled={loading}
+                  className={cn(
+                    'flex-1 flex items-center justify-center gap-2 px-4 py-3 text-white rounded-xl font-bold transition-all',
+                    config.buttonColor
+                  )}
+                >
+                  {loading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Users className="w-5 h-5" />
+                  )}
+                  Load Customers
+                </button>
+                
+                <button
+                  onClick={() => handleDisconnect(provider)}
+                  disabled={loading}
+                  className="px-4 py-3 border-2 border-red-200 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-all"
+                >
+                  <Unlink className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-slate-600 font-medium">
+                Connect your {config.name} account to import your customer list.
+                You'll be redirected to {config.shortName} to authorize access.
+              </p>
+              
+              <button
+                onClick={() => handleConnect(provider)}
+                disabled={loading}
+                className={cn(
+                  'w-full flex items-center justify-center gap-2 px-4 py-3 text-white rounded-xl font-bold transition-all',
+                  config.buttonColor
+                )}
+              >
+                {loading ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <>
+                    <Link2 className="w-5 h-5" />
+                    Connect to {config.name}
+                  </>
+                )}
+              </button>
+              
+              <p className="text-xs text-slate-500 font-medium text-center">
+                We only request read access to your customer/contact list.
+                We never modify your {config.shortName} data.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="mt-4 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-500 mt-0.5" />
+            <div>
+              <p className="font-bold text-red-800">Connection Error</p>
+              <p className="text-sm text-red-700 font-medium">{error}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSelectCustomers = () => {
+    if (!provider) return null;
+    const config = PROVIDERS[provider];
+
+    return (
+      <div className="flex flex-col h-full max-h-[70vh]">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-xl font-extrabold text-slate-900">Import Clients</h2>
-            <p className="text-sm text-slate-500 font-medium">
-              {step === 'method' && 'Choose how to import your clients'}
-              {step === 'import' && 'Upload or paste your client list'}
-              {step === 'integration' && `Select clients from ${INTEGRATIONS.find(i => i.id === selectedIntegration)?.name}`}
-              {step === 'visibility' && 'Set default visibility'}
-              {step === 'assign' && 'Assign users to clients (optional)'}
-              {step === 'done' && 'All done!'}
+        <div className="p-4 border-b-2 border-slate-200">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">{config.icon}</span>
+              <div>
+                <h3 className="font-bold text-slate-900">Select Customers to Import</h3>
+                <p className="text-sm text-slate-500 font-medium">
+                  {customers.length} customers found • {selectedIds.size} selected
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => loadCustomers(provider)}
+              disabled={loading}
+              className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg transition-colors"
+              title="Refresh list"
+            >
+              <RefreshCw className={cn('w-5 h-5', loading && 'animate-spin')} />
+            </button>
+          </div>
+
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search customers..."
+              className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-200 rounded-xl text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+            />
+          </div>
+        </div>
+
+        {/* Select All Row */}
+        <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-3">
+          <button
+            onClick={toggleSelectAll}
+            className="p-1 hover:bg-slate-200 rounded transition-colors"
+          >
+            {allImportableSelected ? (
+              <CheckSquare className="w-5 h-5 text-primary" />
+            ) : someImportableSelected ? (
+              <MinusSquare className="w-5 h-5 text-primary" />
+            ) : (
+              <Square className="w-5 h-5 text-slate-400" />
+            )}
+          </button>
+          <span className="text-sm font-bold text-slate-700">
+            {allImportableSelected ? 'Deselect All' : 'Select All'} ({importableCustomers.length} importable)
+          </span>
+        </div>
+
+        {/* Customer List */}
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-8 h-8 text-primary animate-spin" />
+            </div>
+          ) : filteredCustomers.length === 0 ? (
+            <div className="text-center py-12 text-slate-500">
+              <Users className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+              <p className="font-bold">No customers found</p>
+              <p className="text-sm">Try a different search term</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {filteredCustomers.map((customer) => (
+                <div
+                  key={customer.id}
+                  className={cn(
+                    'flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors',
+                    customer.already_imported && 'opacity-50'
+                  )}
+                >
+                  <button
+                    onClick={() => !customer.already_imported && toggleCustomer(customer.id)}
+                    disabled={customer.already_imported}
+                    className="p-1"
+                  >
+                    {customer.already_imported ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                    ) : selectedIds.has(customer.id) ? (
+                      <CheckSquare className="w-5 h-5 text-primary" />
+                    ) : (
+                      <Square className="w-5 h-5 text-slate-300" />
+                    )}
+                  </button>
+                  
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-900 truncate">{customer.name}</p>
+                    <p className="text-sm text-slate-500 font-medium truncate">
+                      {customer.email || customer.company_name || 'No email'}
+                    </p>
+                  </div>
+                  
+                  {customer.already_imported && (
+                    <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full font-bold">
+                      Already imported
+                    </span>
+                  )}
+                  
+                  {customer.balance !== undefined && customer.balance > 0 && (
+                    <span className="text-sm font-bold text-amber-600">
+                      ${customer.balance.toLocaleString()}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t-2 border-slate-200 bg-slate-50">
+          {error && (
+            <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500" />
+              <span className="text-sm text-red-700 font-medium">{error}</span>
+            </div>
+          )}
+          
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => {
+                setStep('select-source');
+                setProvider(null);
+              }}
+              className="px-4 py-2.5 text-slate-600 font-bold hover:bg-slate-200 rounded-xl transition-colors"
+            >
+              ← Back
+            </button>
+            
+            <button
+              onClick={handleImport}
+              disabled={selectedIds.size === 0 || loading}
+              className={cn(
+                'flex items-center gap-2 px-6 py-2.5 text-white rounded-xl font-bold transition-all',
+                'bg-primary hover:opacity-90 shadow-lg shadow-primary/25',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
+              )}
+            >
+              <Upload className="w-5 h-5" />
+              Import {selectedIds.size} Client{selectedIds.size !== 1 ? 's' : ''}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderImporting = () => (
+    <div className="p-12 text-center">
+      <Loader2 className="w-12 h-12 text-primary animate-spin mx-auto mb-4" />
+      <h3 className="text-xl font-bold text-slate-900 mb-2">Importing Clients...</h3>
+      <p className="text-slate-600 font-medium">
+        This may take a moment. Please don't close this window.
+      </p>
+    </div>
+  );
+
+  const renderComplete = () => {
+    if (!importResult) return null;
+    
+    const { summary, imported, skipped, errors } = importResult;
+    const hasErrors = errors.length > 0;
+    const hasSkipped = skipped.length > 0;
+
+    return (
+      <div className="p-6">
+        {/* Success Header */}
+        <div className="text-center mb-6">
+          <div className={cn(
+            'w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4',
+            hasErrors ? 'bg-amber-100' : 'bg-emerald-100'
+          )}>
+            {hasErrors ? (
+              <AlertCircle className="w-8 h-8 text-amber-600" />
+            ) : (
+              <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+            )}
+          </div>
+          <h3 className="text-xl font-bold text-slate-900">
+            {hasErrors ? 'Import Completed with Issues' : 'Import Complete!'}
+          </h3>
+          <p className="text-slate-600 font-medium">
+            {summary.imported_count} client{summary.imported_count !== 1 ? 's' : ''} imported successfully
+          </p>
+        </div>
+
+        {/* Summary Stats */}
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 text-center">
+            <p className="text-3xl font-extrabold text-emerald-600">{summary.imported_count}</p>
+            <p className="text-sm font-bold text-emerald-700">Imported</p>
+          </div>
+          <div className="bg-slate-50 border-2 border-slate-200 rounded-xl p-4 text-center">
+            <p className="text-3xl font-extrabold text-slate-600">{summary.skipped_count}</p>
+            <p className="text-sm font-bold text-slate-700">Skipped</p>
+          </div>
+          <div className={cn(
+            'rounded-xl p-4 text-center border-2',
+            summary.error_count > 0 
+              ? 'bg-red-50 border-red-200' 
+              : 'bg-slate-50 border-slate-200'
+          )}>
+            <p className={cn(
+              'text-3xl font-extrabold',
+              summary.error_count > 0 ? 'text-red-600' : 'text-slate-600'
+            )}>
+              {summary.error_count}
+            </p>
+            <p className={cn(
+              'text-sm font-bold',
+              summary.error_count > 0 ? 'text-red-700' : 'text-slate-700'
+            )}>
+              Errors
             </p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
+        </div>
+
+        {/* Imported List */}
+        {imported.length > 0 && (
+          <div className="mb-4">
+            <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              Successfully Imported
+            </h4>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl max-h-32 overflow-y-auto">
+              {imported.map((item, idx) => (
+                <div key={idx} className="px-3 py-2 text-sm border-b border-emerald-100 last:border-0">
+                  <span className="font-bold text-emerald-800">{item.name}</span>
+                  {item.linked_existing && (
+                    <span className="ml-2 text-xs text-emerald-600">(linked to existing)</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Skipped List */}
+        {hasSkipped && (
+          <div className="mb-4">
+            <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
+              <ArrowRight className="w-4 h-4 text-slate-500" />
+              Skipped
+            </h4>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl max-h-32 overflow-y-auto">
+              {skipped.map((item, idx) => (
+                <div key={idx} className="px-3 py-2 text-sm border-b border-slate-100 last:border-0">
+                  <span className="font-medium text-slate-700">{item.name}</span>
+                  <span className="text-slate-500 ml-2">— {item.reason}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Errors List */}
+        {hasErrors && (
+          <div className="mb-4">
+            <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500" />
+              Errors
+            </h4>
+            <div className="bg-red-50 border border-red-200 rounded-xl max-h-32 overflow-y-auto">
+              {errors.map((item, idx) => (
+                <div key={idx} className="px-3 py-2 text-sm border-b border-red-100 last:border-0">
+                  <span className="font-medium text-red-700">{item.name || item.id}</span>
+                  <span className="text-red-600 ml-2">— {item.error}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-3 mt-6">
+          <button
+            onClick={() => {
+              setStep('select-source');
+              setProvider(null);
+              setImportResult(null);
+            }}
+            className="flex-1 px-4 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            Import More
+          </button>
+          <button
+            onClick={() => {
+              onSuccess();
+              onClose();
+            }}
+            className="flex-1 px-4 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 transition-all shadow-lg shadow-primary/25"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================================
+  // Main Render
+  // ============================================================================
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b-2 border-slate-200 bg-slate-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center">
+              <Upload className="w-5 h-5 text-primary" />
+            </div>
+            <h2 className="text-lg font-bold text-slate-900">Import Clients</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-slate-200 rounded-lg transition-colors"
+          >
             <X className="w-5 h-5 text-slate-500" />
           </button>
         </div>
 
-        {/* ================================================================== */}
-        {/* Step: Choose Method                                               */}
-        {/* ================================================================== */}
-        {step === 'method' && (
-          <div>
-            <div className="grid md:grid-cols-2 gap-4 mb-6">
-              {/* File Upload Option */}
-              <button
-                onClick={() => { setImportMethod('file'); setStep('import'); }}
-                className="p-6 border-2 border-slate-200 rounded-xl hover:border-primary hover:bg-primary/5 transition-all text-left group"
-              >
-                <FileSpreadsheet className="w-10 h-10 text-slate-400 group-hover:text-primary mb-3" />
-                <h3 className="font-bold text-slate-900 mb-1">Upload CSV / Excel</h3>
-                <p className="text-sm text-slate-500">
-                  Import from a file or paste from Excel
-                </p>
-              </button>
-
-              {/* Integration Option */}
-              <button
-                onClick={() => setImportMethod('integration')}
-                className="p-6 border-2 border-slate-200 rounded-xl hover:border-primary hover:bg-primary/5 transition-all text-left group"
-              >
-                <Link className="w-10 h-10 text-slate-400 group-hover:text-primary mb-3" />
-                <h3 className="font-bold text-slate-900 mb-1">Connect Integration</h3>
-                <p className="text-sm text-slate-500">
-                  QuickBooks, Xero, Karbon & more
-                </p>
-              </button>
-            </div>
-
-            {/* Integration List (if selected) */}
-            {importMethod === 'integration' && (
-              <div className="border-t-2 border-slate-100 pt-6">
-                <h3 className="font-bold text-slate-800 mb-4">Choose your platform</h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {INTEGRATIONS.map(integration => (
-                    <button
-                      key={integration.id}
-                      onClick={() => integration.status === 'available' && handleConnectIntegration(integration.id)}
-                      disabled={integration.status === 'coming_soon' || importing}
-                      className={cn(
-                        'p-4 border-2 rounded-xl text-left transition-all relative',
-                        integration.status === 'coming_soon' 
-                          ? 'opacity-60 cursor-not-allowed ' + integration.color
-                          : integration.color + ' cursor-pointer',
-                        importing && selectedIntegration === integration.id && 'ring-2 ring-primary'
-                      )}
-                    >
-                      {integration.status === 'coming_soon' && (
-                        <span className="absolute top-2 right-2 text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full font-bold">
-                          SOON
-                        </span>
-                      )}
-                      <div className="text-2xl mb-2">{integration.logo}</div>
-                      <p className="font-bold text-slate-800 text-sm">{integration.name}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">{integration.description}</p>
-                      
-                      {importing && selectedIntegration === integration.id && (
-                        <div className="absolute inset-0 bg-white/80 rounded-xl flex items-center justify-center">
-                          <Loader2 className="w-6 h-6 text-primary animate-spin" />
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-                
-                <p className="text-xs text-slate-500 mt-4 text-center">
-                  Don't see your platform? <button className="text-primary font-bold hover:underline">Request an integration</button>
-                </p>
-              </div>
-            )}
-
-            {importResult?.error && (
-              <div className="mt-4 p-3 bg-red-50 border-2 border-red-200 rounded-xl">
-                <p className="text-sm text-red-700 font-medium flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4" />
-                  {importResult.error}
-                </p>
-              </div>
-            )}
-
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={onClose}
-                className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================== */}
-        {/* Step: Integration Client Selection                                */}
-        {/* ================================================================== */}
-        {step === 'integration' && (
-          <div>
-            <div className="mb-4 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-center gap-3">
-              <Check className="w-5 h-5 text-emerald-600" />
-              <p className="font-bold text-emerald-800">
-                Connected to {INTEGRATIONS.find(i => i.id === selectedIntegration)?.name}!
-              </p>
-            </div>
-
-            <div className="flex items-center justify-between mb-3">
-              <p className="font-bold text-slate-800">
-                Select clients to import ({selectedClients.size} of {integrationClients.length})
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setSelectedClients(new Set(integrationClients.map(c => c.id)))}
-                  className="text-xs text-primary font-bold hover:underline"
-                >
-                  Select All
-                </button>
-                <button
-                  onClick={() => setSelectedClients(new Set())}
-                  className="text-xs text-slate-500 font-bold hover:underline"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-
-            <div className="border-2 border-slate-200 rounded-xl max-h-64 overflow-y-auto">
-              {integrationClients.length === 0 ? (
-                <div className="p-8 text-center text-slate-500">
-                  <p className="font-medium">No clients found</p>
-                  <p className="text-sm mt-1">Make sure you have customers in your {INTEGRATIONS.find(i => i.id === selectedIntegration)?.name} account</p>
-                </div>
-              ) : (
-                integrationClients.map(client => (
-                  <label
-                    key={client.id}
-                    className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedClients.has(client.id)}
-                      onChange={(e) => {
-                        const newSelected = new Set(selectedClients);
-                        if (e.target.checked) {
-                          newSelected.add(client.id);
-                        } else {
-                          newSelected.delete(client.id);
-                        }
-                        setSelectedClients(newSelected);
-                      }}
-                      className="w-4 h-4 text-primary rounded"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-slate-800 truncate">
-                        {client.name || client.displayName || client.companyName}
-                      </p>
-                      {client.email && (
-                        <p className="text-xs text-slate-500 truncate">{client.email}</p>
-                      )}
-                    </div>
-                    {client.balance !== undefined && (
-                      <span className="text-xs text-slate-500 font-mono">
-                        ${Number(client.balance || 0).toFixed(2)}
-                      </span>
-                    )}
-                  </label>
-                ))
-              )}
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={() => { setStep('method'); setSelectedIntegration(null); }}
-                className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 flex items-center justify-center gap-2 transition-colors"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                Back
-              </button>
-              <button
-                onClick={() => setStep('visibility')}
-                disabled={selectedClients.size === 0}
-                className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-primary/25 transition-all"
-              >
-                Next
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================== */}
-        {/* Step: File Import                                                 */}
-        {/* ================================================================== */}
-        {step === 'import' && (
-          <div>
-            {/* File Upload Zone */}
-            <div
-              className={cn(
-                'border-2 border-dashed rounded-xl p-8 text-center mb-4 transition-all',
-                dragActiveClient ? 'border-primary bg-primary/5' : 'border-slate-300 hover:border-slate-400'
-              )}
-              onDragEnter={handleDragClient}
-              onDragLeave={handleDragClient}
-              onDragOver={handleDragClient}
-              onDrop={handleDropClient}
-            >
-              <input
-                ref={clientFileInputRef}
-                type="file"
-                accept=".csv,.txt,text/csv,text/plain"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files?.[0]) {
-                    handleFileRead(e.target.files[0], setCsvContent);
-                  }
-                }}
-              />
-              
-              <FileSpreadsheet className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-              <p className="font-bold text-slate-700 mb-1">Drag & drop CSV file here</p>
-              <p className="text-sm text-slate-500 mb-3">
-                or{' '}
-                <button onClick={() => clientFileInputRef.current?.click()} className="text-primary font-bold hover:underline">
-                  browse files
-                </button>
-              </p>
-              <p className="text-xs text-slate-400">Supports .csv and .txt files</p>
-            </div>
-
-            {/* Divider */}
-            <div className="flex items-center gap-4 mb-4">
-              <div className="flex-1 h-px bg-slate-200" />
-              <span className="text-sm font-bold text-slate-400">OR</span>
-              <div className="flex-1 h-px bg-slate-200" />
-            </div>
-
-            {/* Format Example */}
-            <div className="mb-4 p-4 bg-slate-50 rounded-xl">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-bold text-slate-700">Paste from Excel</p>
-                <button onClick={downloadClientTemplate} className="text-xs text-primary font-bold hover:underline flex items-center gap-1">
-                  <Download className="w-3 h-3" />
-                  Download Template
-                </button>
-              </div>
-              <code className="text-xs text-slate-600 bg-slate-200 px-2 py-1 rounded block font-mono">
-                name,code<br/>Acme Corporation,ACME<br/>BigCo Industries,BIGCO
-              </code>
-              <p className="text-xs text-slate-500 mt-2">💡 Header row is optional</p>
-            </div>
-
-            <textarea
-              value={csvContent}
-              onChange={(e) => setCsvContent(e.target.value)}
-              placeholder="Paste your client list here..."
-              rows={6}
-              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
-            />
-
-            {csvContent && (
-              <div className="mt-2 flex items-center gap-2 text-sm text-emerald-600 font-medium">
-                <Check className="w-4 h-4" />
-                {csvContent.split('\n').filter(l => l.trim()).length} rows loaded
-              </div>
-            )}
-
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={() => { setStep('method'); setImportMethod(null); }}
-                className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 flex items-center justify-center gap-2 transition-colors"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                Back
-              </button>
-              <button
-                onClick={() => setStep('visibility')}
-                disabled={!csvContent.trim()}
-                className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-primary/25 transition-all"
-              >
-                Next
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================== */}
-        {/* Step: Visibility                                                  */}
-        {/* ================================================================== */}
-        {step === 'visibility' && (
-          <div>
-            <p className="text-slate-600 font-medium mb-4">Who should be able to see these clients by default?</p>
-
-            <div className="space-y-3">
-              <label className={cn(
-                'block p-4 border-2 rounded-xl cursor-pointer transition-all',
-                defaultVisibility === 'all' ? 'border-primary bg-primary/5' : 'border-slate-200 hover:border-slate-300'
-              )}>
-                <input type="radio" name="visibility" value="all" checked={defaultVisibility === 'all'} onChange={() => setDefaultVisibility('all')} className="sr-only" />
-                <div className="flex items-start gap-3">
-                  <div className={cn('w-5 h-5 rounded-full border-2 flex items-center justify-center mt-0.5 flex-shrink-0', defaultVisibility === 'all' ? 'border-primary' : 'border-slate-300')}>
-                    {defaultVisibility === 'all' && <div className="w-2.5 h-2.5 rounded-full bg-primary" />}
-                  </div>
-                  <div>
-                    <p className="font-bold text-slate-900">👥 All Team Members</p>
-                    <p className="text-sm text-slate-500 font-medium mt-1">Everyone can see all clients. Best for small teams.</p>
-                    <span className="inline-block mt-2 px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-full">Recommended</span>
-                  </div>
-                </div>
-              </label>
-
-              <label className={cn(
-                'block p-4 border-2 rounded-xl cursor-pointer transition-all',
-                defaultVisibility === 'assigned' ? 'border-primary bg-primary/5' : 'border-slate-200 hover:border-slate-300'
-              )}>
-                <input type="radio" name="visibility" value="assigned" checked={defaultVisibility === 'assigned'} onChange={() => setDefaultVisibility('assigned')} className="sr-only" />
-                <div className="flex items-start gap-3">
-                  <div className={cn('w-5 h-5 rounded-full border-2 flex items-center justify-center mt-0.5 flex-shrink-0', defaultVisibility === 'assigned' ? 'border-primary' : 'border-slate-300')}>
-                    {defaultVisibility === 'assigned' && <div className="w-2.5 h-2.5 rounded-full bg-primary" />}
-                  </div>
-                  <div>
-                    <p className="font-bold text-slate-900">🔒 Assigned Users Only</p>
-                    <p className="text-sm text-slate-500 font-medium mt-1">Only assigned team members can see each client.</p>
-                    <p className="text-xs text-amber-600 font-medium mt-2">⚠️ You'll need to assign users in the next step</p>
-                  </div>
-                </div>
-              </label>
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={() => setStep(importMethod === 'integration' ? 'integration' : 'import')}
-                className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 flex items-center justify-center gap-2 transition-colors"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                Back
-              </button>
-              <button
-                onClick={importMethod === 'integration' ? handleImportFromIntegration : handleImportClients}
-                disabled={importing}
-                className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-primary/25 transition-all"
-              >
-                {importing ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" />Importing...</>
-                ) : (
-                  <>Import Clients<ChevronRight className="w-4 h-4" /></>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================== */}
-        {/* Step: Assign Users                                                */}
-        {/* ================================================================== */}
-        {step === 'assign' && (
-          <div>
-            <div className="mb-4 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
-              <p className="font-bold text-emerald-800 flex items-center gap-2">
-                <Check className="w-5 h-5" />
-                Imported {importResult?.created || 0} clients
-                {importResult?.skipped > 0 && <span className="font-normal text-emerald-600">({importResult.skipped} already existed)</span>}
-              </p>
-            </div>
-
-            <p className="text-slate-600 font-medium mb-4">
-              Assign team members to clients. You can skip this and do it later in <span className="font-bold">Settings → Client Access</span>.
-            </p>
-
-            {/* File Upload */}
-            <div
-              className={cn(
-                'border-2 border-dashed rounded-xl p-6 text-center mb-4 transition-all',
-                dragActiveAssign ? 'border-primary bg-primary/5' : 'border-slate-300 hover:border-slate-400'
-              )}
-              onDragEnter={handleDragAssign}
-              onDragLeave={handleDragAssign}
-              onDragOver={handleDragAssign}
-              onDrop={handleDropAssign}
-            >
-              <input
-                ref={assignFileInputRef}
-                type="file"
-                accept=".csv,.txt"
-                className="hidden"
-                onChange={(e) => e.target.files?.[0] && handleFileRead(e.target.files[0], setAssignmentCsv, setAssignResult)}
-              />
-              <FileSpreadsheet className="w-10 h-10 text-slate-400 mx-auto mb-3" />
-              <p className="font-bold text-slate-700 mb-1">
-                Drop CSV here or <button onClick={() => assignFileInputRef.current?.click()} className="text-primary hover:underline">browse</button>
-              </p>
-            </div>
-
-            <div className="mb-4 p-4 bg-slate-50 rounded-xl">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-bold text-slate-700">Format:</p>
-                <button onClick={downloadAssignmentTemplate} className="text-xs text-primary font-bold hover:underline flex items-center gap-1">
-                  <Download className="w-3 h-3" />Template
-                </button>
-              </div>
-              <code className="text-xs text-slate-600 bg-slate-200 px-2 py-1 rounded block font-mono">
-                email,client_code<br/>john@firm.com,ACME
-              </code>
-            </div>
-
-            <textarea
-              value={assignmentCsv}
-              onChange={(e) => setAssignmentCsv(e.target.value)}
-              placeholder="Paste assignments here..."
-              rows={5}
-              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
-            />
-
-            {assignResult && (
-              <div className={cn('mt-4 p-4 rounded-xl', assignResult.error ? 'bg-red-50 border-2 border-red-200' : 'bg-emerald-50 border-2 border-emerald-200')}>
-                {assignResult.error ? (
-                  <p className="font-bold text-red-800 flex items-center gap-2"><AlertCircle className="w-4 h-4" />{assignResult.error}</p>
-                ) : (
-                  <p className="font-bold text-emerald-800">✓ Created {assignResult.created} assignments</p>
-                )}
-              </div>
-            )}
-
-            <div className="flex gap-3 mt-6">
-              <button onClick={() => setStep('done')} className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100">
-                Skip for Now
-              </button>
-              <button
-                onClick={handleImportAssignments}
-                disabled={importing || !assignmentCsv.trim()}
-                className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
-              >
-                {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                Import Assignments
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================== */}
-        {/* Step: Done                                                        */}
-        {/* ================================================================== */}
-        {step === 'done' && (
-          <div className="text-center py-8">
-            <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Check className="w-8 h-8 text-emerald-600" />
-            </div>
-            <h3 className="text-xl font-extrabold text-slate-900 mb-2">All Done!</h3>
-            <p className="text-slate-600 font-medium">
-              {importResult?.created || 0} client{(importResult?.created || 0) !== 1 ? 's' : ''} imported
-              {assignResult?.created ? ` and ${assignResult.created} assignment${assignResult.created !== 1 ? 's' : ''} created` : ''}.
-            </p>
-            <button
-              onClick={() => { onSuccess(); onClose(); }}
-              className="mt-6 px-8 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 shadow-lg shadow-primary/25"
-            >
-              Done
-            </button>
-          </div>
-        )}
+        {/* Content */}
+        <div className="max-h-[70vh] overflow-hidden">
+          {step === 'select-source' && renderSelectSource()}
+          {step === 'connect' && renderConnect()}
+          {step === 'select-customers' && renderSelectCustomers()}
+          {step === 'importing' && renderImporting()}
+          {step === 'complete' && renderComplete()}
+        </div>
       </div>
     </div>
   );

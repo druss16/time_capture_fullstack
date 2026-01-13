@@ -24,6 +24,8 @@ import ManualCategorization from "@/components/ManualCategorization";
 import { safeFetchJson } from "@/lib/api";
 import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn, getClientColor, SKELETON, DESIGN_SYSTEM } from "@/lib/design-system";
+import { useSearchParams } from 'react-router-dom';
+
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -67,6 +69,22 @@ export default function DailyReview() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
   const [availableClients, setAvailableClients] = useState<ClientOption[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Add these with your other useState declarations
+  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [manualEntry, setManualEntry] = useState<{
+    client_id: number | null;
+    description: string;
+    hours: number;
+    date: string;
+  }>({
+    client_id: null,
+    description: '',
+    hours: 0,
+    date: todayIso(),
+  });
+
+
 
   useEffect(() => { if (!user && whoami) setUser(whoami); }, [whoami, user]);
   useEffect(() => { (async () => { try { await primeCsrf(API_BASE); } catch {} })(); }, []);
@@ -137,6 +155,31 @@ export default function DailyReview() {
     const interval = setInterval(() => { loadTimeSummary(); loadUncategorizedCount(); }, 2 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadTimeSummary, loadUncategorizedCount]);
+
+  // Check for auto-open params on mount
+  // Check for auto-open params on mount
+  useEffect(() => {
+    const shouldAdd = searchParams.get('add') === 'true';
+    const preSelectedClientId = searchParams.get('client_id');
+    
+    if (shouldAdd) {
+      // Pre-fill the client if provided
+      if (preSelectedClientId) {
+        setManualEntry(prev => ({
+          ...prev,
+          client_id: parseInt(preSelectedClientId),
+        }));
+      }
+      
+      // Open the modal
+      setShowManualEntry(true);
+      
+      // Clear the params so refresh doesn't re-open
+      searchParams.delete('add');
+      searchParams.delete('client_id');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const handleRefresh = useCallback(() => { loadTimeSummary(); loadUncategorizedCount(); }, [loadTimeSummary, loadUncategorizedCount]);
   const handleCategorizationComplete = useCallback(() => { loadTimeSummary(); loadUncategorizedCount(); }, [loadTimeSummary, loadUncategorizedCount]);
@@ -240,6 +283,7 @@ export default function DailyReview() {
               </div>
               <ManualTimeEntry defaultDate={date} onSuccess={handleRefresh} />
             </div>
+
 
             {/* Right: Date + Refresh + Billable */}
             <div className="flex items-center gap-3">
@@ -447,6 +491,27 @@ export default function DailyReview() {
           <ManualCategorization onComplete={handleCategorizationComplete} />
         )}
       </div>
-    </div>
+          {/* ========================================= */}
+        {/* MODAL GOES HERE - AT THE VERY END        */}
+        {/* ========================================= */}
+        {showManualEntry && (
+          <ManualTimeEntry
+            isOpen={showManualEntry}
+            onClose={() => {
+              setShowManualEntry(false);
+              setManualEntry({ client_id: null, description: '', hours: 0, date: todayIso() });
+            }}
+            onSuccess={() => {
+              setShowManualEntry(false);
+              setManualEntry({ client_id: null, description: '', hours: 0, date: todayIso() });
+              loadTimeSummary();
+              showToast('Time entry added', 'success');
+            }}
+            defaultDate={date}
+            preSelectedClientId={manualEntry.client_id}
+          />
+        )}
+
+      </div>  // <-- Final closing div
   );
 }

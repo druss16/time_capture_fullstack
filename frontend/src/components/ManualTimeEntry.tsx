@@ -1,13 +1,4 @@
-/**
- * ManualTimeEntry.tsx - Add time entries manually
- * 
- * Allows users to manually log time for:
- * - Client
- * - Category
- * - Date
- * - Duration (hours)
- * - Optional notes
- */
+// src/components/ManualTimeEntry.tsx
 
 import { useState, useEffect, useCallback } from "react";
 import { Plus, Clock, X, Check, Calendar } from "lucide-react";
@@ -21,7 +12,6 @@ type ClientOption = {
   name: string;
 };
 
-// Default categories
 const DEFAULT_CATEGORIES = [
   'Tax Preparation',
   'Audit/Assurance',
@@ -38,10 +28,38 @@ const DEFAULT_CATEGORIES = [
 type ManualTimeEntryProps = {
   onSuccess?: () => void;
   defaultDate?: string;
+  // NEW: External control props
+  isOpen?: boolean;
+  onClose?: () => void;
+  preSelectedClientId?: number | null;
 };
 
-export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEntryProps) {
-  const [isOpen, setIsOpen] = useState(false);
+export default function ManualTimeEntry({ 
+  onSuccess, 
+  defaultDate,
+  isOpen: externalIsOpen,
+  onClose: externalOnClose,
+  preSelectedClientId,
+}: ManualTimeEntryProps) {
+  // Use external control if provided, otherwise internal
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isControlled = externalIsOpen !== undefined;
+  const isOpen = isControlled ? externalIsOpen : internalIsOpen;
+  
+  const handleClose = () => {
+    if (isControlled && externalOnClose) {
+      externalOnClose();
+    } else {
+      setInternalIsOpen(false);
+    }
+  };
+
+  const handleOpen = () => {
+    if (!isControlled) {
+      setInternalIsOpen(true);
+    }
+  };
+
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -59,15 +77,40 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
     notes: '',
   });
 
+  // Update form when preSelectedClientId changes
+  useEffect(() => {
+    if (preSelectedClientId && isOpen) {
+      setForm(prev => ({ ...prev, client_id: preSelectedClientId.toString() }));
+    }
+  }, [preSelectedClientId, isOpen]);
+
+  // Update date when defaultDate changes
+  useEffect(() => {
+    if (defaultDate) {
+      setForm(prev => ({ ...prev, date: defaultDate }));
+    }
+  }, [defaultDate]);
+
   // Load clients
   const loadClients = useCallback(async () => {
     try {
-      const data = await safeFetchJson<ClientOption[]>(`${API_BASE}/options/clients/`);
+      // Try the my-clients endpoint first (respects visibility)
+      const data = await safeFetchJson<ClientOption[]>(`${API_BASE}/settings/my-clients/`);
       if (data && Array.isArray(data) && data.length > 0) {
         setClients(data);
+        return;
       }
-    } catch (err) {
-      console.error('Failed to load clients:', err);
+    } catch {}
+    
+    // Fallback to other endpoints
+    for (const url of [`${API_BASE}/options/clients/`, `${API_BASE}/clients/list/`]) {
+      try {
+        const data = await safeFetchJson<ClientOption[]>(url);
+        if (data && Array.isArray(data) && data.length > 0) {
+          setClients(data);
+          return;
+        }
+      } catch {}
     }
   }, []);
 
@@ -87,6 +130,8 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
     if (isOpen) {
       loadClients();
       loadCategories();
+      setError(null);
+      setSuccess(false);
     }
   }, [isOpen, loadClients, loadCategories]);
 
@@ -136,6 +181,7 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
 
       if (response?.success) {
         setSuccess(true);
+        
         // Reset form
         setForm({
           client_id: '',
@@ -149,7 +195,7 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
         
         // Close after short delay
         setTimeout(() => {
-          setIsOpen(false);
+          handleClose();
           setSuccess(false);
           onSuccess?.();
         }, 1500);
@@ -178,61 +224,73 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
     setForm({ ...form, hours: hours.toString(), minutes: minutes.toString() });
   };
 
+  // Get client name for display
+  const selectedClient = clients.find(c => c.id.toString() === form.client_id);
+
   return (
     <>
-      {/* Trigger Button */}
-      <button
-        onClick={() => setIsOpen(true)}
-        className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm shadow-sm"
-      >
-        <Plus className="w-4 h-4" />
-        Add Time Manually
-      </button>
+      {/* Trigger Button - only show if not externally controlled */}
+      {!isControlled && (
+        <button
+          onClick={handleOpen}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm shadow-sm"
+        >
+          <Plus className="w-4 h-4" />
+          Add Time Manually
+        </button>
+      )}
 
       {/* Modal */}
       {isOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b">
-              <div className="flex items-center gap-2">
-                <Clock className="w-5 h-5 text-primary" />
-                <h2 className="text-lg font-semibold">Add Time Manually</h2>
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-primary/10 rounded-xl">
+                  <Clock className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-extrabold text-slate-900">Add Time Manually</h2>
+                  {selectedClient && (
+                    <p className="text-sm text-primary font-medium">{selectedClient.name}</p>
+                  )}
+                </div>
               </div>
               <button
-                onClick={() => setIsOpen(false)}
-                className="p-1 hover:bg-gray-100 rounded"
+                onClick={handleClose}
+                className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5 text-slate-500" />
               </button>
             </div>
 
             {/* Form */}
-            <form onSubmit={handleSubmit} className="p-4 space-y-4">
+            <form onSubmit={handleSubmit} className="p-5 space-y-4">
               {/* Success Message */}
               {success && (
-                <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700">
+                <div className="flex items-center gap-2 p-3 bg-emerald-50 border-2 border-emerald-200 rounded-xl text-emerald-700">
                   <Check className="w-5 h-5" />
-                  <span className="font-medium">Time entry added successfully!</span>
+                  <span className="font-bold">Time entry added successfully!</span>
                 </div>
               )}
 
               {/* Error Message */}
               {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                <div className="p-3 bg-red-50 border-2 border-red-200 rounded-xl text-red-700 text-sm font-medium">
                   {error}
                 </div>
               )}
 
               {/* Client */}
               <div>
-                <label className="block text-sm font-medium mb-1.5">
+                <label className="block text-sm font-bold text-slate-800 mb-2">
                   Client <span className="text-red-500">*</span>
                 </label>
                 <select
                   value={form.client_id}
                   onChange={(e) => setForm({ ...form, client_id: e.target.value })}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                  className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white"
                   required
                 >
                   <option value="">Select client...</option>
@@ -244,13 +302,13 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
 
               {/* Category */}
               <div>
-                <label className="block text-sm font-medium mb-1.5">
+                <label className="block text-sm font-bold text-slate-800 mb-2">
                   Category <span className="text-red-500">*</span>
                 </label>
                 <select
                   value={form.category}
                   onChange={(e) => setForm({ ...form, category: e.target.value })}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                  className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white"
                   required
                 >
                   <option value="">Select category...</option>
@@ -262,7 +320,7 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
 
               {/* Date */}
               <div>
-                <label className="block text-sm font-medium mb-1.5">
+                <label className="block text-sm font-bold text-slate-800 mb-2">
                   Date <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
@@ -270,19 +328,18 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
                     type="date"
                     value={form.date}
                     onChange={(e) => setForm({ ...form, date: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                    className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                     required
                   />
-                  <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                 </div>
               </div>
 
               {/* Time Duration */}
               <div>
-                <label className="block text-sm font-medium mb-1.5">
+                <label className="block text-sm font-bold text-slate-800 mb-2">
                   Duration <span className="text-red-500">*</span>
                 </label>
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   <div className="flex-1">
                     <div className="relative">
                       <input
@@ -293,9 +350,9 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
                         placeholder="0"
                         value={form.hours}
                         onChange={(e) => setForm({ ...form, hours: e.target.value })}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-12 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                        className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 pr-12 font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                       />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">hrs</span>
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-slate-500 font-medium">hrs</span>
                     </div>
                   </div>
                   <div className="flex-1">
@@ -308,21 +365,21 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
                         placeholder="0"
                         value={form.minutes}
                         onChange={(e) => setForm({ ...form, minutes: e.target.value })}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-12 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                        className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 pr-12 font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                       />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">min</span>
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-slate-500 font-medium">min</span>
                     </div>
                   </div>
                 </div>
 
                 {/* Quick Time Buttons */}
-                <div className="flex flex-wrap gap-1.5 mt-2">
+                <div className="flex flex-wrap gap-2 mt-3">
                   {quickTimes.map(qt => (
                     <button
                       key={qt.label}
                       type="button"
                       onClick={() => setQuickTime(qt.hours, qt.minutes)}
-                      className="px-2.5 py-1 text-xs font-medium bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                      className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                     >
                       {qt.label}
                     </button>
@@ -331,7 +388,7 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
 
                 {/* Total Display */}
                 {getTotalHours() > 0 && (
-                  <p className="text-sm text-primary font-medium mt-2">
+                  <p className="text-sm text-primary font-bold mt-3">
                     Total: {getTotalHours().toFixed(2)} hours
                   </p>
                 )}
@@ -339,28 +396,28 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
 
               {/* Start Time (Optional) */}
               <div>
-                <label className="block text-sm font-medium mb-1.5">
-                  Start Time <span className="text-gray-400 text-xs">(optional)</span>
+                <label className="block text-sm font-bold text-slate-800 mb-2">
+                  Start Time <span className="text-slate-400 text-xs font-medium">(optional)</span>
                 </label>
                 <input
                   type="time"
                   value={form.start_time}
                   onChange={(e) => setForm({ ...form, start_time: e.target.value })}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                  className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                 />
               </div>
 
               {/* Notes */}
               <div>
-                <label className="block text-sm font-medium mb-1.5">
-                  Notes <span className="text-gray-400 text-xs">(optional)</span>
+                <label className="block text-sm font-bold text-slate-800 mb-2">
+                  Notes <span className="text-slate-400 text-xs font-medium">(optional)</span>
                 </label>
                 <textarea
                   value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
                   placeholder="What did you work on?"
                   rows={2}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary resize-none"
+                  className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all resize-none"
                 />
               </div>
 
@@ -368,15 +425,15 @@ export default function ManualTimeEntry({ onSuccess, defaultDate }: ManualTimeEn
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsOpen(false)}
-                  className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                  onClick={handleClose}
+                  className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting || success}
-                  className="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                  className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
                 >
                   {isSubmitting ? (
                     <>

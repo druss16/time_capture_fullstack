@@ -219,8 +219,9 @@ export default function Clients() {
                 </div>
                 
                 <div className="mt-4 pt-3 border-t border-slate-100 flex items-center gap-2">
+                  // Change the link to include both client and action
                   <Link
-                    to={`/daily?client=${client.id}`}
+                    to={`/daily?add=true&client_id=${client.id}`}
                     className="text-xs text-primary font-bold hover:underline flex items-center gap-1"
                   >
                     Log Time

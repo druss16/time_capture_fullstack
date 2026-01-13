@@ -33,6 +33,9 @@ import {
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 
+import ClientAssignmentManager from '@/components/ClientAssignmentManager';
+
+
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
@@ -69,6 +72,7 @@ type Client = {
   name: string;
   code: string;
   is_active: boolean;
+  visibility: 'all' | 'assigned' | 'confidential';  // ← ADD THIS
   created_at: string;
 };
 
@@ -115,7 +119,7 @@ type EmployeeCostRate = {
   end_date: string | null;
 };
 
-type Tab = 'organization' | 'team' | 'clients' | 'billing' | 'costs' | 'devices' | 'token';
+type Tab = 'organization' | 'team' | 'clients' | 'assignments' | 'billing' | 'costs' | 'devices' | 'token';
 
 // Define which plans can access which features
 const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive'];
@@ -125,7 +129,8 @@ interface TabConfig {
   id: Tab;
   label: string;
   icon: React.ReactNode;
-  requiredPlan?: PlanType[]; // If undefined, all plans can access
+  requiredPlan?: PlanType[];
+  requiredRole?: ('owner' | 'admin' | 'manager')[];  // ← NEW: Role restriction
 }
 
 // ============================================================================
@@ -246,6 +251,7 @@ export default function Settings() {
           setOrgInfo(org);
           setOrgPlan(org.plan || 'professional');
           break;
+          
         case 'team':
           const team = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`);
           setTeamMembers(team || []);
@@ -256,12 +262,22 @@ export default function Settings() {
             }
           }
           break;
+          
         case 'clients':
           const clientList = await safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`);
           setClients(clientList || []);
           break;
+          
+        case 'assignments':
+          const [assignmentClients, assignmentTeam] = await Promise.all([
+            safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
+            safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
+          ]);
+          setClients(assignmentClients || []);
+          setTeamMembers(assignmentTeam || []);
+          break;
+          
         case 'billing':
-          // Only load if plan allows
           if (EXECUTIVE_PLANS.includes(orgPlan)) {
             const rates = await safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`);
             setBillingRates(rates || []);
@@ -273,8 +289,8 @@ export default function Settings() {
             setTeamMembers(teamForRates || []);
           }
           break;
+          
         case 'costs':
-          // Only load if plan allows
           if (EXECUTIVE_PLANS.includes(orgPlan)) {
             const costRates = await safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []);
             setEmployeeCostRates(costRates || []);
@@ -282,10 +298,12 @@ export default function Settings() {
             setTeamMembers(teamForCosts || []);
           }
           break;
+          
         case 'devices':
           const deviceList = await safeFetchJson<Device[]>(`${API_BASE}/settings/devices/`);
           setDevices(deviceList || []);
           break;
+          
         case 'token':
           const token = await safeFetchJson<InstallToken>(`${API_BASE}/settings/install-token/`);
           setInstallToken(token);
@@ -306,6 +324,12 @@ export default function Settings() {
     { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
     { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
     { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
+    { 
+      id: 'assignments', 
+      label: 'Client Access', 
+      icon: <Shield className="w-4 h-4" />,
+      requiredRole: ['owner', 'admin', 'manager'],  // Managers can view/assign their team
+    },
     { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
     { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
     { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
@@ -467,6 +491,7 @@ export default function Settings() {
                       {activeTab === 'clients' && (
                         <ClientsTab
                           clients={clients}
+                          currentUserRole={currentUserRole}  // ← ADD THIS
                           onRefresh={() => loadTabData('clients')}
                           onSuccess={showSuccess}
                           onError={showError}
@@ -496,6 +521,15 @@ export default function Settings() {
                         <DevicesTab
                           devices={devices}
                           onRefresh={() => loadTabData('devices')}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                        />
+                      )}
+                      {/* In the content rendering section, add: */}
+                      {activeTab === 'assignments' && (
+                        <ClientAssignmentManager
+                          users={teamMembers}
+                          clients={clients}
                           onSuccess={showSuccess}
                           onError={showError}
                         />
@@ -1125,22 +1159,27 @@ function TeamTab({
 // ============================================================================
 function ClientsTab({
   clients,
+  currentUserRole,  // ← ADD THIS PROP
   onRefresh,
   onSuccess,
   onError,
 }: {
   clients: Client[];
+  currentUserRole: string;  // ← ADD THIS
   onRefresh: () => void;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', code: '' });
+  const [form, setForm] = useState({ name: '', code: '', visibility: 'all' });
   const [saving, setSaving] = useState(false);
 
+  // ✅ Check if user can create/edit clients
+  const canManageClients = ['owner', 'admin'].includes(currentUserRole);
+
   const resetForm = () => {
-    setForm({ name: '', code: '' });
+    setForm({ name: '', code: '', visibility: 'all' });
     setShowAdd(false);
     setEditingId(null);
   };
@@ -1174,12 +1213,18 @@ function ClientsTab({
   };
 
   const handleEdit = (client: Client) => {
-    setForm({ name: client.name, code: client.code || '' });
+    if (!canManageClients) return;  // ← Guard
+    setForm({ 
+      name: client.name, 
+      code: client.code || '',
+      visibility: client.visibility || 'all'
+    });
     setEditingId(client.id);
     setShowAdd(true);
   };
 
   const handleDelete = async (clientId: number, clientName: string) => {
+    if (!canManageClients) return;  // ← Guard
     if (!confirm(`Delete client "${clientName}"?`)) return;
     try {
       await safeFetchJson(`${API_BASE}/settings/clients/${clientId}/`, { method: 'DELETE' });
@@ -1198,19 +1243,32 @@ function ClientsTab({
           Clients
           <span className="text-sm font-bold text-slate-500">({clients.length})</span>
         </h2>
-        <button
-          onClick={() => { resetForm(); setShowAdd(true); }}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
-        >
-          <Plus className="w-4 h-4" />
-          Add Client
-        </button>
+        
+        {/* ✅ Only show Add button for admins/owners */}
+        {canManageClients && (
+          <button
+            onClick={() => { resetForm(); setShowAdd(true); }}
+            className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
+          >
+            <Plus className="w-4 h-4" />
+            Add Client
+          </button>
+        )}
       </div>
 
-      {showAdd && (
+      {/* Info banner for managers */}
+      {!canManageClients && (
+        <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+          <p className="text-sm text-blue-700 font-medium">
+            💡 Only administrators can add or edit clients. Contact your admin to add new clients.
+          </p>
+        </div>
+      )}
+
+      {showAdd && canManageClients && (
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
           <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Client' : 'Add Client'}</h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Client Name *</label>
               <input
@@ -1232,7 +1290,27 @@ function ClientsTab({
                 className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all uppercase"
               />
             </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-800 mb-2">Visibility</label>
+              <select
+                value={form.visibility}
+                onChange={(e) => setForm({ ...form, visibility: e.target.value })}
+                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white"
+              >
+                <option value="all">All Team Members</option>
+                <option value="assigned">Assigned Users Only</option>
+                <option value="confidential">Confidential (strict)</option>
+              </select>
+            </div>
           </div>
+          
+          {/* Visibility explanation */}
+          <div className="mt-3 text-xs text-slate-500 font-medium">
+            {form.visibility === 'all' && '👥 Everyone in the organization can see and log time to this client.'}
+            {form.visibility === 'assigned' && '🔒 Only users assigned via Client Access can see this client. Admins can still see it.'}
+            {form.visibility === 'confidential' && '🔐 Strict confidentiality - even admins need explicit assignment to see this client.'}
+          </div>
+          
           <div className="flex gap-3 mt-4">
             <button
               onClick={handleSave}
@@ -1258,9 +1336,12 @@ function ClientsTab({
             <tr>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Client Name</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Code</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Visibility</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Status</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Added</th>
-              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
+              {canManageClients && (
+                <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
+              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
@@ -1271,31 +1352,63 @@ function ClientsTab({
                 <td className="px-4 py-3">
                   <span className={cn(
                     'text-xs px-2.5 py-1 rounded-full font-bold',
+                    client.visibility === 'all' ? 'bg-emerald-100 text-emerald-700' :
+                    client.visibility === 'assigned' ? 'bg-amber-100 text-amber-700' :
+                    'bg-red-100 text-red-700'
+                  )}>
+                    {client.visibility === 'all' ? '👥 All' :
+                     client.visibility === 'assigned' ? '🔒 Assigned' :
+                     '🔐 Confidential'}
+                  </span>
+                </td>
+                <td className="px-4 py-3">
+                  <span className={cn(
+                    'text-xs px-2.5 py-1 rounded-full font-bold',
                     client.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
                   )}>
                     {client.is_active ? 'Active' : 'Inactive'}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-sm text-slate-500 font-medium">
-                  {new Date(client.created_at).toLocaleDateString()}
+                  {client.created_at ? new Date(client.created_at).toLocaleDateString() : '—'}
                 </td>
-                <td className="px-4 py-3 text-right">
-                  <div className="flex items-center justify-end gap-1">
-                    <button onClick={() => handleEdit(client)} className="p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-colors">
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => handleDelete(client.id, client.name)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </td>
+                {canManageClients && (
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <button 
+                        onClick={() => handleEdit(client)} 
+                        className="p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-colors"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => handleDelete(client.id, client.name)} 
+                        className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
         </table>
         {clients.length === 0 && (
-          <div className="text-center py-8 text-slate-500 font-medium">No clients yet. Add your first client to get started.</div>
+          <div className="text-center py-8 text-slate-500 font-medium">
+            No clients yet. {canManageClients ? 'Add your first client to get started.' : 'Contact your admin to add clients.'}
+          </div>
         )}
+      </div>
+      
+      {/* Visibility legend */}
+      <div className="mt-4 p-4 bg-slate-100 rounded-xl">
+        <h4 className="font-bold text-slate-800 text-sm mb-2">Visibility Levels</h4>
+        <div className="text-sm text-slate-600 font-medium space-y-1">
+          <p><span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold text-xs">👥 All</span> — Everyone in the org can see and log time</p>
+          <p><span className="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold text-xs">🔒 Assigned</span> — Only assigned users + admins can see</p>
+          <p><span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-bold text-xs">🔐 Confidential</span> — Even admins need explicit assignment</p>
+        </div>
       </div>
     </div>
   );

@@ -4188,15 +4188,23 @@ def get_current_client(request):
         })
 
 
+# views.py - Replace the existing list_clients function
+
+from django.db.models import Q, Exists, OuterRef
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def list_clients(request):
     """
-    List all clients for this user's org.
-    Called by GUI to populate "Switch Client" menu.
+    List clients visible to the current user.
+    
+    Visibility rules:
+    - Owners/Admins: See all clients (except 'confidential' without assignment)
+    - Managers: See 'all' visibility clients + their assigned clients
+    - Members: See 'all' visibility clients + their assigned clients
     
     Returns: [
-      {"id": 1, "name": "Acme Corp", "code": "ACME", "is_active": true},
+      {"id": 1, "name": "Acme Corp", "code": "ACME", "is_active": true, "visibility": "all"},
       ...
     ]
     """
@@ -4208,14 +4216,66 @@ def list_clients(request):
             name="default-org",
             defaults={"slug": "default-org"}
         )
-
-    clients = Client.objects.filter(org=org, is_active=True).order_by('name')
+    
+    # Get user's role in the organization
+    membership = OrganizationMembership.objects.filter(
+        user=user, organization=org
+    ).first()
+    
+    role = membership.role if membership else 'member'
+    
+    # Base queryset - active clients in org
+    base_qs = Client.objects.filter(org=org, is_active=True)
+    
+    # Check if ClientAssignment model exists and has data
+    # This allows backward compatibility if no assignments exist yet
+    try:
+        from .models import ClientAssignment
+        has_assignment_system = True
+    except ImportError:
+        has_assignment_system = False
+    
+    if not has_assignment_system:
+        # No assignment system - return all clients (legacy behavior)
+        clients = base_qs.order_by('name')
+    else:
+        # Check if user has any assignments (subquery for efficiency)
+        user_assignments = ClientAssignment.objects.filter(
+            user=user,
+            client=OuterRef('pk')
+        )
+        
+        if role in ('owner', 'admin'):
+            # Admins see everything EXCEPT 'confidential' clients they're not assigned to
+            clients = base_qs.filter(
+                Q(visibility__in=['all', 'assigned']) |
+                Q(visibility='confidential', pk__in=ClientAssignment.objects.filter(user=user).values('client_id')) |
+                # Also include if visibility field doesn't exist (legacy clients)
+                Q(visibility__isnull=True)
+            ).order_by('name')
+        
+        elif role == 'manager':
+            # Managers see 'all' visibility + their direct assignments
+            clients = base_qs.filter(
+                Q(visibility='all') |
+                Q(visibility__isnull=True) |  # Legacy clients without visibility field
+                Exists(user_assignments)
+            ).order_by('name')
+        
+        else:
+            # Members see 'all' visibility + their direct assignments
+            clients = base_qs.filter(
+                Q(visibility='all') |
+                Q(visibility__isnull=True) |  # Legacy clients without visibility field
+                Exists(user_assignments)
+            ).order_by('name')
     
     return Response([{
         "id": c.id,
         "name": c.name,
         "code": getattr(c, 'code', '') or c.name[:4].upper(),
         "is_active": c.is_active,
+        "visibility": getattr(c, 'visibility', 'all') or 'all',
     } for c in clients])
 
 

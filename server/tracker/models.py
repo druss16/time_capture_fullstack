@@ -517,6 +517,36 @@ class ClientAssignment(models.Model):
     def __str__(self):
         return f"{self.user.username} → {self.client.name}"
 
+# tracker/models.py
+
+class ClientRequest(models.Model):
+    """Requests from users to add new clients."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='client_requests')
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='client_requests')
+    client_name = models.CharField(max_length=255)
+    notes = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='approved_client_requests'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+
 class Project(models.Model):
     org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="projects")

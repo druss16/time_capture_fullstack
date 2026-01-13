@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings  # ✅ ADD THIS IMPORT
+from . import views_billing, views_settings, views_integrations  # ✅ ADD THIS IMPORT
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -160,6 +160,9 @@ urlpatterns = [
     path('settings/client-assignments/bulk/', views_settings.bulk_assign_clients, name='bulk-assign-clients'),
     path('settings/client-assignments/import/', views_settings.import_client_assignments_csv, name='import-client-assignments'),
 
+    path('settings/client-requests/', views_settings.client_requests),
+    path('settings/client-requests/<int:request_id>/approve/', views_settings.approve_client_request),
+
     # ===============================
     # ✅ NEW: BILLING & TIMESHEETS
     # ===============================
@@ -203,5 +206,17 @@ urlpatterns = [
 
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
+
+        # QuickBooks
+    path('integrations/quickbooks/connect/', views_integrations.quickbooks_connect),
+    path('integrations/quickbooks/callback/', views_integrations.quickbooks_callback),
+    path('integrations/quickbooks/status/', views_integrations.quickbooks_status),
+    path('integrations/quickbooks/clients/', views_integrations.quickbooks_clients),
+    
+    # Xero
+    path('integrations/xero/connect/', views_integrations.xero_connect),
+    path('integrations/xero/callback/', views_integrations.xero_callback),
+    path('integrations/xero/status/', views_integrations.xero_status),
+    path('integrations/xero/clients/', views_integrations.xero_clients),
 
 ]

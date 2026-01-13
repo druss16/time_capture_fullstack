@@ -15,6 +15,7 @@ import PairDeviceModal from "@/components/agent/PairDeviceModal";
 import Navigation from "@/components/Navigation";
 import ProtectedRoute from "@/routes/ProtectedRoute";
 
+
 // Onboarding
 import OnboardingWizard from '@/components/onboarding/OnboardingWizard';
 
@@ -41,6 +42,9 @@ import { safeFetchJson, API_BASE } from "@/lib/api";
 const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
 
 const queryClient = new QueryClient();
+
+const Clients = lazy(() => import("./pages/Clients"));
+
 
 // ============================================================================
 // Route Guards
@@ -323,6 +327,18 @@ export default function App() {
                           <OrganizationSettings />
                         </AppLayout>
                       </AdminRoute>
+                    </MaybeProtected>
+                  }
+                />
+
+                // Add this route (for all authenticated users):
+                <Route
+                  path="/clients"
+                  element={
+                    <MaybeProtected>
+                      <AppLayout>
+                        <Clients />
+                      </AppLayout>
                     </MaybeProtected>
                   }
                 />

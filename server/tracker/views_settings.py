@@ -377,3 +377,108 @@ def import_client_assignments_csv(request):
         'errors': errors[:20],
         'total_errors': len(errors),
     })
+
+
+# tracker/views_settings.py - Add this
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def client_requests(request):
+    """
+    GET: List pending client requests (admin only)
+    POST: Submit a new client request (any user)
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    if request.method == 'POST':
+        name = request.data.get('name', '').strip()
+        notes = request.data.get('notes', '').strip()
+        
+        if not name:
+            return Response({'error': 'Client name required'}, status=400)
+        
+        # Create the request
+        client_request = ClientRequest.objects.create(
+            organization=org,
+            requested_by=request.user,
+            client_name=name,
+            notes=notes,
+        )
+        
+        # TODO: Send notification to admins (email, Slack, etc.)
+        # notify_admins_of_client_request(org, client_request)
+        
+        return Response({
+            'success': True,
+            'message': 'Request submitted',
+            'id': client_request.id,
+        }, status=201)
+    
+    # GET - Admin only
+    membership = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
+    if not membership or membership.role not in ('owner', 'admin'):
+        return Response({'error': 'Permission denied'}, status=403)
+    
+    requests = ClientRequest.objects.filter(
+        organization=org,
+        status='pending'
+    ).select_related('requested_by').order_by('-created_at')
+    
+    return Response([{
+        'id': r.id,
+        'client_name': r.client_name,
+        'notes': r.notes,
+        'requested_by': r.requested_by.username,
+        'requested_by_email': r.requested_by.email,
+        'created_at': r.created_at.isoformat(),
+    } for r in requests])
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def approve_client_request(request, request_id):
+    """Approve a client request and create the client."""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    membership = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
+    if not membership or membership.role not in ('owner', 'admin'):
+        return Response({'error': 'Permission denied'}, status=403)
+    
+    try:
+        client_request = ClientRequest.objects.get(id=request_id, organization=org)
+    except ClientRequest.DoesNotExist:
+        return Response({'error': 'Request not found'}, status=404)
+    
+    # Create the client
+    code = request.data.get('code', client_request.client_name[:4].upper().replace(' ', ''))
+    visibility = request.data.get('visibility', 'all')
+    
+    client = Client.objects.create(
+        org=org,
+        name=client_request.client_name,
+        code=code,
+        visibility=visibility,
+    )
+    
+    # Assign the requester to the client
+    ClientAssignment.objects.create(
+        organization=org,
+        client=client,
+        user=client_request.requested_by,
+        assigned_by=request.user,
+    )
+    
+    # Update request status
+    client_request.status = 'approved'
+    client_request.approved_by = request.user
+    client_request.save()
+    
+    return Response({
+        'success': True,
+        'client_id': client.id,
+        'client_name': client.name,
+    })

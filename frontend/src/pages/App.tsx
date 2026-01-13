@@ -43,7 +43,7 @@ const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
 
 const queryClient = new QueryClient();
 
-const Clients = lazy(() => import("./pages/Clients"));
+const Clients = lazy(() => import("./Clients"));
 
 
 // ============================================================================

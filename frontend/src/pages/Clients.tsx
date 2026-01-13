@@ -209,7 +209,7 @@ export default function Clients() {
                 </div>
               </div>
               
-              {/* Quick actions could go here */}
+              {/* Quick actions */}
               <div className="mt-4 pt-3 border-t border-slate-100 flex items-center gap-2">
                 <Link
                   to={`/daily?client=${client.id}`}

@@ -11,6 +11,7 @@ import {
   Check,
   X,
   ExternalLink,
+  Users,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/design-system';
@@ -102,32 +103,30 @@ export default function Clients() {
   }
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-3">
-            <div className="p-2 bg-primary/10 rounded-xl">
-              <Briefcase className="w-6 h-6 text-primary" />
-            </div>
-            My Clients
-          </h1>
-          <p className="text-slate-500 font-medium mt-1">
-            Clients you can log time to
-          </p>
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-primary/10 rounded-xl">
+            <Users className="w-7 h-7 text-primary" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-extrabold text-slate-900">My Clients</h1>
+            <p className="text-slate-500 font-medium">
+              Clients you can log time to
+            </p>
+          </div>
         </div>
         
         <div className="flex items-center gap-3">
-          {/* Request New Client */}
           <button
             onClick={() => setShowRequest(true)}
             className="flex items-center gap-2 px-4 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
           >
             <Plus className="w-4 h-4" />
-            Request New Client
+            Request Client
           </button>
           
-          {/* Admin Link to Settings */}
           {canManageClients && (
             <Link
               to="/settings?tab=clients"
@@ -140,93 +139,98 @@ export default function Clients() {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="mb-6">
+      {/* Search Card */}
+      <div className="bg-[#F5F7F3] rounded-2xl p-6 border border-slate-200/60">
         <div className="relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search clients..."
-            className="w-full pl-12 pr-4 py-3 border-2 border-slate-200 rounded-xl font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+            placeholder="Search clients by name or code..."
+            className="w-full pl-12 pr-4 py-3 bg-white border-2 border-slate-200 rounded-xl font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
           />
         </div>
       </div>
 
-      {/* Client Grid */}
-      {filteredClients.length === 0 ? (
-        <div className="text-center py-16 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
-          <Briefcase className="w-12 h-12 mx-auto mb-4 text-slate-300" />
-          {search ? (
-            <>
-              <p className="font-bold text-slate-700">No clients match "{search}"</p>
-              <p className="text-sm text-slate-500 mt-1">Try a different search term</p>
-            </>
-          ) : (
-            <>
-              <p className="font-bold text-slate-700">No clients assigned yet</p>
-              <p className="text-sm text-slate-500 mt-1 mb-4">
-                Request access to clients or contact your administrator
-              </p>
-              <button
-                onClick={() => setShowRequest(true)}
-                className="px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90"
-              >
-                <Plus className="w-4 h-4 inline mr-2" />
-                Request New Client
-              </button>
-            </>
-          )}
+      {/* Clients Card */}
+      <div className="bg-[#F5F7F3] rounded-2xl p-6 border border-slate-200/60">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-lg font-extrabold text-slate-900">Your Clients</h2>
+            <p className="text-sm text-slate-500 font-medium">
+              {filteredClients.length} client{filteredClients.length !== 1 ? 's' : ''} available
+            </p>
+          </div>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredClients.map(client => (
-            <div
-              key={client.id}
-              className="p-4 bg-white border-2 border-slate-200 rounded-xl hover:border-primary/50 hover:shadow-lg hover:shadow-primary/5 transition-all group"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-slate-900 truncate group-hover:text-primary transition-colors">
-                    {client.name}
-                  </h3>
-                  {client.code && (
-                    <p className="text-sm text-slate-500 font-mono font-semibold mt-0.5">
-                      {client.code}
-                    </p>
-                  )}
-                </div>
-                <div className="ml-3 flex-shrink-0">
-                  <span className={cn(
-                    'text-xs px-2 py-1 rounded-full font-bold',
-                    client.is_active !== false
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-slate-100 text-slate-500'
-                  )}>
-                    {client.is_active !== false ? 'Active' : 'Inactive'}
-                  </span>
-                </div>
-              </div>
-              
-              {/* Quick actions */}
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center gap-2">
-                <Link
-                  to={`/daily?client=${client.id}`}
-                  className="text-xs text-primary font-bold hover:underline flex items-center gap-1"
-                >
-                  Log Time
-                  <ExternalLink className="w-3 h-3" />
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
-      {/* Stats Footer */}
-      <div className="mt-6 text-sm text-slate-500 font-medium">
-        Showing {filteredClients.length} of {clients.length} client{clients.length !== 1 ? 's' : ''}
+        {filteredClients.length === 0 ? (
+          <div className="bg-white rounded-xl border-2 border-dashed border-slate-200 p-12 text-center">
+            <Briefcase className="w-12 h-12 mx-auto mb-4 text-slate-300" />
+            {search ? (
+              <>
+                <p className="font-bold text-slate-700">No clients match "{search}"</p>
+                <p className="text-sm text-slate-500 mt-1">Try a different search term</p>
+              </>
+            ) : (
+              <>
+                <p className="font-bold text-slate-700">No clients assigned yet</p>
+                <p className="text-sm text-slate-500 mt-1 mb-4">
+                  Request access to clients or contact your administrator
+                </p>
+                <button
+                  onClick={() => setShowRequest(true)}
+                  className="px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90"
+                >
+                  <Plus className="w-4 h-4 inline mr-2" />
+                  Request New Client
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredClients.map(client => (
+              <div
+                key={client.id}
+                className="p-4 bg-white border-2 border-slate-200 rounded-xl hover:border-primary/50 hover:shadow-lg hover:shadow-primary/5 transition-all group"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-slate-900 truncate group-hover:text-primary transition-colors">
+                      {client.name}
+                    </h3>
+                    {client.code && (
+                      <p className="text-sm text-slate-500 font-mono font-semibold mt-0.5">
+                        {client.code}
+                      </p>
+                    )}
+                  </div>
+                  <div className="ml-3 flex-shrink-0">
+                    <span className={cn(
+                      'text-xs px-2 py-1 rounded-full font-bold',
+                      client.is_active !== false
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-slate-100 text-slate-500'
+                    )}>
+                      {client.is_active !== false ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center gap-2">
+                  <Link
+                    to={`/daily?client=${client.id}`}
+                    className="text-xs text-primary font-bold hover:underline flex items-center gap-1"
+                  >
+                    Log Time
+                    <ExternalLink className="w-3 h-3" />
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ================================================================== */}

@@ -451,6 +451,14 @@ class Client(models.Model):
     )
     
     is_active = models.BooleanField(default=True)
+
+    VISIBILITY_CHOICES = [
+        ('all', 'All Team Members'),      # Everyone in org can see
+        ('assigned', 'Assigned Only'),     # Only assigned users + admins
+        ('confidential', 'Confidential'),  # Only assigned users, even admins need assignment
+    ]
+
+    visibility = models.CharField(max_length=20, choices=VISIBILITY_CHOICES, default='all')
     
     class Meta:
         # ✅ ADD THIS - Prevents duplicate codes per org
@@ -463,6 +471,43 @@ class Client(models.Model):
             self.code = self.name[:10].upper().replace(' ', '')[:10]
         super().save(*args, **kwargs)
 
+
+class ClientAssignment(models.Model):
+    """
+    Links users to clients they can access.
+    If a client has no assignments, it's visible to everyone (legacy behavior).
+    If a client has ANY assignments, only assigned users + admins can see it.
+    """
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='client_assignments')
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='assignments')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='client_assignments')
+    
+    # Role on this client (optional, for future use)
+    ROLE_CHOICES = [
+        ('lead', 'Engagement Lead'),
+        ('manager', 'Manager'),
+        ('staff', 'Staff'),
+        ('reviewer', 'Reviewer'),
+    ]
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='staff')
+    
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        related_name='assignments_made'
+    )
+    
+    class Meta:
+        unique_together = ['client', 'user']
+        indexes = [
+            models.Index(fields=['user', 'client']),
+            models.Index(fields=['organization', 'user']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.username} → {self.client.name}"
 
 class Project(models.Model):
     org = models.ForeignKey(Organization, on_delete=models.CASCADE)

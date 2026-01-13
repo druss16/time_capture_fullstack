@@ -154,6 +154,12 @@ urlpatterns = [
     path('settings/seats/reduce/', views_billing.reduce_seats, name='reduce-seats'),
     path('settings/plan/change/', views_billing.change_plan, name='change-plan'),
 
+    path('settings/my-clients/', views_settings.get_my_clients, name='my-clients'),
+    path('settings/client-assignments/', views_settings.client_assignments_list, name='client-assignments'),
+    path('settings/client-assignments/<int:assignment_id>/', views_settings.client_assignment_delete, name='client-assignment-delete'),
+    path('settings/client-assignments/bulk/', views_settings.bulk_assign_clients, name='bulk-assign-clients'),
+    path('settings/client-assignments/import/', views_settings.import_client_assignments_csv, name='import-client-assignments'),
+
     # ===============================
     # ✅ NEW: BILLING & TIMESHEETS
     # ===============================

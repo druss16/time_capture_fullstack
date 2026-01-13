@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
+import { ShieldCheck } from "lucide-react";
 import {
   Settings as SettingsIcon,
   Building2,
@@ -28,6 +29,7 @@ import {
   EyeOff,
   DollarSign,
   Lock,
+  Shield,
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";

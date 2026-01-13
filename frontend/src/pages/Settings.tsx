@@ -31,6 +31,7 @@ import {
   Lock,
   Shield,
   Sparkles,
+  Upload,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";

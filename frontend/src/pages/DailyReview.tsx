@@ -490,10 +490,7 @@ export default function DailyReview() {
         ) : (
           <ManualCategorization onComplete={handleCategorizationComplete} />
         )}
-      </div>
-          {/* ========================================= */}
-        {/* MODAL GOES HERE - AT THE VERY END        */}
-        {/* ========================================= */}
+        </div>
         {showManualEntry && (
           <ManualTimeEntry
             isOpen={showManualEntry}
@@ -512,6 +509,6 @@ export default function DailyReview() {
           />
         )}
 
-      </div>  // <-- Final closing div
+        </div>  // <-- Final closing div
   );
 }

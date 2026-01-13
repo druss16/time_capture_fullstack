@@ -1,11 +1,11 @@
 /**
  * Settings.tsx — Org Admin Settings Page
- * With Plan-Based Feature Gating
+ * With Plan-Based Feature Gating & Bulk Assignment
  * Professional plan: Organization, Team, Clients, Devices, Token
  * Executive plan: All features including Billing Rates & Employee Costs
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { ShieldCheck } from "lucide-react";
 import {
   Settings as SettingsIcon,
@@ -25,6 +25,7 @@ import {
   AlertCircle,
   CheckCircle2,
   UserPlus,
+  UserMinus,
   Eye,
   EyeOff,
   DollarSign,
@@ -32,6 +33,14 @@ import {
   Shield,
   Sparkles,
   Upload,
+  CheckSquare,
+  Square,
+  MinusSquare,
+  FileSpreadsheet,
+  Download,
+  Loader2,
+  ChevronDown,
+  Calendar,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -39,13 +48,12 @@ import { safeFetchJson } from "@/lib/api";
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
 import ClientImportWizard from '@/components/ClientImportWizard';
 
-
-
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
 // Types
 type PlanType = 'professional' | 'executive' | 'none';
+type RoleType = 'owner' | 'admin' | 'manager' | 'member';
 
 type OrgInfo = {
   id: number;
@@ -77,7 +85,7 @@ type Client = {
   name: string;
   code: string;
   is_active: boolean;
-  visibility: 'all' | 'assigned' | 'confidential';  // ← ADD THIS
+  visibility: 'all' | 'assigned' | 'confidential';
   created_at: string;
 };
 
@@ -135,7 +143,7 @@ interface TabConfig {
   label: string;
   icon: React.ReactNode;
   requiredPlan?: PlanType[];
-  requiredRole?: ('owner' | 'admin' | 'manager')[];  // ← NEW: Role restriction
+  requiredRole?: ('owner' | 'admin' | 'manager')[];
 }
 
 // ============================================================================
@@ -144,10 +152,8 @@ interface TabConfig {
 function UpgradePrompt({ featureName }: { featureName: string }) {
   return (
     <div className="relative flex items-center justify-center min-h-[400px]">
-      {/* Blurred background placeholder */}
       <div className="absolute inset-0 overflow-hidden rounded-2xl">
         <div className="w-full h-full bg-gradient-to-br from-slate-100 to-slate-200 opacity-60 blur-sm" />
-        {/* Fake content behind blur */}
         <div className="absolute inset-0 p-6 opacity-30 blur-[2px]">
           <div className="h-8 w-48 bg-slate-300 rounded mb-4" />
           <div className="h-20 bg-emerald-100 rounded-xl mb-4" />
@@ -160,7 +166,6 @@ function UpgradePrompt({ featureName }: { featureName: string }) {
         </div>
       </div>
       
-      {/* Lock overlay */}
       <div className="relative z-10 text-center p-8 bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border-2 border-slate-200 max-w-md">
         <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
           <Lock className="w-8 h-8 text-slate-400" />
@@ -188,7 +193,7 @@ function UpgradePrompt({ featureName }: { featureName: string }) {
 }
 
 // ============================================================================
-// Component
+// Main Component
 // ============================================================================
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>('organization');
@@ -196,7 +201,6 @@ export default function Settings() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // Data states
   const [orgInfo, setOrgInfo] = useState<OrgInfo | null>(null);
   const [orgPlan, setOrgPlan] = useState<PlanType>('professional');
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
@@ -219,17 +223,12 @@ export default function Settings() {
     setTimeout(() => setError(null), 5000);
   };
 
-  // In Settings.tsx, update the useEffect that loads user info:
-  const [roleLoaded, setRoleLoaded] = useState(false);
-
   useEffect(() => {
     const loadUserInfo = async () => {
       try {
         const whoami = await safeFetchJson<any>(`${API_BASE}/whoami/`);
-        console.log('🔍 whoami response:', whoami);  // ← ADD THIS
         setCurrentUserId(whoami.user_id);
         setCurrentUserRole(whoami.role || 'member');
-        console.log('🔍 Setting currentUserRole to:', whoami.role);  // ← ADD THIS
       } catch (err) {
         console.error('Failed to load user info:', err);
       }
@@ -237,7 +236,6 @@ export default function Settings() {
     loadUserInfo();
   }, []);
 
-  // Load org info on mount to get plan
   useEffect(() => {
     const loadOrgPlan = async () => {
       try {
@@ -274,15 +272,14 @@ export default function Settings() {
           }
           break;
           
-          // In loadTabData, update the 'clients' case:
-          case 'clients':
-            const [clientList, clientsTeam] = await Promise.all([
-              safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
-              safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
-            ]);
-            setClients(clientList || []);
-            setTeamMembers(clientsTeam || []);
-            break;
+        case 'clients':
+          const [clientList, clientsTeam] = await Promise.all([
+            safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
+            safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
+          ]);
+          setClients(clientList || []);
+          setTeamMembers(clientsTeam || []);
+          break;
           
         case 'assignments':
           const [assignmentClients, assignmentTeam] = await Promise.all([
@@ -340,25 +337,18 @@ export default function Settings() {
     { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
     { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
     { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
-    { 
-      id: 'assignments', 
-      label: 'Client Access', 
-      icon: <Shield className="w-4 h-4" />,
-      requiredRole: ['owner', 'admin', 'manager'],  // Managers can view/assign their team
-    },
+    { id: 'assignments', label: 'Client Access', icon: <Shield className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },
     { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
     { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
     { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
     { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
   ];
 
-  // Check if a tab is locked due to plan restrictions
   const isTabLocked = (tab: TabConfig): boolean => {
     if (!tab.requiredPlan) return false;
     return !tab.requiredPlan.includes(orgPlan);
   };
 
-  // Get feature name for locked display
   const getLockedFeatureName = (tabId: Tab): string => {
     switch (tabId) {
       case 'billing': return 'Billing Rates';
@@ -378,7 +368,6 @@ export default function Settings() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Toast Notifications */}
       {success && (
         <div className="fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 bg-emerald-500 text-white font-bold animate-in slide-in-from-right">
           <CheckCircle2 className="w-4 h-4" />
@@ -393,7 +382,6 @@ export default function Settings() {
       )}
 
       <div className="max-w-6xl mx-auto px-6 py-6">
-        {/* Page Header */}
         <div className="flex items-center gap-3 mb-6">
           <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
             <SettingsIcon className="w-6 h-6 text-white" />
@@ -405,59 +393,42 @@ export default function Settings() {
         </div>
 
         <div className="flex gap-6">
-          {/* Sidebar Tabs */}
           <div className="w-56 flex-shrink-0">
             <nav className="space-y-1">
               {tabs.map(tab => {
                 const isLocked = isTabLocked(tab);
-                
                 return (
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     className={cn(
                       'w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold transition-all',
-                      isLocked
-                        ? 'text-slate-400 hover:bg-slate-100'
-                        : activeTab === tab.id
-                          ? 'bg-primary text-white shadow-lg shadow-primary/25'
-                          : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                      isLocked ? 'text-slate-400 hover:bg-slate-100'
+                        : activeTab === tab.id ? 'bg-primary text-white shadow-lg shadow-primary/25'
+                        : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
                     )}
                   >
                     <span className="relative">
                       {tab.icon}
-                      {isLocked && (
-                        <Lock className="w-2.5 h-2.5 absolute -top-1 -right-1 text-slate-400" />
-                      )}
+                      {isLocked && <Lock className="w-2.5 h-2.5 absolute -top-1 -right-1 text-slate-400" />}
                     </span>
                     <span className="flex-1 text-left">{tab.label}</span>
-                    {isLocked && (
-                      <Lock className="w-3.5 h-3.5 text-slate-400" />
-                    )}
+                    {isLocked && <Lock className="w-3.5 h-3.5 text-slate-400" />}
                   </button>
                 );
               })}
             </nav>
 
-            {/* Plan Badge */}
             <div className="mt-4">
               <div className={cn(
                 'px-4 py-3 rounded-xl text-center border-2',
-                orgPlan === 'executive'
-                  ? 'bg-primary/10 border-primary/20'
-                  : 'bg-amber-50 border-amber-200'
+                orgPlan === 'executive' ? 'bg-primary/10 border-primary/20' : 'bg-amber-50 border-amber-200'
               )}>
-                <p className={cn(
-                  'text-sm font-bold',
-                  orgPlan === 'executive' ? 'text-primary' : 'text-amber-700'
-                )}>
+                <p className={cn('text-sm font-bold', orgPlan === 'executive' ? 'text-primary' : 'text-amber-700')}>
                   {planLabel}
                 </p>
                 {orgPlan === 'professional' && (
-                  <a 
-                    href="/account/billing"
-                    className="text-xs text-amber-600 font-semibold hover:underline mt-1 block"
-                  >
+                  <a href="/account/billing" className="text-xs text-amber-600 font-semibold hover:underline mt-1 block">
                     Upgrade for more features →
                   </a>
                 )}
@@ -465,7 +436,6 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Content Area */}
           <div className="flex-1 min-w-0">
             <div className="bg-white border-2 border-slate-200 rounded-2xl p-6 shadow-sm">
               {loading ? (
@@ -477,87 +447,33 @@ export default function Settings() {
                 </div>
               ) : (
                 <>
-                  {/* Check if tab is locked */}
                   {isTabLocked(tabs.find(t => t.id === activeTab)!) ? (
                     <UpgradePrompt featureName={getLockedFeatureName(activeTab)} />
                   ) : (
                     <>
                       {activeTab === 'organization' && (
-                        <OrganizationTab
-                          orgInfo={orgInfo}
-                          orgPlan={orgPlan}  // ← ADD THIS
-                          onUpdate={(updated) => {
-                            setOrgInfo(updated);
-                            setOrgPlan(updated.plan || 'professional');
-                          }}
-                          onSuccess={showSuccess}
-                          onError={showError}
-                        />
+                        <OrganizationTab orgInfo={orgInfo} orgPlan={orgPlan} onUpdate={(updated) => { setOrgInfo(updated); setOrgPlan(updated.plan || 'professional'); }} onSuccess={showSuccess} onError={showError} />
                       )}
                       {activeTab === 'team' && (
-                        <TeamTab
-                          members={teamMembers}
-                          currentUserId={currentUserId}
-                          currentUserRole={currentUserRole}
-                          onRefresh={() => loadTabData('team')}
-                          onSuccess={showSuccess}
-                          onError={showError}
-                        />
+                        <TeamTab members={teamMembers} currentUserId={currentUserId} currentUserRole={currentUserRole} onRefresh={() => loadTabData('team')} onSuccess={showSuccess} onError={showError} />
                       )}
                       {activeTab === 'clients' && (
-                        <ClientsTab
-                          clients={clients}
-                          currentUserRole={currentUserRole}
-                          users={teamMembers}  // ← Add this
-                          onRefresh={() => loadTabData('clients')}
-                          onSuccess={showSuccess}
-                          onError={showError}
-                        />
+                        <ClientsTab clients={clients} currentUserRole={currentUserRole as RoleType} users={teamMembers} onRefresh={() => loadTabData('clients')} onSuccess={showSuccess} onError={showError} />
                       )}
                       {activeTab === 'billing' && (
-                        <BillingRatesTab
-                          rates={billingRates}
-                          users={teamMembers}
-                          clients={clients}
-                          orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
-                          onRefresh={() => loadTabData('billing')}
-                          onSuccess={showSuccess}
-                          onError={showError}
-                        />
+                        <BillingRatesTab rates={billingRates} users={teamMembers} clients={clients} orgDefaultRate={orgInfo?.billing_rate_default || '150.00'} onRefresh={() => loadTabData('billing')} onSuccess={showSuccess} onError={showError} />
                       )}
                       {activeTab === 'costs' && (
-                        <EmployeeCostRatesTab
-                          rates={employeeCostRates}
-                          users={teamMembers}
-                          onRefresh={() => loadTabData('costs')}
-                          onSuccess={showSuccess}
-                          onError={showError}
-                        />
+                        <EmployeeCostRatesTab rates={employeeCostRates} users={teamMembers} onRefresh={() => loadTabData('costs')} onSuccess={showSuccess} onError={showError} />
                       )}
                       {activeTab === 'devices' && (
-                        <DevicesTab
-                          devices={devices}
-                          onRefresh={() => loadTabData('devices')}
-                          onSuccess={showSuccess}
-                          onError={showError}
-                        />
+                        <DevicesTab devices={devices} onRefresh={() => loadTabData('devices')} onSuccess={showSuccess} onError={showError} />
                       )}
-                      {/* In the content rendering section, add: */}
                       {activeTab === 'assignments' && (
-                        <ClientAssignmentManager
-                          users={teamMembers}
-                          clients={clients}
-                          onSuccess={showSuccess}
-                          onError={showError}
-                        />
+                        <ClientAssignmentManager users={teamMembers} clients={clients} onSuccess={showSuccess} onError={showError} />
                       )}
                       {activeTab === 'token' && (
-                        <TokenTab
-                          token={installToken}
-                          onRefresh={() => loadTabData('token')}
-                          onSuccess={showSuccess}
-                          onError={showError}
-                        />
+                        <TokenTab token={installToken} onRefresh={() => loadTabData('token')} onSuccess={showSuccess} onError={showError} />
                       )}
                     </>
                   )}
@@ -574,47 +490,21 @@ export default function Settings() {
 // ============================================================================
 // Organization Tab
 // ============================================================================
-function OrganizationTab({
-  orgInfo,
-  orgPlan,  // ← ADD THIS
-  onUpdate,
-  onSuccess,
-  onError,
-}: {
-  orgInfo: OrgInfo | null;
-  orgPlan: PlanType;  // ← ADD THIS
-  onUpdate: (org: OrgInfo) => void;
-  onSuccess: (msg: string) => void;
-  onError: (msg: string) => void;
-}) {
+function OrganizationTab({ orgInfo, orgPlan, onUpdate, onSuccess, onError }: { orgInfo: OrgInfo | null; orgPlan: PlanType; onUpdate: (org: OrgInfo) => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    billing_email: '',
-    billing_contact: '',
-    billing_rate_default: '150.00',
-  });
+  const [form, setForm] = useState({ name: '', billing_email: '', billing_contact: '', billing_rate_default: '150.00' });
 
   useEffect(() => {
     if (orgInfo) {
-      setForm({
-        name: orgInfo.name || '',
-        billing_email: orgInfo.billing_email || '',
-        billing_contact: orgInfo.billing_contact || '',
-        billing_rate_default: orgInfo.billing_rate_default || '150.00',
-      });
+      setForm({ name: orgInfo.name || '', billing_email: orgInfo.billing_email || '', billing_contact: orgInfo.billing_contact || '', billing_rate_default: orgInfo.billing_rate_default || '150.00' });
     }
   }, [orgInfo]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const updated = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
+      const updated = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
       onUpdate(updated);
       setEditing(false);
       onSuccess('Organization updated');
@@ -625,15 +515,9 @@ function OrganizationTab({
     }
   };
 
-  if (!orgInfo) {
-    return <div className="text-slate-500 font-medium">No organization data</div>;
-  }
+  if (!orgInfo) return <div className="text-slate-500 font-medium">No organization data</div>;
 
-  const planLabel = orgPlan === 'executive' 
-  ? '💎 Executive' 
-  : orgPlan === 'professional' 
-    ? '⭐ Professional' 
-    : '🚫 No Plan';
+  const planLabel = orgPlan === 'executive' ? '💎 Executive' : orgPlan === 'professional' ? '⭐ Professional' : '🚫 No Plan';
 
   return (
     <div>
@@ -643,10 +527,7 @@ function OrganizationTab({
           Organization Info
         </h2>
         {!editing && (
-          <button
-            onClick={() => setEditing(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
-          >
+          <button onClick={() => setEditing(true)} className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">
             <Pencil className="w-4 h-4" />
             Edit
           </button>
@@ -657,32 +538,16 @@ function OrganizationTab({
         <div className="space-y-5 max-w-md">
           <div>
             <label className="block text-sm font-bold text-slate-800 mb-2">Organization Name</label>
-            <input
-              type="text"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
-            />
+            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
           </div>
           <div>
             <label className="block text-sm font-bold text-slate-800 mb-2">Billing Email</label>
-            <input
-              type="email"
-              value={form.billing_email}
-              onChange={(e) => setForm({ ...form, billing_email: e.target.value })}
-              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
-            />
+            <input type="email" value={form.billing_email} onChange={(e) => setForm({ ...form, billing_email: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
           </div>
           <div>
             <label className="block text-sm font-bold text-slate-800 mb-2">Billing Contact Name</label>
-            <input
-              type="text"
-              value={form.billing_contact}
-              onChange={(e) => setForm({ ...form, billing_contact: e.target.value })}
-              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
-            />
+            <input type="text" value={form.billing_contact} onChange={(e) => setForm({ ...form, billing_contact: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
           </div>
-          
           <div className="pt-4 border-t-2 border-slate-200">
             <label className="block text-sm font-bold text-slate-800 mb-2 flex items-center gap-2">
               <DollarSign className="w-4 h-4" />
@@ -690,97 +555,34 @@ function OrganizationTab({
             </label>
             <div className="relative max-w-xs">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">$</span>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={form.billing_rate_default}
-                onChange={(e) => setForm({ ...form, billing_rate_default: e.target.value })}
-                className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl text-slate-900 font-semibold focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
-                placeholder="150.00"
-              />
+              <input type="number" step="0.01" min="0" value={form.billing_rate_default} onChange={(e) => setForm({ ...form, billing_rate_default: e.target.value })} className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl text-slate-900 font-semibold focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" placeholder="150.00" />
             </div>
-            <p className="text-sm text-slate-600 font-medium mt-2">
-              This rate applies to all billable time unless overridden in Billing Rates
-            </p>
           </div>
-
           <div className="flex gap-3 pt-4">
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all"
-            >
+            <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Save
             </button>
-            <button
-              onClick={() => setEditing(false)}
-              className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
-            >
-              Cancel
-            </button>
+            <button onClick={() => setEditing(false)} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
           </div>
         </div>
       ) : (
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-6">
-            <div>
-              <p className="text-sm text-slate-500 font-semibold mb-1">Organization Name</p>
-              <p className="text-slate-900 font-bold">{orgInfo.name}</p>
-            </div>
-            <div>
-              <p className="text-sm text-slate-500 font-semibold mb-1">Created</p>
-              <p className="text-slate-900 font-bold">{new Date(orgInfo.created_at).toLocaleDateString()}</p>
-            </div>
-            <div>
-              <p className="text-sm text-slate-500 font-semibold mb-1">Billing Email</p>
-              <p className="text-slate-900 font-bold">{orgInfo.billing_email || '—'}</p>
-            </div>
-            <div>
-              <p className="text-sm text-slate-500 font-semibold mb-1">Billing Contact</p>
-              <p className="text-slate-900 font-bold">{orgInfo.billing_contact || '—'}</p>
-            </div>
+            <div><p className="text-sm text-slate-500 font-semibold mb-1">Organization Name</p><p className="text-slate-900 font-bold">{orgInfo.name}</p></div>
+            <div><p className="text-sm text-slate-500 font-semibold mb-1">Created</p><p className="text-slate-900 font-bold">{new Date(orgInfo.created_at).toLocaleDateString()}</p></div>
+            <div><p className="text-sm text-slate-500 font-semibold mb-1">Billing Email</p><p className="text-slate-900 font-bold">{orgInfo.billing_email || '—'}</p></div>
+            <div><p className="text-sm text-slate-500 font-semibold mb-1">Billing Contact</p><p className="text-slate-900 font-bold">{orgInfo.billing_contact || '—'}</p></div>
           </div>
-          
-{/* Plan Info */}
           <div className="pt-4 border-t-2 border-slate-200">
-            <div className={cn(
-              'rounded-xl p-4 border-2',
-              orgPlan === 'executive'
-                ? 'bg-primary/5 border-primary/20'
-                : orgPlan === 'professional'
-                  ? 'bg-amber-50 border-amber-200'
-                  : 'bg-red-50 border-red-200'
-            )}>
+            <div className={cn('rounded-xl p-4 border-2', orgPlan === 'executive' ? 'bg-primary/5 border-primary/20' : orgPlan === 'professional' ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200')}>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className={cn(
-                    'text-sm font-bold',
-                    orgPlan === 'executive' 
-                      ? 'text-primary' 
-                      : orgPlan === 'professional' 
-                        ? 'text-amber-700'
-                        : 'text-red-700'
-                  )}>
-                    Current Plan
-                  </p>
-                  <p className={cn(
-                    'text-2xl font-extrabold mt-1',
-                    orgPlan === 'executive' 
-                      ? 'text-primary' 
-                      : orgPlan === 'professional' 
-                        ? 'text-amber-700'
-                        : 'text-red-700'
-                  )}>
-                    {planLabel}
-                  </p>
+                  <p className={cn('text-sm font-bold', orgPlan === 'executive' ? 'text-primary' : orgPlan === 'professional' ? 'text-amber-700' : 'text-red-700')}>Current Plan</p>
+                  <p className={cn('text-2xl font-extrabold mt-1', orgPlan === 'executive' ? 'text-primary' : orgPlan === 'professional' ? 'text-amber-700' : 'text-red-700')}>{planLabel}</p>
                 </div>
                 {orgPlan !== 'executive' && (
-                  <a
-                    href="/account/billing"
-                    className="px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25 flex items-center gap-2"
-                  >
+                  <a href="/account/billing" className="px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25 flex items-center gap-2">
                     <Sparkles className="w-4 h-4" />
                     {orgPlan === 'none' ? 'Subscribe' : 'Upgrade'}
                   </a>
@@ -788,26 +590,15 @@ function OrganizationTab({
               </div>
             </div>
           </div>
-          
           <div className="pt-4 border-t-2 border-slate-200">
             <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-emerald-700 font-bold flex items-center gap-2">
-                    <DollarSign className="w-4 h-4" />
-                    Default Hourly Billing Rate
-                  </p>
-                  <p className="text-3xl font-extrabold text-emerald-700 mt-1">
-                    ${parseFloat(orgInfo.billing_rate_default || '150.00').toFixed(2)}/hr
-                  </p>
+                  <p className="text-sm text-emerald-700 font-bold flex items-center gap-2"><DollarSign className="w-4 h-4" />Default Hourly Billing Rate</p>
+                  <p className="text-3xl font-extrabold text-emerald-700 mt-1">${parseFloat(orgInfo.billing_rate_default || '150.00').toFixed(2)}/hr</p>
                 </div>
-                <span className="bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-full text-xs font-bold">
-                  Firm Default
-                </span>
+                <span className="bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-full text-xs font-bold">Firm Default</span>
               </div>
-              <p className="text-sm text-emerald-600 font-medium mt-3">
-                All new time entries use this rate unless a custom rate is configured in Billing Rates
-              </p>
             </div>
           </div>
         </div>
@@ -819,36 +610,12 @@ function OrganizationTab({
 // ============================================================================
 // Team Tab
 // ============================================================================
-// ============================================================================
-// Team Tab (with Seat Management)
-// ============================================================================
-function TeamTab({
-  members,
-  currentUserId,
-  currentUserRole,
-  onRefresh,
-  onSuccess,
-  onError,
-}: {
-  members: TeamMember[];
-  currentUserId: number | null;
-  currentUserRole: string;
-  onRefresh: () => void;
-  onSuccess: (msg: string) => void;
-  onError: (msg: string) => void;
-}) {
+function TeamTab({ members, currentUserId, currentUserRole, onRefresh, onSuccess, onError }: { members: TeamMember[]; currentUserId: number | null; currentUserRole: string; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviting, setInviting] = useState(false);
-  const [seatInfo, setSeatInfo] = useState<{
-    seat_count: number;
-    members: number;
-    pending_invites: number;
-    seats_available: number;
-    can_invite: boolean;
-  } | null>(null);
+  const [seatInfo, setSeatInfo] = useState<{ seat_count: number; members: number; pending_invites: number; seats_available: number; can_invite: boolean; } | null>(null);
 
-  // Load seat info
   useEffect(() => {
     const loadSeatInfo = async () => {
       try {
@@ -865,69 +632,24 @@ function TeamTab({
     if (!inviteEmail.trim()) return;
     setInviting(true);
     try {
-      const response = await safeFetchJson<any>(`${API_BASE}/settings/team/invite/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: inviteEmail }),
-      });
-      
+      const response = await safeFetchJson<any>(`${API_BASE}/settings/team/invite/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: inviteEmail }) });
       if (response.temp_password && !response.email_sent) {
         alert(`User created!\n\nUsername: ${response.username}\nTemp Password: ${response.temp_password}\n\nPlease share these credentials with the user.`);
       }
-      
       onSuccess(response.email_sent ? 'Invitation sent' : 'User created (share credentials manually)');
       setInviteEmail('');
       setShowInvite(false);
       onRefresh();
-      // Reload seat info
       const seatData = await safeFetchJson<any>(`${API_BASE}/settings/seats/`);
       setSeatInfo(seatData);
     } catch (err: any) {
-      // Handle seat limit error
       if (err?.upgrade_required) {
-        onError(`No seats available. You have ${err.seat_count} seats with ${err.current_members} members. Add more seats to invite team members.`);
+        onError(`No seats available. You have ${err.seat_count} seats with ${err.current_members} members.`);
       } else {
         onError(err?.message || 'Failed to invite');
       }
     } finally {
       setInviting(false);
-    }
-  };
-
-  const handlePromote = async (userId: number, username: string) => {
-    if (!confirm(`Promote ${username} to admin?`)) return;
-    try {
-      await safeFetchJson(`${API_BASE}/settings/team/${userId}/promote/`, { method: 'POST' });
-      onSuccess('User promoted to admin');
-      onRefresh();
-    } catch (err: any) {
-      onError(err?.message || 'Failed to promote');
-    }
-  };
-
-  const handleDemote = async (userId: number, username: string, targetRole: 'member' | 'manager' = 'member') => {
-    if (!confirm(`Demote ${username} to ${targetRole}?`)) return;
-    try {
-      await safeFetchJson(`${API_BASE}/settings/team/${userId}/demote/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_role: targetRole }),
-      });
-      onSuccess(`User demoted to ${targetRole}`);
-      onRefresh();
-    } catch (err: any) {
-      onError(err?.message || 'Failed to demote');
-    }
-  };
-
-  const handleSetManager = async (userId: number, username: string) => {
-    if (!confirm(`Promote ${username} to manager?`)) return;
-    try {
-      await safeFetchJson(`${API_BASE}/settings/team/${userId}/set-manager/`, { method: 'POST' });
-      onSuccess('User promoted to manager');
-      onRefresh();
-    } catch (err: any) {
-      onError(err?.message || 'Failed to promote');
     }
   };
 
@@ -937,9 +659,6 @@ function TeamTab({
       await safeFetchJson(`${API_BASE}/settings/team/${userId}/`, { method: 'DELETE' });
       onSuccess('Team member removed');
       onRefresh();
-      // Reload seat info
-      const seatData = await safeFetchJson<any>(`${API_BASE}/settings/seats/`);
-      setSeatInfo(seatData);
     } catch (err: any) {
       onError(err?.message || 'Failed to remove');
     }
@@ -969,9 +688,6 @@ function TeamTab({
     }
   };
 
-  const isOwner = currentUserRole === 'owner';
-  const isAdminOrOwner = currentUserRole === 'owner' || currentUserRole === 'admin';
-
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -980,80 +696,28 @@ function TeamTab({
           Team Members
           <span className="text-sm font-bold text-slate-500">({members.length})</span>
         </h2>
-        <button
-          onClick={() => setShowInvite(true)}
-          disabled={seatInfo !== null && !seatInfo.can_invite}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all",
-            seatInfo && !seatInfo.can_invite
-              ? "bg-slate-200 text-slate-500 cursor-not-allowed"
-              : "bg-primary text-white hover:opacity-90 shadow-lg shadow-primary/25"
-          )}
-        >
+        <button onClick={() => setShowInvite(true)} disabled={seatInfo !== null && !seatInfo.can_invite} className={cn("flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all", seatInfo && !seatInfo.can_invite ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-primary text-white hover:opacity-90 shadow-lg shadow-primary/25")}>
           <UserPlus className="w-4 h-4" />
           Invite Member
         </button>
       </div>
 
-      {/* Seat Usage Bar */}
       {seatInfo && seatInfo.seat_count > 0 && (
         <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
           <div className="flex items-center justify-between mb-2">
             <div>
               <p className="text-sm text-slate-600 font-semibold">Team Seats</p>
-              <p className="text-2xl font-extrabold text-slate-900">
-                {seatInfo.members} / {seatInfo.seat_count}
-                <span className="text-sm font-medium text-slate-500 ml-2">used</span>
-              </p>
+              <p className="text-2xl font-extrabold text-slate-900">{seatInfo.members} / {seatInfo.seat_count}<span className="text-sm font-medium text-slate-500 ml-2">used</span></p>
             </div>
-            <div className="flex items-center gap-3">
-              {seatInfo.pending_invites > 0 && (
-                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-bold">
-                  {seatInfo.pending_invites} pending
-                </span>
-              )}
-              {!seatInfo.can_invite && (
-                <a  
-                  href="/account/billing"
-                  className="flex items-center gap-2 px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 text-sm shadow-lg shadow-primary/25"
-                >
-                  <Plus className="w-4 h-4" />
-                  Add Seats
-                </a>
-              )}
-            </div>
+            {!seatInfo.can_invite && (
+              <a href="/account/billing" className="flex items-center gap-2 px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 text-sm shadow-lg shadow-primary/25">
+                <Plus className="w-4 h-4" />
+                Add Seats
+              </a>
+            )}
           </div>
-          {/* Progress bar */}
           <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-            <div
-              className={cn(
-                "h-full rounded-full transition-all",
-                seatInfo.members >= seatInfo.seat_count 
-                  ? "bg-red-500" 
-                  : seatInfo.members >= seatInfo.seat_count * 0.8 
-                    ? "bg-amber-500" 
-                    : "bg-emerald-500"
-              )}
-              style={{ width: `${Math.min(100, (seatInfo.members / seatInfo.seat_count) * 100)}%` }}
-            />
-          </div>
-          <p className="text-xs text-slate-500 font-medium mt-2">
-            {seatInfo.seats_available} seat(s) available
-          </p>
-        </div>
-      )}
-
-      {/* No seats warning */}
-      {seatInfo && !seatInfo.can_invite && (
-        <div className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-xl">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-red-500 mt-0.5" />
-            <div>
-              <p className="font-bold text-red-800">No seats available</p>
-              <p className="text-sm text-red-700 font-medium">
-                All {seatInfo.seat_count} seats are in use. <a href="/account/billing" className="underline font-bold">Add more seats</a> to invite team members.
-              </p>
-            </div>
+            <div className={cn("h-full rounded-full transition-all", seatInfo.members >= seatInfo.seat_count ? "bg-red-500" : seatInfo.members >= seatInfo.seat_count * 0.8 ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${Math.min(100, (seatInfo.members / seatInfo.seat_count) * 100)}%` }} />
           </div>
         </div>
       )}
@@ -1062,27 +726,12 @@ function TeamTab({
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
           <h3 className="font-bold text-slate-900 mb-3">Invite Team Member</h3>
           <div className="flex gap-2">
-            <input
-              type="email"
-              value={inviteEmail}
-              onChange={(e) => setInviteEmail(e.target.value)}
-              placeholder="email@company.com"
-              className="flex-1 border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
-            />
-            <button
-              onClick={handleInvite}
-              disabled={inviting || !inviteEmail.trim()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 transition-all"
-            >
+            <input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="email@company.com" className="flex-1 border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" />
+            <button onClick={handleInvite} disabled={inviting || !inviteEmail.trim()} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 transition-all">
               {inviting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
               Send
             </button>
-            <button
-              onClick={() => setShowInvite(false)}
-              className="px-4 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
-            >
-              Cancel
-            </button>
+            <button onClick={() => setShowInvite(false)} className="px-4 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
           </div>
         </div>
       )}
@@ -1101,137 +750,83 @@ function TeamTab({
           <tbody className="divide-y divide-slate-200">
             {members.map(member => {
               const isCurrentUser = member.id === currentUserId;
-              const canModify = isOwner && !isCurrentUser && member.role !== 'owner';
-              const canSetManager = isAdminOrOwner && !isCurrentUser && member.role === 'member';
-              
               return (
                 <tr key={member.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
-                        <span className="text-sm font-bold text-primary">
-                          {(member.first_name?.[0] || member.username[0]).toUpperCase()}
-                        </span>
+                        <span className="text-sm font-bold text-primary">{(member.first_name?.[0] || member.username[0]).toUpperCase()}</span>
                       </div>
                       <div>
-                        <p className="font-bold text-slate-900 text-sm">
-                          {member.first_name} {member.last_name || member.username}
-                          {isCurrentUser && <span className="ml-2 text-xs text-slate-500 font-semibold">(you)</span>}
-                        </p>
+                        <p className="font-bold text-slate-900 text-sm">{member.first_name} {member.last_name || member.username}{isCurrentUser && <span className="ml-2 text-xs text-slate-500 font-semibold">(you)</span>}</p>
                         <p className="text-xs text-slate-500 font-medium">@{member.username}</p>
                       </div>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-700 font-medium">{member.email || '—'}</td>
-                  <td className="px-4 py-3">
-                    <span className={cn('text-xs px-2.5 py-1 rounded-full font-bold', getRoleBadge(member.role))}>
-                      {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-500 font-medium">
-                    {formatLastSeen(member.last_login)}
-                  </td>
+                  <td className="px-4 py-3"><span className={cn('text-xs px-2.5 py-1 rounded-full font-bold', getRoleBadge(member.role))}>{member.role.charAt(0).toUpperCase() + member.role.slice(1)}</span></td>
+                  <td className="px-4 py-3 text-sm text-slate-500 font-medium">{formatLastSeen(member.last_login)}</td>
                   <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      {canSetManager && (
-                        <button onClick={() => handleSetManager(member.id, member.username)} className="text-xs px-2 py-1 text-emerald-600 font-bold hover:underline">→ Manager</button>
-                      )}
-                      {canModify && (member.role === 'member' || member.role === 'manager') && (
-                        <button onClick={() => handlePromote(member.id, member.username)} className="text-xs px-2 py-1 text-blue-600 font-bold hover:underline">→ Admin</button>
-                      )}
-                      {canModify && member.role === 'admin' && (
-                        <button onClick={() => handleDemote(member.id, member.username, 'member')} className="text-xs px-2 py-1 text-amber-600 font-bold hover:underline">→ Member</button>
-                      )}
-                      {!isCurrentUser && member.role !== 'owner' && (
-                        <button onClick={() => handleRemove(member.id, member.username)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
+                    {!isCurrentUser && member.role !== 'owner' && (
+                      <button onClick={() => handleRemove(member.id, member.username)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
+                    )}
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-        {members.length === 0 && (
-          <div className="text-center py-8 text-slate-500 font-medium">No team members yet</div>
-        )}
-      </div>
-      
-      <div className="mt-4 p-4 bg-slate-100 rounded-xl">
-        <div className="text-sm text-slate-600 font-medium space-y-1">
-          <p><span className="inline-block px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 font-bold text-xs">Owner</span> — Full control, manage admins</p>
-          <p><span className="inline-block px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold text-xs">Admin</span> — Manage settings, invite users</p>
-          <p><span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-xs">Manager</span> — Approve timecards</p>
-          <p><span className="inline-block px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 font-bold text-xs">Member</span> — Track time only</p>
-        </div>
+        {members.length === 0 && <div className="text-center py-8 text-slate-500 font-medium">No team members yet</div>}
       </div>
     </div>
   );
 }
 
 // ============================================================================
-// Clients Tab
+// Clients Tab (with Bulk Assignment)
 // ============================================================================
-// This goes inside Settings.tsx - Replace your existing ClientsTab function
-
-// First, add the import at the top of Settings.tsx:
-import ClientImportWizard from '@/components/ClientImportWizard';
-
-// ============================================================================
-// Clients Tab (with Import Wizard)
-// ============================================================================
-function ClientsTab({
-  clients,
-  currentUserRole,
-  users,
-  onRefresh,
-  onSuccess,
-  onError,
-}: {
-  clients: Client[];
-  currentUserRole: RoleType;
-  users: TeamMember[];
-  onRefresh: () => void;
-  onSuccess: (msg: string) => void;
-  onError: (msg: string) => void;
-}) {
+function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onError }: { clients: Client[]; currentUserRole: RoleType; users: TeamMember[]; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: '', code: '', visibility: 'all' });
   const [saving, setSaving] = useState(false);
-
-  // Owners AND admins can manage clients
-  const canManageClients = ['owner', 'admin'].includes(currentUserRole);
   
-  // Debug - remove after testing
-  console.log('ClientsTab - currentUserRole:', currentUserRole, 'canManageClients:', canManageClients);
+  const [selectedClientIds, setSelectedClientIds] = useState<Set<number>>(new Set());
+  const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
+  const [showCSVImportModal, setShowCSVImportModal] = useState(false);
+  const [showCopyModal, setShowCopyModal] = useState(false);
+  const [showImportDropdown, setShowImportDropdown] = useState(false);
 
-  const resetForm = () => {
-    setForm({ name: '', code: '', visibility: 'all' });
-    setShowAdd(false);
-    setEditingId(null);
+  const canManageClients = ['owner', 'admin'].includes(currentUserRole);
+
+  const toggleClientSelection = (clientId: number) => {
+    const newSelected = new Set(selectedClientIds);
+    if (newSelected.has(clientId)) newSelected.delete(clientId);
+    else newSelected.add(clientId);
+    setSelectedClientIds(newSelected);
   };
+
+  const toggleSelectAll = () => {
+    if (selectedClientIds.size === clients.length) setSelectedClientIds(new Set());
+    else setSelectedClientIds(new Set(clients.map(c => c.id)));
+  };
+
+  const clearSelection = () => setSelectedClientIds(new Set());
+
+  const selectedClients = clients.filter(c => selectedClientIds.has(c.id));
+
+  const resetForm = () => { setForm({ name: '', code: '', visibility: 'all' }); setShowAdd(false); setEditingId(null); };
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
     setSaving(true);
     try {
       if (editingId) {
-        await safeFetchJson(`${API_BASE}/settings/clients/${editingId}/`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(form),
-        });
+        await safeFetchJson(`${API_BASE}/settings/clients/${editingId}/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
         onSuccess('Client updated');
       } else {
-        await safeFetchJson(`${API_BASE}/settings/clients/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(form),
-        });
+        await safeFetchJson(`${API_BASE}/settings/clients/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
         onSuccess('Client added');
       }
       resetForm();
@@ -1245,11 +840,7 @@ function ClientsTab({
 
   const handleEdit = (client: Client) => {
     if (!canManageClients) return;
-    setForm({ 
-      name: client.name, 
-      code: client.code || '',
-      visibility: client.visibility || 'all'
-    });
+    setForm({ name: client.name, code: client.code || '', visibility: client.visibility || 'all' });
     setEditingId(client.id);
     setShowAdd(true);
   };
@@ -1266,6 +857,18 @@ function ClientsTab({
     }
   };
 
+  const handleBulkUnassign = async () => {
+    if (!confirm(`Remove all team assignments from ${selectedClientIds.size} clients?`)) return;
+    try {
+      await safeFetchJson(`${API_BASE}/clients/bulk-unassign/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_ids: Array.from(selectedClientIds) }) });
+      onSuccess(`Removed team from ${selectedClientIds.size} clients`);
+      onRefresh();
+      clearSelection();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to remove assignments');
+    }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -1275,155 +878,121 @@ function ClientsTab({
           <span className="text-sm font-bold text-slate-500">({clients.length})</span>
         </h2>
         
-        {/* Show buttons for owners AND admins */}
         {canManageClients && (
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowImportWizard(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
-            >
-              <Upload className="w-4 h-4" />
-              Import
-            </button>
-            <button
-              onClick={() => { resetForm(); setShowAdd(true); }}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              Add Client
+            <div className="relative">
+              <button onClick={() => setShowImportDropdown(!showImportDropdown)} className="flex items-center gap-2 px-3 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">
+                <Upload className="w-4 h-4" />Import<ChevronDown className="w-4 h-4" />
+              </button>
+              
+              {showImportDropdown && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setShowImportDropdown(false)} />
+                  <div className="absolute right-0 top-full mt-1 bg-white border-2 border-slate-200 rounded-xl shadow-xl z-20 min-w-[220px] overflow-hidden">
+                    <button onClick={() => { setShowImportWizard(true); setShowImportDropdown(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 text-left transition-colors">
+                      <Upload className="w-4 h-4 text-emerald-600" />
+                      <div><p className="font-bold text-slate-900 text-sm">Import Clients</p><p className="text-xs text-slate-500">From QuickBooks or Xero</p></div>
+                    </button>
+                    <button onClick={() => { setShowCSVImportModal(true); setShowImportDropdown(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 text-left border-t border-slate-100 transition-colors">
+                      <FileSpreadsheet className="w-4 h-4 text-blue-600" />
+                      <div><p className="font-bold text-slate-900 text-sm">Import Assignments</p><p className="text-xs text-slate-500">CSV file upload</p></div>
+                    </button>
+                    <button onClick={() => { setShowCopyModal(true); setShowImportDropdown(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 text-left border-t border-slate-100 transition-colors">
+                      <Copy className="w-4 h-4 text-purple-600" />
+                      <div><p className="font-bold text-slate-900 text-sm">Copy Team</p><p className="text-xs text-slate-500">From another client</p></div>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+            
+            <button onClick={() => { resetForm(); setShowAdd(true); }} className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all">
+              <Plus className="w-4 h-4" />Add Client
             </button>
           </div>
         )}
       </div>
 
-      {/* Info banner for managers/members only (not owners or admins) */}
       {!canManageClients && (
         <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
-          <p className="text-sm text-blue-700 font-medium">
-            💡 Only administrators can add or edit clients. Contact your admin to add new clients.
-          </p>
+          <p className="text-sm text-blue-700 font-medium">💡 Only administrators can add or edit clients.</p>
         </div>
       )}
 
-      {/* Add/Edit Client Form */}
       {showAdd && canManageClients && (
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
           <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Client' : 'Add Client'}</h3>
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Client Name *</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Acme Corporation"
-                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
-              />
+              <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Acme Corporation" className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" />
             </div>
             <div>
-              <label className="block text-sm font-bold text-slate-800 mb-2">Code (optional)</label>
-              <input
-                type="text"
-                value={form.code}
-                onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-                placeholder="ACME"
-                maxLength={10}
-                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all uppercase"
-              />
+              <label className="block text-sm font-bold text-slate-800 mb-2">Code</label>
+              <input type="text" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="ACME" maxLength={10} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all uppercase" />
             </div>
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Visibility</label>
-              <select
-                value={form.visibility}
-                onChange={(e) => setForm({ ...form, visibility: e.target.value })}
-                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white"
-              >
+              <select value={form.visibility} onChange={(e) => setForm({ ...form, visibility: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
                 <option value="all">All Team Members</option>
                 <option value="assigned">Assigned Users Only</option>
-                <option value="confidential">Confidential (strict)</option>
+                <option value="confidential">Confidential</option>
               </select>
             </div>
           </div>
-          
-          <div className="mt-3 text-xs text-slate-500 font-medium">
-            {form.visibility === 'all' && '👥 Everyone in the organization can see and log time to this client.'}
-            {form.visibility === 'assigned' && '🔒 Only users assigned via Client Access can see this client. Admins can still see it.'}
-            {form.visibility === 'confidential' && '🔐 Strict confidentiality - even admins need explicit assignment to see this client.'}
-          </div>
-          
           <div className="flex gap-3 mt-4">
-            <button
-              onClick={handleSave}
-              disabled={saving || !form.name.trim()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all"
-            >
+            <button onClick={handleSave} disabled={saving || !form.name.trim()} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               {editingId ? 'Update' : 'Add'}
             </button>
-            <button
-              onClick={resetForm}
-              className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
-            >
-              Cancel
-            </button>
+            <button onClick={resetForm} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
           </div>
         </div>
       )}
 
-      {/* Clients Table - REMOVED "Added" column */}
       <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
         <table className="w-full">
           <thead className="bg-slate-100">
             <tr>
+              {canManageClients && (
+                <th className="px-4 py-3 w-12">
+                  <button onClick={toggleSelectAll} className="p-1 hover:bg-slate-200 rounded transition-colors">
+                    {selectedClientIds.size === clients.length && clients.length > 0 ? <CheckSquare className="w-5 h-5 text-primary" /> : selectedClientIds.size > 0 ? <MinusSquare className="w-5 h-5 text-primary" /> : <Square className="w-5 h-5 text-slate-400" />}
+                  </button>
+                </th>
+              )}
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Client Name</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Code</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Visibility</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Status</th>
-              {canManageClients && (
-                <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
-              )}
+              {canManageClients && <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
             {clients.map(client => (
-              <tr key={client.id} className="hover:bg-slate-50 transition-colors">
+              <tr key={client.id} className={cn("hover:bg-slate-50 transition-colors", selectedClientIds.has(client.id) && "bg-primary/5")}>
+                {canManageClients && (
+                  <td className="px-4 py-3">
+                    <button onClick={() => toggleClientSelection(client.id)} className="p-1 hover:bg-slate-200 rounded transition-colors">
+                      {selectedClientIds.has(client.id) ? <CheckSquare className="w-5 h-5 text-primary" /> : <Square className="w-5 h-5 text-slate-400" />}
+                    </button>
+                  </td>
+                )}
                 <td className="px-4 py-3 font-bold text-slate-900">{client.name}</td>
                 <td className="px-4 py-3 text-sm text-slate-500 font-mono font-semibold">{client.code || '—'}</td>
                 <td className="px-4 py-3">
-                  <span className={cn(
-                    'text-xs px-2.5 py-1 rounded-full font-bold',
-                    client.visibility === 'all' ? 'bg-emerald-100 text-emerald-700' :
-                    client.visibility === 'assigned' ? 'bg-amber-100 text-amber-700' :
-                    'bg-red-100 text-red-700'
-                  )}>
-                    {client.visibility === 'all' ? '👥 All' :
-                     client.visibility === 'assigned' ? '🔒 Assigned' :
-                     '🔐 Confidential'}
+                  <span className={cn('text-xs px-2.5 py-1 rounded-full font-bold', client.visibility === 'all' ? 'bg-emerald-100 text-emerald-700' : client.visibility === 'assigned' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700')}>
+                    {client.visibility === 'all' ? '👥 All' : client.visibility === 'assigned' ? '🔒 Assigned' : '🔐 Confidential'}
                   </span>
                 </td>
                 <td className="px-4 py-3">
-                  <span className={cn(
-                    'text-xs px-2.5 py-1 rounded-full font-bold',
-                    client.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                  )}>
-                    {client.is_active ? 'Active' : 'Inactive'}
-                  </span>
+                  <span className={cn('text-xs px-2.5 py-1 rounded-full font-bold', client.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500')}>{client.is_active ? 'Active' : 'Inactive'}</span>
                 </td>
                 {canManageClients && (
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <button 
-                        onClick={() => handleEdit(client)} 
-                        className="p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-colors"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(client.id, client.name)} 
-                        className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <button onClick={() => handleEdit(client)} className="p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-colors"><Pencil className="w-4 h-4" /></button>
+                      <button onClick={() => handleDelete(client.id, client.name)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </td>
                 )}
@@ -1435,45 +1004,522 @@ function ClientsTab({
           <div className="text-center py-12">
             <Briefcase className="w-12 h-12 mx-auto mb-3 text-slate-300" />
             <p className="font-bold text-slate-700">No clients yet</p>
-            <p className="text-sm text-slate-500 mt-1 mb-4">
-              {canManageClients ? 'Import your client list or add clients manually.' : 'Contact your admin to add clients.'}
-            </p>
-            {canManageClients && (
-              <button
-                onClick={() => setShowImportWizard(true)}
-                className="px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90"
-              >
-                <Upload className="w-4 h-4 inline mr-2" />
-                Import Clients
-              </button>
-            )}
+            {canManageClients && <button onClick={() => setShowImportWizard(true)} className="mt-4 px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90"><Upload className="w-4 h-4 inline mr-2" />Import Clients</button>}
           </div>
         )}
       </div>
-      
-      {/* Visibility legend */}
-      {clients.length > 0 && (
-        <div className="mt-4 p-4 bg-slate-100 rounded-xl">
-          <h4 className="font-bold text-slate-800 text-sm mb-2">Visibility Levels</h4>
-          <div className="text-sm text-slate-600 font-medium space-y-1">
-            <p><span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold text-xs">👥 All</span> — Everyone in the org can see and log time</p>
-            <p><span className="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold text-xs">🔒 Assigned</span> — Only assigned users + admins can see</p>
-            <p><span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-bold text-xs">🔐 Confidential</span> — Even admins need explicit assignment</p>
-          </div>
+
+      {/* Bulk Actions Floating Toolbar */}
+      {selectedClientIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-4 z-40 animate-in slide-in-from-bottom">
+          <span className="font-bold">{selectedClientIds.size} client{selectedClientIds.size !== 1 ? 's' : ''} selected</span>
+          <div className="w-px h-6 bg-slate-700" />
+          <button onClick={() => setShowBulkAssignModal(true)} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded-xl font-bold transition-colors"><UserPlus className="w-4 h-4" />Assign Team</button>
+          <button onClick={handleBulkUnassign} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-xl font-bold transition-colors"><UserMinus className="w-4 h-4" />Remove Team</button>
+          <button onClick={clearSelection} className="p-2 hover:bg-slate-700 rounded-lg transition-colors" title="Clear selection"><X className="w-5 h-5" /></button>
         </div>
       )}
 
-      {/* Import Wizard Modal */}
-      {showImportWizard && (
-        <ClientImportWizard
-          onClose={() => setShowImportWizard(false)}
-          onSuccess={() => {
-            onRefresh();
-            onSuccess('Clients imported successfully!');
-          }}
-          users={users}
-        />
-      )}
+      {/* Modals */}
+      {showImportWizard && <ClientImportWizard onClose={() => setShowImportWizard(false)} onSuccess={() => { onRefresh(); onSuccess('Clients imported!'); }} users={users} />}
+      {showBulkAssignModal && <BulkAssignModal isOpen={showBulkAssignModal} onClose={() => setShowBulkAssignModal(false)} selectedClients={selectedClients} users={users} onSuccess={() => { onRefresh(); clearSelection(); onSuccess('Team assigned!'); }} />}
+      {showCSVImportModal && <CSVImportModal isOpen={showCSVImportModal} onClose={() => setShowCSVImportModal(false)} onSuccess={() => { onRefresh(); onSuccess('Assignments imported!'); }} />}
+      {showCopyModal && <CopyAssignmentsModal isOpen={showCopyModal} onClose={() => setShowCopyModal(false)} clients={clients} onSuccess={() => { onRefresh(); onSuccess('Team copied!'); }} />}
+    </div>
+  );
+}
+
+// ============================================================================
+// Bulk Assign Modal
+// ============================================================================
+function BulkAssignModal({ isOpen, onClose, selectedClients, users, onSuccess }: { isOpen: boolean; onClose: () => void; selectedClients: Client[]; users: TeamMember[]; onSuccess: () => void; }) {
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
+  const [role, setRole] = useState('Staff');
+  const [mode, setMode] = useState<'add' | 'replace'>('add');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<any>(null);
+
+  const handleToggleUser = (userId: number) => {
+    const newSelected = new Set(selectedUserIds);
+    if (newSelected.has(userId)) newSelected.delete(userId);
+    else newSelected.add(userId);
+    setSelectedUserIds(newSelected);
+  };
+
+  const handleSubmit = async () => {
+    if (selectedUserIds.size === 0) { setError('Select at least one employee'); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await safeFetchJson<any>(`${API_BASE}/clients/bulk-assign/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_ids: selectedClients.map(c => c.id), user_ids: Array.from(selectedUserIds), role, mode }) });
+      setResult(response);
+      setTimeout(() => { onSuccess(); handleClose(); }, 2000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to assign');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = () => { setSelectedUserIds(new Set()); setRole('Staff'); setMode('add'); setError(null); setResult(null); onClose(); };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl mx-4 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b-2 border-slate-200 bg-slate-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center"><UserPlus className="w-5 h-5 text-primary" /></div>
+            <div><h2 className="text-lg font-bold text-slate-900">Bulk Assign Team</h2><p className="text-sm text-slate-500 font-medium">{selectedClients.length} client{selectedClients.length !== 1 ? 's' : ''} selected</p></div>
+          </div>
+          <button onClick={handleClose} className="p-2 hover:bg-slate-200 rounded-lg transition-colors"><X className="w-5 h-5 text-slate-500" /></button>
+        </div>
+
+        <div className="p-6 max-h-[60vh] overflow-y-auto">
+          {result ? (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle2 className="w-8 h-8 text-emerald-600" /></div>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">Assignment Complete!</h3>
+              <p className="text-slate-600">{result.created} assignments created{result.updated > 0 && `, ${result.updated} updated`}</p>
+            </div>
+          ) : (
+            <>
+              {error && (
+                <div className="mb-4 p-3 bg-red-50 border-2 border-red-200 rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+                  <p className="text-sm text-red-700 font-medium">{error}</p>
+                </div>
+              )}
+
+              {/* Mode Selection */}
+              <div className="mb-6">
+                <label className="block text-sm font-bold text-slate-800 mb-3">Assignment Mode</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => setMode('add')} className={cn('p-4 border-2 rounded-xl text-left transition-all', mode === 'add' ? 'border-primary bg-primary/5' : 'border-slate-200 hover:border-slate-300')}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <UserPlus className={cn('w-4 h-4', mode === 'add' ? 'text-primary' : 'text-slate-500')} />
+                      <span className={cn('font-bold', mode === 'add' ? 'text-primary' : 'text-slate-700')}>Add to Team</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Keep existing members, add new ones</p>
+                  </button>
+                  <button onClick={() => setMode('replace')} className={cn('p-4 border-2 rounded-xl text-left transition-all', mode === 'replace' ? 'border-primary bg-primary/5' : 'border-slate-200 hover:border-slate-300')}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <RefreshCw className={cn('w-4 h-4', mode === 'replace' ? 'text-primary' : 'text-slate-500')} />
+                      <span className={cn('font-bold', mode === 'replace' ? 'text-primary' : 'text-slate-700')}>Replace Team</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Remove existing, assign only selected</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Role Selection */}
+              <div className="mb-6">
+                <label className="block text-sm font-bold text-slate-800 mb-2">Default Role</label>
+                <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
+                  <option value="Staff">Staff</option>
+                  <option value="Manager">Manager</option>
+                  <option value="Partner">Partner</option>
+                  <option value="Lead">Lead</option>
+                </select>
+              </div>
+
+              {/* User Selection */}
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-3">Select Team Members</label>
+                <div className="border-2 border-slate-200 rounded-xl max-h-64 overflow-y-auto">
+                  {users.map(user => (
+                    <button key={user.id} onClick={() => handleToggleUser(user.id)} className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', selectedUserIds.has(user.id) && 'bg-primary/5')}>
+                      {selectedUserIds.has(user.id) ? <CheckSquare className="w-5 h-5 text-primary flex-shrink-0" /> : <Square className="w-5 h-5 text-slate-400 flex-shrink-0" />}
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                        <span className="text-xs font-bold text-primary">{(user.first_name?.[0] || user.username[0]).toUpperCase()}</span>
+                      </div>
+                      <div className="flex-1 text-left">
+                        <p className="font-bold text-slate-900 text-sm">{user.first_name} {user.last_name || user.username}</p>
+                        <p className="text-xs text-slate-500">{user.email}</p>
+                      </div>
+                    </button>
+                  ))}
+                  {users.length === 0 && <div className="text-center py-8 text-slate-500">No team members</div>}
+                </div>
+                {selectedUserIds.size > 0 && (
+                  <p className="mt-2 text-sm text-primary font-semibold">{selectedUserIds.size} member{selectedUserIds.size !== 1 ? 's' : ''} selected</p>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {!result && (
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t-2 border-slate-200 bg-slate-50">
+            <button onClick={handleClose} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
+            <button onClick={handleSubmit} disabled={loading || selectedUserIds.size === 0} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+              Assign to {selectedClients.length} Client{selectedClients.length !== 1 ? 's' : ''}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// CSV Import Modal
+// ============================================================================
+function CSVImportModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClose: () => void; onSuccess: () => void; }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<any>(null);
+  const [preview, setPreview] = useState<any[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setError(null);
+      // Preview first few rows
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        const lines = text.split('\n').slice(0, 6);
+        const previewData = lines.map(line => line.split(',').map(cell => cell.trim().replace(/"/g, '')));
+        setPreview(previewData);
+      };
+      reader.readAsText(selectedFile);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/clients/assignment-template/`, {
+        credentials: 'include',
+      });
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'client_assignments_template.csv';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      setError('Failed to download template');
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!file) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await fetch(`${API_BASE}/clients/import-assignments/`, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Import failed');
+      }
+      
+      const data = await response.json();
+      setResult(data);
+      setTimeout(() => { onSuccess(); handleClose(); }, 2000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to import');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = () => { setFile(null); setError(null); setResult(null); setPreview([]); onClose(); };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b-2 border-slate-200 bg-slate-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center"><FileSpreadsheet className="w-5 h-5 text-blue-600" /></div>
+            <div><h2 className="text-lg font-bold text-slate-900">Import Assignments from CSV</h2><p className="text-sm text-slate-500 font-medium">Bulk assign team members via spreadsheet</p></div>
+          </div>
+          <button onClick={handleClose} className="p-2 hover:bg-slate-200 rounded-lg transition-colors"><X className="w-5 h-5 text-slate-500" /></button>
+        </div>
+
+        <div className="p-6">
+          {result ? (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle2 className="w-8 h-8 text-emerald-600" /></div>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">Import Complete!</h3>
+              <p className="text-slate-600">{result.created} assignments created, {result.updated} updated</p>
+              {result.errors && result.errors.length > 0 && (
+                <div className="mt-4 text-left bg-red-50 border-2 border-red-200 rounded-xl p-4">
+                  <p className="font-bold text-red-700 mb-2">Some rows had errors:</p>
+                  <ul className="text-sm text-red-600 space-y-1">
+                    {result.errors.slice(0, 5).map((err: string, i: number) => <li key={i}>• {err}</li>)}
+                    {result.errors.length > 5 && <li>...and {result.errors.length - 5} more</li>}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {error && (
+                <div className="mb-4 p-3 bg-red-50 border-2 border-red-200 rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+                  <p className="text-sm text-red-700 font-medium">{error}</p>
+                </div>
+              )}
+
+              {/* Template Download */}
+              <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-bold text-blue-800">Download Template</p>
+                    <p className="text-sm text-blue-600">Get a pre-filled CSV with your clients and team members</p>
+                  </div>
+                  <button onClick={handleDownloadTemplate} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors">
+                    <Download className="w-4 h-4" />
+                    Template
+                  </button>
+                </div>
+              </div>
+
+              {/* File Upload */}
+              <div className="mb-6">
+                <label className="block text-sm font-bold text-slate-800 mb-3">Upload CSV File</label>
+                <div 
+                  onClick={() => fileInputRef.current?.click()}
+                  className={cn(
+                    'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all',
+                    file ? 'border-emerald-300 bg-emerald-50' : 'border-slate-300 hover:border-primary hover:bg-primary/5'
+                  )}
+                >
+                  <input ref={fileInputRef} type="file" accept=".csv" onChange={handleFileChange} className="hidden" />
+                  {file ? (
+                    <>
+                      <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto mb-2" />
+                      <p className="font-bold text-emerald-800">{file.name}</p>
+                      <p className="text-sm text-emerald-600">Click to change file</p>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-10 h-10 text-slate-400 mx-auto mb-2" />
+                      <p className="font-bold text-slate-700">Click to select a CSV file</p>
+                      <p className="text-sm text-slate-500">or drag and drop</p>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Preview */}
+              {preview.length > 0 && (
+                <div className="mb-6">
+                  <label className="block text-sm font-bold text-slate-800 mb-3">Preview</label>
+                  <div className="border-2 border-slate-200 rounded-xl overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-100">
+                        <tr>
+                          {preview[0]?.map((header: string, i: number) => (
+                            <th key={i} className="px-3 py-2 text-left font-bold text-slate-700 whitespace-nowrap">{header}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.slice(1).map((row, i) => (
+                          <tr key={i} className="border-t border-slate-100">
+                            {row.map((cell: string, j: number) => (
+                              <td key={j} className="px-3 py-2 text-slate-600 whitespace-nowrap">{cell}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">Showing first {preview.length - 1} rows</p>
+                </div>
+              )}
+
+              {/* Format Instructions */}
+              <div className="p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
+                <p className="font-bold text-slate-800 mb-2">CSV Format</p>
+                <p className="text-sm text-slate-600">Required columns: <code className="bg-slate-200 px-1 rounded">client_code</code>, <code className="bg-slate-200 px-1 rounded">user_email</code>, <code className="bg-slate-200 px-1 rounded">role</code></p>
+                <p className="text-sm text-slate-500 mt-1">Optional: <code className="bg-slate-200 px-1 rounded">client_name</code>, <code className="bg-slate-200 px-1 rounded">user_name</code></p>
+              </div>
+            </>
+          )}
+        </div>
+
+        {!result && (
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t-2 border-slate-200 bg-slate-50">
+            <button onClick={handleClose} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
+            <button onClick={handleSubmit} disabled={loading || !file} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              Import Assignments
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Copy Assignments Modal
+// ============================================================================
+function CopyAssignmentsModal({ isOpen, onClose, clients, onSuccess }: { isOpen: boolean; onClose: () => void; clients: Client[]; onSuccess: () => void; }) {
+  const [sourceClientId, setSourceClientId] = useState<number | null>(null);
+  const [targetClientIds, setTargetClientIds] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<any>(null);
+  const [searchSource, setSearchSource] = useState('');
+  const [searchTarget, setSearchTarget] = useState('');
+
+  const filteredSourceClients = clients.filter(c => c.name.toLowerCase().includes(searchSource.toLowerCase()) || c.code?.toLowerCase().includes(searchSource.toLowerCase()));
+  const filteredTargetClients = clients.filter(c => c.id !== sourceClientId && (c.name.toLowerCase().includes(searchTarget.toLowerCase()) || c.code?.toLowerCase().includes(searchTarget.toLowerCase())));
+
+  const handleToggleTarget = (clientId: number) => {
+    const newSelected = new Set(targetClientIds);
+    if (newSelected.has(clientId)) newSelected.delete(clientId);
+    else newSelected.add(clientId);
+    setTargetClientIds(newSelected);
+  };
+
+  const handleSubmit = async () => {
+    if (!sourceClientId || targetClientIds.size === 0) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await safeFetchJson<any>(`${API_BASE}/clients/copy-assignments/`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ source_client_id: sourceClientId, target_client_ids: Array.from(targetClientIds) }) 
+      });
+      setResult(response);
+      setTimeout(() => { onSuccess(); handleClose(); }, 2000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to copy');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = () => { setSourceClientId(null); setTargetClientIds(new Set()); setError(null); setResult(null); setSearchSource(''); setSearchTarget(''); onClose(); };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b-2 border-slate-200 bg-slate-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center"><Copy className="w-5 h-5 text-purple-600" /></div>
+            <div><h2 className="text-lg font-bold text-slate-900">Copy Team Assignments</h2><p className="text-sm text-slate-500 font-medium">Clone team from one client to others</p></div>
+          </div>
+          <button onClick={handleClose} className="p-2 hover:bg-slate-200 rounded-lg transition-colors"><X className="w-5 h-5 text-slate-500" /></button>
+        </div>
+
+        <div className="p-6 max-h-[60vh] overflow-y-auto">
+          {result ? (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle2 className="w-8 h-8 text-emerald-600" /></div>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">Copy Complete!</h3>
+              <p className="text-slate-600">{result.created} assignments created across {result.clients_updated} clients</p>
+            </div>
+          ) : (
+            <>
+              {error && (
+                <div className="mb-4 p-3 bg-red-50 border-2 border-red-200 rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+                  <p className="text-sm text-red-700 font-medium">{error}</p>
+                </div>
+              )}
+
+              {/* Source Client Selection */}
+              <div className="mb-6">
+                <label className="block text-sm font-bold text-slate-800 mb-3">Copy From (Source Client)</label>
+                <input 
+                  type="text" 
+                  placeholder="Search clients..." 
+                  value={searchSource} 
+                  onChange={(e) => setSearchSource(e.target.value)} 
+                  className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 mb-2 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" 
+                />
+                <div className="border-2 border-slate-200 rounded-xl max-h-40 overflow-y-auto">
+                  {filteredSourceClients.map(client => (
+                    <button 
+                      key={client.id} 
+                      onClick={() => { setSourceClientId(client.id); setTargetClientIds(new Set()); }} 
+                      className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', sourceClientId === client.id && 'bg-purple-50')}
+                    >
+                      {sourceClientId === client.id ? <CheckSquare className="w-5 h-5 text-purple-600 flex-shrink-0" /> : <Square className="w-5 h-5 text-slate-400 flex-shrink-0" />}
+                      <div className="flex-1 text-left">
+                        <p className="font-bold text-slate-900 text-sm">{client.name}</p>
+                        {client.code && <p className="text-xs text-slate-500 font-mono">{client.code}</p>}
+                      </div>
+                    </button>
+                  ))}
+                  {filteredSourceClients.length === 0 && <div className="text-center py-4 text-slate-500">No clients found</div>}
+                </div>
+              </div>
+
+              {/* Target Clients Selection */}
+              {sourceClientId && (
+                <div>
+                  <label className="block text-sm font-bold text-slate-800 mb-3">Copy To (Target Clients)</label>
+                  <input 
+                    type="text" 
+                    placeholder="Search clients..." 
+                    value={searchTarget} 
+                    onChange={(e) => setSearchTarget(e.target.value)} 
+                    className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 mb-2 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" 
+                  />
+                  <div className="border-2 border-slate-200 rounded-xl max-h-48 overflow-y-auto">
+                    {filteredTargetClients.map(client => (
+                      <button 
+                        key={client.id} 
+                        onClick={() => handleToggleTarget(client.id)} 
+                        className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', targetClientIds.has(client.id) && 'bg-primary/5')}
+                      >
+                        {targetClientIds.has(client.id) ? <CheckSquare className="w-5 h-5 text-primary flex-shrink-0" /> : <Square className="w-5 h-5 text-slate-400 flex-shrink-0" />}
+                        <div className="flex-1 text-left">
+                          <p className="font-bold text-slate-900 text-sm">{client.name}</p>
+                          {client.code && <p className="text-xs text-slate-500 font-mono">{client.code}</p>}
+                        </div>
+                      </button>
+                    ))}
+                    {filteredTargetClients.length === 0 && <div className="text-center py-4 text-slate-500">No other clients available</div>}
+                  </div>
+                  {targetClientIds.size > 0 && (
+                    <p className="mt-2 text-sm text-primary font-semibold">{targetClientIds.size} client{targetClientIds.size !== 1 ? 's' : ''} selected</p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {!result && (
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t-2 border-slate-200 bg-slate-50">
+            <button onClick={handleClose} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
+            <button onClick={handleSubmit} disabled={loading || !sourceClientId || targetClientIds.size === 0} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
+              Copy to {targetClientIds.size || 0} Client{targetClientIds.size !== 1 ? 's' : ''}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1481,50 +1527,31 @@ function ClientsTab({
 // ============================================================================
 // Billing Rates Tab
 // ============================================================================
-function BillingRatesTab({
-  rates,
-  users,
-  clients,
-  orgDefaultRate,
-  onRefresh,
-  onSuccess,
-  onError,
-}: {
-  rates: BillingRate[];
-  users: TeamMember[];
-  clients: Client[];
-  orgDefaultRate: string;
-  onRefresh: () => void;
-  onSuccess: (msg: string) => void;
-  onError: (msg: string) => void;
-}) {
+function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onSuccess, onError }: { rates: BillingRate[]; users: TeamMember[]; clients: Client[]; orgDefaultRate: string; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    user: '',
-    client: '',
-    hourly_rate: '150.00',
-    effective_date: new Date().toISOString().split('T')[0],
-  });
+  const [form, setForm] = useState({ user: '', client: '', rate: '', effective_date: new Date().toISOString().split('T')[0] });
 
-  const resetForm = () => {
-    setForm({ user: '', client: '', hourly_rate: '150.00', effective_date: new Date().toISOString().split('T')[0] });
-    setShowAdd(false);
-  };
+  const resetForm = () => { setForm({ user: '', client: '', rate: '', effective_date: new Date().toISOString().split('T')[0] }); setShowAdd(false); setEditingId(null); };
 
   const handleSave = async () => {
+    if (!form.rate) return;
     setSaving(true);
     try {
-      const payload: Record<string, any> = { rate: form.hourly_rate, effective_date: form.effective_date };
-      if (form.user) payload.user_id = parseInt(form.user, 10);
-      if (form.client) payload.client_id = parseInt(form.client, 10);
-      
-      await safeFetchJson(`${API_BASE}/billing/rates/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      onSuccess('Rate added');
+      const payload = { 
+        user: form.user || null, 
+        client: form.client || null, 
+        rate: form.rate, 
+        effective_date: form.effective_date 
+      };
+      if (editingId) {
+        await safeFetchJson(`${API_BASE}/billing/rates/${editingId}/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        onSuccess('Rate updated');
+      } else {
+        await safeFetchJson(`${API_BASE}/billing/rates/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        onSuccess('Rate added');
+      }
       resetForm();
       onRefresh();
     } catch (err: any) {
@@ -1534,8 +1561,14 @@ function BillingRatesTab({
     }
   };
 
+  const handleEdit = (rate: BillingRate) => {
+    setForm({ user: rate.user?.toString() || '', client: rate.client?.toString() || '', rate: rate.rate || rate.hourly_rate || '', effective_date: rate.effective_date });
+    setEditingId(rate.id);
+    setShowAdd(true);
+  };
+
   const handleDelete = async (rateId: number) => {
-    if (!confirm('Delete this billing rate?')) return;
+    if (!confirm('Delete this rate?')) return;
     try {
       await safeFetchJson(`${API_BASE}/billing/rates/${rateId}/`, { method: 'DELETE' });
       onSuccess('Rate deleted');
@@ -1551,79 +1584,61 @@ function BillingRatesTab({
         <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <DollarSign className="w-5 h-5 text-primary" />
           Billing Rates
-          <span className="text-sm font-bold text-slate-500">({rates.length} custom)</span>
+          <span className="text-sm font-bold text-slate-500">({rates.length})</span>
         </h2>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
-        >
-          <Plus className="w-4 h-4" />
-          Add Custom Rate
+        <button onClick={() => { resetForm(); setShowAdd(true); }} className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all">
+          <Plus className="w-4 h-4" />Add Rate
         </button>
       </div>
 
-      {/* Org Default Rate */}
+      {/* Default Rate Banner */}
       <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm text-emerald-700 font-bold">Organization Default Rate</p>
-            <p className="text-3xl font-extrabold text-emerald-700">${parseFloat(orgDefaultRate).toFixed(2)}/hr</p>
+            <p className="text-sm text-emerald-700 font-bold flex items-center gap-2"><DollarSign className="w-4 h-4" />Organization Default Rate</p>
+            <p className="text-2xl font-extrabold text-emerald-700 mt-1">${parseFloat(orgDefaultRate).toFixed(2)}/hr</p>
           </div>
-          <div className="text-right">
-            <span className="bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-full text-xs font-bold">Base Rate</span>
-            <p className="text-xs text-emerald-600 font-medium mt-1">Edit in Organization tab</p>
-          </div>
+          <span className="bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-full text-xs font-bold">Fallback Rate</span>
         </div>
-      </div>
-
-      {/* Rate Priority Info */}
-      <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
-        <h4 className="font-bold text-blue-800 mb-2">Rate Priority (highest to lowest):</h4>
-        <ol className="text-sm text-blue-700 font-medium space-y-1 list-decimal list-inside">
-          <li><strong>User + Client</strong> — "John at Acme Corp = $200/hr"</li>
-          <li><strong>Client</strong> — "Any user at Acme Corp = $175/hr"</li>
-          <li><strong>User</strong> — "John = $150/hr everywhere"</li>
-          <li><strong>Default</strong> — ${parseFloat(orgDefaultRate).toFixed(2)}/hr</li>
-        </ol>
       </div>
 
       {showAdd && (
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
-          <h3 className="font-bold text-slate-900 mb-4">Add Custom Rate Override</h3>
-          <div className="grid grid-cols-2 gap-4">
+          <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Rate' : 'Add Rate Override'}</h3>
+          <div className="grid grid-cols-4 gap-4">
             <div>
-              <label className="block text-sm font-bold text-slate-800 mb-2">User <span className="font-medium text-slate-500">(blank = all)</span></label>
-              <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white">
-                <option value="">All Users</option>
-                {users.map((u) => <option key={u.id} value={u.id}>{u.first_name} {u.last_name || u.username}</option>)}
+              <label className="block text-sm font-bold text-slate-800 mb-2">Employee</label>
+              <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
+                <option value="">All Employees</option>
+                {users.map(u => <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-bold text-slate-800 mb-2">Client <span className="font-medium text-slate-500">(blank = all)</span></label>
-              <select value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white">
+              <label className="block text-sm font-bold text-slate-800 mb-2">Client</label>
+              <select value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
                 <option value="">All Clients</option>
-                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-bold text-slate-800 mb-2">Hourly Rate ($)</label>
-              <input type="number" step="0.01" min="0" value={form.hourly_rate} onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-semibold focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
+              <label className="block text-sm font-bold text-slate-800 mb-2">Hourly Rate *</label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">$</span>
+                <input type="number" step="0.01" min="0" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-200 rounded-xl text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" placeholder="175.00" />
+              </div>
             </div>
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Effective Date</label>
-              <input type="date" value={form.effective_date} onChange={(e) => setForm({ ...form, effective_date: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
+              <input type="date" value={form.effective_date} onChange={(e) => setForm({ ...form, effective_date: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" />
             </div>
           </div>
           <div className="flex gap-3 mt-4">
-            <button onClick={handleSave} disabled={saving || (!form.user && !form.client)} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
+            <button onClick={handleSave} disabled={saving || !form.rate} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Save Rate
+              {editingId ? 'Update' : 'Add'}
             </button>
             <button onClick={resetForm} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
           </div>
-          {!form.user && !form.client && (
-            <p className="text-sm text-amber-600 font-semibold mt-3">⚠️ Select a user and/or client. To change the org default, go to the Organization tab.</p>
-          )}
         </div>
       )}
 
@@ -1631,105 +1646,65 @@ function BillingRatesTab({
         <table className="w-full">
           <thead className="bg-slate-100">
             <tr>
-              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">User</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Employee</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Client</th>
-              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Rate/Hour</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Rate</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Effective</th>
               <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
-            {rates.length === 0 ? (
-              <tr><td colSpan={5} className="text-center py-8 text-slate-500 font-medium">No custom rate overrides. All billing uses default (${parseFloat(orgDefaultRate).toFixed(2)}/hr).</td></tr>
-            ) : (
-              rates.map((rate) => (
-                <tr key={rate.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3 font-semibold text-slate-900">{rate.user_name || <span className="text-slate-400 italic font-medium">All Users</span>}</td>
-                  <td className="px-4 py-3 font-semibold text-slate-900">{rate.client_name || <span className="text-slate-400 italic font-medium">All Clients</span>}</td>
-                  <td className="px-4 py-3 text-right"><span className="font-extrabold text-emerald-600 text-lg">${parseFloat(rate.rate || rate.hourly_rate || '0').toFixed(2)}</span></td>
-                  <td className="px-4 py-3 text-sm text-slate-500 font-medium">{new Date(rate.effective_date).toLocaleDateString()}</td>
-                  <td className="px-4 py-3 text-right">
+            {rates.map(rate => (
+              <tr key={rate.id} className="hover:bg-slate-50 transition-colors">
+                <td className="px-4 py-3 font-medium text-slate-900">{rate.user_name || <span className="text-slate-400 italic">All</span>}</td>
+                <td className="px-4 py-3 font-medium text-slate-900">{rate.client_name || <span className="text-slate-400 italic">All</span>}</td>
+                <td className="px-4 py-3"><span className="font-bold text-emerald-700">${parseFloat(rate.rate || rate.hourly_rate || '0').toFixed(2)}/hr</span></td>
+                <td className="px-4 py-3 text-sm text-slate-500">{new Date(rate.effective_date).toLocaleDateString()}</td>
+                <td className="px-4 py-3 text-right">
+                  <div className="flex items-center justify-end gap-1">
+                    <button onClick={() => handleEdit(rate)} className="p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-colors"><Pencil className="w-4 h-4" /></button>
                     <button onClick={() => handleDelete(rate.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
-                  </td>
-                </tr>
-              ))
-            )}
+                  </div>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
+        {rates.length === 0 && (
+          <div className="text-center py-12">
+            <DollarSign className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+            <p className="font-bold text-slate-700">No rate overrides yet</p>
+            <p className="text-sm text-slate-500 mt-1">Using organization default: ${parseFloat(orgDefaultRate).toFixed(2)}/hr</p>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-
 // ============================================================================
 // Employee Cost Rates Tab
 // ============================================================================
-function EmployeeCostRatesTab({
-  rates,
-  users,
-  onRefresh,
-  onSuccess,
-  onError,
-}: {
-  rates: EmployeeCostRate[];
-  users: TeamMember[];
-  onRefresh: () => void;
-  onSuccess: (msg: string) => void;
-  onError: (msg: string) => void;
-}) {
+function EmployeeCostRatesTab({ rates, users, onRefresh, onSuccess, onError }: { rates: EmployeeCostRate[]; users: TeamMember[]; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ user: '', cost_rate: '75.00', effective_date: new Date().toISOString().split('T')[0] });
-  
-  // Conflict dialog state
-  const [conflictData, setConflictData] = useState<{
-    existingRate: { id: number; cost_rate: string; effective_date: string };
-    newCost: string;
-    userName: string;
-  } | null>(null);
+  const [form, setForm] = useState({ user: '', cost_rate: '', effective_date: new Date().toISOString().split('T')[0] });
 
-  const resetForm = () => {
-    setForm({ user: '', cost_rate: '75.00', effective_date: new Date().toISOString().split('T')[0] });
-    setShowAdd(false);
-  };
+  const resetForm = () => { setForm({ user: '', cost_rate: '', effective_date: new Date().toISOString().split('T')[0] }); setShowAdd(false); setEditingId(null); };
 
   const handleSave = async () => {
-    if (!form.user) { onError('Please select an employee'); return; }
+    if (!form.user || !form.cost_rate) return;
     setSaving(true);
     try {
-      const response = await fetch(`${API_BASE}/billing/cost-rates/`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
-        },
-        body: JSON.stringify({ 
-          user: parseInt(form.user, 10), 
-          cost_rate: form.cost_rate, 
-          effective_date: form.effective_date 
-        }),
-      });
-      
-      const data = await response.json();
-      
-      if (response.status === 409) {
-        // Duplicate found - show conflict dialog
-        const selectedUser = users.find(u => u.id === parseInt(form.user, 10));
-        setConflictData({
-          existingRate: data.existing_rate,
-          newCost: form.cost_rate,
-          userName: selectedUser ? `${selectedUser.first_name} ${selectedUser.last_name || selectedUser.username}` : 'this employee',
-        });
-        setSaving(false);
-        return;
+      const payload = { user: parseInt(form.user), cost_rate: form.cost_rate, effective_date: form.effective_date };
+      if (editingId) {
+        await safeFetchJson(`${API_BASE}/billing/cost-rates/${editingId}/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        onSuccess('Cost rate updated');
+      } else {
+        await safeFetchJson(`${API_BASE}/billing/cost-rates/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        onSuccess('Cost rate added');
       }
-      
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to save');
-      }
-      
-      onSuccess('Cost rate added');
       resetForm();
       onRefresh();
     } catch (err: any) {
@@ -1739,34 +1714,10 @@ function EmployeeCostRatesTab({
     }
   };
 
-  const handleUpdateExisting = async () => {
-    if (!conflictData) return;
-    setSaving(true);
-    
-    try {
-      const response = await fetch(`${API_BASE}/billing/cost-rates/${conflictData.existingRate.id}/`, {
-        method: 'PATCH',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
-        },
-        body: JSON.stringify({ cost_rate: conflictData.newCost }),
-      });
-      
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to update');
-      }
-      
-      onSuccess('Cost rate updated');
-      setConflictData(null);
-      resetForm();
-      onRefresh();
-    } catch (err: any) {
-      onError(err?.message || 'Failed to update');
-    } finally {
-      setSaving(false);
-    }
+  const handleEdit = (rate: EmployeeCostRate) => {
+    setForm({ user: rate.user.toString(), cost_rate: rate.cost_rate, effective_date: rate.effective_date });
+    setEditingId(rate.id);
+    setShowAdd(true);
   };
 
   const handleDelete = async (rateId: number) => {
@@ -1782,98 +1733,48 @@ function EmployeeCostRatesTab({
 
   return (
     <div>
-      {/* Conflict Dialog Modal */}
-      {conflictData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
-                <AlertCircle className="w-5 h-5 text-amber-600" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900">Rate Already Exists</h3>
-            </div>
-            
-            <p className="text-slate-600 mb-4">
-              A cost rate of <span className="font-bold text-amber-600">${parseFloat(conflictData.existingRate.cost_rate).toFixed(2)}/hr</span> already 
-              exists for <span className="font-bold">{conflictData.userName}</span> on{' '}
-              <span className="font-bold">{new Date(conflictData.existingRate.effective_date).toLocaleDateString()}</span>.
-            </p>
-            
-            <p className="text-slate-600 mb-6">
-              Do you want to update it to <span className="font-bold text-emerald-600">${parseFloat(conflictData.newCost).toFixed(2)}/hr</span>?
-            </p>
-            
-            <div className="flex gap-3">
-              <button
-                onClick={() => setConflictData(null)}
-                className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleUpdateExisting}
-                disabled={saving}
-                className="flex-1 px-4 py-2.5 bg-primary hover:opacity-90 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
-              >
-                {saving ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Check className="w-4 h-4" />
-                )}
-                Update Rate
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Users className="w-5 h-5 text-primary" />
           Employee Cost Rates
           <span className="text-sm font-bold text-slate-500">({rates.length})</span>
         </h2>
-        <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all">
-          <Plus className="w-4 h-4" />
-          Add Cost Rate
+        <button onClick={() => { resetForm(); setShowAdd(true); }} className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all">
+          <Plus className="w-4 h-4" />Add Cost Rate
         </button>
       </div>
 
-      <div className="mb-6 p-4 bg-amber-50 border-2 border-amber-200 rounded-xl">
-        <h4 className="font-bold text-amber-800 mb-2">What is a Cost Rate?</h4>
-        <p className="text-sm text-amber-700 font-medium">
-          The <strong>cost rate</strong> is what you pay an employee per hour (loaded labor cost). 
-          Used to calculate profit: <em>Margin = Billing Rate - Cost Rate</em>.
-        </p>
-        <p className="text-sm text-amber-700 font-medium mt-2">
-          Example: Bill client $150/hr, employee costs $75/hr → margin is $75/hr (50%).
-        </p>
+      <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+        <p className="text-sm text-blue-700 font-medium">💡 Cost rates represent the internal cost per hour for each employee. This is used for profitability calculations.</p>
       </div>
 
       {showAdd && (
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
-          <h3 className="font-bold text-slate-900 mb-4">Add Employee Cost Rate</h3>
+          <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Cost Rate' : 'Add Cost Rate'}</h3>
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Employee *</label>
-              <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white" required>
+              <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
                 <option value="">Select Employee</option>
-                {users.map((u) => <option key={u.id} value={u.id}>{u.first_name} {u.last_name || u.username}</option>)}
+                {users.map(u => <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-bold text-slate-800 mb-2">Hourly Cost ($)</label>
-              <input type="number" step="0.01" min="0" value={form.cost_rate} onChange={(e) => setForm({ ...form, cost_rate: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-semibold focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
+              <label className="block text-sm font-bold text-slate-800 mb-2">Hourly Cost *</label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">$</span>
+                <input type="number" step="0.01" min="0" value={form.cost_rate} onChange={(e) => setForm({ ...form, cost_rate: e.target.value })} className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-200 rounded-xl text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" placeholder="75.00" />
+              </div>
             </div>
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Effective Date</label>
-              <input type="date" value={form.effective_date} onChange={(e) => setForm({ ...form, effective_date: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
+              <input type="date" value={form.effective_date} onChange={(e) => setForm({ ...form, effective_date: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" />
             </div>
           </div>
           <div className="flex gap-3 mt-4">
-            <button onClick={handleSave} disabled={saving || !form.user} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
+            <button onClick={handleSave} disabled={saving || !form.user || !form.cost_rate} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Save Cost Rate
+              {editingId ? 'Update' : 'Add'}
             </button>
             <button onClick={resetForm} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
           </div>
@@ -1885,39 +1786,36 @@ function EmployeeCostRatesTab({
           <thead className="bg-slate-100">
             <tr>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Employee</th>
-              <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Cost/Hour</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Cost Rate</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Effective</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">End Date</th>
               <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
-            {rates.length === 0 ? (
-              <tr><td colSpan={4} className="text-center py-8 text-slate-500 font-medium">No employee cost rates configured yet. Add cost rates to calculate profit margins.</td></tr>
-            ) : (
-              rates.map((rate) => (
-                <tr key={rate.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3 font-bold text-slate-900">{rate.user_name}</td>
-                  <td className="px-4 py-3 text-right"><span className="font-extrabold text-amber-600 text-lg">${parseFloat(rate.cost_rate).toFixed(2)}</span></td>
-                  <td className="px-4 py-3 text-sm text-slate-500 font-medium">{new Date(rate.effective_date).toLocaleDateString()}</td>
-                  <td className="px-4 py-3 text-right">
+            {rates.map(rate => (
+              <tr key={rate.id} className="hover:bg-slate-50 transition-colors">
+                <td className="px-4 py-3 font-bold text-slate-900">{rate.user_name}</td>
+                <td className="px-4 py-3"><span className="font-bold text-amber-700">${parseFloat(rate.cost_rate).toFixed(2)}/hr</span></td>
+                <td className="px-4 py-3 text-sm text-slate-500">{new Date(rate.effective_date).toLocaleDateString()}</td>
+                <td className="px-4 py-3 text-sm text-slate-500">{rate.end_date ? new Date(rate.end_date).toLocaleDateString() : <span className="text-emerald-600 font-medium">Current</span>}</td>
+                <td className="px-4 py-3 text-right">
+                  <div className="flex items-center justify-end gap-1">
+                    <button onClick={() => handleEdit(rate)} className="p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-colors"><Pencil className="w-4 h-4" /></button>
                     <button onClick={() => handleDelete(rate.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
-                  </td>
-                </tr>
-              ))
-            )}
+                  </div>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
-      </div>
-
-      <div className="mt-6 p-4 bg-slate-100 rounded-xl">
-        <h4 className="font-bold text-slate-800 text-sm mb-2">Calculating Loaded Labor Cost</h4>
-        <div className="text-sm text-slate-600 font-medium space-y-1">
-          <p>• Base salary ÷ 2080 hours = base hourly rate</p>
-          <p>• + Benefits (health insurance, 401k match)</p>
-          <p>• + Payroll taxes (FICA, unemployment)</p>
-          <p>• + Overhead allocation (office, software)</p>
-          <p className="mt-2 text-slate-700"><strong>Rule of thumb:</strong> Loaded cost is typically 1.25x to 1.5x base salary</p>
-        </div>
+        {rates.length === 0 && (
+          <div className="text-center py-12">
+            <Users className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+            <p className="font-bold text-slate-700">No cost rates defined</p>
+            <p className="text-sm text-slate-500 mt-1">Add cost rates to track profitability</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1926,17 +1824,28 @@ function EmployeeCostRatesTab({
 // ============================================================================
 // Devices Tab
 // ============================================================================
-function DevicesTab({
-  devices,
-  onRefresh,
-  onSuccess,
-  onError,
-}: {
-  devices: Device[];
-  onRefresh: () => void;
-  onSuccess: (msg: string) => void;
-  onError: (msg: string) => void;
-}) {
+function DevicesTab({ devices, onRefresh, onSuccess, onError }: { devices: Device[]; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
+  const handleDeactivate = async (deviceId: number, machineName: string) => {
+    if (!confirm(`Deactivate device "${machineName}"? The agent will need to be re-registered.`)) return;
+    try {
+      await safeFetchJson(`${API_BASE}/settings/devices/${deviceId}/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: false }) });
+      onSuccess('Device deactivated');
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to deactivate');
+    }
+  };
+
+  const handleActivate = async (deviceId: number) => {
+    try {
+      await safeFetchJson(`${API_BASE}/settings/devices/${deviceId}/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: true }) });
+      onSuccess('Device activated');
+      onRefresh();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to activate');
+    }
+  };
+
   const formatLastSeen = (dateStr: string) => {
     const date = new Date(dateStr);
     const now = new Date();
@@ -1951,24 +1860,12 @@ function DevicesTab({
     return date.toLocaleDateString();
   };
 
-  const getStatusColor = (lastSeen: string) => {
-    const date = new Date(lastSeen);
-    const now = new Date();
-    const diffHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
-    if (diffHours < 1) return 'bg-emerald-500';
-    if (diffHours < 24) return 'bg-amber-500';
-    return 'bg-slate-400';
-  };
-
-  const handleDeactivate = async (deviceId: number, machineName: string) => {
-    if (!confirm(`Deactivate agent on "${machineName}"?`)) return;
-    try {
-      await safeFetchJson(`${API_BASE}/settings/devices/${deviceId}/deactivate/`, { method: 'POST' });
-      onSuccess('Device deactivated');
-      onRefresh();
-    } catch (err: any) {
-      onError(err?.message || 'Failed to deactivate');
-    }
+  const getOSIcon = (os: string) => {
+    const osLower = os.toLowerCase();
+    if (osLower.includes('mac') || osLower.includes('darwin')) return '🍎';
+    if (osLower.includes('win')) return '🪟';
+    if (osLower.includes('linux')) return '🐧';
+    return '💻';
   };
 
   return (
@@ -1976,7 +1873,7 @@ function DevicesTab({
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Monitor className="w-5 h-5 text-primary" />
-          Registered Devices
+          Devices
           <span className="text-sm font-bold text-slate-500">({devices.length})</span>
         </h2>
         <button onClick={onRefresh} className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">
@@ -1989,27 +1886,42 @@ function DevicesTab({
         <table className="w-full">
           <thead className="bg-slate-100">
             <tr>
-              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Status</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Device</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">User</th>
-              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Machine</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">OS</th>
-              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Version</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Agent Version</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Last Seen</th>
+              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Status</th>
               <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
             {devices.map(device => (
-              <tr key={device.id} className={cn('hover:bg-slate-50 transition-colors', !device.is_active && 'opacity-50')}>
-                <td className="px-4 py-3"><div className={cn('w-3 h-3 rounded-full', device.is_active ? getStatusColor(device.last_seen) : 'bg-slate-300')} /></td>
-                <td className="px-4 py-3 font-bold text-slate-900 text-sm">{device.user}</td>
-                <td className="px-4 py-3 text-sm text-slate-700 font-medium">{device.machine_name}</td>
-                <td className="px-4 py-3 text-sm text-slate-700 font-medium capitalize">{device.os}</td>
-                <td className="px-4 py-3 text-sm text-slate-500 font-mono font-semibold">{device.agent_version || '—'}</td>
-                <td className="px-4 py-3 text-sm text-slate-500 font-medium">{formatLastSeen(device.last_seen)}</td>
+              <tr key={device.id} className="hover:bg-slate-50 transition-colors">
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">{getOSIcon(device.os)}</span>
+                    <span className="font-bold text-slate-900">{device.machine_name}</span>
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-sm text-slate-700 font-medium">{device.user}</td>
+                <td className="px-4 py-3 text-sm text-slate-500">{device.os} {device.os_version}</td>
+                <td className="px-4 py-3 text-sm text-slate-500 font-mono">{device.agent_version || '—'}</td>
+                <td className="px-4 py-3 text-sm text-slate-500">{formatLastSeen(device.last_seen)}</td>
+                <td className="px-4 py-3">
+                  <span className={cn('text-xs px-2.5 py-1 rounded-full font-bold', device.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500')}>
+                    {device.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                </td>
                 <td className="px-4 py-3 text-right">
-                  {device.is_active && (
-                    <button onClick={() => handleDeactivate(device.id, device.machine_name)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><X className="w-4 h-4" /></button>
+                  {device.is_active ? (
+                    <button onClick={() => handleDeactivate(device.id, device.machine_name)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Deactivate">
+                      <X className="w-4 h-4" />
+                    </button>
+                  ) : (
+                    <button onClick={() => handleActivate(device.id)} className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors" title="Activate">
+                      <Check className="w-4 h-4" />
+                    </button>
                   )}
                 </td>
               </tr>
@@ -2017,14 +1929,12 @@ function DevicesTab({
           </tbody>
         </table>
         {devices.length === 0 && (
-          <div className="text-center py-8 text-slate-500 font-medium">No devices registered yet. Install the agent to start tracking.</div>
+          <div className="text-center py-12">
+            <Monitor className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+            <p className="font-bold text-slate-700">No devices registered</p>
+            <p className="text-sm text-slate-500 mt-1">Install the TimeTracker agent on your team's computers</p>
+          </div>
         )}
-      </div>
-
-      <div className="flex items-center gap-6 mt-4 text-sm text-slate-600 font-medium">
-        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-500" />Active now</div>
-        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500" />Active today</div>
-        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-slate-400" />Inactive</div>
       </div>
     </div>
   );
@@ -2033,31 +1943,22 @@ function DevicesTab({
 // ============================================================================
 // Token Tab
 // ============================================================================
-function TokenTab({
-  token,
-  onRefresh,
-  onSuccess,
-  onError,
-}: {
-  token: InstallToken | null;
-  onRefresh: () => void;
-  onSuccess: (msg: string) => void;
-  onError: (msg: string) => void;
-}) {
+function TokenTab({ token, onRefresh, onSuccess, onError }: { token: InstallToken | null; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showToken, setShowToken] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
-  const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    if (token?.token) {
-      navigator.clipboard.writeText(token.token);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    if (!token?.token) return;
+    try {
+      await navigator.clipboard.writeText(token.token);
+      onSuccess('Token copied to clipboard');
+    } catch (err) {
+      onError('Failed to copy token');
     }
   };
 
   const handleRegenerate = async () => {
-    if (!confirm('Regenerate install token? The old token will stop working immediately.')) return;
+    if (!confirm('Regenerate the install token? Existing tokens will be invalidated.')) return;
     setRegenerating(true);
     try {
       await safeFetchJson(`${API_BASE}/settings/install-token/regenerate/`, { method: 'POST' });
@@ -2070,6 +1971,8 @@ function TokenTab({
     }
   };
 
+  const maskedToken = token?.token ? token.token.substring(0, 8) + '••••••••••••••••' + token.token.slice(-4) : '';
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -2079,54 +1982,57 @@ function TokenTab({
         </h2>
       </div>
 
-      <div className="bg-slate-50 border-2 border-slate-200 rounded-xl p-6">
-        <p className="text-sm text-slate-600 font-medium mb-4">
-          Share this token with your IT team for MDM deployment. Agents will automatically register with your organization.
+      <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+        <p className="text-sm text-blue-700 font-medium">
+          💡 Use this token when installing the TimeTracker agent on team members' computers. The token links devices to your organization.
         </p>
+      </div>
 
-        {token ? (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-bold text-slate-800 mb-2">Organization Token</label>
-              <div className="flex items-center gap-2">
-                <div className="flex-1 bg-white border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-sm text-slate-900 font-semibold">
-                  {showToken ? token.token : '••••••••••••••••••••••••••••••••'}
-                </div>
-                <button onClick={() => setShowToken(!showToken)} className="p-2.5 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-all">
-                  {showToken ? <EyeOff className="w-5 h-5 text-slate-600" /> : <Eye className="w-5 h-5 text-slate-600" />}
-                </button>
-                <button onClick={handleCopy} className="p-2.5 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-all">
-                  {copied ? <Check className="w-5 h-5 text-emerald-600" /> : <Copy className="w-5 h-5 text-slate-600" />}
-                </button>
+      {token ? (
+        <div className="space-y-6">
+          <div className="p-6 bg-slate-50 border-2 border-slate-200 rounded-xl">
+            <label className="block text-sm font-bold text-slate-800 mb-3">Organization Install Token</label>
+            <div className="flex items-center gap-3">
+              <div className="flex-1 bg-white border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-sm text-slate-700">
+                {showToken ? token.token : maskedToken}
               </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <p className="text-sm text-slate-500 font-medium">Created: {new Date(token.created_at).toLocaleString()}</p>
-              <button onClick={handleRegenerate} disabled={regenerating} className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-red-200 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-all disabled:opacity-50">
-                {regenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                Regenerate Token
+              <button onClick={() => setShowToken(!showToken)} className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-colors" title={showToken ? 'Hide token' : 'Show token'}>
+                {showToken ? <EyeOff className="w-5 h-5 text-slate-500" /> : <Eye className="w-5 h-5 text-slate-500" />}
+              </button>
+              <button onClick={handleCopy} className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-colors" title="Copy token">
+                <Copy className="w-5 h-5 text-slate-500" />
               </button>
             </div>
+            <p className="text-xs text-slate-500 mt-2">Created: {new Date(token.created_at).toLocaleString()}</p>
           </div>
-        ) : (
-          <div className="text-center py-8">
-            <p className="text-slate-500 font-medium mb-4">No install token exists yet.</p>
-            <button onClick={handleRegenerate} disabled={regenerating} className="px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">Generate Token</button>
-          </div>
-        )}
-      </div>
 
-      <div className="mt-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
-        <h3 className="font-bold text-blue-900 mb-3">MDM Deployment Instructions</h3>
-        <ol className="text-sm text-blue-800 font-medium space-y-2 list-decimal list-inside">
-          <li>Download the TimeTracker installer (.pkg for Mac, .msi for Windows)</li>
-          <li>Create a configuration file with the token above</li>
-          <li>Deploy both via your MDM (Jamf, Intune, Kandji, etc.)</li>
-          <li>Agents will auto-register when users log in</li>
-        </ol>
-        <p className="text-sm text-blue-600 font-semibold mt-4">Need help? Contact support@mavops.ai</p>
-      </div>
+          <div className="flex items-center gap-4">
+            <button onClick={handleRegenerate} disabled={regenerating} className="flex items-center gap-2 px-4 py-2.5 border-2 border-red-200 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-colors disabled:opacity-50">
+              {regenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              Regenerate Token
+            </button>
+            <p className="text-sm text-slate-500">⚠️ Regenerating will invalidate the current token</p>
+          </div>
+
+          <div className="p-4 bg-amber-50 border-2 border-amber-200 rounded-xl">
+            <h4 className="font-bold text-amber-800 mb-2">Installation Instructions</h4>
+            <ol className="text-sm text-amber-700 space-y-2">
+              <li>1. Download the TimeTracker agent for your operating system</li>
+              <li>2. Run the installer</li>
+              <li>3. When prompted, enter this install token</li>
+              <li>4. The agent will automatically link to your organization</li>
+            </ol>
+          </div>
+        </div>
+      ) : (
+        <div className="text-center py-12">
+          <Key className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+          <p className="font-bold text-slate-700">No install token found</p>
+          <button onClick={onRefresh} className="mt-4 px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90">
+            Generate Token
+          </button>
+        </div>
+      )}
     </div>
   );
 }

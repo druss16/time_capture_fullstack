@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations  # ✅ ADD THIS IMPORT
+from . import views_billing, views_settings, views_integrations, views_bulk_assignment  # ✅ ADD THIS IMPORT
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -225,5 +225,13 @@ urlpatterns = [
     path('integrations/xero/disconnect/', views_integrations.xero_disconnect, name='xero-disconnect'),
     path('integrations/xero/contacts/', views_integrations.xero_contacts, name='xero-contacts'),
     path('integrations/xero/import/', views_integrations.xero_import, name='xero-import'),
+
+    path('clients/bulk-assign/', views_bulk_assignment.bulk_assign_clients, name='bulk-assign-clients'),
+    path('clients/bulk-unassign/', views_bulk_assignment.bulk_unassign_clients, name='bulk-unassign-clients'),
+    path('clients/copy-assignments/', views_bulk_assignment.copy_assignments, name='copy-assignments'),
+    
+    # CSV import
+    path('clients/assignment-template/', views_bulk_assignment.assignment_csv_template, name='assignment-template'),
+    path('clients/import-assignments/', views_bulk_assignment.import_assignments_csv, name='import-assignments'),
 
 ]

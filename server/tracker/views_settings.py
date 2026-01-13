@@ -2,7 +2,35 @@
 
 from .models import ClientAssignment
 from django.db import IntegrityError
+from rest_framework.views import APIView  # ← ADD THIS LINE
+from rest_framework import viewsets, status
+from rest_framework.decorators import api_view, action, permission_classes
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView  # ← ADD THIS LINE
+from django.db.models import Sum, F, Q, DecimalField
+from django.db.models.functions import Coalesce
+from django.utils import timezone
+from django.shortcuts import get_object_or_404
+from datetime import timedelta, date
+from decimal import Decimal
+from .models import (
+    BillingRate, Timesheet, Block, BlockAuditLog, 
+    Client, TaskType, Organization, OrganizationMembership,
+    EmployeeCostRate, Invitation  # ← ADD THIS
+)
+from .serializers_billing import (
+    BillingRateSerializer, TimesheetSummarySerializer, TimesheetDetailSerializer,
+    ApprovalQueueItemSerializer, ClientSummarySerializer, BlockAuditLogSerializer,
+    InvoiceExportSerializer,
+    EmployeeCostRateSerializer,  # ← ADD THIS
+)
 
+from rest_framework.response import Response
+from functools import wraps  # Add this import
+
+from django.conf import settings
+import stripe
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

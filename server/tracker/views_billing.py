@@ -1767,12 +1767,12 @@ def create_billing_portal_session(request):
 # SUBSCRIPTION STATUS
 # ============================================================================
 
+# In views_billing.py, update get_subscription_status
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_subscription_status(request):
-    """
-    Get current subscription status for the organization.
-    """
+    """Get current subscription status for the organization."""
     try:
         membership = OrganizationMembership.objects.filter(
             user=request.user
@@ -1801,14 +1801,21 @@ def get_subscription_status(request):
             
             if subscriptions.data:
                 sub = subscriptions.data[0]
+                item = sub['items']['data'][0] if sub['items']['data'] else None
+                
+                # Get the billing interval from the price
+                interval = 'month'
+                if item and item.get('price'):
+                    interval = item['price'].get('recurring', {}).get('interval', 'month')
+                
                 subscription_data = {
                     'id': sub.id,
                     'status': sub.status,
                     'current_period_end': sub.current_period_end,
                     'cancel_at_period_end': sub.cancel_at_period_end,
-                    'plan': sub['items']['data'][0]['price']['nickname'] if sub['items']['data'] else None,
-                    'quantity': sub['items']['data'][0]['quantity'] if sub['items']['data'] else 1,
-
+                    'plan': item['price']['nickname'] if item else None,
+                    'quantity': item['quantity'] if item else 1,
+                    'interval': interval,  # 'month' or 'year'
                 }
         
         return Response({

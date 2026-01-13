@@ -22,7 +22,8 @@ import {
   RefreshCw,
   X,
   ArrowDown,
-  ArrowUp
+  ArrowUp,
+  Percent
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -41,6 +42,7 @@ interface SubscriptionData {
     cancel_at_period_end: boolean;
     plan: string | null;
     quantity: number;
+    interval?: string; // 'month' or 'year'
   } | null;
   has_payment_method: boolean;
   is_owner: boolean;
@@ -63,7 +65,8 @@ type Plan = {
   id: PlanId;
   name: string;
   emoji: string;
-  price: number;
+  monthlyPrice: number;
+  yearlyPrice: number; // per month when billed yearly
   icon: any;
   popular?: boolean;
   features: string[];
@@ -74,7 +77,8 @@ const PLANS: Plan[] = [
     id: 'professional',
     name: 'Professional',
     emoji: '⭐',
-    price: 29.99,
+    monthlyPrice: 29.99,
+    yearlyPrice: 23.99, // 20% off = $287.88/year
     icon: Star,
     features: [
       'Automatic time tracking',
@@ -92,7 +96,8 @@ const PLANS: Plan[] = [
     id: 'executive',
     name: 'Executive',
     emoji: '💎',
-    price: 49.99,
+    monthlyPrice: 49.99,
+    yearlyPrice: 39.99, // 20% off = $479.88/year
     icon: Crown,
     popular: true,
     features: [
@@ -119,6 +124,9 @@ export default function BillingSettingsPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [upgrading, setUpgrading] = useState(false);
   const [managingBilling, setManagingBilling] = useState(false);
+  
+  // Billing interval toggle
+  const [billingInterval, setBillingInterval] = useState<BillingInterval>('monthly');
   
   // Add seats modal state
   const [showAddSeats, setShowAddSeats] = useState(false);
@@ -152,6 +160,11 @@ export default function BillingSettingsPage() {
 
       const data = await response.json();
       setSubscription(data);
+      
+      // Set billing interval based on current subscription
+      if (data.subscription?.interval === 'year') {
+        setBillingInterval('yearly');
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -215,8 +228,6 @@ export default function BillingSettingsPage() {
     }
   };
 
-  const handleUpgrade = async () => handleSubscribe('executive', 'monthly');
-
   const handleAddSeats = async () => {
     setAddingSeats(true);
     setError(null);
@@ -239,7 +250,6 @@ export default function BillingSettingsPage() {
       setShowAddSeats(false);
       setSeatsToAdd(1);
       
-      // Reload data
       loadSubscription();
       loadSeatInfo();
       
@@ -268,7 +278,6 @@ export default function BillingSettingsPage() {
 
       const data = await response.json();
       if (!response.ok) {
-        // Handle the "cannot reduce below usage" error with details
         if (data.current_members) {
           throw new Error(data.message || `Cannot reduce below ${data.total_allocated} seats in use`);
         }
@@ -278,7 +287,6 @@ export default function BillingSettingsPage() {
       setSuccess(`Reduced to ${data.new_seat_count} seat(s). You'll receive a prorated credit.`);
       setShowManageSeats(false);
       
-      // Reload data
       loadSubscription();
       loadSeatInfo();
       
@@ -312,7 +320,6 @@ export default function BillingSettingsPage() {
       setSuccess(`${action} to ${newPlan.charAt(0).toUpperCase() + newPlan.slice(1)} plan successfully!`);
       setShowChangePlan(false);
       
-      // Reload data
       loadSubscription();
       loadSeatInfo();
       
@@ -357,6 +364,18 @@ export default function BillingSettingsPage() {
     }
   };
 
+  // Helper to get price based on interval
+  const getPlanPrice = (plan: Plan) => {
+    return billingInterval === 'yearly' ? plan.yearlyPrice : plan.monthlyPrice;
+  };
+
+  // Calculate yearly savings
+  const getYearlySavings = (plan: Plan) => {
+    const monthlyCost = plan.monthlyPrice * 12;
+    const yearlyCost = plan.yearlyPrice * 12;
+    return monthlyCost - yearlyCost;
+  };
+
 
   if (loading) {
     return (
@@ -373,6 +392,7 @@ export default function BillingSettingsPage() {
     ? (subscription?.organization?.plan || 'none').toLowerCase()
     : 'none';
   const hasNoPlan = !hasActiveSubscription;
+  const currentInterval = subscription?.subscription?.interval === 'year' ? 'yearly' : 'monthly';
 
   // Get plan display info
   const getPlanDisplay = (plan: string) => {
@@ -387,7 +407,10 @@ export default function BillingSettingsPage() {
   };
 
   const planDisplay = getPlanDisplay(currentPlan);
-  const pricePerSeat = currentPlan === 'executive' ? 49.99 : 29.99;
+  const currentPlanData = PLANS.find(p => p.id === currentPlan);
+  const pricePerSeat = currentPlanData 
+    ? (currentInterval === 'yearly' ? currentPlanData.yearlyPrice : currentPlanData.monthlyPrice)
+    : 29.99;
 
   return (
     <div className="space-y-6">
@@ -421,12 +444,17 @@ export default function BillingSettingsPage() {
             
             <div className="bg-slate-50 rounded-xl p-4 mb-6">
               <div className="flex justify-between text-sm font-medium text-slate-600">
-                <span>Price per seat</span>
+                <span>Price per seat ({currentInterval})</span>
                 <span>${pricePerSeat}/mo</span>
               </div>
               <div className="flex justify-between text-lg font-bold text-slate-900 mt-2">
-                <span>Additional monthly cost</span>
-                <span>${(seatsToAdd * pricePerSeat).toFixed(2)}</span>
+                <span>Additional {currentInterval === 'yearly' ? 'yearly' : 'monthly'} cost</span>
+                <span>
+                  ${currentInterval === 'yearly' 
+                    ? (seatsToAdd * pricePerSeat * 12).toFixed(2) + '/yr'
+                    : (seatsToAdd * pricePerSeat).toFixed(2) + '/mo'
+                  }
+                </span>
               </div>
               <p className="text-xs text-slate-500 mt-2">
                 You'll be charged a prorated amount for the current billing period.
@@ -471,7 +499,6 @@ export default function BillingSettingsPage() {
               </button>
             </div>
             
-            {/* Current usage info */}
             <div className="bg-slate-50 rounded-xl p-4 mb-4">
               <div className="flex justify-between text-sm font-medium text-slate-600 mb-1">
                 <span>Current seats</span>
@@ -533,7 +560,12 @@ export default function BillingSettingsPage() {
               <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 mb-6">
                 <p className="text-sm text-emerald-700 font-medium">
                   💰 Reducing by {seatInfo.seat_count - newSeatCount} seat(s) will save you{' '}
-                  <span className="font-bold">${((seatInfo.seat_count - newSeatCount) * pricePerSeat).toFixed(2)}/mo</span>
+                  <span className="font-bold">
+                    ${currentInterval === 'yearly'
+                      ? ((seatInfo.seat_count - newSeatCount) * pricePerSeat * 12).toFixed(2) + '/yr'
+                      : ((seatInfo.seat_count - newSeatCount) * pricePerSeat).toFixed(2) + '/mo'
+                    }
+                  </span>
                 </p>
                 <p className="text-xs text-emerald-600 mt-1">
                   You'll receive a prorated credit for the current billing period.
@@ -545,7 +577,12 @@ export default function BillingSettingsPage() {
               <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4 mb-6">
                 <p className="text-sm text-blue-700 font-medium">
                   Adding {newSeatCount - seatInfo.seat_count} seat(s) will cost{' '}
-                  <span className="font-bold">${((newSeatCount - seatInfo.seat_count) * pricePerSeat).toFixed(2)}/mo</span> more
+                  <span className="font-bold">
+                    ${currentInterval === 'yearly'
+                      ? ((newSeatCount - seatInfo.seat_count) * pricePerSeat * 12).toFixed(2) + '/yr'
+                      : ((newSeatCount - seatInfo.seat_count) * pricePerSeat).toFixed(2) + '/mo'
+                    }
+                  </span> more
                 </p>
               </div>
             )}
@@ -596,12 +633,12 @@ export default function BillingSettingsPage() {
             
             <div className="mb-6">
               <p className="text-slate-600 font-medium">
-                You're currently on the <span className="font-bold">{planDisplay.name}</span> plan.
+                You're currently on the <span className="font-bold">{planDisplay.name}</span> plan
+                ({currentInterval === 'yearly' ? 'billed yearly' : 'billed monthly'}).
               </p>
             </div>
 
             {currentPlan === 'executive' ? (
-              // Downgrade option
               <div className="border-2 border-amber-200 bg-amber-50 rounded-xl p-5 mb-6">
                 <div className="flex items-start gap-4">
                   <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -610,7 +647,8 @@ export default function BillingSettingsPage() {
                   <div className="flex-1">
                     <h4 className="font-bold text-slate-900">⭐ Professional</h4>
                     <p className="text-2xl font-extrabold text-slate-900 mt-1">
-                      $29.99<span className="text-sm font-medium text-slate-500">/user/month</span>
+                      ${currentInterval === 'yearly' ? '23.99' : '29.99'}
+                      <span className="text-sm font-medium text-slate-500">/user/month</span>
                     </p>
                     <p className="text-sm text-amber-700 font-medium mt-2">
                       You'll lose access to: Billing rates, Employee costs, Profitability reports, Advanced analytics
@@ -620,7 +658,7 @@ export default function BillingSettingsPage() {
                 
                 <div className="mt-4 p-3 bg-amber-100 rounded-lg">
                   <p className="text-sm text-amber-800 font-medium">
-                    ⚠️ Downgrading will take effect immediately. Any custom billing rates and cost configurations will be preserved but inaccessible until you upgrade again.
+                    ⚠️ Downgrading will take effect immediately. Your configurations will be preserved but inaccessible.
                   </p>
                 </div>
 
@@ -638,7 +676,6 @@ export default function BillingSettingsPage() {
                 </button>
               </div>
             ) : (
-              // Upgrade option
               <div className="border-2 border-primary bg-primary/5 rounded-xl p-5 mb-6">
                 <div className="flex items-start gap-4">
                   <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center flex-shrink-0">
@@ -647,7 +684,8 @@ export default function BillingSettingsPage() {
                   <div className="flex-1">
                     <h4 className="font-bold text-slate-900">💎 Executive</h4>
                     <p className="text-2xl font-extrabold text-slate-900 mt-1">
-                      $49.99<span className="text-sm font-medium text-slate-500">/user/month</span>
+                      ${currentInterval === 'yearly' ? '39.99' : '49.99'}
+                      <span className="text-sm font-medium text-slate-500">/user/month</span>
                     </p>
                     <p className="text-sm text-primary font-medium mt-2">
                       Unlock: Billing rates, Employee costs, Profitability reports, Advanced analytics, API access
@@ -737,6 +775,11 @@ export default function BillingSettingsPage() {
                 <p className="text-lg font-bold text-slate-900">
                   {planDisplay.name}
                 </p>
+                {hasActiveSubscription && (
+                  <p className="text-xs text-slate-500 font-medium">
+                    Billed {currentInterval === 'yearly' ? 'yearly' : 'monthly'}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -771,7 +814,7 @@ export default function BillingSettingsPage() {
           )}
         </div>
 
-        {/* Seat Usage Section - Only show for active subscriptions */}
+        {/* Seat Usage Section */}
         {hasActiveSubscription && seatInfo && (
           <div className="p-5 bg-slate-50 border-2 border-slate-200 rounded-xl mb-6">
             <div className="flex items-center justify-between mb-3">
@@ -805,7 +848,6 @@ export default function BillingSettingsPage() {
               </div>
             </div>
             
-            {/* Progress bar */}
             <div className="h-2 bg-slate-200 rounded-full overflow-hidden mb-2">
               <div
                 className={`h-full rounded-full transition-all ${
@@ -847,12 +889,56 @@ export default function BillingSettingsPage() {
         )}
       </div>
 
-      {/* Show Plans if no subscription OR if on Professional (can upgrade to Executive) */}
+      {/* Plans Section - Show for no subscription or can upgrade */}
       {(!hasActiveSubscription || currentPlan === 'professional') && (
         <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
-          <h3 className="text-lg font-bold text-slate-900 mb-6">
-            {hasActiveSubscription ? 'Upgrade Your Plan' : 'Choose a Plan'}
-          </h3>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-bold text-slate-900">
+              {hasActiveSubscription ? 'Upgrade Your Plan' : 'Choose a Plan'}
+            </h3>
+            
+            {/* Billing Interval Toggle */}
+            <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl">
+              <button
+                onClick={() => setBillingInterval('monthly')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                  billingInterval === 'monthly'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Monthly
+              </button>
+              <button
+                onClick={() => setBillingInterval('yearly')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${
+                  billingInterval === 'yearly'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Yearly
+                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-full">
+                  Save 20%
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Yearly savings banner */}
+          {billingInterval === 'yearly' && (
+            <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-center gap-3">
+              <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+                <Percent className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <p className="font-bold text-emerald-800">Save 20% with yearly billing!</p>
+                <p className="text-sm text-emerald-700 font-medium">
+                  That's 2+ months free compared to monthly billing.
+                </p>
+              </div>
+            </div>
+          )}
 
           <div className="grid md:grid-cols-2 gap-6">
             {PLANS.map((plan) => {
@@ -860,6 +946,8 @@ export default function BillingSettingsPage() {
               const isCurrentPlan = currentPlan === plan.id;
               const canUpgrade = currentPlan === 'professional' && plan.id === 'executive';
               const canSubscribe = !hasActiveSubscription;
+              const displayPrice = getPlanPrice(plan);
+              const yearlySavings = getYearlySavings(plan);
 
               return (
                 <div
@@ -893,8 +981,27 @@ export default function BillingSettingsPage() {
                   </div>
 
                   <div className="mb-4">
-                    <span className="text-3xl font-extrabold text-slate-900">${plan.price}</span>
-                    <span className="text-slate-500 font-medium">/user/month</span>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-3xl font-extrabold text-slate-900">${displayPrice}</span>
+                      <span className="text-slate-500 font-medium">/user/month</span>
+                    </div>
+                    
+                    {billingInterval === 'yearly' && (
+                      <div className="mt-1">
+                        <span className="text-sm text-slate-500 line-through font-medium">
+                          ${plan.monthlyPrice}/mo
+                        </span>
+                        <span className="ml-2 text-sm text-emerald-600 font-bold">
+                          Save ${yearlySavings.toFixed(0)}/year
+                        </span>
+                      </div>
+                    )}
+                    
+                    {billingInterval === 'yearly' && (
+                      <p className="text-xs text-slate-500 font-medium mt-1">
+                        Billed as ${(displayPrice * 12).toFixed(2)}/year per user
+                      </p>
+                    )}
                   </div>
 
                   <ul className="space-y-2 mb-6">
@@ -911,7 +1018,7 @@ export default function BillingSettingsPage() {
                   {/* Subscribe button for users with no plan */}
                   {canSubscribe && (
                     <button
-                      onClick={() => handleSubscribe(plan.id)}
+                      onClick={() => handleSubscribe(plan.id, billingInterval)}
                       disabled={upgrading}
                       className={`
                         w-full py-2.5 px-4 font-bold rounded-xl transition-all flex items-center justify-center gap-2
@@ -925,7 +1032,7 @@ export default function BillingSettingsPage() {
                       ) : (
                         <>
                           <CreditCard className="w-4 h-4" />
-                          Subscribe Now
+                          Subscribe {billingInterval === 'yearly' ? 'Yearly' : 'Monthly'}
                         </>
                       )}
                     </button>

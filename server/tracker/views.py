@@ -4639,46 +4639,43 @@ def import_clients_csv(request):
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-
-@api_view(['GET'])
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsAuthenticated])
 def user_profile(request):
     """
-    Get user profile information.
-    Returns authentication status and profile data.
-    
-    ✅ FIXED: Now handles anonymous users gracefully
+    GET: Return user profile information
+    PATCH: Update user profile
     """
     user = request.user
     
-    # ✅ Check if user is authenticated BEFORE accessing user attributes
-    if not user.is_authenticated:
+    if request.method == 'GET':
         return Response({
-            "authenticated": False,
-            "onboarding_completed": False
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
         })
     
-    # User is authenticated - return full profile
-    try:
+    elif request.method == 'PATCH':
+        # Update allowed fields
+        if 'first_name' in request.data:
+            user.first_name = request.data['first_name']
+        if 'last_name' in request.data:
+            user.last_name = request.data['last_name']
+        if 'email' in request.data:
+            user.email = request.data['email']
+        
+        user.save()
+        
         return Response({
-            "authenticated": True,
+            "id": user.id,
+            "username": user.username,
             "email": user.email,
-            "onboarding_completed": getattr(user.profile, 'onboarding_completed', False),
-            # Add any other profile fields you need:
-            # "first_name": user.first_name,
-            # "last_name": user.last_name,
-            # "company": getattr(user.profile, 'company', None),
-            # etc.
+            "first_name": user.first_name,
+            "last_name": user.last_name,
         })
-    except Exception as e:
-        # Gracefully handle any profile access errors
-        return Response({
-            "authenticated": True,
-            "email": user.email,
-            "onboarding_completed": False,
-            "error": "Profile access error"
-        }, status=200)  # Still return 200 to prevent frontend crashes
-
-
+        
 @api_view(["POST"])
 @permission_classes([PermUI])  # ← Use this instead
 def complete_onboarding(request):
@@ -6399,7 +6396,7 @@ def settings_org(request):
             response_data["created_at"] = None
         
         return Response(response_data)
-        
+
 # ============================================================================
 # Team Members
 # ============================================================================

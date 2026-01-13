@@ -37,7 +37,7 @@ const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
 // Types
-type PlanType = 'professional' | 'executive';
+type PlanType = 'professional' | 'executive' | 'none';
 
 type OrgInfo = {
   id: number;
@@ -445,6 +445,7 @@ export default function Settings() {
                       {activeTab === 'organization' && (
                         <OrganizationTab
                           orgInfo={orgInfo}
+                          orgPlan={orgPlan}  // ← ADD THIS
                           onUpdate={(updated) => {
                             setOrgInfo(updated);
                             setOrgPlan(updated.plan || 'professional');
@@ -524,11 +525,13 @@ export default function Settings() {
 // ============================================================================
 function OrganizationTab({
   orgInfo,
+  orgPlan,  // ← ADD THIS
   onUpdate,
   onSuccess,
   onError,
 }: {
   orgInfo: OrgInfo | null;
+  orgPlan: PlanType;  // ← ADD THIS
   onUpdate: (org: OrgInfo) => void;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
@@ -575,7 +578,11 @@ function OrganizationTab({
     return <div className="text-slate-500 font-medium">No organization data</div>;
   }
 
-  const planLabel = orgInfo.plan === 'professional' ? '⭐ Professional' : '💎 Executive';
+  const planLabel = orgPlan === 'executive' 
+  ? '💎 Executive' 
+  : orgPlan === 'professional' 
+    ? '⭐ Professional' 
+    : '🚫 No Plan';
 
   return (
     <div>
@@ -685,44 +692,49 @@ function OrganizationTab({
             </div>
           </div>
           
-          {/* Plan Info */}
+{/* Plan Info */}
           <div className="pt-4 border-t-2 border-slate-200">
             <div className={cn(
               'rounded-xl p-4 border-2',
-              orgInfo.plan === 'executive'
+              orgPlan === 'executive'
                 ? 'bg-primary/5 border-primary/20'
-                : 'bg-amber-50 border-amber-200'
+                : orgPlan === 'professional'
+                  ? 'bg-amber-50 border-amber-200'
+                  : 'bg-red-50 border-red-200'
             )}>
               <div className="flex items-center justify-between">
                 <div>
                   <p className={cn(
                     'text-sm font-bold',
-                    orgInfo.plan === 'executive' ? 'text-primary' : 'text-amber-700'
+                    orgPlan === 'executive' 
+                      ? 'text-primary' 
+                      : orgPlan === 'professional' 
+                        ? 'text-amber-700'
+                        : 'text-red-700'
                   )}>
                     Current Plan
                   </p>
                   <p className={cn(
                     'text-2xl font-extrabold mt-1',
-                    orgInfo.plan === 'executive' ? 'text-primary' : 'text-amber-700'
+                    orgPlan === 'executive' 
+                      ? 'text-primary' 
+                      : orgPlan === 'professional' 
+                        ? 'text-amber-700'
+                        : 'text-red-700'
                   )}>
                     {planLabel}
                   </p>
                 </div>
-                {orgInfo.plan === 'professional' && (
+                {orgPlan !== 'executive' && (
                   <a
                     href="/account/billing"
                     className="px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25 flex items-center gap-2"
                   >
                     <Sparkles className="w-4 h-4" />
-                    Upgrade
+                    {orgPlan === 'none' ? 'Subscribe' : 'Upgrade'}
                   </a>
                 )}
               </div>
-              {orgInfo.trial_ends_at && (
-                <p className="text-sm text-amber-600 font-medium mt-2">
-                  Trial ends: {new Date(orgInfo.trial_ends_at).toLocaleDateString()}
-                </p>
-              )}
             </div>
           </div>
           

@@ -472,6 +472,8 @@ class Client(models.Model):
         super().save(*args, **kwargs)
 
 
+# tracker/models.py - Update ClientAssignment
+
 class ClientAssignment(models.Model):
     """
     Links users to clients they can access.
@@ -482,14 +484,14 @@ class ClientAssignment(models.Model):
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='assignments')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='client_assignments')
     
-    # Role on this client (optional, for future use)
+    # Role on this client (optional - for future use)
     ROLE_CHOICES = [
-        ('lead', 'Engagement Lead'),
-        ('manager', 'Manager'),
         ('staff', 'Staff'),
+        ('manager', 'Manager'),
+        ('lead', 'Engagement Lead'),
         ('reviewer', 'Reviewer'),
     ]
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='staff')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, null=True, blank=True)
     
     assigned_at = models.DateTimeField(auto_now_add=True)
     assigned_by = models.ForeignKey(

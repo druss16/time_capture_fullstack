@@ -1,36 +1,57 @@
-# tracker/views_settings.py - Add these
+# tracker/views_settings.py - Client Assignment endpoints
 
-from .models import ClientAssignment
+import csv
+from io import StringIO
 from django.db import IntegrityError
-from rest_framework.views import APIView  # ← ADD THIS LINE
-from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, action, permission_classes
-from rest_framework.response import Response
+from django.db.models import Q, Exists, OuterRef
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.views import APIView  # ← ADD THIS LINE
-from django.db.models import Sum, F, Q, DecimalField
-from django.db.models.functions import Coalesce
-from django.utils import timezone
-from django.shortcuts import get_object_or_404
-from datetime import timedelta, date
-from decimal import Decimal
-from .models import (
-    BillingRate, Timesheet, Block, BlockAuditLog, 
-    Client, TaskType, Organization, OrganizationMembership,
-    EmployeeCostRate, Invitation  # ← ADD THIS
-)
-from .serializers_billing import (
-    BillingRateSerializer, TimesheetSummarySerializer, TimesheetDetailSerializer,
-    ApprovalQueueItemSerializer, ClientSummarySerializer, BlockAuditLogSerializer,
-    InvoiceExportSerializer,
-    EmployeeCostRateSerializer,  # ← ADD THIS
-)
-
 from rest_framework.response import Response
-from functools import wraps  # Add this import
 
-from django.conf import settings
-import stripe
+from .models import Client, Organization, OrganizationMembership, ClientAssignment
+
+
+def get_user_org(user):
+    """Helper to get user's organization."""
+    membership = OrganizationMembership.objects.filter(user=user).select_related('organization').first()
+    return membership.organization if membership else None
+
+
+
+def get_visible_clients(user, org):
+    """
+    Returns queryset of clients visible to this user.
+    """
+    membership = OrganizationMembership.objects.filter(user=user, organization=org).first()
+    if not membership:
+        return Client.objects.none()
+    
+    role = membership.role
+    base_qs = Client.objects.filter(org=org, is_active=True)
+    
+    user_assignments = ClientAssignment.objects.filter(user=user, client=OuterRef('pk'))
+    
+    if role in ('owner', 'admin'):
+        # Admins see everything except confidential without assignment
+        return base_qs.filter(
+            Q(visibility__in=['all', 'assigned']) |
+            Q(visibility='confidential', pk__in=ClientAssignment.objects.filter(user=user).values('client_id')) |
+            Q(visibility__isnull=True)
+        )
+    else:
+        # Managers/Members see 'all' + their assignments
+        return base_qs.filter(
+            Q(visibility='all') |
+            Q(visibility__isnull=True) |
+            Exists(user_assignments)
+        )
+
+
+# ============================================================================
+# Client Assignment Endpoints
+# ============================================================================
+
+# views_settings.py - Add this function
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -46,27 +67,22 @@ def get_my_clients(request):
     
     return Response(list(clients))
 
-
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def client_assignments_list(request):
     """
-    GET: List all client assignments (admin only)
-    POST: Create new assignment (admin only)
+    GET: List all client assignments
+    POST: Create new assignment(s)
     """
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
+        return Response({'error': 'No organization found'}, status=404)
     
-    membership = OrganizationMembership.objects.filter(
-        user=request.user, organization=org
-    ).first()
-    
+    membership = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
     if not membership or membership.role not in ('owner', 'admin', 'manager'):
         return Response({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
-        # Optional filters
         client_id = request.query_params.get('client_id')
         user_id = request.query_params.get('user_id')
         
@@ -85,11 +101,11 @@ def client_assignments_list(request):
                 'id': a.id,
                 'client_id': a.client_id,
                 'client_name': a.client.name,
-                'client_code': a.client.code,
+                'client_code': getattr(a.client, 'code', '') or '',
                 'user_id': a.user_id,
                 'user_name': f"{a.user.first_name} {a.user.last_name}".strip() or a.user.username,
                 'user_email': a.user.email,
-                'role': a.role,
+                'role': a.role,  # Will be null if not set
                 'assigned_at': a.assigned_at.isoformat(),
                 'assigned_by': a.assigned_by.username if a.assigned_by else None,
             })
@@ -99,7 +115,7 @@ def client_assignments_list(request):
     elif request.method == 'POST':
         client_id = request.data.get('client_id')
         user_id = request.data.get('user_id')
-        role = request.data.get('role', 'staff')
+        role = request.data.get('role')  # Optional now
         
         if not client_id or not user_id:
             return Response({'error': 'client_id and user_id required'}, status=400)
@@ -115,7 +131,7 @@ def client_assignments_list(request):
                 organization=org,
                 client_id=client_id,
                 user_id=user_id,
-                role=role,
+                role=role if role else None,  # Optional
                 assigned_by=request.user,
             )
             
@@ -140,12 +156,9 @@ def client_assignment_delete(request, assignment_id):
     """Delete a client assignment."""
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
+        return Response({'error': 'No organization found'}, status=404)
     
-    membership = OrganizationMembership.objects.filter(
-        user=request.user, organization=org
-    ).first()
-    
+    membership = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
     if not membership or membership.role not in ('owner', 'admin', 'manager'):
         return Response({'error': 'Permission denied'}, status=403)
     
@@ -161,16 +174,15 @@ def client_assignment_delete(request, assignment_id):
 @permission_classes([IsAuthenticated])
 def bulk_assign_clients(request):
     """
-    Bulk assign multiple clients to multiple users.
+    Bulk assign clients to users.
     
-    Body:
+    Option 1 - Direct assignment:
     {
         "client_ids": [1, 2, 3],
-        "user_ids": [10, 11, 12],
-        "role": "staff"
+        "user_ids": [10, 11, 12]
     }
     
-    OR copy from another user:
+    Option 2 - Copy from another user:
     {
         "copy_from_user_id": 5,
         "to_user_ids": [10, 11, 12]
@@ -178,19 +190,15 @@ def bulk_assign_clients(request):
     """
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
+        return Response({'error': 'No organization found'}, status=404)
     
-    membership = OrganizationMembership.objects.filter(
-        user=request.user, organization=org
-    ).first()
-    
+    membership = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
     if not membership or membership.role not in ('owner', 'admin'):
         return Response({'error': 'Permission denied'}, status=403)
     
     # Option 1: Direct assignment
     client_ids = request.data.get('client_ids', [])
     user_ids = request.data.get('user_ids', [])
-    role = request.data.get('role', 'staff')
     
     # Option 2: Copy from user
     copy_from_user_id = request.data.get('copy_from_user_id')
@@ -225,7 +233,6 @@ def bulk_assign_clients(request):
     elif client_ids and user_ids:
         # Direct bulk assignment
         for client_id in client_ids:
-            # Verify client belongs to org
             if not Client.objects.filter(id=client_id, org=org).exists():
                 continue
             
@@ -235,7 +242,6 @@ def bulk_assign_clients(request):
                         organization=org,
                         client_id=client_id,
                         user_id=user_id,
-                        role=role,
                         assigned_by=request.user,
                     )
                     created += 1
@@ -260,23 +266,16 @@ def import_client_assignments_csv(request):
     """
     Import client assignments from CSV.
     
-    Expected CSV format:
-    user_email,client_code,role
-    john@firm.com,ACME,staff
-    jane@firm.com,ACME,lead
-    jane@firm.com,BIGCO,manager
+    Expected format (flexible column names):
+    email,client_code
+    john@firm.com,ACME
+    jane@firm.com,BIGCO
     """
-    import csv
-    from io import StringIO
-    
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
+        return Response({'error': 'No organization found'}, status=404)
     
-    membership = OrganizationMembership.objects.filter(
-        user=request.user, organization=org
-    ).first()
-    
+    membership = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
     if not membership or membership.role not in ('owner', 'admin'):
         return Response({'error': 'Permission denied'}, status=403)
     
@@ -285,7 +284,14 @@ def import_client_assignments_csv(request):
         return Response({'error': 'csv_content required'}, status=400)
     
     # Parse CSV
-    reader = csv.DictReader(StringIO(csv_content))
+    try:
+        reader = csv.DictReader(StringIO(csv_content))
+        rows = list(reader)
+    except Exception as e:
+        return Response({'error': f'Invalid CSV format: {str(e)}'}, status=400)
+    
+    if not rows:
+        return Response({'error': 'CSV is empty'}, status=400)
     
     # Build lookup caches
     users_by_email = {
@@ -300,17 +306,32 @@ def import_client_assignments_csv(request):
         if c.code
     }
     
+    # Also lookup by name (lowercase) as fallback
+    clients_by_name = {
+        c.name.lower(): c 
+        for c in Client.objects.filter(org=org)
+    }
+    
     created = 0
     skipped = 0
     errors = []
     
-    for i, row in enumerate(reader, start=2):  # Start at 2 (header is row 1)
-        email = (row.get('user_email') or '').strip().lower()
-        code = (row.get('client_code') or '').strip().upper()
-        role = (row.get('role') or 'staff').strip().lower()
+    # Flexible column name mapping
+    def get_value(row, possible_names, default=''):
+        for name in possible_names:
+            if name in row and row[name]:
+                return row[name].strip()
+        return default
+    
+    for i, row in enumerate(rows, start=2):
+        # Try various column names for email
+        email = get_value(row, ['user_email', 'email', 'Email', 'user', 'User', 'employee', 'Employee']).lower()
         
-        if not email or not code:
-            errors.append(f"Row {i}: Missing email or client_code")
+        # Try various column names for client
+        client_ref = get_value(row, ['client_code', 'client', 'Client', 'code', 'Code', 'client_name', 'Client Name'])
+        
+        if not email or not client_ref:
+            errors.append(f"Row {i}: Missing email or client")
             continue
         
         user = users_by_email.get(email)
@@ -318,20 +339,17 @@ def import_client_assignments_csv(request):
             errors.append(f"Row {i}: User not found: {email}")
             continue
         
-        client = clients_by_code.get(code)
+        # Try to find client by code first, then by name
+        client = clients_by_code.get(client_ref.upper()) or clients_by_name.get(client_ref.lower())
         if not client:
-            errors.append(f"Row {i}: Client not found: {code}")
+            errors.append(f"Row {i}: Client not found: {client_ref}")
             continue
-        
-        if role not in ('lead', 'manager', 'staff', 'reviewer'):
-            role = 'staff'
         
         try:
             ClientAssignment.objects.create(
                 organization=org,
                 client=client,
                 user=user,
-                role=role,
                 assigned_by=request.user,
             )
             created += 1
@@ -342,6 +360,6 @@ def import_client_assignments_csv(request):
         'success': True,
         'created': created,
         'skipped_duplicates': skipped,
-        'errors': errors[:20],  # Limit error messages
+        'errors': errors[:20],
         'total_errors': len(errors),
     })

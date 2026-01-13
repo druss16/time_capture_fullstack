@@ -5704,8 +5704,8 @@ def invite_team_member(request):
     # Also count pending invitations (optional but recommended)
     pending_invites = Invitation.objects.filter(
         organization=org,
-        accepted=False,
-        expires_at__gt=timezone.now()  # Not expired
+        accepted_at__isnull=True,  # ✅ Correct - invitation not yet accepted
+        expires_at__gt=timezone.now()
     ).count()
     
     total_allocated = current_member_count + pending_invites

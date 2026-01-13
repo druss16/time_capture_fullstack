@@ -2101,7 +2101,7 @@ def get_seat_usage(request):
     
     pending_invites = Invitation.objects.filter(
         organization=org,
-        accepted=False,
+        accepted_at__isnull=True,  # ✅ Correct - invitation not yet accepted
         expires_at__gt=timezone.now()
     ).count()
     

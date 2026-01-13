@@ -36,6 +36,8 @@ import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
+import ClientImportWizard from '@/components/ClientImportWizard';
+
 
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -265,10 +267,15 @@ export default function Settings() {
           }
           break;
           
-        case 'clients':
-          const clientList = await safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`);
-          setClients(clientList || []);
-          break;
+          // In loadTabData, update the 'clients' case:
+          case 'clients':
+            const [clientList, clientsTeam] = await Promise.all([
+              safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
+              safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
+            ]);
+            setClients(clientList || []);
+            setTeamMembers(clientsTeam || []);
+            break;
           
         case 'assignments':
           const [assignmentClients, assignmentTeam] = await Promise.all([
@@ -493,7 +500,8 @@ export default function Settings() {
                       {activeTab === 'clients' && (
                         <ClientsTab
                           clients={clients}
-                          currentUserRole={currentUserRole}  // ← ADD THIS
+                          currentUserRole={currentUserRole}
+                          users={teamMembers}  // ← Add this
                           onRefresh={() => loadTabData('clients')}
                           onSuccess={showSuccess}
                           onError={showError}
@@ -1159,25 +1167,36 @@ function TeamTab({
 // ============================================================================
 // Clients Tab
 // ============================================================================
+// This goes inside Settings.tsx - Replace your existing ClientsTab function
+
+// First, add the import at the top of Settings.tsx:
+import ClientImportWizard from '@/components/ClientImportWizard';
+
+// ============================================================================
+// Clients Tab (with Import Wizard)
+// ============================================================================
 function ClientsTab({
   clients,
-  currentUserRole,  // ← ADD THIS PROP
+  currentUserRole,
+  users,
   onRefresh,
   onSuccess,
   onError,
 }: {
   clients: Client[];
-  currentUserRole: string;  // ← ADD THIS
+  currentUserRole: RoleType;
+  users: TeamMember[];
   onRefresh: () => void;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [showImportWizard, setShowImportWizard] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: '', code: '', visibility: 'all' });
   const [saving, setSaving] = useState(false);
 
-  // ✅ Check if user can create/edit clients
+  // Only owners and admins can create/edit/delete clients
   const canManageClients = ['owner', 'admin'].includes(currentUserRole);
 
   const resetForm = () => {
@@ -1215,7 +1234,7 @@ function ClientsTab({
   };
 
   const handleEdit = (client: Client) => {
-    if (!canManageClients) return;  // ← Guard
+    if (!canManageClients) return;
     setForm({ 
       name: client.name, 
       code: client.code || '',
@@ -1226,7 +1245,7 @@ function ClientsTab({
   };
 
   const handleDelete = async (clientId: number, clientName: string) => {
-    if (!canManageClients) return;  // ← Guard
+    if (!canManageClients) return;
     if (!confirm(`Delete client "${clientName}"?`)) return;
     try {
       await safeFetchJson(`${API_BASE}/settings/clients/${clientId}/`, { method: 'DELETE' });
@@ -1246,19 +1265,28 @@ function ClientsTab({
           <span className="text-sm font-bold text-slate-500">({clients.length})</span>
         </h2>
         
-        {/* ✅ Only show Add button for admins/owners */}
+        {/* Only show buttons for admins/owners */}
         {canManageClients && (
-          <button
-            onClick={() => { resetForm(); setShowAdd(true); }}
-            className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            Add Client
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowImportWizard(true)}
+              className="flex items-center gap-2 px-3 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
+            >
+              <Upload className="w-4 h-4" />
+              Import
+            </button>
+            <button
+              onClick={() => { resetForm(); setShowAdd(true); }}
+              className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              Add Client
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Info banner for managers */}
+      {/* Info banner for non-admins */}
       {!canManageClients && (
         <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
           <p className="text-sm text-blue-700 font-medium">
@@ -1267,6 +1295,7 @@ function ClientsTab({
         </div>
       )}
 
+      {/* Add/Edit Client Form */}
       {showAdd && canManageClients && (
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
           <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Client' : 'Add Client'}</h3>
@@ -1332,6 +1361,7 @@ function ClientsTab({
         </div>
       )}
 
+      {/* Clients Table */}
       <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
         <table className="w-full">
           <thead className="bg-slate-100">
@@ -1340,7 +1370,6 @@ function ClientsTab({
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Code</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Visibility</th>
               <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Status</th>
-              <th className="text-left px-4 py-3 text-sm font-bold text-slate-700">Added</th>
               {canManageClients && (
                 <th className="text-right px-4 py-3 text-sm font-bold text-slate-700">Actions</th>
               )}
@@ -1371,9 +1400,6 @@ function ClientsTab({
                     {client.is_active ? 'Active' : 'Inactive'}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-sm text-slate-500 font-medium">
-                  {client.created_at ? new Date(client.created_at).toLocaleDateString() : '—'}
-                </td>
                 {canManageClients && (
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
@@ -1397,21 +1423,48 @@ function ClientsTab({
           </tbody>
         </table>
         {clients.length === 0 && (
-          <div className="text-center py-8 text-slate-500 font-medium">
-            No clients yet. {canManageClients ? 'Add your first client to get started.' : 'Contact your admin to add clients.'}
+          <div className="text-center py-12">
+            <Briefcase className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+            <p className="font-bold text-slate-700">No clients yet</p>
+            <p className="text-sm text-slate-500 mt-1 mb-4">
+              {canManageClients ? 'Import your client list or add clients manually.' : 'Contact your admin to add clients.'}
+            </p>
+            {canManageClients && (
+              <button
+                onClick={() => setShowImportWizard(true)}
+                className="px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90"
+              >
+                <Upload className="w-4 h-4 inline mr-2" />
+                Import Clients
+              </button>
+            )}
           </div>
         )}
       </div>
       
       {/* Visibility legend */}
-      <div className="mt-4 p-4 bg-slate-100 rounded-xl">
-        <h4 className="font-bold text-slate-800 text-sm mb-2">Visibility Levels</h4>
-        <div className="text-sm text-slate-600 font-medium space-y-1">
-          <p><span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold text-xs">👥 All</span> — Everyone in the org can see and log time</p>
-          <p><span className="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold text-xs">🔒 Assigned</span> — Only assigned users + admins can see</p>
-          <p><span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-bold text-xs">🔐 Confidential</span> — Even admins need explicit assignment</p>
+      {clients.length > 0 && (
+        <div className="mt-4 p-4 bg-slate-100 rounded-xl">
+          <h4 className="font-bold text-slate-800 text-sm mb-2">Visibility Levels</h4>
+          <div className="text-sm text-slate-600 font-medium space-y-1">
+            <p><span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold text-xs">👥 All</span> — Everyone in the org can see and log time</p>
+            <p><span className="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold text-xs">🔒 Assigned</span> — Only assigned users + admins can see</p>
+            <p><span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-bold text-xs">🔐 Confidential</span> — Even admins need explicit assignment</p>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Import Wizard Modal */}
+      {showImportWizard && (
+        <ClientImportWizard
+          onClose={() => setShowImportWizard(false)}
+          onSuccess={() => {
+            onRefresh();
+            onSuccess('Clients imported successfully!');
+          }}
+          users={users}
+        />
+      )}
     </div>
   );
 }

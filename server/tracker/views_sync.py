@@ -38,8 +38,7 @@ def sync_status(request):
     """
     try:
         membership = OrganizationMembership.objects.select_related('organization').get(
-            user=request.user, 
-            is_active=True
+            user=request.user
         )
         org = membership.organization
     except OrganizationMembership.DoesNotExist:
@@ -69,7 +68,7 @@ def sync_status(request):
     
     # Task types (org-wide)
     task_stats = TaskType.objects.filter(
-        organization=org,
+        org=org,
         is_active=True
     ).aggregate(
         latest=Max('updated_at'),
@@ -139,8 +138,7 @@ def sync_clients(request):
     """
     try:
         membership = OrganizationMembership.objects.select_related('organization').get(
-            user=request.user,
-            is_active=True
+            user=request.user
         )
         org = membership.organization
     except OrganizationMembership.DoesNotExist:
@@ -190,8 +188,7 @@ def sync_projects(request):
     """
     try:
         membership = OrganizationMembership.objects.select_related('organization').get(
-            user=request.user,
-            is_active=True
+            user=request.user
         )
         org = membership.organization
     except OrganizationMembership.DoesNotExist:
@@ -231,15 +228,14 @@ def sync_task_types(request):
     """
     try:
         membership = OrganizationMembership.objects.select_related('organization').get(
-            user=request.user,
-            is_active=True
+            user=request.user
         )
         org = membership.organization
     except OrganizationMembership.DoesNotExist:
         return Response({'error': 'No organization'}, status=400)
     
     task_types = TaskType.objects.filter(
-        organization=org,
+        org=org,
         is_active=True
     ).order_by('name').values(
         'id', 'name', 'code', 'is_billable', 'updated_at'
@@ -264,8 +260,7 @@ def sync_full(request):
     """
     try:
         membership = OrganizationMembership.objects.select_related('organization').get(
-            user=request.user,
-            is_active=True
+            user=request.user
         )
         org = membership.organization
     except OrganizationMembership.DoesNotExist:
@@ -309,7 +304,7 @@ def sync_full(request):
     
     # Task types
     task_types = list(TaskType.objects.filter(
-        organization=org,
+        org=org,
         is_active=True
     ).order_by('name').values('id', 'name', 'code', 'is_billable'))
     
@@ -349,7 +344,7 @@ def _get_accessible_client_ids(user, org):
         return []
     
     # Get all org clients
-    all_clients = Client.objects.filter(organization=org, is_active=True)
+    all_clients = Client.objects.filter(org=org, is_active=True)
     
     # Get user's explicit assignments
     assigned_client_ids = set(

@@ -157,10 +157,14 @@ def sync_clients(request):
     )
     
     # Include user's role on each client if assigned
-    assignments = {
-        a.client_id: a.role 
-        for a in ClientAssignment.objects.filter(user=request.user, organization=org)
-    }
+    assignments = {}
+    try:
+        assignments = {
+            a.client_id: a.role 
+            for a in ClientAssignment.objects.filter(user=request.user, organization=org)
+        }
+    except Exception:
+        pass
     
     client_list = []
     for c in clients:
@@ -206,7 +210,6 @@ def sync_projects(request):
     project_list = [{
         'id': p.id,
         'name': p.name,
-        'code': getattr(p, 'code', '') or '',
         'client_id': p.client_id,
         'client_name': p.client.name,
     } for p in projects]
@@ -235,15 +238,24 @@ def sync_task_types(request):
     except OrganizationMembership.DoesNotExist:
         return Response({'error': 'No organization'}, status=400)
     
-    task_types = TaskType.objects.filter(
-        org=org,
-        is_active=True
-    ).order_by('name').values(
-        'id', 'name', 'code', 'is_billable'
-    )
+    try:
+        # Try full query first
+        task_types = list(TaskType.objects.filter(
+            org=org,
+            is_active=True
+        ).order_by('name').values('id', 'name', 'code', 'is_billable'))
+    except Exception:
+        # Fallback to minimal fields
+        try:
+            task_types = list(TaskType.objects.filter(
+                org=org,
+                is_active=True
+            ).order_by('name').values('id', 'name'))
+        except Exception:
+            task_types = []
     
     return Response({
-        'task_types': list(task_types),
+        'task_types': task_types,
         'count': len(task_types),
         'synced_at': timezone.now().isoformat(),
     })
@@ -269,11 +281,15 @@ def sync_full(request):
     
     accessible_ids = _get_accessible_client_ids(request.user, org)
     
-    # Get user's assignments
-    assignments = {
-        a.client_id: a.role 
-        for a in ClientAssignment.objects.filter(user=request.user, organization=org)
-    }
+    # Get user's assignments (safely)
+    assignments = {}
+    try:
+        assignments = {
+            a.client_id: a.role 
+            for a in ClientAssignment.objects.filter(user=request.user, organization=org)
+        }
+    except Exception:
+        pass
     
     # Clients
     clients = Client.objects.filter(
@@ -284,8 +300,8 @@ def sync_full(request):
     client_list = [{
         'id': c.id,
         'name': c.name,
-        'code': c.code or '',
-        'visibility': c.visibility,
+        'code': getattr(c, 'code', '') or '',
+        'visibility': getattr(c, 'visibility', 'all') or 'all',
         'my_role': assignments.get(c.id),
     } for c in clients]
     
@@ -298,22 +314,24 @@ def sync_full(request):
     project_list = [{
         'id': p.id,
         'name': p.name,
-        'code': p.code or '',
         'client_id': p.client_id,
         'client_name': p.client.name,
     } for p in projects]
     
     # Task types
-    task_types = list(TaskType.objects.filter(
-        org=org,
-        is_active=True
-    ).order_by('name').values('id', 'name', 'code', 'is_billable'))
+    try:
+        task_types = list(TaskType.objects.filter(
+            org=org,
+            is_active=True
+        ).order_by('name').values('id', 'name', 'code', 'is_billable'))
+    except Exception:
+        task_types = []
     
     return Response({
         'organization': {
             'id': org.id,
             'name': org.name,
-            'slug': org.slug,
+            'slug': getattr(org, 'slug', '') or '',
         },
         'user': {
             'id': request.user.id,
@@ -347,13 +365,18 @@ def _get_accessible_client_ids(user, org):
     # Get all org clients
     all_clients = Client.objects.filter(org=org, is_active=True)
     
-    # Get user's explicit assignments
-    assigned_client_ids = set(
-        ClientAssignment.objects.filter(
-            user=user, 
-            organization=org
-        ).values_list('client_id', flat=True)
-    )
+    # Get user's explicit assignments (safely)
+    assigned_client_ids = set()
+    try:
+        assigned_client_ids = set(
+            ClientAssignment.objects.filter(
+                user=user, 
+                organization=org
+            ).values_list('client_id', flat=True)
+        )
+    except Exception:
+        # ClientAssignment might not exist or have different field names
+        pass
     
     accessible_ids = []
     

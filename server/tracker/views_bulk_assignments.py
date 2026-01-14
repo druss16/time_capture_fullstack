@@ -100,7 +100,8 @@ def bulk_assign_clients(request):
                     ClientAssignment.objects.create(
                         client=client,
                         user_id=user_id,
-                        role=role
+                        role=role,
+                        organization=org,
                     )
                     created_count += 1
     

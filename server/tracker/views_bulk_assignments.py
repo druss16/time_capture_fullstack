@@ -98,10 +98,11 @@ def bulk_assign_clients(request):
                 else:
                     # Create new assignment
                     ClientAssignment.objects.create(
+                        organization=org,        # From request.user's membership
                         client=client,
-                        user_id=user_id,
-                        role=role,
-                        organization=org,
+                        user=user,
+                        role=role,              # Make sure this matches ROLE_CHOICES
+                        assigned_by=request.user,
                     )
                     created_count += 1
     

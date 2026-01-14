@@ -538,10 +538,11 @@ class ClientAssignment(models.Model):
     
     # Role on this client (optional - for future use)
     ROLE_CHOICES = [
-        ('staff', 'Staff'),
-        ('manager', 'Manager'),
-        ('lead', 'Engagement Lead'),
-        ('reviewer', 'Reviewer'),
+        ('Partner', 'Partner'),       # Engagement partner, signs off
+        ('Manager', 'Manager'),       # Supervises work
+        ('Senior', 'Senior'),         # Experienced staff
+        ('Staff', 'Staff'),           # Does the work
+        ('Admin', 'Admin'),           # Billing/admin support
     ]
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, null=True, blank=True)
     

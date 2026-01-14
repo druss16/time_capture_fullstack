@@ -226,12 +226,12 @@ urlpatterns = [
     path('integrations/xero/contacts/', views_integrations.xero_contacts, name='xero-contacts'),
     path('integrations/xero/import/', views_integrations.xero_import, name='xero-import'),
 
-    path('clients/bulk-assign/', views_bulk_assignment.bulk_assign_clients, name='bulk-assign-clients'),
-    path('clients/bulk-unassign/', views_bulk_assignment.bulk_unassign_clients, name='bulk-unassign-clients'),
-    path('clients/copy-assignments/', views_bulk_assignment.copy_assignments, name='copy-assignments'),
+    path('clients/bulk-assign/', views_bulk_assignments.bulk_assign_clients, name='bulk-assign-clients'),
+    path('clients/bulk-unassign/', views_bulk_assignments.bulk_unassign_clients, name='bulk-unassign-clients'),
+    path('clients/copy-assignments/', views_bulk_assignments.copy_assignments, name='copy-assignments'),
     
     # CSV import
-    path('clients/assignment-template/', views_bulk_assignment.assignment_csv_template, name='assignment-template'),
-    path('clients/import-assignments/', views_bulk_assignment.import_assignments_csv, name='import-assignments'),
+    path('clients/assignment-template/', views_bulk_assignments.assignment_csv_template, name='assignment-template'),
+    path('clients/import-assignments/', views_bulk_assignments.import_assignments_csv, name='import-assignments'),
 
 ]

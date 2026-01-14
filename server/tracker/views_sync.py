@@ -31,7 +31,7 @@ def sync_status(request):
     Lightweight endpoint to check if agent needs to sync.
     Agent calls this every 30-60 seconds.
     
-    Returns timestamps and hashes for each entity type.
+    Returns counts and hashes for each entity type.
     Agent compares with local cache and only fetches what changed.
     
     GET /api/sync/status/
@@ -44,8 +44,8 @@ def sync_status(request):
     except OrganizationMembership.DoesNotExist:
         return Response({'error': 'No organization'}, status=400)
     
-    # Get latest update times and counts for each entity
-    # Using aggregation for efficiency (single query per entity)
+    # Get counts for each entity (simple change detection)
+    # Note: Client/Project may not have updated_at, so we just use count + max(id)
     
     # Clients the user can access
     accessible_clients = _get_accessible_client_ids(request.user, org)
@@ -53,7 +53,7 @@ def sync_status(request):
         id__in=accessible_clients,
         is_active=True
     ).aggregate(
-        latest=Max('updated_at'),
+        latest_id=Max('id'),
         count=Count('id')
     )
     
@@ -62,33 +62,40 @@ def sync_status(request):
         client_id__in=accessible_clients,
         is_active=True
     ).aggregate(
-        latest=Max('updated_at'),
+        latest_id=Max('id'),
         count=Count('id')
     )
     
-    # Task types (org-wide)
-    task_stats = TaskType.objects.filter(
-        org=org,
-        is_active=True
-    ).aggregate(
-        latest=Max('updated_at'),
-        count=Count('id')
-    )
+    # Task types (org-wide) - may or may not have updated_at
+    try:
+        task_stats = TaskType.objects.filter(
+            org=org,
+            is_active=True
+        ).aggregate(
+            latest_id=Max('id'),
+            count=Count('id')
+        )
+    except Exception:
+        task_stats = {'latest_id': None, 'count': 0}
     
     # Client assignments for this user
-    assignment_stats = ClientAssignment.objects.filter(
-        user=request.user,
-        organization=org
-    ).aggregate(
-        latest=Max('assigned_at'),
-        count=Count('id')
-    )
+    try:
+        assignment_stats = ClientAssignment.objects.filter(
+            user=request.user,
+            organization=org
+        ).aggregate(
+            latest_id=Max('id'),
+            count=Count('id')
+        )
+    except Exception:
+        assignment_stats = {'latest_id': None, 'count': 0}
     
     # Build response with hashes for quick comparison
     def make_hash(stats):
         """Create hash from stats for change detection"""
-        latest = stats['latest'].isoformat() if stats['latest'] else 'none'
-        return _compute_hash(f"{latest}:{stats['count']}")
+        latest_id = stats.get('latest_id') or 0
+        count = stats.get('count') or 0
+        return _compute_hash(f"{latest_id}:{count}")
     
     return Response({
         'server_time': timezone.now().isoformat(),
@@ -99,23 +106,19 @@ def sync_status(request):
         },
         'entities': {
             'clients': {
-                'updated_at': client_stats['latest'],
-                'count': client_stats['count'],
+                'count': client_stats['count'] or 0,
                 'hash': make_hash(client_stats),
             },
             'projects': {
-                'updated_at': project_stats['latest'],
-                'count': project_stats['count'],
+                'count': project_stats['count'] or 0,
                 'hash': make_hash(project_stats),
             },
             'task_types': {
-                'updated_at': task_stats['latest'],
-                'count': task_stats['count'],
+                'count': task_stats.get('count') or 0,
                 'hash': make_hash(task_stats),
             },
             'assignments': {
-                'updated_at': assignment_stats['latest'],
-                'count': assignment_stats['count'],
+                'count': assignment_stats.get('count') or 0,
                 'hash': make_hash(assignment_stats),
             },
         },
@@ -150,7 +153,7 @@ def sync_clients(request):
         id__in=accessible_ids,
         is_active=True
     ).order_by('name').values(
-        'id', 'name', 'code', 'visibility', 'updated_at'
+        'id', 'name', 'code', 'visibility'
     )
     
     # Include user's role on each client if assigned
@@ -165,9 +168,8 @@ def sync_clients(request):
             'id': c['id'],
             'name': c['name'],
             'code': c['code'] or '',
-            'visibility': c['visibility'],
+            'visibility': c['visibility'] or 'all',
             'my_role': assignments.get(c['id']),
-            'updated_at': c['updated_at'].isoformat() if c['updated_at'] else None,
         })
     
     return Response({
@@ -204,10 +206,9 @@ def sync_projects(request):
     project_list = [{
         'id': p.id,
         'name': p.name,
-        'code': p.code or '',
+        'code': getattr(p, 'code', '') or '',
         'client_id': p.client_id,
         'client_name': p.client.name,
-        'updated_at': p.updated_at.isoformat() if p.updated_at else None,
     } for p in projects]
     
     return Response({
@@ -238,7 +239,7 @@ def sync_task_types(request):
         org=org,
         is_active=True
     ).order_by('name').values(
-        'id', 'name', 'code', 'is_billable', 'updated_at'
+        'id', 'name', 'code', 'is_billable'
     )
     
     return Response({

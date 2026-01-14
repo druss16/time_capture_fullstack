@@ -7,7 +7,7 @@ import hashlib
 import json
 from django.utils import timezone
 from django.db.models import Max, Count
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -15,6 +15,7 @@ from .models import (
     Client, Project, TaskType, ClientAssignment,
     OrganizationMembership, Organization
 )
+from .auth import AgentKeyAuthentication, BearerTokenAuthentication
 
 
 def _compute_hash(data: str) -> str:
@@ -23,6 +24,7 @@ def _compute_hash(data: str) -> str:
 
 
 @api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def sync_status(request):
     """
@@ -126,6 +128,7 @@ def sync_status(request):
 
 
 @api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def sync_clients(request):
     """
@@ -177,6 +180,7 @@ def sync_clients(request):
 
 
 @api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def sync_projects(request):
     """
@@ -217,6 +221,7 @@ def sync_projects(request):
 
 
 @api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def sync_task_types(request):
     """
@@ -248,6 +253,7 @@ def sync_task_types(request):
 
 
 @api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def sync_full(request):
     """
@@ -356,14 +362,16 @@ def _get_accessible_client_ids(user, org):
     accessible_ids = []
     
     for client in all_clients:
-        if client.visibility == 'all':
+        visibility = getattr(client, 'visibility', 'all') or 'all'
+        
+        if visibility == 'all':
             # Everyone can see
             accessible_ids.append(client.id)
-        elif client.visibility == 'assigned':
+        elif visibility == 'assigned':
             # Assigned users + admins
             if client.id in assigned_client_ids or is_admin:
                 accessible_ids.append(client.id)
-        elif client.visibility == 'confidential':
+        elif visibility == 'confidential':
             # Only explicitly assigned (even admins need assignment)
             if client.id in assigned_client_ids:
                 accessible_ids.append(client.id)

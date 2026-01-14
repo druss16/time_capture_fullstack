@@ -7172,3 +7172,18 @@ def auth_change_password(request):
         'message': 'Password changed successfully'
     })
 
+
+# views.py - Add sync check endpoint
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def sync_check(request):
+    membership = OrganizationMembership.objects.get(user=request.user)
+    org = membership.organization
+    
+    # Get latest update timestamps
+    latest_client = Client.objects.filter(organization=org).order_by('-updated_at').first()
+    
+    return Response({
+        'clients_updated': latest_client.updated_at if latest_client else None,
+        'server_time': timezone.now(),
+    })

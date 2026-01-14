@@ -30,7 +30,6 @@ from timetracker_gui import run_gui_app, show_pairing_window, GUI_AVAILABLE
 import urllib.request
 import urllib.error
 
-
 from Quartz import (
     CGWindowListCopyWindowInfo,
     kCGWindowListOptionOnScreenOnly,
@@ -63,6 +62,9 @@ except Exception:
 
 info = AppKit.NSBundle.mainBundle().infoDictionary()
 info["LSUIElement"] = "1"
+
+sync = None  # Global sync manager, initialized in run_agent()
+
 
 
 # ---------------- MDM Config ----------------
@@ -686,7 +688,10 @@ def set_current_client_on_backend(api_base: str, api_key: str,
 
 
 def fetch_clients_from_backend(api_base: str, api_key: str) -> list:
-    """Fetch list of clients from backend for GUI menu."""
+    """Use sync cache if available, otherwise fetch directly."""
+    global sync
+    if sync and sync.clients:
+        return sync.clients  # ✅ Use cached data
     if not api_base or not api_key:
         return []
     
@@ -1698,8 +1703,9 @@ def on_client_switch_from_menu(client_id: int, client_name: str):
 # ---------------- Main loop ----------------
 def run_agent():
     """Main agent function with GUI integration."""
-
     global API_KEY
+    global sync  # ← ADD THIS LINE!
+
 
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -1769,6 +1775,28 @@ def run_agent():
             print("Exiting: hello failed.")
             remove_pid()
             return
+
+    # === SYNC INITIALIZATION ===
+    # === SYNC INITIALIZATION ===
+    sync = None
+    api_key = config.get("api_key") or API_KEY
+    if api_key:
+        from agent_sync_integration import AgentSync
+        
+        sync = AgentSync(
+            api_base=API_BASE,
+            device_token=api_key  # Use the paired device key
+        )
+        
+        def on_sync_update():
+            log(f"[SYNC] Data updated: {len(sync.clients)} clients")
+            # Refresh GUI menu if available
+            if gui_menu_bar and hasattr(gui_menu_bar, 'refresh_client_menu'):
+                gui_menu_bar.refresh_client_menu(sync.clients)
+        
+        sync.on_update = on_sync_update
+        sync.start()  # Start background polling
+        log(f"[SYNC] Started - polling every {sync.poll_interval}s")
 
     # === GUI INITIALIZATION (after pairing succeeds) ===
     gui_menu_bar = None

@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments  # ✅ ADD THIS IMPORT
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync  # ✅ ADD THIS IMPORT
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -233,5 +233,12 @@ urlpatterns = [
     # CSV import
     path('clients/assignment-template/', views_bulk_assignments.assignment_csv_template, name='assignment-template'),
     path('clients/import-assignments/', views_bulk_assignments.import_assignments_csv, name='import-assignments'),
+
+    # Quick minimal sync using existing endpoints
+    path('sync/status/', views_sync.sync_status, name='sync-status'),
+    path('sync/clients/', views_sync.sync_clients, name='sync-clients'),
+    path('sync/projects/', views_sync.sync_projects, name='sync-projects'),
+    path('sync/task-types/', views_sync.sync_task_types, name='sync-task-types'),
+    path('sync/full/', views_sync.sync_full, name='sync-full'),
 
 ]

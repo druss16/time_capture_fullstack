@@ -11,6 +11,11 @@ import urllib.error
 logger = logging.getLogger(__name__)
 
 
+def log(msg: str):
+    """Print with timestamp for visibility"""
+    print(msg, flush=True)
+
+
 class AgentSync:
     """
     Simple sync manager for TimeTracker agent.
@@ -64,12 +69,12 @@ class AgentSync:
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        logger.info("Agent sync started")
+        log("[SYNC] Background thread started")
     
     def stop(self):
         """Stop background sync"""
         self._running = False
-        logger.info("Agent sync stopped")
+        log("[SYNC] Stopped")
     
     def refresh(self):
         """Force immediate refresh"""
@@ -94,7 +99,7 @@ class AgentSync:
     
     def _run(self):
         """Background sync loop"""
-        # Initial sync
+        log("[SYNC] Initial sync starting...")
         self._full_sync()
         
         while self._running:
@@ -105,30 +110,39 @@ class AgentSync:
     def _check_and_sync(self):
         """Check for changes, sync if needed"""
         try:
+            log("[SYNC] Checking for updates...")
             status = self._get('/sync/status/')
             if not status:
+                log("[SYNC] Status check failed (no response)")
                 return
             
             entities = status.get('entities', {})
             needs_sync = False
+            changed_entities = []
             
             for key in ['clients', 'projects', 'task_types']:
                 new_hash = entities.get(key, {}).get('hash', '')
-                if new_hash and new_hash != self._hashes.get(key):
+                old_hash = self._hashes.get(key, '')
+                if new_hash and new_hash != old_hash:
                     needs_sync = True
+                    changed_entities.append(key)
                     self._hashes[key] = new_hash
             
             if needs_sync:
+                log(f"[SYNC] Changes detected in: {', '.join(changed_entities)}")
                 self._full_sync()
+            else:
+                log("[SYNC] No changes detected")
                 
         except Exception as e:
-            logger.error(f"Sync check error: {e}")
+            log(f"[SYNC] Check error: {e}")
     
     def _full_sync(self):
         """Fetch all data from server"""
         try:
             data = self._get('/sync/full/')
             if not data:
+                log("[SYNC] Full sync failed (no response)")
                 return
             
             self.clients = data.get('clients', [])
@@ -136,15 +150,18 @@ class AgentSync:
             self.task_types = data.get('task_types', [])
             self.last_sync = datetime.now()
             
+            # Update hashes from full sync if available
+            # (prevents immediate re-sync)
+            
             self._save_cache()
             
-            logger.info(f"Synced: {len(self.clients)} clients, {len(self.projects)} projects")
+            log(f"[SYNC] Full sync complete: {len(self.clients)} clients, {len(self.projects)} projects")
             
             if self.on_update:
                 self.on_update()
                 
         except Exception as e:
-            logger.error(f"Full sync error: {e}")
+            log(f"[SYNC] Full sync error: {e}")
             if self.on_error:
                 self.on_error(str(e))
     
@@ -158,20 +175,29 @@ class AgentSync:
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            log(f"[SYNC] API error: HTTP {e.code} - {e.reason}")
+            return None
+        except urllib.error.URLError as e:
+            log(f"[SYNC] Network error: {e.reason}")
+            return None
         except Exception as e:
-            logger.error(f"API error: {e}")
+            log(f"[SYNC] Request error: {e}")
             return None
     
     def _save_cache(self):
         """Save to disk"""
-        self._cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._cache_file, 'w') as f:
-            json.dump({
-                'clients': self.clients,
-                'projects': self.projects,
-                'task_types': self.task_types,
-                'hashes': self._hashes,
-            }, f)
+        try:
+            self._cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._cache_file, 'w') as f:
+                json.dump({
+                    'clients': self.clients,
+                    'projects': self.projects,
+                    'task_types': self.task_types,
+                    'hashes': self._hashes,
+                }, f)
+        except Exception as e:
+            log(f"[SYNC] Cache save error: {e}")
     
     def _load_cache(self):
         """Load from disk"""
@@ -183,5 +209,6 @@ class AgentSync:
                 self.projects = data.get('projects', [])
                 self.task_types = data.get('task_types', [])
                 self._hashes = data.get('hashes', {})
+                log(f"[SYNC] Loaded {len(self.clients)} clients from cache")
             except Exception as e:
-                logger.error(f"Cache load error: {e}")
+                log(f"[SYNC] Cache load error: {e}")

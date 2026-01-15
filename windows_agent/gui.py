@@ -17,6 +17,26 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 PID_FILE = os.path.join(APPDATA, "TimeTracker", "agent.pid")
 
+def get_agent_exe_path():
+    """Get path to TimeTrackerAgent.exe"""
+    # When running as PyInstaller bundle, look in same directory as this exe
+    if getattr(sys, 'frozen', False):
+        # Running as compiled exe
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # Running as script (development)
+        base_dir = os.path.dirname(__file__)
+    
+    agent_exe = os.path.join(base_dir, "TimeTrackerAgent.exe")
+    
+    # Fallback to main.py for development
+    if not os.path.exists(agent_exe):
+        agent_py = os.path.join(base_dir, "main.py")
+        if os.path.exists(agent_py):
+            return (sys.executable, agent_py)  # Return tuple for subprocess
+    
+    return agent_exe
+
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
@@ -60,7 +80,8 @@ class ConfigGUI:
         self.config = load_config()
         
         self._setup_ui()
-        self._update_status()
+        self._update_status()       
+        self._start_auto_refresh()
     
     def _setup_ui(self):
         # Title
@@ -97,7 +118,7 @@ class ConfigGUI:
         
         # API URL
         tk.Label(config_frame, text="API URL:").grid(row=0, column=0, sticky="w", pady=5)
-        self.api_url_var = tk.StringVar(value=self.config.get("api_base", "http://localhost:7123/api"))
+        self.api_url_var = tk.StringVar(value=self.config.get("api_base", "https://timetracker-api-k375.onrender.com/api"))
         api_entry = tk.Entry(config_frame, textvariable=self.api_url_var, width=50)
         api_entry.grid(row=0, column=1, pady=5, padx=5)
         
@@ -163,7 +184,13 @@ class ConfigGUI:
         
         help_btn = tk.Button(bottom_frame, text="Help", command=self._show_help)
         help_btn.pack(side=tk.RIGHT, padx=5)
-    
+
+
+    def _start_auto_refresh(self):
+        """Auto-refresh status every 3 seconds"""
+        self._update_status()
+        self.root.after(3000, self._start_auto_refresh)
+
     def _update_status(self):
         """Update agent status display"""
         if is_agent_running():
@@ -178,16 +205,26 @@ class ConfigGUI:
     def _start_agent(self):
         """Start the agent"""
         try:
-            # Use pythonw.exe to avoid console window
-            python_exe = sys.executable.replace("python.exe", "pythonw.exe")
-            if not os.path.exists(python_exe):
-                python_exe = sys.executable
+            agent_path = get_agent_exe_path()
             
-            main_py = os.path.join(os.path.dirname(__file__), "main.py")
+            # Handle both exe and (python, script) tuple
+            if isinstance(agent_path, tuple):
+                # Development mode: (python_exe, script_path)
+                cmd = list(agent_path) + ["start"]
+            else:
+                # Production mode: TimeTrackerAgent.exe
+                cmd = [agent_path, "start"]
             
-            # Start in background
-            subprocess.Popen([python_exe, main_py, "start"], 
-                           creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+            # Start in background without console window
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            
+            subprocess.Popen(
+                cmd,
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
             
             # Wait a bit and refresh
             self.root.after(1000, self._update_status)
@@ -199,9 +236,15 @@ class ConfigGUI:
     def _stop_agent(self):
         """Stop the agent"""
         try:
-            main_py = os.path.join(os.path.dirname(__file__), "main.py")
-            subprocess.run([sys.executable, main_py, "stop"], check=True, 
-                         capture_output=True, text=True)
+            agent_path = get_agent_exe_path()
+            
+            # Handle both exe and (python, script) tuple
+            if isinstance(agent_path, tuple):
+                cmd = list(agent_path) + ["stop"]
+            else:
+                cmd = [agent_path, "stop"]
+            
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
             
             self.root.after(500, self._update_status)
             messagebox.showinfo("Success", "Agent stopped successfully!")
@@ -209,24 +252,91 @@ class ConfigGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to stop agent: {e}")
     
-    def _save_config(self):
-        """Save configuration"""
+    def _try_pair(self, api_base, code):
+        """Attempt to pair with the backend and return (api_key, server_device_id) or (None, None)"""
+        import urllib.request
+        import urllib.error
+        import uuid
+        import platform
+        
+        url = api_base.rstrip('/') + '/agents/pair/claim/'
+        
+        # Get or create device_id
+        device_id_file = os.path.join(APPDATA, 'TimeTracker', '.device_id')
         try:
+            if os.path.exists(device_id_file):
+                with open(device_id_file) as f:
+                    device_id = f.read().strip()
+            else:
+                device_id = str(uuid.uuid4())
+                os.makedirs(os.path.dirname(device_id_file), exist_ok=True)
+                with open(device_id_file, 'w') as f:
+                    f.write(device_id)
+        except:
+            device_id = str(uuid.uuid4())
+        
+        payload = {
+            'code': code.strip().upper(),
+            'hostname': platform.node(),
+            'platform': 'Windows',
+            'version': '1.0.0',
+            'device_id': device_id
+        }
+        
+        try:
+            req = urllib.request.Request(url, data=json.dumps(payload).encode(), method='POST')
+            req.add_header('Content-Type', 'application/json')
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                if data.get('ok') and data.get('api_key'):
+                    return data.get('api_key'), data.get('device_id')
+                return None, None
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode()
+            try:
+                error_data = json.loads(error_body)
+                error_msg = error_data.get('error', 'Unknown error')
+            except:
+                error_msg = error_body
+            messagebox.showerror('Pairing Failed', f'Could not pair device:\n{error_msg}\n\nPlease generate a new pairing code and try again.')
+            return None, None
+        except Exception as e:
+            messagebox.showerror('Pairing Failed', f'Connection error:\n{e}')
+            return None, None
+
+    def _save_config(self):
+        """Save configuration - handles pairing if needed"""
+        try:
+            api_base = self.api_url_var.get().strip().rstrip("/")
+            api_key = self.api_key_var.get().strip()
+            pair_code = self.pair_code_var.get().strip()
+            
+            # If pair_code provided and no api_key, attempt pairing now
+            if pair_code and not api_key:
+                api_key, server_device_id = self._try_pair(api_base, pair_code)
+                if api_key:
+                    self.api_key_var.set(api_key)
+                    messagebox.showinfo("Pairing Successful", "Device paired successfully!")
+                else:
+                    return  # Error already shown by _try_pair
+            
             config = {
-                "api_base": self.api_url_var.get().strip().rstrip("/"),
-                "api_key": self.api_key_var.get().strip(),
+                "api_base": api_base,
+                "api_key": api_key,
                 "poll_seconds": self.poll_var.get(),
                 "min_dwell_seconds": self.dwell_var.get(),
                 "verbose": self.verbose_var.get(),
             }
             
-            # Only save pair_code if provided
-            pair_code = self.pair_code_var.get().strip()
-            if pair_code:
-                config["pair_code"] = pair_code
+            # Save server_device_id if we just paired
+            if pair_code and api_key:
+                try:
+                    config["server_device_id"] = server_device_id
+                except:
+                    pass
             
             save_config(config)
-            messagebox.showinfo("Success", "Configuration saved!\n\nRestart the agent for changes to take effect.")
+            messagebox.showinfo("Success", "Configuration saved!\n\nClick 'Start Agent' to begin tracking.")
         
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save configuration: {e}")
@@ -245,6 +355,14 @@ class ConfigGUI:
     def _test_system(self):
         """Test system dependencies"""
         try:
+            # Look for test_system.py or TestSystem.exe
+            if getattr(sys, 'frozen', False):
+                base_dir = os.path.dirname(sys.executable)
+                test_exe = os.path.join(base_dir, "TestSystem.exe")
+                if os.path.exists(test_exe):
+                    subprocess.Popen([test_exe], creationflags=subprocess.CREATE_NEW_CONSOLE)
+                    return
+            
             test_py = os.path.join(os.path.dirname(__file__), "test_system.py")
             if os.path.exists(test_py):
                 subprocess.Popen([sys.executable, test_py], creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -290,3 +408,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -642,6 +642,13 @@ class TimeTrackerSystemTray:
         
         self.icon.run()
 
+    def refresh_client_menu(self, clients):
+        """Called by sync to update client list"""
+        self.client_mgr.clients = clients
+        if self.icon:
+            self.icon.menu = self._build_menu()
+        print(f"[GUI] Refreshed menu with {len(clients)} clients")
+
 # ------------------------------------------------------------
 # Entrypoint
 # ------------------------------------------------------------
@@ -651,7 +658,8 @@ def run_gui_app(on_client_confirmed: Callable,
                 get_ai_guess: Callable = None,
                 fetch_clients: Callable = None,
                 set_current_client: Callable = None,
-                get_current_client: Callable = None):
+                get_current_client: Callable = None,
+                sync=None):
     """
     Start the GUI system tray app with backend sync.
     """
@@ -687,6 +695,11 @@ def run_gui_app(on_client_confirmed: Callable,
                 print(f"[GUI] Restored client: {current['client_name']}")
         except Exception as e:
             print(f"[GUI] Failed to restore client state: {e}")
+
+    # Register with sync
+    if sync:
+        sync.gui_menu_bar = tray
+        print("[GUI] Registered with sync")
     
     return tray
 

@@ -434,7 +434,7 @@ def ensure_api_key_interactive(hostname: str):
             return key
     
     # Interactive prompt
-    if sys.stdin.isatty():
+    if sys.stdin and sys.stdin.isatty():
         print("\n🧩 Enter pairing code from the web app to link this device:")
         code = input("> ").strip()
         if code:
@@ -745,6 +745,34 @@ def run_agent():
         pass
     
     start_context_bus(CONTEXT_PORT)
+
+    # After the hello() call, add sync initialization:
+
+    # === SYNC INITIALIZATION ===
+    sync = None
+    api_key = config.get("api_key") or API_KEY
+    if api_key:
+        try:
+            from agent_sync_integration import AgentSync
+            
+            sync = AgentSync(
+                api_base=API_BASE,
+                device_token=api_key
+            )
+            
+            def on_sync_update():
+                print(f"[SYNC] Data updated: {len(sync.clients)} clients")
+                if sync.gui_menu_bar and hasattr(sync.gui_menu_bar, 'refresh_client_menu'):
+                    sync.gui_menu_bar.refresh_client_menu(sync.clients)
+                    print("[SYNC] GUI menu refreshed")
+                else:
+                    print("[SYNC] GUI not ready yet")
+            
+            sync.on_update = on_sync_update
+            sync.start()
+            print(f"[SYNC] Started - polling every {sync.poll_interval}s")
+        except ImportError:
+            print("[SYNC] agent_sync_integration not available")
     
     # GUI initialization
     gui_menu_bar = None
@@ -760,6 +788,7 @@ def run_agent():
                 fetch_clients=lambda: fetch_clients_from_backend(api_base, api_key),
                 set_current_client=lambda cid: set_current_client_backend(api_base, api_key, cid),
                 get_current_client=lambda: get_current_client_from_backend(api_base, api_key),
+                sync=sync,
             )
             log("[GUI] System tray initialized")
         except Exception as e:

@@ -1035,6 +1035,11 @@ class TimeTrackerMenuBar(NSObject):
             return self.get_today_time_callback()
         return []
 
+    def refresh_client_menu(self, clients):
+        """Called by sync to update client list"""
+        self.client_mgr.clients = clients
+        self._update_switch_submenu()
+
 
 # ------------------------------------------------------------
 # GUI Pairing Function (called from main.py)
@@ -1073,7 +1078,8 @@ def run_gui_app(on_client_confirmed: Callable,
                 set_current_client: Callable = None,
                 get_current_client: Callable = None,
                 repair_callback: Callable = None,
-                cpa_tools_data: dict = None):  # Keep param for backwards compat
+                cpa_tools_data: dict = None,
+                sync=None):  # Keep param for backwards compat
     """
     Initialize and run the GUI menu bar app.
     """
@@ -1095,6 +1101,11 @@ def run_gui_app(on_client_confirmed: Callable,
     menu_bar.set_current_client_callback = set_current_client
     menu_bar.get_current_client_callback = get_current_client
     menu_bar.repair_callback = repair_callback
+
+    if sync:
+        print(f"[GUI DEBUG] Setting gui_menu_bar on sync id={id(sync)}")
+        sync.gui_menu_bar = menu_bar
+        print(f"[GUI] Registered with sync")
 
     if fetch_clients:
         menu_bar.client_mgr.load(fetch_clients)

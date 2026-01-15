@@ -1790,13 +1790,14 @@ def run_agent():
         
         def on_sync_update():
             log(f"[SYNC] Data updated: {len(sync.clients)} clients")
-            # Use sync's direct reference instead of closure
+            log(f"[SYNC DEBUG] sync id={id(sync)}, gui_menu_bar={getattr(sync, 'gui_menu_bar', 'MISSING')}")
+            
             if sync.gui_menu_bar and hasattr(sync.gui_menu_bar, 'refresh_client_menu'):
                 sync.gui_menu_bar.refresh_client_menu(sync.clients)
                 log("[SYNC] GUI menu refreshed")
             else:
                 log("[SYNC] GUI not ready yet")
-        
+                
         sync.on_update = on_sync_update
         sync.start()  # Start background polling
         log(f"[SYNC] Started - polling every {sync.poll_interval}s")
@@ -1814,15 +1815,21 @@ def run_agent():
                 set_current_client=lambda client_id: set_current_client_backend(API_BASE, API_KEY, client_id),
                 get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY),
                 repair_callback=_gui_pair_callback,
+                sync=sync,  # ← Add this
+
             )
             log("[GUI] Menu bar initialized")
+            log(f"[DEBUG] sync={sync is not None}, gui_menu_bar={gui_menu_bar is not None}, type={type(gui_menu_bar)}")
             
-            # ✅ ADD THIS: Register GUI with sync and trigger immediate refresh
+            # Register GUI with sync
             if sync and gui_menu_bar:
                 sync.gui_menu_bar = gui_menu_bar
+                log(f"[DEBUG] Registered - sync.gui_menu_bar is now {sync.gui_menu_bar is not None}")
                 if sync.clients and hasattr(gui_menu_bar, 'refresh_client_menu'):
                     gui_menu_bar.refresh_client_menu(sync.clients)
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
+            else:
+                log(f"[DEBUG] Registration skipped - sync={sync is not None}, gui={gui_menu_bar is not None}")
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")

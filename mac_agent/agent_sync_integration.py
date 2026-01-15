@@ -35,6 +35,8 @@ class AgentSync:
     def __init__(self, api_base: str, device_token: str):
         self.api_base = api_base.rstrip('/')
         self.device_token = device_token
+        self.gui_menu_bar = None  # ← Add this line
+
         
         # Cached data
         self.clients: List[Dict] = []

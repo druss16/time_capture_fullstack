@@ -1,0 +1,96 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        working-directory: mac_agent
+        run: |
+          pip install pyinstaller rumps pyobjc-framework-Cocoa requests
+      
+      - name: Build Mac app
+        working-directory: mac_agent
+        run: |
+          pyinstaller --onefile --windowed --name "TimeTracker" main.py
+          # Create simple pkg (or use your build script)
+          mkdir -p dist/pkg
+          cp dist/TimeTracker dist/pkg/
+          pkgbuild --root dist/pkg --identifier com.mavops.timetracker --install-location /Applications dist/TimeTracker.pkg
+      
+      - name: Upload Mac artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-installer
+          path: mac_agent/dist/TimeTracker.pkg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        working-directory: windows_agent
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build executables
+        working-directory: windows_agent
+        run: |
+          python -m PyInstaller --onefile --windowed --name "TimeTracker" --icon "timetracker.ico" gui.py
+          python -m PyInstaller --onefile --noconsole --name "TimeTrackerAgent" --icon "timetracker.ico" --hidden-import=timetracker_gui --add-data "timetracker_gui.py;." main.py
+      
+      - name: Build installer
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: windows_agent/installer.iss
+      
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: windows_agent/Output/*.exe
+
+  release:
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Mac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-installer
+          path: ./mac
+      
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: ./windows
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          repository: druss16/timetracker-releases
+          files: |
+            ./mac/TimeTracker.pkg
+            ./windows/*.exe
+          tag_name: ${{ github.ref_name }}
+          token: ${{ secrets.RELEASES_PAT }}

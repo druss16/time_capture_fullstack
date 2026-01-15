@@ -1790,14 +1790,18 @@ def run_agent():
         
         def on_sync_update():
             log(f"[SYNC] Data updated: {len(sync.clients)} clients")
-            # Refresh GUI menu if available
-            if gui_menu_bar and hasattr(gui_menu_bar, 'refresh_client_menu'):
-                gui_menu_bar.refresh_client_menu(sync.clients)
+            # Use sync's direct reference instead of closure
+            if sync.gui_menu_bar and hasattr(sync.gui_menu_bar, 'refresh_client_menu'):
+                sync.gui_menu_bar.refresh_client_menu(sync.clients)
+                log("[SYNC] GUI menu refreshed")
+            else:
+                log("[SYNC] GUI not ready yet")
         
         sync.on_update = on_sync_update
         sync.start()  # Start background polling
         log(f"[SYNC] Started - polling every {sync.poll_interval}s")
 
+    # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
     gui_menu_bar = None
     if GUI_AVAILABLE:
@@ -1812,6 +1816,14 @@ def run_agent():
                 repair_callback=_gui_pair_callback,
             )
             log("[GUI] Menu bar initialized")
+            
+            # ✅ ADD THIS: Register GUI with sync and trigger immediate refresh
+            if sync and gui_menu_bar:
+                sync.gui_menu_bar = gui_menu_bar
+                if sync.clients and hasattr(gui_menu_bar, 'refresh_client_menu'):
+                    gui_menu_bar.refresh_client_menu(sync.clients)
+                    log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
+                    
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
 

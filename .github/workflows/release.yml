@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build and Release TimeTracker
 
 on:
   push:
@@ -6,91 +6,172 @@ on:
       - 'v*'
 
 jobs:
-  build-mac:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        working-directory: mac_agent
-        run: |
-          pip install pyinstaller rumps pyobjc-framework-Cocoa requests
-      
-      - name: Build Mac app
-        working-directory: mac_agent
-        run: |
-          pyinstaller --onefile --windowed --name "TimeTracker" main.py
-          # Create simple pkg (or use your build script)
-          mkdir -p dist/pkg
-          cp dist/TimeTracker dist/pkg/
-          pkgbuild --root dist/pkg --identifier com.mavops.timetracker --install-location /Applications dist/TimeTracker.pkg
-      
-      - name: Upload Mac artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-installer
-          path: mac_agent/dist/TimeTracker.pkg
-
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       
       - name: Install dependencies
-        working-directory: windows_agent
         run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
+          cd windows_agent
+          pip install -r requirements.txt pyinstaller
       
-      - name: Build executables
-        working-directory: windows_agent
+      - name: Build executable
         run: |
-          python -m PyInstaller --onefile --windowed --name "TimeTracker" --icon "timetracker.ico" gui.py
-          python -m PyInstaller --onefile --noconsole --name "TimeTrackerAgent" --icon "timetracker.ico" --hidden-import=timetracker_gui --add-data "timetracker_gui.py;." main.py
+          cd windows_agent
+          pyinstaller --onefile --windowed --name "TimeTracker" --icon=icon.ico gui.py
+      
+      - name: Create Inno Setup script
+        run: |
+          @"
+          [Setup]
+          AppName=TimeTracker
+          AppVersion=${{ github.ref_name }}
+          AppPublisher=MavOps
+          AppPublisherURL=https://predictoredge.com
+          DefaultDirName={autopf}\TimeTracker
+          DefaultGroupName=TimeTracker
+          OutputDir=installer
+          OutputBaseFilename=TimeTracker-Setup
+          Compression=lzma
+          SolidCompression=yes
+          PrivilegesRequired=lowest
+          
+          [Files]
+          Source: "dist\TimeTracker.exe"; DestDir: "{app}"; Flags: ignoreversion
+          
+          [Icons]
+          Name: "{group}\TimeTracker"; Filename: "{app}\TimeTracker.exe"
+          Name: "{autodesktop}\TimeTracker"; Filename: "{app}\TimeTracker.exe"; Tasks: desktopicon
+          Name: "{userstartup}\TimeTracker"; Filename: "{app}\TimeTracker.exe"; Tasks: startupicon
+          
+          [Tasks]
+          Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Shortcuts:"
+          Name: "startupicon"; Description: "Start with Windows"; GroupDescription: "Startup:"
+          
+          [Run]
+          Filename: "{app}\TimeTracker.exe"; Description: "Launch TimeTracker"; Flags: postinstall nowait skipifsilent
+          "@ | Out-File -FilePath windows_agent\installer.iss -Encoding UTF8
       
       - name: Build installer
-        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
-        with:
-          path: windows_agent/installer.iss
+        run: |
+          cd windows_agent
+          mkdir installer
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
       
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: windows_agent/Output/*.exe
+          path: windows_agent/installer/TimeTracker-Setup.exe
 
-  release:
-    needs: [build-mac, build-windows]
-    runs-on: ubuntu-latest
+  build-mac:
+    runs-on: macos-latest
     steps:
-      - name: Download Mac artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          cd mac_agent
+          pip install -r requirements.txt pyinstaller
+      
+      - name: Build app
+        run: |
+          cd mac_agent
+          pyinstaller --onefile --windowed --name "TimeTracker" --icon=icon.icns gui.py
+      
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+        run: |
+          echo $MACOS_CERTIFICATE | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
+      
+      - name: Sign app
+        env:
+          IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          cd mac_agent/dist
+          codesign --force --deep --sign "$IDENTITY" --options runtime TimeTracker.app
+      
+      - name: Create pkg installer
+        env:
+          IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
+        run: |
+          cd mac_agent
+          pkgbuild --root dist --identifier com.mavops.timetracker --version ${{ github.ref_name }} --install-location /Applications unsigned.pkg
+          productsign --sign "$IDENTITY" unsigned.pkg TimeTracker.pkg
+          rm unsigned.pkg
+      
+      - name: Notarize pkg
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          cd mac_agent
+          xcrun notarytool submit TimeTracker.pkg --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple TimeTracker.pkg
+      
+      - uses: actions/upload-artifact@v4
         with:
           name: mac-installer
-          path: ./mac
-      
+          path: mac_agent/TimeTracker.pkg
+
+  release:
+    needs: [build-windows, build-mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
           name: windows-installer
-          path: ./windows
+          path: ./artifacts
       
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Download Mac artifact
+        uses: actions/download-artifact@v4
         with:
-          repository: druss16/timetracker-releases
-          files: |
-            ./mac/TimeTracker.pkg
-            ./windows/*.exe
-          tag_name: ${{ github.ref_name }}
-          token: ${{ secrets.RELEASES_PAT }}
+          name: mac-installer
+          path: ./artifacts
+      
+      - name: Create release in releases repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT }}
+        run: |
+          VERSION=${{ github.ref_name }}
+          
+          gh release create $VERSION \
+            ./artifacts/TimeTracker-Setup.exe \
+            ./artifacts/TimeTracker.pkg \
+            --repo druss16/timetracker-releases \
+            --title "TimeTracker $VERSION" \
+            --notes "## Downloads
+          
+          | Platform | File |
+          |----------|------|
+          | Windows | TimeTracker-Setup.exe |
+          | macOS | TimeTracker.pkg |
+          
+          ## What's New
+          - Cross-platform desktop agent
+          - Automatic activity tracking
+          - AI-powered time categorization
+          
+          ## Installation
+          **Windows:** Run TimeTracker-Setup.exe and follow the prompts
+          **Mac:** Open TimeTracker.pkg and follow the installer"

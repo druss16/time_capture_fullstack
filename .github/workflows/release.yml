@@ -48,7 +48,11 @@ jobs:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         working-directory: mac_agent
         run: |
-          codesign --force --deep --sign "$IDENTITY" --options runtime dist/TimeTracker.app
+          # Sign all contents first, then the app itself
+          find dist/TimeTracker.app -type f -perm +111 -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
+          codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
+          # Verify
+          codesign --verify --verbose dist/TimeTracker.app
       
       - name: Create signed pkg installer
         env:
@@ -66,7 +70,32 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         working-directory: mac_agent
         run: |
-          xcrun notarytool submit TimeTracker.pkg --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          # Submit for notarization
+          xcrun notarytool submit TimeTracker.pkg \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait \
+            --output-format json > notarization_result.json || true
+          
+          # Get submission ID and check result
+          SUBMISSION_ID=$(cat notarization_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
+          STATUS=$(cat notarization_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+          
+          echo "Submission ID: $SUBMISSION_ID"
+          echo "Status: $STATUS"
+          
+          # If failed, get the log
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "=== NOTARIZATION LOG ==="
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD"
+            exit 1
+          fi
+          
+          # Staple if successful
           xcrun stapler staple TimeTracker.pkg
       
       - name: Upload Mac artifact

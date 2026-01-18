@@ -30,6 +30,9 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple, List
 from urllib.parse import urlparse
 
+from quick_switcher import QuickSwitcher, start_hotkey_listener, stop_hotkey_listener
+
+
 # Windows-specific imports
 try:
     import win32gui
@@ -776,6 +779,7 @@ def run_agent():
     
     # GUI initialization
     gui_menu_bar = None
+    quick_switcher = None
     if GUI_AVAILABLE:
         try:
             api_key = config.get("api_key") or API_KEY
@@ -791,10 +795,47 @@ def run_agent():
                 sync=sync,
             )
             log("[GUI] System tray initialized")
+
+            # === QUICK SWITCHER (Ctrl+Shift+T) ===
+            if GUI_AVAILABLE and gui_menu_bar:
+                try:
+                    from quick_switcher import QuickSwitcher, start_hotkey_listener
+                    from timetracker_gui import load_client_usage, track_client_selection
+                    
+                    def on_quick_switch(client_id: int, client_name: str):
+                        """Handle client selection from quick switcher."""
+                        if client_id and client_id > 0:
+                            track_client_selection(client_id)
+                        
+                        # Update GUI state
+                        gui_menu_bar.state.set_client(client_id, client_name)
+                        
+                        # Sync to backend
+                        api_key = config.get("api_key") or API_KEY
+                        if api_key and API_BASE:
+                            set_current_client_backend(API_BASE, api_key, client_id)
+                        
+                        log(f"[QUICK] Switched to: {client_name}")
+                    
+                    quick_switcher = QuickSwitcher(
+                        get_clients=lambda: fetch_clients_from_backend(API_BASE, config.get("api_key") or API_KEY),
+                        on_select=on_quick_switch,
+                        get_usage=load_client_usage,
+                        get_current_id=lambda: gui_menu_bar.state.current_client_id
+                    )
+                    
+                    start_hotkey_listener(quick_switcher.show)
+                    log("[QUICK] Quick Switcher ready (Ctrl+Shift+T)")
+                    
+                except Exception as e:
+                    log(f"[QUICK] Failed to initialize: {e}")
+                    import traceback
+                    traceback.print_exc()
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
             import traceback
             traceback.print_exc()
+
     
     log("=== Windows Activity Agent starting… (Ctrl+C to stop) ===")
     log(f"CONFIG={CONFIG_FILE}")

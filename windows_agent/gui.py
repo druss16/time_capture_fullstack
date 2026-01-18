@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-TimeTracker Configuration GUI - Modern Version
+TimeTracker Configuration GUI - macOS Modern Version
 
-Beautiful, modern UI using CustomTkinter
+Beautiful, modern UI using CustomTkinter (matching Windows design)
 """
 
 import os
@@ -10,6 +10,8 @@ import json
 import subprocess
 import sys
 import webbrowser
+import platform
+import uuid
 
 try:
     import customtkinter as ctk
@@ -25,13 +27,14 @@ from tkinter import messagebox
 
 CONFIG_DIR = os.path.expanduser("~/.timetracker")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
-PID_FILE = os.path.join(APPDATA, "TimeTracker", "agent.pid")
+PLIST = os.path.expanduser("~/Library/LaunchAgents/com.mavops.timetracker.plist")
+PID_FILE = os.path.expanduser("~/.timetracker/agent.pid")
+LOG_DIR = os.path.expanduser("~/Library/Logs/TimeTracker")
 
 APP_VERSION = "1.0.0"
 GITHUB_REPO = "druss16/timetracker-releases"
 
-# Color scheme
+# Color scheme (matching Windows)
 COLORS = {
     "primary": "#3B82F6",      # Blue
     "primary_hover": "#2563EB",
@@ -47,21 +50,24 @@ COLORS = {
 }
 
 
-def get_agent_exe_path():
-    """Get path to TimeTrackerAgent.exe"""
+def get_agent_script_path():
+    """Get path to main.py agent script"""
     if getattr(sys, 'frozen', False):
         base_dir = os.path.dirname(sys.executable)
     else:
         base_dir = os.path.dirname(__file__)
     
-    agent_exe = os.path.join(base_dir, "TimeTrackerAgent.exe")
+    agent_py = os.path.join(base_dir, "main.py")
+    if os.path.exists(agent_py):
+        return agent_py
     
-    if not os.path.exists(agent_exe):
-        agent_py = os.path.join(base_dir, "main.py")
-        if os.path.exists(agent_py):
-            return (sys.executable, agent_py)
+    # Try parent directory
+    parent_dir = os.path.dirname(base_dir)
+    agent_py = os.path.join(parent_dir, "main.py")
+    if os.path.exists(agent_py):
+        return agent_py
     
-    return agent_exe
+    return None
 
 
 def load_config():
@@ -80,23 +86,34 @@ def save_config(config):
         json.dump(config, f, indent=2)
 
 
-def is_agent_running():
-    """Check if agent is running via PID file"""
-    if not os.path.exists(PID_FILE):
-        return False
+def launchctl(args):
+    """Run launchctl command"""
     try:
-        with open(PID_FILE) as f:
-            pid = int(f.read().strip())
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        PROCESS_QUERY_INFORMATION = 0x0400
-        handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid)
-        if handle:
-            kernel32.CloseHandle(handle)
+        out = subprocess.run(["/bin/launchctl"] + args, capture_output=True, text=True)
+        return out.returncode, out.stdout, out.stderr
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def is_agent_running():
+    """Check if agent is running via launchctl or PID file"""
+    # Check launchctl first
+    code, _, _ = launchctl(["print", f"gui/{os.getuid()}/com.mavops.timetracker"])
+    if code == 0:
+        return True
+    
+    # Fallback to PID file check
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE) as f:
+                pid = int(f.read().strip())
+            # Check if process exists
+            os.kill(pid, 0)
             return True
-        return False
-    except Exception:
-        return False
+        except (OSError, ValueError):
+            pass
+    
+    return False
 
 
 class ModernConfigGUI:
@@ -148,6 +165,19 @@ class ModernConfigGUI:
             text_color=COLORS["text_muted"]
         )
         version_label.pack(side="right", pady=10)
+        
+        # macOS badge
+        os_label = ctk.CTkLabel(
+            header_frame,
+            text="macOS",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["text_muted"],
+            fg_color=COLORS["bg_card"],
+            corner_radius=4,
+            padx=8,
+            pady=2
+        )
+        os_label.pack(side="right", padx=(0, 10), pady=10)
         
         # ===== Status Card =====
         status_card = ctk.CTkFrame(main_frame, corner_radius=12)
@@ -321,7 +351,15 @@ class ModernConfigGUI:
         )
         lbl.pack(fill="x")
         
-        var = ctk.StringVar(value=self.config.get(var_name.replace("_var", ""), default))
+        # Get value from config, handling both old and new key names
+        config_key = var_name.replace("_var", "")
+        value = self.config.get(config_key, "")
+        if not value and config_key == "api_url":
+            value = self.config.get("api_base", default)
+        if not value:
+            value = default
+            
+        var = ctk.StringVar(value=value)
         setattr(self, f"{var_name}_var", var)
         
         entry = ctk.CTkEntry(
@@ -372,25 +410,27 @@ class ModernConfigGUI:
     def _start_agent(self):
         """Start the agent"""
         try:
-            agent_path = get_agent_exe_path()
+            # Try launchctl first
+            if os.path.exists(PLIST):
+                code, _, stderr = launchctl(["load", "-w", PLIST])
+                if code == 0:
+                    self.root.after(1000, self._update_status)
+                    self._show_toast("Success", "Agent started successfully!", "success")
+                    return
             
-            if isinstance(agent_path, tuple):
-                cmd = list(agent_path) + ["start"]
+            # Fallback to direct script execution
+            agent_path = get_agent_script_path()
+            if agent_path:
+                subprocess.Popen(
+                    [sys.executable, agent_path, "start"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
+                self.root.after(1000, self._update_status)
+                self._show_toast("Success", "Agent started successfully!", "success")
             else:
-                cmd = [agent_path, "start"]
-            
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-            
-            subprocess.Popen(
-                cmd,
-                startupinfo=startupinfo,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-            )
-            
-            self.root.after(1000, self._update_status)
-            self._show_toast("Success", "Agent started successfully!", "success")
+                self._show_toast("Error", "Agent script not found", "error")
         
         except Exception as e:
             self._show_toast("Error", f"Failed to start agent: {e}", "error")
@@ -398,14 +438,18 @@ class ModernConfigGUI:
     def _stop_agent(self):
         """Stop the agent"""
         try:
-            agent_path = get_agent_exe_path()
+            # Try launchctl first
+            if os.path.exists(PLIST):
+                launchctl(["unload", PLIST])
             
-            if isinstance(agent_path, tuple):
-                cmd = list(agent_path) + ["stop"]
-            else:
-                cmd = [agent_path, "stop"]
-            
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            # Also try to stop via PID
+            if os.path.exists(PID_FILE):
+                try:
+                    with open(PID_FILE) as f:
+                        pid = int(f.read().strip())
+                    os.kill(pid, 15)  # SIGTERM
+                except Exception:
+                    pass
             
             self.root.after(500, self._update_status)
             self._show_toast("Success", "Agent stopped successfully!", "success")
@@ -417,12 +461,10 @@ class ModernConfigGUI:
         """Attempt to pair with the backend"""
         import urllib.request
         import urllib.error
-        import uuid
-        import platform
         
         url = api_base.rstrip('/') + '/agents/pair/claim/'
         
-        device_id_file = os.path.join(APPDATA, 'TimeTracker', '.device_id')
+        device_id_file = os.path.join(CONFIG_DIR, '.device_id')
         try:
             if os.path.exists(device_id_file):
                 with open(device_id_file) as f:
@@ -438,7 +480,7 @@ class ModernConfigGUI:
         payload = {
             'code': code.strip().upper(),
             'hostname': platform.node(),
-            'platform': 'Windows',
+            'platform': 'macOS',
             'version': APP_VERSION,
             'device_id': device_id
         }
@@ -502,12 +544,11 @@ class ModernConfigGUI:
     
     def _open_logs(self):
         """Open logs folder"""
-        log_dir = os.path.join(APPDATA, "TimeTracker", "logs")
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir, exist_ok=True)
+        if not os.path.exists(LOG_DIR):
+            os.makedirs(LOG_DIR, exist_ok=True)
         
         try:
-            os.startfile(log_dir)
+            subprocess.run(["open", LOG_DIR])
         except Exception as e:
             self._show_toast("Error", f"Failed to open logs: {e}", "error")
     
@@ -539,7 +580,7 @@ class ModernConfigGUI:
             ("1️⃣", "Get your pairing code from the web app\n    Settings → Devices → Generate Code"),
             ("2️⃣", "Enter the code above and click Save & Pair"),
             ("3️⃣", "Click Start Agent to begin tracking"),
-            ("4️⃣", "Look for the TT icon in your system tray"),
+            ("4️⃣", "Look for the TT icon in your menu bar"),
         ]
         
         for emoji, text in steps:
@@ -608,12 +649,9 @@ def main():
         app = ModernConfigGUI()
         app.run()
     else:
-        # Fallback to original
+        # Fallback to original tkinter version
         print("CustomTkinter not installed. Run: pip install customtkinter CTkMessagebox")
-        from gui import ConfigGUI
-        root = tk.Tk()
-        app = ConfigGUI(root)
-        root.mainloop()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

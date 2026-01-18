@@ -1,1 +1,3 @@
 pyobjc==10.3
+rumps>=0.4.0
+pillow>=10.0.0

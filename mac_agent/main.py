@@ -40,6 +40,9 @@ from Quartz import (
     kCGEventMouseMoved,
 )
 
+from quick_switcher import QuickSwitcher, start_hotkey_listener, stop_hotkey_listener
+
+
 
 # Notifications (PyObjC)
 try:
@@ -1805,6 +1808,7 @@ def run_agent():
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
     gui_menu_bar = None
+    quick_switcher = None  # ← Add this line
     if GUI_AVAILABLE:
         try:
             gui_menu_bar = run_gui_app(
@@ -1830,9 +1834,36 @@ def run_agent():
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
             else:
                 log(f"[DEBUG] Registration skipped - sync={sync is not None}, gui={gui_menu_bar is not None}")
+
+            # === QUICK SWITCHER (Cmd+Shift+T) ===
+            try:
+                from quick_switcher import QuickSwitcher, start_hotkey_listener
+                from timetracker_gui import load_client_usage, track_client_selection
+                
+                def on_quick_switch(client_id: int, client_name: str):
+                    if client_id and client_id > 0:
+                        track_client_selection(client_id)
+                    gui_menu_bar.state.set_client(client_id, client_name)
+                    set_current_client_on_backend(API_BASE, config.get("api_key") or API_KEY, 
+                                                   client_id=client_id, client_name=client_name)
+                    if gui_menu_bar.app and hasattr(gui_menu_bar.app, '_rebuild_menu'):
+                        gui_menu_bar.app._rebuild_menu()
+                    log(f"[QUICK] Switched to: {client_name}")
+                
+                quick_switcher = QuickSwitcher(
+                    get_clients=lambda: fetch_clients_from_backend(API_BASE, config.get("api_key") or API_KEY),
+                    on_select=on_quick_switch,
+                    get_usage=load_client_usage,
+                    get_current_id=lambda: gui_menu_bar.state.current_client_id
+                )
+                start_hotkey_listener(quick_switcher.show, use_fallback=True)  # ← Add use_fallback=True
+                log("[QUICK] Ready - Cmd+Shift+T")
+            except Exception as e:
+                log(f"[QUICK] Failed to initialize: {e}")
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
+
 
     # Restore client state from backend
     api_key = config.get("api_key") or API_KEY
@@ -2009,7 +2040,7 @@ def run_agent():
         from AppKit import NSApp
         log("[GUI] Starting GUI event loop...")
         try:
-            NSApp.run()
+            gui_menu_bar.run()
         except KeyboardInterrupt:
             log("[GUI] Interrupted")
     else:

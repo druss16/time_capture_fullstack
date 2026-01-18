@@ -778,63 +778,46 @@ def run_agent():
             print("[SYNC] agent_sync_integration not available")
     
     # GUI initialization
-    gui_menu_bar = None
-    quick_switcher = None
-    if GUI_AVAILABLE:
-        try:
-            api_key = config.get("api_key") or API_KEY
-            api_base = API_BASE
-            
-            gui_menu_bar = run_gui_app(
-                on_client_confirmed=lambda cid, cname, data: log(f"[GUI] Client confirmed: {cname}"),
-                on_client_rejected=lambda data: log(f"[GUI] Client rejected"),
-                get_today_time=fetch_today_time,
-                fetch_clients=lambda: fetch_clients_from_backend(api_base, api_key),
-                set_current_client=lambda cid: set_current_client_backend(api_base, api_key, cid),
-                get_current_client=lambda: get_current_client_from_backend(api_base, api_key),
-                sync=sync,
-            )
-            log("[GUI] System tray initialized")
-
-            # === QUICK SWITCHER (Ctrl+Shift+T) ===
-            if GUI_AVAILABLE and gui_menu_bar:
-                try:
-                    from quick_switcher import QuickSwitcher, start_hotkey_listener
-                    from timetracker_gui import load_client_usage, track_client_selection
-                    
-                    def on_quick_switch(client_id: int, client_name: str):
-                        """Handle client selection from quick switcher."""
-                        if client_id and client_id > 0:
-                            track_client_selection(client_id)
+    # GUI initialization
+        gui_menu_bar = None
+        quick_switcher = None
+        if GUI_AVAILABLE:
+            try:
+                api_key = config.get("api_key") or API_KEY
+                api_base = API_BASE
+                
+                gui_menu_bar = run_gui_app(
+                    on_client_confirmed=lambda cid, cname, data: log(f"[GUI] Client confirmed: {cname}"),
+                    on_client_rejected=lambda data: log(f"[GUI] Client rejected"),
+                    get_today_time=fetch_today_time,
+                    fetch_clients=lambda: fetch_clients_from_backend(api_base, api_key),
+                    set_current_client=lambda cid: set_current_client_backend(api_base, api_key, cid),
+                    get_current_client=lambda: get_current_client_from_backend(api_base, api_key),
+                    sync=sync,
+                )
+                log("[GUI] System tray initialized")
+                
+                # === QUICK SWITCHER (Alt+Shift+T) ===
+                if gui_menu_bar:
+                    try:
+                        import keyboard
                         
-                        # Update GUI state
-                        gui_menu_bar.state.set_client(client_id, client_name)
+                        def on_hotkey_pressed():
+                            log("[HOTKEY] Alt+Shift+T pressed!")
+                            gui_menu_bar._show_client_picker()
                         
-                        # Sync to backend
-                        api_key = config.get("api_key") or API_KEY
-                        if api_key and API_BASE:
-                            set_current_client_backend(API_BASE, api_key, client_id)
+                        keyboard.add_hotkey('alt+shift+t', on_hotkey_pressed)
+                        log("[QUICK] Ready - Alt+Shift+T")
                         
-                        log(f"[QUICK] Switched to: {client_name}")
-                    
-                    quick_switcher = QuickSwitcher(
-                        get_clients=lambda: fetch_clients_from_backend(API_BASE, config.get("api_key") or API_KEY),
-                        on_select=on_quick_switch,
-                        get_usage=load_client_usage,
-                        get_current_id=lambda: gui_menu_bar.state.current_client_id
-                    )
-                    
-                    start_hotkey_listener(quick_switcher.show)
-                    log("[QUICK] Quick Switcher ready (Ctrl+Shift+T)")
-                    
-                except Exception as e:
-                    log(f"[QUICK] Failed to initialize: {e}")
-                    import traceback
-                    traceback.print_exc()
-        except Exception as e:
-            log(f"[GUI] Failed to initialize: {e}")
-            import traceback
-            traceback.print_exc()
+                    except Exception as e:
+                        log(f"[QUICK] Failed to initialize: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        
+            except Exception as e:
+                log(f"[GUI] Failed to initialize: {e}")
+                import traceback
+                traceback.print_exc()
 
     
     log("=== Windows Activity Agent starting… (Ctrl+C to stop) ===")

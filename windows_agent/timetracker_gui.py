@@ -68,6 +68,29 @@ COLORS = {
 
 CLIENT_USAGE_FILE = os.path.expanduser("~/.timetracker/client_usage.json")
 
+def _run_client_picker_process(clients_json: str, current_id: int, result_queue):
+    """Run client picker in separate process"""
+    import json
+    clients = json.loads(clients_json) if clients_json else []
+    
+    # Create a minimal client manager for the picker
+    class TempClientMgr:
+        def __init__(self, clients):
+            self.clients = clients
+        def get_all(self):
+            return self.clients
+    
+    selected = {"id": None, "name": None}
+    
+    def on_select(client_id, client_name):
+        selected["id"] = client_id
+        selected["name"] = client_name
+    
+    picker = ClientPickerWindow(TempClientMgr(clients), on_select)
+    picker.show()
+    
+    result_queue.put((selected["id"], selected["name"]))
+
 def load_client_usage() -> Dict[int, int]:
     """Load client selection counts"""
     if os.path.exists(CLIENT_USAGE_FILE):
@@ -358,6 +381,13 @@ class TodayTimeWindowModern:
         self.root.title("Today's Time")
         self.root.geometry("500x450")
         self.root.resizable(False, False)
+        self.root.attributes('-topmost', True)
+        
+        # Center window
+        self.root.update_idletasks()
+        x = (self.root.winfo_screenwidth() // 2) - 250
+        y = (self.root.winfo_screenheight() // 2) - 225
+        self.root.geometry(f"+{x}+{y}")
         
         self._setup_ui()
     
@@ -389,14 +419,30 @@ class TodayTimeWindowModern:
         self.entries_frame = ctk.CTkScrollableFrame(content, corner_radius=10)
         self.entries_frame.pack(fill="both", expand=True, pady=(0, 15))
         
-        # Refresh button
+        # Buttons
+        btn_frame = ctk.CTkFrame(content, fg_color="transparent")
+        btn_frame.pack(fill="x")
+        
         refresh_btn = ctk.CTkButton(
-            content,
+            btn_frame,
             text="🔄  Refresh",
             command=self._on_refresh,
             height=40
         )
-        refresh_btn.pack(fill="x")
+        refresh_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
+        
+        close_btn = ctk.CTkButton(
+            btn_frame,
+            text="Close",
+            command=self.root.destroy,
+            fg_color=COLORS["bg_card"],
+            hover_color=COLORS["bg_dark"],
+            height=40
+        )
+        close_btn.pack(side="right", expand=True, fill="x", padx=(5, 0))
+        
+        # Escape to close
+        self.root.bind("<Escape>", lambda e: self.root.destroy())
     
     def _on_refresh(self):
         if not self.api_callback:
@@ -622,9 +668,32 @@ class TimeTrackerSystemTray:
         )
 
     def _show_client_picker(self):
-        """Show searchable client picker"""
-        picker = ClientPickerWindow(self.client_mgr, self._switch_client)
-        picker.show()
+        """Show searchable client picker in subprocess to avoid threading issues"""
+        import multiprocessing
+        
+        # Serialize data for subprocess
+        clients_json = json.dumps(self.client_mgr.get_all())
+        current_id = self.state.current_client_id
+        
+        result_queue = multiprocessing.Queue()
+        
+        p = multiprocessing.Process(
+            target=_run_client_picker_process,
+            args=(clients_json, current_id, result_queue)
+        )
+        p.start()
+        p.join(timeout=60)
+        
+        if p.is_alive():
+            p.terminate()
+            return
+        
+        try:
+            selected_id, selected_name = result_queue.get(timeout=1)
+            if selected_id is not None or selected_name == "No Client":
+                self._switch_client(selected_id or 0, selected_name)
+        except:
+            pass
     
     def _switch_client(self, client_id: int, client_name: str):
         """Handle client switch"""
@@ -741,9 +810,11 @@ class ClientPickerWindow:
         )
         self.search_entry.pack(fill="x", pady=(0, 15))
         
-        # Bind Enter key to select first result
+        # Bindings
         self.search_entry.bind("<Return>", self._select_first)
         self.search_entry.bind("<Escape>", lambda e: self.root.destroy())
+        self.root.bind("<Escape>", lambda e: self.root.destroy())
+        self.root.bind("<Button-1>", lambda e: self.search_entry.focus_set())
         
         # Results list
         self.results_frame = ctk.CTkScrollableFrame(content, corner_radius=10)
@@ -836,7 +907,6 @@ class ClientPickerWindow:
             self.root.destroy()
     
     def _select_client(self, client_id: int, client_name: str):
-        # Store selection, don't call callback yet
         self._selected_id = client_id
         self._selected_name = client_name
         self.root.destroy()
@@ -844,7 +914,25 @@ class ClientPickerWindow:
     def show(self):
         self._selected_id = None
         self._selected_name = None
+        
+        # Force focus to window and search box
+        def grab_focus():
+            try:
+                self.root.lift()
+                self.root.attributes('-topmost', True)
+                self.root.focus_force()
+                self.root.grab_set()
+                self.search_entry.focus_set()
+                self.search_entry.focus_force()
+            except:
+                pass
+        
+        self.root.after(50, grab_focus)
+        self.root.after(200, grab_focus)
+        self.root.after(500, grab_focus)
+        
         self.root.mainloop()
+        
         # After mainloop exits, call the callback safely
         if self._selected_id is not None or self._selected_name == "No Client":
             self.on_select(self._selected_id or 0, self._selected_name)

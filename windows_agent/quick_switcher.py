@@ -153,6 +153,10 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     visible_clients = []
     item_widgets = []
     
+    # Track after IDs for cleanup and shutdown flag
+    after_ids = []
+    shutting_down = [False]  # Mutable for nested function access
+    
     # ---- Window Setup ----
     if USE_CTK:
         ctk.set_appearance_mode("dark")
@@ -187,20 +191,36 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     root.attributes('-topmost', True)
     root.focus_force()
     
-    # Keep it on top continuously
+    # Keep it on top continuously (with proper cleanup)
     def stay_on_top():
-        if root.winfo_exists():
-            root.lift()
-            root.attributes('-topmost', True)
-            root.after(100, stay_on_top)
+        if shutting_down[0]:
+            return
+        try:
+            if root.winfo_exists():
+                root.lift()
+                root.attributes('-topmost', True)
+                after_id = root.after(100, stay_on_top)
+                after_ids.append(after_id)
+        except:
+            pass
     
-    root.after(100, stay_on_top)
+    after_ids.append(root.after(100, stay_on_top))
     
     # Add subtle shadow/border effect
     if USE_CTK:
         root.configure(fg_color=colors["bg_window"])
     
     # ---- Helper Functions ----
+    def cancel_all_after():
+        """Cancel all pending after callbacks."""
+        shutting_down[0] = True
+        for after_id in after_ids:
+            try:
+                root.after_cancel(after_id)
+            except:
+                pass
+        after_ids.clear()
+    
     def update_selection(new_index: int):
         """Update visual selection."""
         if not visible_clients:
@@ -233,12 +253,14 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
             client = visible_clients[current_index[0]]
             selected["id"] = client.get("id")
             selected["name"] = client.get("name")
+        cancel_all_after()
         root.quit()
     
     def cancel():
         """Cancel and close."""
         selected["id"] = None
         selected["name"] = None
+        cancel_all_after()
         root.quit()
     
     def rebuild_list(query: str = ""):
@@ -399,6 +421,8 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     
     def on_search_change(*args):
         """Called when search text changes."""
+        if shutting_down[0]:
+            return
         query = search_var.get()
         rebuild_list(query)
     
@@ -518,19 +542,25 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     
     # Force focus to search entry after a brief delay
     def focus_search():
-        search_entry.focus_force()
-        root.lift()
-        root.attributes('-topmost', True)
+        if shutting_down[0]:
+            return
+        try:
+            search_entry.focus_force()
+            root.lift()
+            root.attributes('-topmost', True)
+        except:
+            pass
     
-    root.after(100, focus_search)
+    after_ids.append(root.after(100, focus_search))
     
     # ---- Run ----
     root.mainloop()
     
-    try:
-        root.destroy()
-    except:
-        pass
+    # Cleanup: cancel any remaining after callbacks before destroy
+    cancel_all_after()
+    
+    # Process exits here - no need to destroy, OS cleans up
+
     
     # Return result
     result_queue.put((selected["id"], selected["name"]))

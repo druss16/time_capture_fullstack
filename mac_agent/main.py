@@ -1807,8 +1807,9 @@ def run_agent():
 
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
+    # === GUI INITIALIZATION (after pairing succeeds) ===
     gui_menu_bar = None
-    quick_switcher = None  # ← Add this line
+    quick_switcher = None
     if GUI_AVAILABLE:
         try:
             gui_menu_bar = run_gui_app(
@@ -1819,51 +1820,43 @@ def run_agent():
                 set_current_client=lambda client_id: set_current_client_backend(API_BASE, API_KEY, client_id),
                 get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY),
                 repair_callback=_gui_pair_callback,
-                sync=sync,  # ← Add this
-
+                sync=sync,
             )
             log("[GUI] Menu bar initialized")
-            log(f"[DEBUG] sync={sync is not None}, gui_menu_bar={gui_menu_bar is not None}, type={type(gui_menu_bar)}")
             
             # Register GUI with sync
             if sync and gui_menu_bar:
                 sync.gui_menu_bar = gui_menu_bar
-                log(f"[DEBUG] Registered - sync.gui_menu_bar is now {sync.gui_menu_bar is not None}")
                 if sync.clients and hasattr(gui_menu_bar, 'refresh_client_menu'):
                     gui_menu_bar.refresh_client_menu(sync.clients)
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
-            else:
-                log(f"[DEBUG] Registration skipped - sync={sync is not None}, gui={gui_menu_bar is not None}")
-
-            # === QUICK SWITCHER (Cmd+Shift+T) ===
+            
+            # === QUICK SWITCHER (Option+Shift+T) ===
             try:
-                from quick_switcher import QuickSwitcher, start_hotkey_listener
-                from timetracker_gui import load_client_usage, track_client_selection
+                from pynput import keyboard
                 
-                def on_quick_switch(client_id: int, client_name: str):
-                    if client_id and client_id > 0:
-                        track_client_selection(client_id)
-                    gui_menu_bar.state.set_client(client_id, client_name)
-                    set_current_client_on_backend(API_BASE, config.get("api_key") or API_KEY, 
-                                                   client_id=client_id, client_name=client_name)
-                    if gui_menu_bar.app and hasattr(gui_menu_bar.app, '_rebuild_menu'):
-                        gui_menu_bar.app._rebuild_menu()
-                    log(f"[QUICK] Switched to: {client_name}")
+                def on_hotkey():
+                    if gui_menu_bar and gui_menu_bar.app:
+                        gui_menu_bar.app._on_search(None)
                 
-                quick_switcher = QuickSwitcher(
-                    get_clients=lambda: fetch_clients_from_backend(API_BASE, config.get("api_key") or API_KEY),
-                    on_select=on_quick_switch,
-                    get_usage=load_client_usage,
-                    get_current_id=lambda: gui_menu_bar.state.current_client_id
+                def for_canonical(f):
+                    return lambda k: f(listener.canonical(k))
+                
+                hotkey = keyboard.HotKey(
+                    keyboard.HotKey.parse('<alt>+<shift>+t'),
+                    on_hotkey
                 )
-                start_hotkey_listener(quick_switcher.show, use_fallback=True)  # ← Add use_fallback=True
-                log("[QUICK] Ready - Cmd+Shift+T")
+                listener = keyboard.Listener(
+                    on_press=for_canonical(hotkey.press),
+                    on_release=for_canonical(hotkey.release)
+                )
+                listener.start()
+                log("[QUICK] Ready - Option+Shift+T")
             except Exception as e:
-                log(f"[QUICK] Failed to initialize: {e}")
+                log(f"[QUICK] Failed: {e}")
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
-
 
     # Restore client state from backend
     api_key = config.get("api_key") or API_KEY

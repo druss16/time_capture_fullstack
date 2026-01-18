@@ -1323,9 +1323,30 @@ if RUMPS_AVAILABLE:
             self.menu.add(quit_item)
         
         def _on_search(self, _):
-            # Run in thread since the subprocess will handle GUI
-            threading.Thread(target=self._show_client_picker, daemon=True).start()
-        
+            """Native macOS search dialog"""
+            clients = sort_clients_by_usage(self.controller.client_mgr.get_all())
+            
+            # Build a quick reference list
+            client_list = "\n".join([f"{c['name']}" for c in clients[:10]])
+            
+            window = rumps.Window(
+                message=f'Top clients:\n{client_list}\n\nType name to switch:',
+                title='Switch Client',
+                default_text='',
+                ok='Switch',
+                cancel='Cancel',
+                dimensions=(320, 24)
+            )
+            response = window.run()
+            
+            if response.clicked and response.text:
+                query = response.text.lower().strip()
+                for client in clients:
+                    if query in client.get("name", "").lower() or query in client.get("code", "").lower():
+                        self._switch_client(client["id"], client["name"])
+                        return
+                rumps.alert("Not found", f"No client matching: {response.text}")
+                
         def _show_client_picker(self):
             if self.controller.fetch_clients_callback:
                 try:

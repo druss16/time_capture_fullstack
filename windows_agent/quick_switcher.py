@@ -121,6 +121,9 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     This avoids Tkinter threading issues with rumps.
     """
     import json
+    import sys
+    import os
+    import subprocess
     import tkinter as tk
     
     try:
@@ -164,9 +167,35 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     else:
         root = tk.Tk()
     
-    root.title("")
-    root.overrideredirect(True)  # No title bar - Spotlight style
+    root.title("Quick Switch")
+    # root.overrideredirect(True)  # DISABLED - causes focus issues on macOS
     root.attributes('-topmost', True)
+    
+    # Minimal window decorations on macOS
+    try:
+        root.attributes('-alpha', 0.98)  # Slight transparency
+    except:
+        pass
+    
+    # macOS: Activate this process to receive keyboard input
+    import sys
+    if sys.platform == 'darwin':
+        try:
+            from AppKit import NSApplication, NSApp
+            NSApplication.sharedApplication()
+            NSApp.activateIgnoringOtherApps_(True)
+        except ImportError:
+            # Fallback: use osascript
+            try:
+                import subprocess
+                import os
+                pid = os.getpid()
+                subprocess.run([
+                    'osascript', '-e', 
+                    f'tell application "System Events" to set frontmost of (first process whose unix id is {pid}) to true'
+                ], capture_output=True)
+            except:
+                pass
     
     # Window size
     WIDTH = 500
@@ -501,15 +530,17 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     # ---- Bindings ----
     search_var.trace_add("write", on_search_change)
     
-    # Explicit Escape binding (works even when search has focus)
-    root.bind("<Escape>", lambda e: cancel())
+    # Bind ALL keyboard events to search_entry (where user types)
     search_entry.bind("<Escape>", lambda e: cancel())
+    search_entry.bind("<Return>", lambda e: confirm_selection())
+    search_entry.bind("<Down>", lambda e: [update_selection(current_index[0] + 1), "break"][1])
+    search_entry.bind("<Up>", lambda e: [update_selection(current_index[0] - 1), "break"][1])
     
-    # Arrow keys and Enter
+    # Also bind to root for safety
+    root.bind("<Escape>", lambda e: cancel())
+    root.bind("<Return>", lambda e: confirm_selection())
     root.bind("<Down>", lambda e: update_selection(current_index[0] + 1))
     root.bind("<Up>", lambda e: update_selection(current_index[0] - 1))
-    root.bind("<Return>", lambda e: confirm_selection())
-    search_entry.bind("<Return>", lambda e: confirm_selection())
     
     # ---- Close button (top right) ----
     if USE_CTK:
@@ -540,8 +571,9 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     root.deiconify()
     rebuild_list("")
     
-    # Force focus to search entry after a brief delay
+    # Force focus to search entry - multiple attempts for macOS
     def focus_search():
+<<<<<<< Updated upstream
         if shutting_down[0]:
             return
         try:
@@ -552,6 +584,29 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
             pass
     
     after_ids.append(root.after(100, focus_search))
+=======
+        try:
+            # macOS: activate the app again
+            if sys.platform == 'darwin':
+                try:
+                    from AppKit import NSApp
+                    NSApp.activateIgnoringOtherApps_(True)
+                except:
+                    pass
+            
+            root.lift()
+            root.focus_force()
+            root.grab_set()  # Capture all keyboard/mouse input
+            search_entry.focus_set()
+            search_entry.focus_force()
+            search_entry.icursor('end')  # Put cursor at end
+        except Exception as e:
+            print(f"[QuickSwitcher] Focus error: {e}")
+    
+    root.after(50, focus_search)
+    root.after(200, focus_search)  # Try again
+    root.after(500, focus_search)  # And again
+>>>>>>> Stashed changes
     
     # ---- Run ----
     root.mainloop()

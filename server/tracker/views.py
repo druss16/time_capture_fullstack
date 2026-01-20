@@ -4958,6 +4958,7 @@ def today_time(request):
         cat_data = data[client_name]['categories'][category]
         cat_data['spans'].append({'start': block.start, 'end': block.end})
         cat_data['count'] += 1
+        cat_data['actual_minutes'] = cat_data.get('actual_minutes', 0) + (block.minutes or 0)
         
         # Build title for aggregation
         title = block.window_title or block.url or block.app_name or 'Unknown'

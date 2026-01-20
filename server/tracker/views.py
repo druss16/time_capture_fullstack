@@ -6462,8 +6462,12 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
 @api_view(["GET", "PATCH"])
-@permission_classes([IsAuthenticated])  # all members can GET; PATCH restricted below
+@permission_classes([IsAuthenticated])
 def settings_org(request):
     """
     GET: Return organization info including plan (all members)
@@ -6482,108 +6486,109 @@ def settings_org(request):
         return Response({"error": "No organization found"}, status=404)
 
     org = membership.organization
-    is_admin_or_owner = membership.role in ['owner', 'admin']
+    is_admin_or_owner = membership.role in ["owner", "admin"]
+
+    # ✅ Ensure profile exists (so GET always has a place to read from)
+    profile, _ = OrgProfile.objects.get_or_create(org=org)
 
     def compute_actual_plan(org_obj):
-        """
-        Trust DB plan only if Stripe shows an active subscription.
-        Otherwise return 'none'.
-        """
-        actual = 'none'
-        if getattr(org_obj, 'stripe_customer_id', None):
+        actual = "none"
+        if getattr(org_obj, "stripe_customer_id", None):
             try:
-                stripe.api_key = getattr(django_settings, 'STRIPE_SECRET_KEY', None)
+                stripe.api_key = getattr(django_settings, "STRIPE_SECRET_KEY", None)
                 subs = stripe.Subscription.list(
                     customer=org_obj.stripe_customer_id,
-                    status='active',
+                    status="active",
                     limit=1
                 )
                 if subs.data:
-                    actual = getattr(org_obj, 'plan', 'professional') or 'professional'
+                    actual = getattr(org_obj, "plan", "professional") or "professional"
             except Exception as e:
                 print(f"[settings_org] Stripe check failed: {e}")
-                actual = 'none'
+                actual = "none"
         return actual
 
     if request.method == "GET":
-        # ✅ All members can read org info (including billing contact/email)
         response_data = {
             "id": org.id,
             "name": org.name,
-            "slug": getattr(org, 'slug', '') or "",
+            "slug": getattr(org, "slug", "") or "",
+
             "plan": compute_actual_plan(org),
-            "seat_count": getattr(org, 'seat_count', 1),
+            "seat_count": getattr(org, "seat_count", 1),
 
-            # Trial info
             "trial_ends_at": org.trial_ends_at.isoformat()
-            if getattr(org, 'trial_ends_at', None) else None,
+            if getattr(org, "trial_ends_at", None) else None,
 
-            # ✅ Recommended: return these to ALL members
-            "billing_email": (getattr(org, 'billing_email', '') or ''),
-            "billing_contact": (getattr(org, 'billing_contact', '') or ''),
+            # ✅ Billing fields live on OrgProfile
+            # Recommended: visible to all members
+            "billing_email": profile.billing_email or "",
+            "billing_contact": profile.billing_contact or "",
 
-            # Rates
-            "billing_rate_default": str(getattr(org, 'billing_rate_default', None) or "150.00"),
+            # Default billing rate - visible to all (needed for time tracking)
+            "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
 
-            # Cost rate (still admin-only)
-            "cost_rate_default": str(getattr(org, 'cost_rate_default', None) or "75.00")
+            # Default cost rate - only for admin/owner
+            "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00")
             if is_admin_or_owner else "0.00",
 
             "created_at": org.created_at.isoformat()
-            if getattr(org, 'created_at', None) else None,
+            if getattr(org, "created_at", None) else None,
 
             # Helpful flags for frontend
             "can_edit_org": is_admin_or_owner,
             "role": membership.role,
         }
-
         return Response(response_data)
 
     # =========================
     # PATCH (owner/admin only)
     # =========================
-    if membership.role not in ['owner', 'admin']:
+    if not is_admin_or_owner:
         return Response({"error": "Only owner or admin can update organization settings"}, status=403)
 
-    # Updates
+    # Update org fields
     if "name" in request.data:
         org.name = request.data["name"]
 
-    if "billing_email" in request.data and hasattr(org, 'billing_email'):
-        org.billing_email = request.data["billing_email"]
-
-    if "billing_contact" in request.data and hasattr(org, 'billing_contact'):
-        org.billing_contact = request.data["billing_contact"]
-
-    # Default billing rate
-    if "billing_rate_default" in request.data and hasattr(org, 'billing_rate_default'):
+    if "billing_rate_default" in request.data and hasattr(org, "billing_rate_default"):
         org.billing_rate_default = Decimal(str(request.data["billing_rate_default"]))
 
-    # Default cost rate
-    if "cost_rate_default" in request.data and hasattr(org, 'cost_rate_default'):
+    if "cost_rate_default" in request.data and hasattr(org, "cost_rate_default"):
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
 
     org.save()
+
+    # ✅ Update profile billing fields
+    if "billing_email" in request.data:
+        # Normalize empty string → None (since field allows null)
+        val = (request.data.get("billing_email") or "").strip()
+        profile.billing_email = val or None
+
+    if "billing_contact" in request.data:
+        profile.billing_contact = (request.data.get("billing_contact") or "").strip()
+
+    profile.save()
 
     # Build response
     response_data = {
         "id": org.id,
         "name": org.name,
-        "slug": getattr(org, 'slug', '') or "",
+        "slug": getattr(org, "slug", "") or "",
         "plan": compute_actual_plan(org),
-        "seat_count": getattr(org, 'seat_count', 1),
+        "seat_count": getattr(org, "seat_count", 1),
+
         "trial_ends_at": org.trial_ends_at.isoformat()
-        if getattr(org, 'trial_ends_at', None) else None,
+        if getattr(org, "trial_ends_at", None) else None,
 
-        # ✅ Return updated billing info
-        "billing_email": (getattr(org, 'billing_email', '') or ''),
-        "billing_contact": (getattr(org, 'billing_contact', '') or ''),
+        "billing_email": profile.billing_email or "",
+        "billing_contact": profile.billing_contact or "",
 
-        "billing_rate_default": str(getattr(org, 'billing_rate_default', None) or "150.00"),
-        "cost_rate_default": str(getattr(org, 'cost_rate_default', None) or "75.00"),
+        "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
+        "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00"),
 
         "created_at": org.created_at.isoformat()
-        if getattr(org, 'created_at', None) else None,
+        if getattr(org, "created_at", None) else None,
 
         "can_edit_org": True,
         "role": membership.role,

@@ -1,17 +1,17 @@
 # tracker/services/compaction.py
 """
-Event-centric compaction with cross-run block merging:
-- Each RawEvent has a `block` FK (null until processed)
-- Compaction ONLY processes events where block__isnull=True
-- NEW: Events are merged into EXISTING uncategorized blocks when possible
-- Events are linked to their block when created
-- Categorized blocks are NEVER touched
+Event-centric compaction with SESSION-AWARE merging.
+
+KEY RULES:
+1. Gap > 30 minutes = DIFFERENT SESSION (never merge across)
+2. Same app + overlapping/adjacent time (< 2 min gap) = merge
+3. Minutes are ALWAYS calculated from (end - start), never added
+4. Categorized blocks are NEVER touched
 
 GUARANTEES:
-1. No duplicates - each event belongs to exactly one block
-2. No double-counting - events with block!=null are ignored
-3. No flip-flopping - categorized blocks never change
-4. NEW: Minimal blocks - adjacent same-activity blocks are merged
+- No 9-hour blocks from 30 minutes of work
+- No duplicate blocks for same activity
+- No flip-flopping of categorized blocks
 """
 
 from __future__ import annotations
@@ -31,14 +31,14 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # Configuration
-IDLE_CAP = timedelta(minutes=30)       # Cap long gaps to 30 minutes
-MIN_BLOCK = timedelta(seconds=30)      # Drop tiny blips under 30 seconds
-COALESCE_GAP = timedelta(seconds=5)    # Merge blocks if gap < 5 seconds
-MERGE_GAP = timedelta(minutes=5)       # Merge with existing blocks if gap < 5 minutes
+IDLE_CAP = timedelta(minutes=30)           # Cap duration to next event
+MIN_BLOCK = timedelta(seconds=30)          # Drop events shorter than this
+SESSION_GAP = timedelta(minutes=30)        # Gap > 30 min = new session (NEVER merge across)
+MERGE_GAP = timedelta(minutes=2)           # Merge blocks if gap < 2 min (within same session)
 
 
 def _safe_device_id(device_id) -> int:
-    """Ensure device_id is a valid integer. Returns 0 for invalid values."""
+    """Ensure device_id is a valid integer."""
     if device_id is None:
         return 0
     try:
@@ -47,30 +47,15 @@ def _safe_device_id(device_id) -> int:
         return 0
 
 
-def _block_signature(block_or_dict) -> Tuple[str, str, str]:
-    """
-    Create a signature tuple for matching blocks.
-    Works with both Block objects and dicts.
-    """
+def _app_key(block_or_dict) -> str:
+    """Get normalized app name for grouping."""
     if isinstance(block_or_dict, dict):
-        return (
-            (block_or_dict.get("app_name") or "").lower().strip(),
-            (block_or_dict.get("bundle_id") or "").lower().strip(),
-            (block_or_dict.get("window_title") or "").lower().strip(),
-        )
-    else:
-        return (
-            (getattr(block_or_dict, 'app_name', None) or "").lower().strip(),
-            (getattr(block_or_dict, 'bundle_id', None) or "").lower().strip(),
-            (getattr(block_or_dict, 'window_title', None) or "").lower().strip(),
-        )
+        return (block_or_dict.get("app_name") or "").lower().strip()
+    return (getattr(block_or_dict, 'app_name', None) or "").lower().strip()
 
 
 def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org=None) -> int:
-    """
-    Main entry point - called by ai_suggestions_today and other views.
-    Compacts today's unlinked events into blocks.
-    """
+    """Main entry point - compacts today's unlinked events into blocks."""
     today = timezone.localdate()
     
     if isinstance(user, str):
@@ -85,15 +70,8 @@ def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org
 
 def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) -> int:
     """
-    Event-centric compaction with cross-run block merging.
-    
-    Key principles:
-    1. Only process events where block__isnull=True
-    2. Merge into existing uncategorized blocks when possible
-    3. Never touch categorized blocks
-    4. Consolidate duplicate blocks at the end
+    Event-centric compaction with session-aware merging.
     """
-    # Normalize user
     if isinstance(user, str):
         try:
             user = User.objects.get(username=user)
@@ -104,7 +82,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if not user:
         return 0
     
-    # Get org if not provided
+    # Get org
     if not org:
         from tracker.models import Organization, OrganizationMembership
         membership = OrganizationMembership.objects.filter(user=user).first()
@@ -117,7 +95,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             )
     
     # =========================================================
-    # STEP 1: Get ONLY unlinked events (never processed before)
+    # STEP 1: Get unlinked events
     # =========================================================
     qs = RawEvent.objects.filter(
         user=user,
@@ -132,72 +110,32 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     
     if not events:
         logger.debug(f"[COMPACT] No unlinked events for {day}")
-        # Still run consolidation in case there are duplicate blocks
-        consolidated = consolidate_uncategorized_blocks(user, day, hostname, org)
-        return consolidated
+        return 0
     
     logger.info(f"[COMPACT] Found {len(events)} unlinked events to process")
     
     # =========================================================
-    # STEP 2: Build raw blocks using duration-to-next-event
+    # STEP 2: Group events into SESSIONS (gap > 30 min = new session)
     # =========================================================
-    raw_blocks = []
-    
-    for i, event in enumerate(events):
-        start = event.ts_utc
-        
-        # Duration = time until next event (capped at IDLE_CAP)
-        if i + 1 < len(events):
-            next_ts = events[i + 1].ts_utc
-        else:
-            next_ts = start + timedelta(minutes=10)
-        
-        dur = max(timedelta(0), min(next_ts - start, IDLE_CAP))
-        
-        if dur < MIN_BLOCK:
-            continue
-        
-        end = start + dur
-        
-        raw_blocks.append({
-            "start": start,
-            "end": end,
-            "minutes": dur.total_seconds() / 60.0,
-            "app_name": event.app_name or "",
-            "bundle_id": event.bundle_id or "",
-            "window_title": event.window_title or "",
-            "url": event.url or "",
-            "file_path": event.file_path or "",
-            "hostname": event.hostname or hostname or "unknown",
-            "device_id": _safe_device_id(getattr(event, 'device_id', None)),
-            "current_client_id": getattr(event, 'current_client_id', None),
-            "ctx": getattr(event, 'ctx', {}),
-            "source_events": [event],
-        })
-    
-    if not raw_blocks:
-        logger.info(f"[COMPACT] No blocks to create (all events too short)")
-        # Still run consolidation
-        consolidated = consolidate_uncategorized_blocks(user, day, hostname, org)
-        return consolidated
+    sessions = _split_into_sessions(events)
+    logger.info(f"[COMPACT] Split into {len(sessions)} sessions")
     
     # =========================================================
-    # STEP 3: Coalesce adjacent identical activities (within this batch)
+    # STEP 3: Within each session, build blocks by app
     # =========================================================
-    coalesced = []
+    all_blocks = []
     
-    for block in raw_blocks:
-        if coalesced and _can_coalesce(coalesced[-1], block):
-            coalesced[-1]["end"] = block["end"]
-            coalesced[-1]["minutes"] += block["minutes"]
-            coalesced[-1]["source_events"].extend(block["source_events"])
-        else:
-            coalesced.append(block)
+    for session_events in sessions:
+        session_blocks = _build_session_blocks(session_events, hostname)
+        all_blocks.extend(session_blocks)
     
-    logger.info(f"[COMPACT] Coalesced {len(raw_blocks)} → {len(coalesced)} blocks (within batch)")
+    logger.info(f"[COMPACT] Built {len(all_blocks)} blocks from sessions")
+    
+    if not all_blocks:
+        return 0
     
     # =========================================================
-    # STEP 4: Get existing UNCATEGORIZED blocks for merging
+    # STEP 4: Try to merge into existing uncategorized blocks
     # =========================================================
     existing_uncategorized = list(Block.objects.filter(
         user=user,
@@ -208,307 +146,324 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if hostname:
         existing_uncategorized = [b for b in existing_uncategorized if b.hostname == hostname]
     
-    # Build signature map for quick lookup
-    existing_by_sig: Dict[Tuple, List[Block]] = {}
-    for eb in existing_uncategorized:
-        sig = _block_signature(eb)
-        if sig not in existing_by_sig:
-            existing_by_sig[sig] = []
-        existing_by_sig[sig].append(eb)
-    
-    logger.info(f"[COMPACT] Found {len(existing_uncategorized)} existing uncategorized blocks to potentially merge into")
-    
-    # =========================================================
-    # STEP 5: Try to merge new blocks into existing ones
-    # =========================================================
     blocks_to_create = []
     merged_count = 0
     
     with transaction.atomic():
-        for block_data in coalesced:
-            sig = _block_signature(block_data)
-            matching_existing = existing_by_sig.get(sig, [])
+        for block_data in all_blocks:
+            merged = _try_merge_into_existing(block_data, existing_uncategorized)
             
-            merged = False
-            
-            for existing in matching_existing:
-                # Check if adjacent or overlapping (within MERGE_GAP)
-                gap_after_existing = (block_data["start"] - existing.end).total_seconds()
-                gap_before_existing = (existing.start - block_data["end"]).total_seconds()
-                
-                # Merge if: new block is within 5 minutes before or after existing
-                # OR if they overlap
-                can_merge = (
-                    -300 <= gap_after_existing <= MERGE_GAP.total_seconds() or  # New starts near/after existing end
-                    -300 <= gap_before_existing <= MERGE_GAP.total_seconds() or  # New ends near/before existing start
-                    (block_data["start"] <= existing.end and block_data["end"] >= existing.start)  # Overlap
-                )
-                
-                if can_merge:
-                    # Extend existing block
-                    new_start = min(existing.start, block_data["start"])
-                    new_end = max(existing.end, block_data["end"])
-                    new_minutes = int((new_end - new_start).total_seconds() / 60)
-                    
-                    # Lock and update
-                    existing_locked = Block.objects.select_for_update().get(id=existing.id)
-                    
-                    # Double-check it's still uncategorized
-                    if existing_locked.is_categorized:
-                        continue
-                    
-                    existing_locked.start = new_start
-                    existing_locked.end = new_end
-                    existing_locked.minutes = new_minutes
-                    existing_locked.save(update_fields=['start', 'end', 'minutes'])
-                    
-                    # Link events to this existing block
-                    event_ids = [e.id for e in block_data["source_events"]]
-                    RawEvent.objects.filter(id__in=event_ids).update(block=existing_locked)
-                    
-                    # Update our local reference too
-                    existing.start = new_start
-                    existing.end = new_end
-                    existing.minutes = new_minutes
-                    
-                    logger.info(f"[COMPACT] ✅ Extended existing block {existing.id} with {len(event_ids)} events → now {new_minutes} min")
-                    merged = True
-                    merged_count += 1
-                    break
-            
-            if not merged:
+            if merged:
+                merged_count += 1
+            else:
                 blocks_to_create.append(block_data)
     
-    logger.info(f"[COMPACT] Merged {merged_count} blocks into existing, {len(blocks_to_create)} new to create")
+    logger.info(f"[COMPACT] Merged {merged_count} into existing, {len(blocks_to_create)} new")
     
     # =========================================================
-    # STEP 6: Create remaining blocks
+    # STEP 5: Create new blocks
     # =========================================================
     created_count = 0
     
     with transaction.atomic():
         for block_data in blocks_to_create:
-            is_idle = is_idle_activity(
-                app_name=block_data.get("app_name"),
-                bundle_id=block_data.get("bundle_id"),
-                window_title=block_data.get("window_title")
-            )
-            
-            device_id = block_data.get("device_id", 0)
-            
-            # Get client
-            client = None
-            if not is_idle:
-                client_id = block_data.get("current_client_id")
-                if client_id:
-                    try:
-                        client = Client.objects.get(id=client_id)
-                    except Client.DoesNotExist:
-                        pass
-                
-                if not client and device_id:
-                    client = get_current_client_for_user(user, device_id=device_id)
-            
-            # Create the block
-            if is_idle:
-                hours = round(int(block_data["minutes"]) / 60.0, 2)
-                new_block = Block.objects.create(
-                    org=org,
-                    user=user,
-                    device_id=device_id or 0,
-                    hostname=block_data["hostname"],
-                    start=block_data["start"],
-                    end=block_data["end"],
-                    day=day,
-                    minutes=int(block_data["minutes"]),
-                    title="Idle",
-                    window_title="Idle/Uncategorized",
-                    url="",
-                    file_path="",
-                    app_name=block_data.get("app_name") or "Idle",
-                    bundle_id=block_data.get("bundle_id") or "__idle__",
-                    hints={},
-                    client=None,
-                    category_hours={"Idle": hours},
-                    is_categorized=True,
-                    categorized_by="system",
-                    categorized_at=timezone.now(),
-                    approved=False,
-                )
-            else:
-                new_block = Block.objects.create(
-                    org=org,
-                    user=user,
-                    device_id=device_id or 0,
-                    hostname=block_data["hostname"],
-                    start=block_data["start"],
-                    end=block_data["end"],
-                    day=day,
-                    minutes=int(block_data["minutes"]),
-                    title=block_data.get("app_name") or "Unknown",
-                    window_title=block_data.get("window_title") or "",
-                    url=block_data.get("url") or "",
-                    file_path=block_data.get("file_path") or "",
-                    app_name=block_data.get("app_name") or "",
-                    bundle_id=block_data.get("bundle_id") or "",
-                    hints=block_data.get("ctx") or {},
-                    client=client,
-                    category_hours={},
-                    is_categorized=False,
-                    approved=False,
-                )
-            
-            # Link source events to this block
-            event_ids = [e.id for e in block_data["source_events"]]
-            RawEvent.objects.filter(id__in=event_ids).update(block=new_block)
-            
-            created_count += 1
-            logger.debug(f"[COMPACT] Created block {new_block.id} ({new_block.title}) from {len(event_ids)} events")
+            new_block = _create_block(block_data, user, org, day)
+            if new_block:
+                created_count += 1
     
     logger.info(f"[COMPACT] Created {created_count} new blocks for {day}")
-    
-    # =========================================================
-    # STEP 7: Consolidate any remaining duplicate blocks
-    # =========================================================
-    consolidated = consolidate_uncategorized_blocks(user, day, hostname, org)
     
     return created_count + merged_count
 
 
-def consolidate_uncategorized_blocks(user, day: date_type, hostname: Optional[str], org) -> int:
+def _split_into_sessions(events: List) -> List[List]:
     """
-    Post-compaction cleanup: merge any uncategorized blocks that have the same
-    signature and are adjacent/overlapping.
-    
-    This handles blocks created by previous compaction runs that should have
-    been merged but weren't.
+    Split events into sessions based on time gaps.
+    Gap > 30 minutes = new session.
     """
-    # Get all uncategorized blocks for today
-    qs = Block.objects.filter(
-        user=user,
-        day=day,
-        is_categorized=False,
-    ).order_by('start')
+    if not events:
+        return []
     
-    if hostname:
-        qs = qs.filter(hostname=hostname)
+    sessions = []
+    current_session = [events[0]]
+    prev_ts = events[0].ts_utc
     
-    blocks = list(qs)
-    
-    if len(blocks) < 2:
-        return 0
-    
-    logger.info(f"[CONSOLIDATE] Checking {len(blocks)} uncategorized blocks for duplicates")
-    
-    # Group by signature
-    by_sig: Dict[Tuple, List[Block]] = {}
-    for b in blocks:
-        sig = _block_signature(b)
-        if sig not in by_sig:
-            by_sig[sig] = []
-        by_sig[sig].append(b)
-    
-    merged_count = 0
-    blocks_to_delete = []
-    
-    with transaction.atomic():
-        for sig, sig_blocks in by_sig.items():
-            if len(sig_blocks) < 2:
-                continue
-            
-            # Sort by start time
-            sig_blocks.sort(key=lambda b: b.start)
-            
-            # Find adjacent/overlapping blocks to merge
-            i = 0
-            while i < len(sig_blocks) - 1:
-                current = sig_blocks[i]
-                next_block = sig_blocks[i + 1]
-                
-                # Check if adjacent/overlapping
-                gap_seconds = (next_block.start - current.end).total_seconds()
-                
-                # Merge if gap < 5 minutes OR overlapping
-                if gap_seconds <= MERGE_GAP.total_seconds():
-                    # Lock both blocks
-                    try:
-                        current_locked = Block.objects.select_for_update().get(id=current.id)
-                        next_locked = Block.objects.select_for_update().get(id=next_block.id)
-                        
-                        # Double-check neither is categorized
-                        if current_locked.is_categorized or next_locked.is_categorized:
-                            i += 1
-                            continue
-                        
-                        # Merge next into current
-                        new_start = min(current_locked.start, next_locked.start)
-                        new_end = max(current_locked.end, next_locked.end)
-                        new_minutes = int((new_end - new_start).total_seconds() / 60)
-                        
-                        current_locked.start = new_start
-                        current_locked.end = new_end
-                        current_locked.minutes = new_minutes
-                        current_locked.save(update_fields=['start', 'end', 'minutes'])
-                        
-                        # Move events from next to current
-                        RawEvent.objects.filter(block=next_locked).update(block=current_locked)
-                        
-                        # Mark next for deletion
-                        blocks_to_delete.append(next_locked.id)
-                        
-                        # Update local references
-                        current.start = new_start
-                        current.end = new_end
-                        current.minutes = new_minutes
-                        
-                        # Remove next from list
-                        sig_blocks.pop(i + 1)
-                        
-                        merged_count += 1
-                        logger.info(f"[CONSOLIDATE] ✅ Merged block {next_locked.id} into {current_locked.id} → now {new_minutes} min")
-                        
-                        # Don't increment i - check if we can merge more into current
-                        
-                    except Block.DoesNotExist:
-                        i += 1
-                else:
-                    i += 1
+    for event in events[1:]:
+        gap = (event.ts_utc - prev_ts).total_seconds()
         
-        # Delete merged blocks
-        if blocks_to_delete:
-            Block.objects.filter(id__in=blocks_to_delete).delete()
-            logger.info(f"[CONSOLIDATE] Deleted {len(blocks_to_delete)} merged blocks")
+        if gap > SESSION_GAP.total_seconds():
+            # Big gap - start new session
+            sessions.append(current_session)
+            current_session = [event]
+        else:
+            current_session.append(event)
+        
+        prev_ts = event.ts_utc
     
-    if merged_count > 0:
-        logger.info(f"[CONSOLIDATE] Merged {merged_count} duplicate blocks")
+    if current_session:
+        sessions.append(current_session)
     
-    return merged_count
+    return sessions
 
 
-def _can_coalesce(block1: Dict[str, Any], block2: Dict[str, Any]) -> bool:
+def _build_session_blocks(events: List, hostname: Optional[str]) -> List[Dict]:
     """
-    Check if two blocks can be merged (within same compaction batch).
-    Only merge if same app, same window, and gap < 5 seconds.
+    Build blocks from events within a single session.
+    Groups consecutive same-app events together.
     """
-    if not all([
-        block1["app_name"] == block2["app_name"],
-        block1["bundle_id"] == block2["bundle_id"],
-        block1["window_title"] == block2["window_title"],
-    ]):
-        return False
+    if not events:
+        return []
     
-    gap = block2["start"] - block1["end"]
-    if gap > COALESCE_GAP:
-        return False
+    blocks = []
     
-    return True
+    # Group consecutive events by app
+    current_app = _app_key_from_event(events[0])
+    current_events = [events[0]]
+    
+    for event in events[1:]:
+        app = _app_key_from_event(event)
+        gap = (event.ts_utc - current_events[-1].ts_utc).total_seconds()
+        
+        # Same app AND gap < 2 minutes = continue block
+        if app == current_app and gap <= MERGE_GAP.total_seconds():
+            current_events.append(event)
+        else:
+            # Different app or gap too big - finalize current block
+            block = _events_to_block(current_events, hostname)
+            if block:
+                blocks.append(block)
+            
+            current_app = app
+            current_events = [event]
+    
+    # Don't forget last block
+    if current_events:
+        block = _events_to_block(current_events, hostname)
+        if block:
+            blocks.append(block)
+    
+    return blocks
+
+
+def _app_key_from_event(event) -> str:
+    """Get app key from event."""
+    return (event.app_name or "").lower().strip()
+
+
+def _events_to_block(events: List, hostname: Optional[str]) -> Optional[Dict]:
+    """Convert a list of events into a block dict."""
+    if not events:
+        return None
+    
+    start = events[0].ts_utc
+    
+    # End = last event + duration to next (capped)
+    # For simplicity, use last event + 5 minutes or time to next
+    if len(events) == 1:
+        end = start + timedelta(minutes=5)
+    else:
+        # Use the span of events + small buffer
+        end = events[-1].ts_utc + timedelta(minutes=5)
+    
+    # Calculate actual minutes from time range
+    minutes = (end - start).total_seconds() / 60.0
+    
+    if minutes < 0.5:  # Less than 30 seconds
+        return None
+    
+    # Pick the most descriptive window title
+    titles = [e.window_title for e in events if e.window_title]
+    titles = [t for t in titles if t.lower() not in ('', 'open', 'untitled', 'new tab')]
+    window_title = max(titles, key=len) if titles else (events[0].window_title or "")
+    
+    # Pick URL if any
+    urls = [e.url for e in events if e.url]
+    url = urls[0] if urls else ""
+    
+    # Pick file_path if any
+    paths = [e.file_path for e in events if e.file_path]
+    file_path = paths[0] if paths else ""
+    
+    return {
+        "start": start,
+        "end": end,
+        "minutes": minutes,
+        "app_name": events[0].app_name or "",
+        "bundle_id": events[0].bundle_id or "",
+        "window_title": window_title,
+        "url": url,
+        "file_path": file_path,
+        "hostname": events[0].hostname or hostname or "unknown",
+        "device_id": _safe_device_id(getattr(events[0], 'device_id', None)),
+        "current_client_id": getattr(events[0], 'current_client_id', None),
+        "ctx": getattr(events[0], 'ctx', {}) or {},
+        "source_events": events,
+    }
+
+
+def _try_merge_into_existing(block_data: Dict, existing_blocks: List[Block]) -> bool:
+    """
+    Try to merge block_data into an existing uncategorized block.
+    Only merges if:
+    1. Same app
+    2. Time ranges overlap OR gap < 2 minutes
+    3. NOT separated by a session gap (> 30 min)
+    """
+    app = _app_key(block_data)
+    block_start = block_data["start"]
+    block_end = block_data["end"]
+    
+    for existing in existing_blocks:
+        if existing.is_categorized:
+            continue
+        
+        if _app_key(existing) != app:
+            continue
+        
+        # Check time relationship
+        # Gap = time between blocks (negative = overlap)
+        if block_start > existing.end:
+            gap_seconds = (block_start - existing.end).total_seconds()
+        elif block_end < existing.start:
+            gap_seconds = (existing.start - block_end).total_seconds()
+        else:
+            gap_seconds = 0  # Overlapping
+        
+        # Only merge if gap < 2 minutes (and definitely not > 30 min)
+        if gap_seconds <= MERGE_GAP.total_seconds():
+            # Merge!
+            try:
+                with transaction.atomic():
+                    locked = Block.objects.select_for_update().get(id=existing.id)
+                    
+                    if locked.is_categorized:
+                        continue
+                    
+                    # Calculate new time range
+                    new_start = min(locked.start, block_start)
+                    new_end = max(locked.end, block_end)
+                    new_minutes = int((new_end - new_start).total_seconds() / 60)
+                    
+                    # Sanity check - don't create blocks > 4 hours
+                    if new_minutes > 240:
+                        logger.warning(f"[COMPACT] Refusing to create {new_minutes}min block - too long")
+                        continue
+                    
+                    locked.start = new_start
+                    locked.end = new_end
+                    locked.minutes = new_minutes
+                    
+                    # Keep better window title
+                    if len(block_data.get("window_title", "")) > len(locked.window_title or ""):
+                        locked.window_title = block_data["window_title"]
+                    
+                    locked.save(update_fields=['start', 'end', 'minutes', 'window_title'])
+                    
+                    # Link events
+                    event_ids = [e.id for e in block_data["source_events"]]
+                    RawEvent.objects.filter(id__in=event_ids).update(block=locked)
+                    
+                    # Update local reference
+                    existing.start = new_start
+                    existing.end = new_end
+                    existing.minutes = new_minutes
+                    
+                    logger.debug(f"[COMPACT] Merged into block {locked.id} → {new_minutes} min")
+                    return True
+                    
+            except Block.DoesNotExist:
+                continue
+    
+    return False
+
+
+def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
+    """Create a new block from block_data."""
+    
+    is_idle = is_idle_activity(
+        app_name=block_data.get("app_name"),
+        bundle_id=block_data.get("bundle_id"),
+        window_title=block_data.get("window_title")
+    )
+    
+    device_id = block_data.get("device_id", 0)
+    minutes = int(block_data["minutes"])
+    
+    # Sanity check
+    if minutes > 240:
+        logger.warning(f"[COMPACT] Refusing to create {minutes}min block - too long")
+        return None
+    
+    client = None
+    if not is_idle:
+        client_id = block_data.get("current_client_id")
+        if client_id:
+            try:
+                client = Client.objects.get(id=client_id)
+            except Client.DoesNotExist:
+                pass
+        
+        if not client and device_id:
+            client = get_current_client_for_user(user, device_id=device_id)
+    
+    if is_idle:
+        hours = round(minutes / 60.0, 2)
+        new_block = Block.objects.create(
+            org=org,
+            user=user,
+            device_id=device_id or 0,
+            hostname=block_data["hostname"],
+            start=block_data["start"],
+            end=block_data["end"],
+            day=day,
+            minutes=minutes,
+            title="Idle",
+            window_title="Idle/Uncategorized",
+            url="",
+            file_path="",
+            app_name=block_data.get("app_name") or "Idle",
+            bundle_id=block_data.get("bundle_id") or "__idle__",
+            hints={},
+            client=None,
+            category_hours={"Idle": hours},
+            is_categorized=True,
+            categorized_by="system",
+            categorized_at=timezone.now(),
+            approved=False,
+        )
+    else:
+        new_block = Block.objects.create(
+            org=org,
+            user=user,
+            device_id=device_id or 0,
+            hostname=block_data["hostname"],
+            start=block_data["start"],
+            end=block_data["end"],
+            day=day,
+            minutes=minutes,
+            title=block_data.get("app_name") or "Unknown",
+            window_title=block_data.get("window_title") or "",
+            url=block_data.get("url") or "",
+            file_path=block_data.get("file_path") or "",
+            app_name=block_data.get("app_name") or "",
+            bundle_id=block_data.get("bundle_id") or "",
+            hints=block_data.get("ctx") or {},
+            client=client,
+            category_hours={},
+            is_categorized=False,
+            approved=False,
+        )
+    
+    # Link events
+    event_ids = [e.id for e in block_data["source_events"]]
+    RawEvent.objects.filter(id__in=event_ids).update(block=new_block)
+    
+    logger.debug(f"[COMPACT] Created block {new_block.id} ({new_block.app_name}) - {minutes} min")
+    return new_block
 
 
 def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:
-    """
-    Quick compaction of recent events.
-    Called after event ingestion for real-time block creation.
-    """
+    """Quick compaction of recent events."""
     if isinstance(user, str):
         try:
             user = User.objects.get(username=user)
@@ -523,10 +478,7 @@ def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: in
 
 
 def auto_compact_all_active_users(minutes_back: int = 30):
-    """
-    Auto-compact for all users with recent activity.
-    Run this from a cron job or celery task.
-    """
+    """Auto-compact for all users with recent activity."""
     cutoff = timezone.now() - timedelta(minutes=minutes_back)
     
     recent_users = RawEvent.objects.filter(
@@ -558,39 +510,3 @@ def auto_compact_all_active_users(minutes_back: int = 30):
     )
     
     return stats
-
-
-# =========================================================
-# ONE-TIME CLEANUP: Run this to fix existing duplicate blocks
-# =========================================================
-def cleanup_duplicate_blocks_for_user(username: str, days_back: int = 7):
-    """
-    One-time cleanup script to consolidate duplicate blocks.
-    Run this after deploying the fix to clean up existing duplicates.
-    
-    Usage:
-        from tracker.services.compaction import cleanup_duplicate_blocks_for_user
-        cleanup_duplicate_blocks_for_user('dan', days_back=7)
-    """
-    try:
-        user = User.objects.get(username=username)
-    except User.DoesNotExist:
-        logger.error(f"User not found: {username}")
-        return
-    
-    from tracker.models import Organization, OrganizationMembership
-    membership = OrganizationMembership.objects.filter(user=user).first()
-    org = membership.organization if membership else None
-    
-    today = timezone.localdate()
-    total_merged = 0
-    
-    for i in range(days_back):
-        day = today - timedelta(days=i)
-        merged = consolidate_uncategorized_blocks(user, day, None, org)
-        total_merged += merged
-        if merged > 0:
-            logger.info(f"[CLEANUP] {day}: Merged {merged} duplicate blocks")
-    
-    logger.info(f"[CLEANUP] Total merged: {total_merged} blocks over {days_back} days")
-    return total_merged

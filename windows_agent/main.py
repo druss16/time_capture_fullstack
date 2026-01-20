@@ -51,6 +51,19 @@ try:
 except ImportError:
     GUI_AVAILABLE = False
 
+# Push notifications for client reminders
+try:
+    from notifications import (
+        ClientNotificationManager,
+        NotificationConfig,
+        NotificationWorker,
+        create_notification_system,
+    )
+    PUSH_NOTIF_AVAILABLE = True
+except ImportError:
+    PUSH_NOTIF_AVAILABLE = False
+    print("[WARN] notifications.py not found - push notifications disabled")
+
 
 # ---------------- Client Sync ----------------
 def get_current_client_from_backend(api_base, api_key):
@@ -143,6 +156,17 @@ TOOL_HOSTS = set(_get("tool_hosts", "").split(",")) or {
     "chatgpt.com", "openai.com", "localhost", "127.0.0.1",
     "github.com", "gitlab.com", "stackoverflow.com",
 }
+
+# Notification settings
+NOTIF_ENABLED = bool(_get("notifications_enabled", os.getenv("AGENT_NOTIF_ENABLED") != "0") if _get("notifications_enabled") is not None else True)
+NOTIF_DURATION_MINUTES = int(_get("notif_duration_minutes", os.getenv("AGENT_NOTIF_DURATION_MINUTES")) or 60)
+NOTIF_IDLE_THRESHOLD = int(_get("notif_idle_threshold", os.getenv("AGENT_NOTIF_IDLE_THRESHOLD")) or 300)
+NOTIF_NO_CLIENT_MINUTES = int(_get("notif_no_client_minutes", os.getenv("AGENT_NOTIF_NO_CLIENT_MINUTES")) or 15)
+
+# At top of file with other globals
+sync = None
+notif_manager = None
+notif_worker = None
 
 # ---------------- Logging ----------------
 def log(msg: str):
@@ -577,7 +601,6 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
     conn.commit()
     
     # Get current client from backend
-    # Replaced with local function
     api_key = config.get("api_key") or API_KEY
     current_client_id = None
     current_client_name = None
@@ -590,6 +613,10 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
                 current_client_name = current.get("client_name")
         except Exception as e:
             log(f"[CLIENT] Failed to get current client: {e}")
+    
+    # === NOTIFY: Update notification state with current client ===
+    if notif_manager:
+        notif_manager.set_current_client(current_client_id, current_client_name)
     
     payload = {
         "ts_utc": ts_iso,
@@ -741,6 +768,7 @@ def read_pid():
 
 # ---------------- Main Tracking Loop ----------------
 def run_agent():
+    global API_KEY, notif_manager, notif_worker
     """Main agent function with GUI integration"""
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -776,6 +804,92 @@ def run_agent():
             print(f"[SYNC] Started - polling every {sync.poll_interval}s")
         except ImportError:
             print("[SYNC] agent_sync_integration not available")
+
+
+    # === PUSH NOTIFICATION SYSTEM ===
+    global notif_manager
+    notif_worker = None
+    gui_menu_bar = None  # Initialize before it's referenced
+    
+    if PUSH_NOTIF_AVAILABLE and NOTIF_ENABLED:
+        log("[NOTIF] Initializing push notification system...")
+        
+        notif_config = NotificationConfig(
+            enabled=True,
+            duration_reminder_enabled=True,
+            duration_reminder_interval_minutes=NOTIF_DURATION_MINUTES,
+            duration_reminder_first_minutes=30,
+            idle_return_enabled=True,
+            idle_threshold_seconds=NOTIF_IDLE_THRESHOLD,
+            context_change_enabled=True,
+            context_confidence_threshold=0.6,
+            no_client_reminder_enabled=True,
+            no_client_reminder_after_minutes=NOTIF_NO_CLIENT_MINUTES,
+            min_seconds_between_notifications=60,
+            respect_quiet_hours=False,
+        )
+        
+        def on_notif_confirm(client_id, client_name):
+            """Handle user confirming client from notification"""
+            log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
+            
+            # Update GUI state if available
+            if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                gui_menu_bar.state.set_client(client_id, client_name)
+                if hasattr(gui_menu_bar, 'app') and hasattr(gui_menu_bar.app, '_rebuild_menu'):
+                    gui_menu_bar.app._rebuild_menu()
+            
+            # Sync to backend
+            api_key = config.get("api_key") or API_KEY
+            if api_key and API_BASE:
+                set_current_client_backend(api_key, api_key, client_id)
+        
+        def on_notif_switch():
+            """Handle user requesting client switch from notification"""
+            log("[NOTIF] User requested client switch - opening picker")
+            if gui_menu_bar and hasattr(gui_menu_bar, '_show_client_picker'):
+                try:
+                    gui_menu_bar._show_client_picker()
+                except Exception as e:
+                    log(f"[NOTIF] Failed to open picker: {e}")
+        
+        def on_notif_snooze(client_id, minutes):
+            """Handle user snoozing a client suggestion"""
+            log(f"[NOTIF] User snoozed client {client_id} for {minutes} minutes")
+        
+        notif_manager = create_notification_system(
+            on_confirm=on_notif_confirm,
+            on_switch=on_notif_switch,
+            on_snooze=on_notif_snooze,
+            config=notif_config
+        )
+        
+        if notif_manager and notif_manager.ready:
+            log("[NOTIF] ✅ Push notification system ready")
+            
+            def get_current_client_for_notif():
+                if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                    return {
+                        "client_id": gui_menu_bar.state.current_client_id,
+                        "client_name": gui_menu_bar.state.current_client_name
+                    }
+                return {"client_id": None, "client_name": None}
+            
+            notif_worker = NotificationWorker(
+                notification_manager=notif_manager,
+                get_current_client=get_current_client_for_notif,
+                poll_interval=30
+            )
+            notif_worker.start()
+            log("[NOTIF] Notification worker started")
+        else:
+            log("[NOTIF] ⚠️ Push notifications not authorized")
+            notif_manager = None
+    else:
+        if not PUSH_NOTIF_AVAILABLE:
+            log("[NOTIF] Push notifications not available (module not found)")
+        elif not NOTIF_ENABLED:
+            log("[NOTIF] Push notifications disabled by config")
     
     # GUI initialization
     # GUI initialization
@@ -864,72 +978,87 @@ def run_agent():
                 log(f"[CLIENT] Failed to restore client state: {e}")
     
     # Tracking loop
-    def tracking_loop():
-        conn = ensure_db()
-        cur = conn.cursor()
-        current_sig = None
-        dwell_start = None
-        
-        try:
-            while True:
-                if should_stop(CONTROL_URL, os_user, hostname):
-                    log("[CTRL] Stopping agent per admin request.")
-                    break
-                
-                idle = mouse_idle_seconds()
-                if idle >= MOUSE_IDLE_PAUSE_S:
-                    if current_sig != IDLE_SIG:
-                        if current_sig and dwell_start:
-                            now = time.time()
-                            effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
-                            dwell = effective_end - dwell_start
-                            if dwell >= MIN_DWELL_SECONDS:
-                                write_event(conn, cur, os_user, hostname, current_sig)
-                        current_sig = IDLE_SIG
-                        dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
-                        log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
-                    time.sleep(POLL_SECONDS)
-                else:
-                    if current_sig == IDLE_SIG and dwell_start:
-                        dwell = time.time() - dwell_start
-                        if dwell >= MIN_DWELL_SECONDS:
-                            write_event(conn, cur, os_user, hostname, current_sig)
-                        current_sig = None
-                        dwell_start = None
+    # Tracking loop
+        def tracking_loop():
+            conn = ensure_db()
+            cur = conn.cursor()
+            current_sig = None
+            dwell_start = None
+            
+            try:
+                while True:
+                    if should_stop(CONTROL_URL, os_user, hostname):
+                        log("[CTRL] Stopping agent per admin request.")
+                        break
                     
-                    front = get_foreground_window_info()
-                    if not front:
+                    idle = mouse_idle_seconds()
+                    if idle >= MOUSE_IDLE_PAUSE_S:
+                        if current_sig != IDLE_SIG:
+                            # === NOTIFY: Going idle ===
+                            if notif_manager:
+                                notif_manager.on_idle_start()
+                            
+                            if current_sig and dwell_start:
+                                now = time.time()
+                                effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                                dwell = effective_end - dwell_start
+                                if dwell >= MIN_DWELL_SECONDS:
+                                    write_event(conn, cur, os_user, hostname, current_sig)
+                            current_sig = IDLE_SIG
+                            dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
+                            log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
                         time.sleep(POLL_SECONDS)
-                        continue
-                    
-                    app_name, exe_name, pid, window_title = front
-                    
-                    extras = try_get_url_or_path(exe_name, window_title)
-                    url, fpath = extras.get("url"), extras.get("file_path")
-                    
-                    sig = (app_name, exe_name, window_title, url, fpath)
-                    
-                    if sig != current_sig:
-                        if current_sig and dwell_start:
+                    else:
+                        if current_sig == IDLE_SIG and dwell_start:
+                            # === NOTIFY: Returning from idle ===
+                            if notif_manager:
+                                notif_manager.on_idle_end()
+                            
                             dwell = time.time() - dwell_start
                             if dwell >= MIN_DWELL_SECONDS:
                                 write_event(conn, cur, os_user, hostname, current_sig)
-                        current_sig = sig
-                        dwell_start = time.time()
-                        log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
-                    
-                    time.sleep(POLL_SECONDS)
-        
-        except KeyboardInterrupt:
-            log("=== Stopping (Ctrl+C) ===")
-            if current_sig and dwell_start:
-                dwell = time.time() - dwell_start
-                if dwell >= MIN_DWELL_SECONDS:
-                    write_event(conn, cur, os_user, hostname, current_sig)
-        finally:
-            conn.close()
-            remove_pid()
-    
+                                log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
+                            else:
+                                log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
+                            current_sig = None
+                            dwell_start = None
+                        
+                        front = get_foreground_window_info()
+                        if not front:
+                            time.sleep(POLL_SECONDS)
+                            continue
+                        
+                        app_name, exe_name, pid, window_title = front
+                        
+                        extras = try_get_url_or_path(exe_name, window_title)
+                        url, fpath = extras.get("url"), extras.get("file_path")
+                        
+                        sig = (app_name, exe_name, window_title, url, fpath)
+                        
+                        if sig != current_sig:
+                            if current_sig and dwell_start:
+                                dwell = time.time() - dwell_start
+                                if dwell >= MIN_DWELL_SECONDS:
+                                    write_event(conn, cur, os_user, hostname, current_sig)
+                            current_sig = sig
+                            dwell_start = time.time()
+                            log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
+                        
+                        time.sleep(POLL_SECONDS)
+            
+            except KeyboardInterrupt:
+                log("=== Stopping (Ctrl+C) ===")
+                if current_sig and dwell_start:
+                    dwell = time.time() - dwell_start
+                    if dwell >= MIN_DWELL_SECONDS:
+                        write_event(conn, cur, os_user, hostname, current_sig)
+            finally:
+                conn.close()
+                remove_pid()
+                # === CLEANUP: Stop notification worker ===
+                if notif_worker:
+                    notif_worker.stop()
+
     # Run tracking in thread
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
     tracking_thread.start()

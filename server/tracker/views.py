@@ -3073,7 +3073,11 @@ def timecards_summary_day(request):
         project = (getattr(b, "project_name", None) or getattr(getattr(b, "project", None), "name", None))
         key = (client, project or "-")
 
-        block_minutes = int((e_ms - s_ms) // 60_000)
+        # NEW (use actual event-based minutes):
+        block_minutes = b.minutes
+        if not block_minutes or block_minutes <= 0:
+            # Fallback to span only if minutes not set
+            block_minutes = int((e_ms - s_ms) // 60_000)
         if block_minutes <= 0:
             continue
 

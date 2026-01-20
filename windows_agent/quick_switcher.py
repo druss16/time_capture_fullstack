@@ -571,20 +571,11 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
     root.deiconify()
     rebuild_list("")
     
-    # Force focus to search entry - multiple attempts for macOS
+    # Force focus to search entry - multiple attempts for both platforms
     def focus_search():
-<<<<<<< Updated upstream
+        """Focus the search entry with shutdown check and platform-specific handling."""
         if shutting_down[0]:
             return
-        try:
-            search_entry.focus_force()
-            root.lift()
-            root.attributes('-topmost', True)
-        except:
-            pass
-    
-    after_ids.append(root.after(100, focus_search))
-=======
         try:
             # macOS: activate the app again
             if sys.platform == 'darwin':
@@ -594,19 +585,46 @@ def _run_quick_switcher_process(clients_json: str, usage_json: str,
                 except:
                     pass
             
-            root.lift()
-            root.focus_force()
+            # Windows: bring window to front and force focus
+            if sys.platform == 'win32':
+                try:
+                    root.lift()
+                    root.attributes('-topmost', True)
+                    root.focus_force()
+                    root.after(10, lambda: search_entry.focus_set())
+                    root.after(20, lambda: search_entry.focus_force())
+                    # Use Windows API to force foreground
+                    try:
+                        import ctypes
+                        hwnd = ctypes.windll.user32.GetForegroundWindow()
+                        ctypes.windll.user32.SetForegroundWindow(root.winfo_id())
+                    except:
+                        pass
+                except Exception as e:
+                    print(f"[QuickSwitcher] Windows focus error: {e}")
+            else:
+                root.lift()
+                root.attributes('-topmost', True)
+                root.focus_force()
+            
             root.grab_set()  # Capture all keyboard/mouse input
             search_entry.focus_set()
             search_entry.focus_force()
-            search_entry.icursor('end')  # Put cursor at end
+            if USE_CTK:
+                pass  # CTK handles cursor differently
+            else:
+                search_entry.icursor('end')  # Put cursor at end
         except Exception as e:
             print(f"[QuickSwitcher] Focus error: {e}")
     
-    root.after(50, focus_search)
-    root.after(200, focus_search)  # Try again
-    root.after(500, focus_search)  # And again
->>>>>>> Stashed changes
+    # Schedule multiple focus attempts - more aggressive on Windows
+    after_ids.append(root.after(10, focus_search))
+    after_ids.append(root.after(50, focus_search))
+    after_ids.append(root.after(100, focus_search))
+    after_ids.append(root.after(200, focus_search))
+    if sys.platform == 'win32':
+        after_ids.append(root.after(300, focus_search))
+        after_ids.append(root.after(500, focus_search))
     
     # ---- Run ----
     root.mainloop()
@@ -658,13 +676,25 @@ class QuickSwitcher:
         
         self._showing = False
         self._lock = threading.Lock()
+        self._last_show_time = 0  # Debounce timestamp
+        self._debounce_ms = 500   # Minimum ms between shows
     
     def show(self):
         """Show the quick switcher popup."""
+        import time
+        
+        # Debounce - prevent double triggers
+        now = time.time() * 1000  # ms
+        if now - self._last_show_time < self._debounce_ms:
+            print("[QuickSwitcher] Debounced (too soon after last show)")
+            return
+        
         with self._lock:
             if self._showing:
+                print("[QuickSwitcher] Already showing")
                 return
             self._showing = True
+            self._last_show_time = now
         
         try:
             self._show_impl()
@@ -907,10 +937,19 @@ def _windows_hotkey_listener(callback: Callable, stop_event: threading.Event):
     # Try keyboard library first (better Windows support)
     try:
         import keyboard
+        import time
         
         print("[Hotkey] Using keyboard library for Ctrl+Shift+T")
         
+        last_trigger = [0]  # Mutable for closure
+        debounce_ms = 500   # Minimum ms between triggers
+        
         def on_hotkey():
+            now = time.time() * 1000
+            if now - last_trigger[0] < debounce_ms:
+                print("[Hotkey] Debounced")
+                return
+            last_trigger[0] = now
             print("[Hotkey] Ctrl+Shift+T detected!")
             threading.Thread(target=callback, daemon=True).start()
         

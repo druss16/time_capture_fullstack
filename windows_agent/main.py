@@ -767,17 +767,17 @@ def read_pid():
         return None
 
 # ---------------- Main Tracking Loop ----------------
+# ---------------- Main Tracking Loop ----------------
 def run_agent():
-    global API_KEY, notif_manager, notif_worker
     """Main agent function with GUI integration"""
+    global API_KEY, notif_manager, notif_worker, sync
+    
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
         pass
     
     start_context_bus(CONTEXT_PORT)
-
-    # After the hello() call, add sync initialization:
 
     # === SYNC INITIALIZATION ===
     sync = None
@@ -793,7 +793,8 @@ def run_agent():
             
             def on_sync_update():
                 print(f"[SYNC] Data updated: {len(sync.clients)} clients")
-                if sync.gui_menu_bar and hasattr(sync.gui_menu_bar, 'refresh_client_menu'):
+                # Safe check for gui_menu_bar attribute
+                if hasattr(sync, 'gui_menu_bar') and sync.gui_menu_bar and hasattr(sync.gui_menu_bar, 'refresh_client_menu'):
                     sync.gui_menu_bar.refresh_client_menu(sync.clients)
                     print("[SYNC] GUI menu refreshed")
                 else:
@@ -805,9 +806,7 @@ def run_agent():
         except ImportError:
             print("[SYNC] agent_sync_integration not available")
 
-
     # === PUSH NOTIFICATION SYSTEM ===
-    global notif_manager
     notif_worker = None
     gui_menu_bar = None  # Initialize before it's referenced
     
@@ -842,7 +841,7 @@ def run_agent():
             # Sync to backend
             api_key = config.get("api_key") or API_KEY
             if api_key and API_BASE:
-                set_current_client_backend(api_key, api_key, client_id)
+                set_current_client_backend(API_BASE, api_key, client_id)
         
         def on_notif_switch():
             """Handle user requesting client switch from notification"""
@@ -891,49 +890,63 @@ def run_agent():
         elif not NOTIF_ENABLED:
             log("[NOTIF] Push notifications disabled by config")
     
-    # GUI initialization
-    # GUI initialization
-        gui_menu_bar = None
-        quick_switcher = None
-        if GUI_AVAILABLE:
-            try:
-                api_key = config.get("api_key") or API_KEY
-                api_base = API_BASE
-                
-                gui_menu_bar = run_gui_app(
-                    on_client_confirmed=lambda cid, cname, data: log(f"[GUI] Client confirmed: {cname}"),
-                    on_client_rejected=lambda data: log(f"[GUI] Client rejected"),
-                    get_today_time=fetch_today_time,
-                    fetch_clients=lambda: fetch_clients_from_backend(api_base, api_key),
-                    set_current_client=lambda cid: set_current_client_backend(api_base, api_key, cid),
-                    get_current_client=lambda: get_current_client_from_backend(api_base, api_key),
-                    sync=sync,
-                )
-                log("[GUI] System tray initialized")
-                
-                # === QUICK SWITCHER (Alt+Shift+T) ===
-                if gui_menu_bar:
-                    try:
-                        import keyboard
-                        
-                        def on_hotkey_pressed():
-                            log("[HOTKEY] Alt+Shift+T pressed!")
-                            gui_menu_bar._show_client_picker()
-                        
-                        keyboard.add_hotkey('alt+shift+t', on_hotkey_pressed)
-                        log("[QUICK] Ready - Alt+Shift+T")
-                        
-                    except Exception as e:
-                        log(f"[QUICK] Failed to initialize: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        
-            except Exception as e:
-                log(f"[GUI] Failed to initialize: {e}")
-                import traceback
-                traceback.print_exc()
+    # === GUI INITIALIZATION ===
+    quick_switcher = None
+    if GUI_AVAILABLE:
+        try:
+            api_key = config.get("api_key") or API_KEY
+            api_base = API_BASE
+            
+            gui_menu_bar = run_gui_app(
+                on_client_confirmed=lambda cid, cname, data: log(f"[GUI] Client confirmed: {cname}"),
+                on_client_rejected=lambda data: log(f"[GUI] Client rejected"),
+                get_today_time=fetch_today_time,
+                fetch_clients=lambda: fetch_clients_from_backend(api_base, api_key),
+                set_current_client=lambda cid: set_current_client_backend(api_base, api_key, cid),
+                get_current_client=lambda: get_current_client_from_backend(api_base, api_key),
+                sync=sync,
+            )
+            log("[GUI] System tray initialized")
+            
+            # Register GUI with sync
+            if sync and gui_menu_bar:
+                sync.gui_menu_bar = gui_menu_bar
+                if sync.clients and hasattr(gui_menu_bar, 'refresh_client_menu'):
+                    gui_menu_bar.refresh_client_menu(sync.clients)
+                    log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
+            
+            # === QUICK SWITCHER (Alt+Shift+T) ===
+            # === QUICK SWITCHER (Alt+Shift+T) ===
+            if gui_menu_bar:
+                try:
+                    import keyboard
+                    import time as _time
+                    
+                    _last_hotkey_time = [0]  # Mutable for closure
+                    _hotkey_debounce_ms = 1000  # 1 second debounce
+                    
+                    def on_hotkey_pressed():
+                        now = _time.time() * 1000
+                        if now - _last_hotkey_time[0] < _hotkey_debounce_ms:
+                            log("[HOTKEY] Debounced - ignoring duplicate")
+                            return
+                        _last_hotkey_time[0] = now
+                        log("[HOTKEY] Alt+Shift+T pressed!")
+                        gui_menu_bar._show_client_picker()
+                    
+                    keyboard.add_hotkey('alt+shift+t', on_hotkey_pressed)
+                    log("[QUICK] Ready - Alt+Shift+T")
+                    
+                except Exception as e:
+                    log(f"[QUICK] Failed to initialize: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    
+        except Exception as e:
+            log(f"[GUI] Failed to initialize: {e}")
+            import traceback
+            traceback.print_exc()
 
-    
     log("=== Windows Activity Agent starting… (Ctrl+C to stop) ===")
     log(f"CONFIG={CONFIG_FILE}")
     log(f"DB_PATH={DB_PATH}")
@@ -977,87 +990,86 @@ def run_agent():
             except Exception as e:
                 log(f"[CLIENT] Failed to restore client state: {e}")
     
-    # Tracking loop
-    # Tracking loop
-        def tracking_loop():
-            conn = ensure_db()
-            cur = conn.cursor()
-            current_sig = None
-            dwell_start = None
-            
-            try:
-                while True:
-                    if should_stop(CONTROL_URL, os_user, hostname):
-                        log("[CTRL] Stopping agent per admin request.")
-                        break
+    # === TRACKING LOOP (must be at this indentation level, NOT inside if gui_menu_bar) ===
+    def tracking_loop():
+        conn = ensure_db()
+        cur = conn.cursor()
+        current_sig = None
+        dwell_start = None
+        
+        try:
+            while True:
+                if should_stop(CONTROL_URL, os_user, hostname):
+                    log("[CTRL] Stopping agent per admin request.")
+                    break
+                
+                idle = mouse_idle_seconds()
+                if idle >= MOUSE_IDLE_PAUSE_S:
+                    if current_sig != IDLE_SIG:
+                        # === NOTIFY: Going idle ===
+                        if notif_manager:
+                            notif_manager.on_idle_start()
+                        
+                        if current_sig and dwell_start:
+                            now = time.time()
+                            effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                            dwell = effective_end - dwell_start
+                            if dwell >= MIN_DWELL_SECONDS:
+                                write_event(conn, cur, os_user, hostname, current_sig)
+                        current_sig = IDLE_SIG
+                        dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
+                        log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
+                    time.sleep(POLL_SECONDS)
+                else:
+                    if current_sig == IDLE_SIG and dwell_start:
+                        # === NOTIFY: Returning from idle ===
+                        if notif_manager:
+                            notif_manager.on_idle_end()
+                        
+                        dwell = time.time() - dwell_start
+                        if dwell >= MIN_DWELL_SECONDS:
+                            write_event(conn, cur, os_user, hostname, current_sig)
+                            log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
+                        else:
+                            log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
+                        current_sig = None
+                        dwell_start = None
                     
-                    idle = mouse_idle_seconds()
-                    if idle >= MOUSE_IDLE_PAUSE_S:
-                        if current_sig != IDLE_SIG:
-                            # === NOTIFY: Going idle ===
-                            if notif_manager:
-                                notif_manager.on_idle_start()
-                            
-                            if current_sig and dwell_start:
-                                now = time.time()
-                                effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
-                                dwell = effective_end - dwell_start
-                                if dwell >= MIN_DWELL_SECONDS:
-                                    write_event(conn, cur, os_user, hostname, current_sig)
-                            current_sig = IDLE_SIG
-                            dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
-                            log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
+                    front = get_foreground_window_info()
+                    if not front:
                         time.sleep(POLL_SECONDS)
-                    else:
-                        if current_sig == IDLE_SIG and dwell_start:
-                            # === NOTIFY: Returning from idle ===
-                            if notif_manager:
-                                notif_manager.on_idle_end()
-                            
+                        continue
+                    
+                    app_name, exe_name, pid, window_title = front
+                    
+                    extras = try_get_url_or_path(exe_name, window_title)
+                    url, fpath = extras.get("url"), extras.get("file_path")
+                    
+                    sig = (app_name, exe_name, window_title, url, fpath)
+                    
+                    if sig != current_sig:
+                        if current_sig and dwell_start:
                             dwell = time.time() - dwell_start
                             if dwell >= MIN_DWELL_SECONDS:
                                 write_event(conn, cur, os_user, hostname, current_sig)
-                                log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
-                            else:
-                                log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
-                            current_sig = None
-                            dwell_start = None
-                        
-                        front = get_foreground_window_info()
-                        if not front:
-                            time.sleep(POLL_SECONDS)
-                            continue
-                        
-                        app_name, exe_name, pid, window_title = front
-                        
-                        extras = try_get_url_or_path(exe_name, window_title)
-                        url, fpath = extras.get("url"), extras.get("file_path")
-                        
-                        sig = (app_name, exe_name, window_title, url, fpath)
-                        
-                        if sig != current_sig:
-                            if current_sig and dwell_start:
-                                dwell = time.time() - dwell_start
-                                if dwell >= MIN_DWELL_SECONDS:
-                                    write_event(conn, cur, os_user, hostname, current_sig)
-                            current_sig = sig
-                            dwell_start = time.time()
-                            log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
-                        
-                        time.sleep(POLL_SECONDS)
-            
-            except KeyboardInterrupt:
-                log("=== Stopping (Ctrl+C) ===")
-                if current_sig and dwell_start:
-                    dwell = time.time() - dwell_start
-                    if dwell >= MIN_DWELL_SECONDS:
-                        write_event(conn, cur, os_user, hostname, current_sig)
-            finally:
-                conn.close()
-                remove_pid()
-                # === CLEANUP: Stop notification worker ===
-                if notif_worker:
-                    notif_worker.stop()
+                        current_sig = sig
+                        dwell_start = time.time()
+                        log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
+                    
+                    time.sleep(POLL_SECONDS)
+        
+        except KeyboardInterrupt:
+            log("=== Stopping (Ctrl+C) ===")
+            if current_sig and dwell_start:
+                dwell = time.time() - dwell_start
+                if dwell >= MIN_DWELL_SECONDS:
+                    write_event(conn, cur, os_user, hostname, current_sig)
+        finally:
+            conn.close()
+            remove_pid()
+            # === CLEANUP: Stop notification worker ===
+            if notif_worker:
+                notif_worker.stop()
 
     # Run tracking in thread
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)

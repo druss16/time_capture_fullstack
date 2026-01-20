@@ -146,15 +146,37 @@ export default function DailyReview() {
     } catch {}
   }, [date]);
 
+
+  const runAIClassification = useCallback(async () => {
+    try {
+      const response = await safeFetchJson<any[]>(`${API_BASE}/blocks/suggestions/`);
+      if (Array.isArray(response)) {
+        const autoSaved = response.filter(r => r.ai_suggestion?.auto_saved).length;
+        if (autoSaved > 0) {
+          console.log(`[AI] Auto-categorized ${autoSaved} blocks`);
+          loadTimeSummary();
+          loadUncategorizedCount();
+        }
+      }
+    } catch (err) {
+      console.warn('[AI] Classification skipped:', err);
+    }
+  }, [loadTimeSummary, loadUncategorizedCount]);
+
   useEffect(() => {
     const t = setTimeout(() => { loadTimeSummary(); loadUncategorizedCount(); loadCategories(); loadClients(); }, 200);
     return () => clearTimeout(t);
-  }, [loadTimeSummary, loadUncategorizedCount, loadCategories, loadClients]);
+  }, [loadTimeSummary, loadUncategorizedCount, loadCategories, loadClients, runAIClassification]);
 
+  // And update the interval useEffect to also run AI:
   useEffect(() => {
-    const interval = setInterval(() => { loadTimeSummary(); loadUncategorizedCount(); }, 2 * 60 * 1000);
+    const interval = setInterval(() => { 
+      loadTimeSummary(); 
+      loadUncategorizedCount();
+      runAIClassification();  // <-- ADD THIS
+    }, 2 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [loadTimeSummary, loadUncategorizedCount]);
+  }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
   // Check for auto-open params on mount
   // Check for auto-open params on mount

@@ -608,6 +608,10 @@ def maybe_suggest_client(detected_client: dict, current_client_id: int):
     
     log(f"[CLIENT-DETECT] Found '{client_name}' in window title")
     
+    # === ADD DEBUG HERE ===
+    log(f"[CLIENT-DETECT] notif_manager={notif_manager}, ready={getattr(notif_manager, 'ready', False)}")
+    log(f"[CLIENT-DETECT] has notify_client_suggestion={hasattr(notif_manager, 'notify_client_suggestion')}")
+    
     # Use the new notification system if available
     if notif_manager and notif_manager.ready:
         notif_manager.notify_client_suggestion(

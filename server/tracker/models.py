@@ -151,6 +151,15 @@ class RawEvent(models.Model):
     
     # NEW: Store which client was selected when this event was captured
     current_client_id = models.IntegerField(null=True, blank=True, db_index=True)
+
+    block = models.ForeignKey(
+        'Block',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='source_events',
+        help_text="The block this event was compacted into"
+    )
     
     class Meta:
         indexes = [
@@ -158,6 +167,7 @@ class RawEvent(models.Model):
             models.Index(fields=["user", "device_id", "ts_utc"]),
             models.Index(fields=["user", "hostname"]),
         ]
+
 # ===========================
 # ======  AGENT MODELS  =====
 # ===========================

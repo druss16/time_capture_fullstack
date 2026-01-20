@@ -67,8 +67,20 @@ info = AppKit.NSBundle.mainBundle().infoDictionary()
 info["LSUIElement"] = "1"
 
 sync = None  # Global sync manager, initialized in run_agent()
+notif_manager = None  # Global notification manager, initialized in run_agent()
 
-
+# Push notifications for client reminders
+try:
+    from notifications import (
+        ClientNotificationManager,
+        NotificationConfig,
+        NotificationWorker,
+        create_notification_system,
+    )
+    PUSH_NOTIF_AVAILABLE = True
+except ImportError:
+    PUSH_NOTIF_AVAILABLE = False
+    print("[WARN] notifications.py not found - push notifications disabled")
 
 # ---------------- MDM Config ----------------
 MDM_CONFIG_PATH_MAC = "/Library/Application Support/TimeTracker/config.plist"
@@ -197,6 +209,9 @@ CONTROL_POLL_S    = int(_get("agent_control_poll_seconds", 10))
 
 EXCLUDE_BUNDLES.add("org.python.python")
 EXCLUDE_BUNDLES.add("com.apple.python3")
+
+_LAST_CLIENT_SUGGESTION = {}  # {client_id: timestamp} - prevent spam
+
 
 PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 
@@ -530,6 +545,92 @@ CPA_TOOL_DETECTION = {
     },
 }
 
+# Notification settings
+NOTIF_ENABLED = bool(_get("notifications_enabled", os.getenv("AGENT_NOTIF_ENABLED") != "0") if _get("notifications_enabled") is not None else True)
+NOTIF_DURATION_MINUTES = int(_get("notif_duration_minutes", os.getenv("AGENT_NOTIF_DURATION_MINUTES")) or 60)
+NOTIF_IDLE_THRESHOLD = int(_get("notif_idle_threshold", os.getenv("AGENT_NOTIF_IDLE_THRESHOLD")) or 300)
+NOTIF_NO_CLIENT_MINUTES = int(_get("notif_no_client_minutes", os.getenv("AGENT_NOTIF_NO_CLIENT_MINUTES")) or 15)
+
+
+def detect_client_in_window(title: str, file_path: str = None) -> Optional[dict]:
+    """
+    Check if any known client name appears in window title or file path.
+    Returns client dict if found, None otherwise.
+    """
+    global sync
+    
+    if not sync or not sync.clients:
+        return None
+    
+    search_text = f"{title or ''} {file_path or ''}".lower()
+    
+    for client in sync.clients:
+        client_name = client.get("name", "")
+        if not client_name:
+            continue
+        
+        # Check if client name appears in window/file
+        if client_name.lower() in search_text:
+            return client
+        
+        # Also check aliases if available
+        aliases = client.get("aliases", []) or []
+        for alias in aliases:
+            if alias.lower() in search_text:
+                return client
+    
+    return None
+
+
+def maybe_suggest_client(detected_client: dict, current_client_id: int):
+    """
+    Show notification if detected client differs from current.
+    """
+    global _LAST_CLIENT_SUGGESTION, notif_manager
+    
+    if not detected_client:
+        return
+    
+    client_id = detected_client.get("id")
+    client_name = detected_client.get("name")
+    
+    # Already working on this client
+    if client_id == current_client_id:
+        return
+    
+    # Rate limit - don't spam same suggestion within 10 minutes
+    now = time.time()
+    last_suggested = _LAST_CLIENT_SUGGESTION.get(client_id, 0)
+    if now - last_suggested < 600:  # 10 minutes
+        return
+    
+    _LAST_CLIENT_SUGGESTION[client_id] = now
+    
+    log(f"[CLIENT-DETECT] Found '{client_name}' in window title")
+    
+    # Use the new notification system if available
+    if notif_manager and notif_manager.ready:
+        notif_manager.notify_client_suggestion(
+            client_id=client_id,
+            client_name=client_name,
+            confidence=0.85,
+            reason="Detected in window title"
+        )
+    else:
+        # Fallback to AppleScript
+        msg = f"Are you working on {client_name}?"
+        ans = prompt_yes_no("Time Tracker", msg, timeout_s=15)
+        if ans is True:
+            api_key = config.get("api_key") or API_KEY
+            if api_key and API_BASE:
+                set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
+                log(f"[CLIENT-DETECT] Set current client to {client_name}")
+
+
+# ---------------- Logging ----------------
+def log(msg: str):
+    if VERBOSE:
+        print(msg, flush=True)
 
 # ---------------- Logging ----------------
 def log(msg: str):
@@ -1398,7 +1499,7 @@ def prompt_yes_no(title: str, message: str, timeout_s: int = 15) -> Optional[boo
         return None
 
 
-def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_menu_bar=None):
+def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_menu_bar=None, notif_manager=None):
     """Polls /context/guess for client suggestions."""
     if not NUDGE_ENABLED:
         log("[NUDGE] Disabled.")
@@ -1451,6 +1552,18 @@ def guess_worker(hostname: str, os_user: str, stop_event: threading.Event, gui_m
 
             with _nudge_lock:
                 if _snoozed(os_user, int(client_id)):
+                    time.sleep(GUESS_POLL_SECONDS)
+                    continue
+
+                # === ADD THIS BLOCK HERE (before gui_menu_bar check) ===
+                if notif_manager and notif_manager.ready:
+                    notif_manager.notify_client_suggestion(
+                        client_id=int(client_id),
+                        client_name=client_name,
+                        confidence=float(conf),
+                        reason=None  # Could add context like "Opened QuickBooks"
+                    )
+                    _snooze(os_user, int(client_id), NUDGE_SNOOZE_MIN)
                     time.sleep(GUESS_POLL_SECONDS)
                     continue
 
@@ -1578,6 +1691,7 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
     api_key = config.get("api_key") or API_KEY
     current_client_id = None
     current_client_name = None
+
     if api_key and API_BASE:
         try:
             current = get_current_client_from_backend(API_BASE, api_key)
@@ -1586,6 +1700,10 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
                 current_client_name = current.get("client_name")
         except Exception as e:
             log(f"[CLIENT] Failed to get current client: {e}")
+
+    # Update notification state with current client
+    if notif_manager:
+        notif_manager.set_current_client(current_client_id, current_client_name)
 
     payload = {
         "ts_utc": ts_iso,
@@ -1639,6 +1757,10 @@ def handle_client_confirmed(client_id, client_name, prompt_data):
         log(f"[GUI] Client confirmed and set: {client_name}")
     except Exception as e:
         log(f"[GUI] confirm error: {e}")
+
+    # Update notification state
+    if notif_manager:
+        notif_manager.set_current_client(client_id, client_name)
 
 
 def handle_client_rejected(prompt_data):
@@ -1703,11 +1825,17 @@ def on_client_switch_from_menu(client_id: int, client_name: str):
     if hasattr(gui_menu_bar, "updateMenu_"):
         gui_menu_bar.updateMenu_(None)
 
+    # Update notification state
+    if notif_manager:
+        notif_manager.set_current_client(client_id, client_name)
+
 # ---------------- Main loop ----------------
 def run_agent():
     """Main agent function with GUI integration."""
     global API_KEY
     global sync  # ← ADD THIS LINE!
+    global notif_manager  # ← Declare global FIRST
+
 
 
     try:
@@ -1805,6 +1933,96 @@ def run_agent():
         sync.start()  # Start background polling
         log(f"[SYNC] Started - polling every {sync.poll_interval}s")
 
+    # === PUSH NOTIFICATION SYSTEM ===
+    global notif_manager
+    notif_worker = None
+    gui_menu_bar = None  # ← ADD THIS LINE HERE (initialize before it's referenced)
+
+    
+    if PUSH_NOTIF_AVAILABLE and NOTIF_ENABLED:
+        log("[NOTIF] Initializing push notification system...")
+        
+        # Load or create notification config
+        notif_config = NotificationConfig(
+            enabled=True,
+            duration_reminder_enabled=True,
+            duration_reminder_interval_minutes=NOTIF_DURATION_MINUTES,
+            duration_reminder_first_minutes=30,
+            idle_return_enabled=True,
+            idle_threshold_seconds=NOTIF_IDLE_THRESHOLD,
+            context_change_enabled=True,
+            context_confidence_threshold=0.6,
+            no_client_reminder_enabled=True,
+            no_client_reminder_after_minutes=NOTIF_NO_CLIENT_MINUTES,
+            min_seconds_between_notifications=60,
+            respect_quiet_hours=False,
+        )
+        
+        def on_notif_confirm(client_id, client_name):
+            """Handle user confirming client from notification"""
+            log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
+            
+            # Update GUI state
+            if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                gui_menu_bar.state.set_client(client_id, client_name)
+                if hasattr(gui_menu_bar, 'app') and hasattr(gui_menu_bar.app, '_rebuild_menu'):
+                    gui_menu_bar.app._rebuild_menu()
+            
+            # Sync to backend
+            api_key = config.get("api_key") or API_KEY
+            if api_key and API_BASE:
+                set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
+        
+        def on_notif_switch():
+            """Handle user requesting client switch from notification"""
+            log("[NOTIF] User requested client switch - opening picker")
+            if gui_menu_bar and hasattr(gui_menu_bar, 'app'):
+                # Trigger the client picker UI
+                try:
+                    gui_menu_bar.app._on_search(None)
+                except Exception as e:
+                    log(f"[NOTIF] Failed to open picker: {e}")
+        
+        def on_notif_snooze(client_id, minutes):
+            """Handle user snoozing a client suggestion"""
+            log(f"[NOTIF] User snoozed client {client_id} for {minutes} minutes")
+            # The notification manager handles internal snooze tracking
+        
+        notif_manager = create_notification_system(
+            on_confirm=on_notif_confirm,
+            on_switch=on_notif_switch,
+            on_snooze=on_notif_snooze,
+            config=notif_config
+        )
+        
+        if notif_manager.ready:
+            log("[NOTIF] ✅ Push notification system ready")
+            
+            # Start the notification worker thread
+            def get_current_client_for_notif():
+                if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                    return {
+                        "client_id": gui_menu_bar.state.current_client_id,
+                        "client_name": gui_menu_bar.state.current_client_name
+                    }
+                return {"client_id": None, "client_name": None}
+            
+            notif_worker = NotificationWorker(
+                notification_manager=notif_manager,
+                get_current_client=get_current_client_for_notif,
+                poll_interval=30  # Check every 30 seconds
+            )
+            notif_worker.start()
+            log("[NOTIF] Notification worker started")
+        else:
+            log("[NOTIF] ⚠️ Push notifications not authorized")
+            notif_manager = None
+    else:
+        if not PUSH_NOTIF_AVAILABLE:
+            log("[NOTIF] Push notifications not available (module not found)")
+        elif not NOTIF_ENABLED:
+            log("[NOTIF] Push notifications disabled by config")
+
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
@@ -1882,13 +2100,17 @@ def run_agent():
             log(f"[CLIENT] Failed to restore client state: {e}")
 
     # Notifications setup
-    try:
-        if NOTIFIER.setup():
-            log("[NOTIF] Ready (UNUserNotificationCenter).")
-        else:
-            log("[NOTIF] Not ready; will fallback to AppleScript prompt.")
-    except Exception as e:
-        log(f"[NOTIF] setup exception: {e}")
+    # Notifications setup (OLD system - skip if new system is active)
+    if not notif_manager:
+        try:
+            if NOTIFIER.setup():
+                log("[NOTIF] Ready (UNUserNotificationCenter).")
+            else:
+                log("[NOTIF] Not ready; will fallback to AppleScript prompt.")
+        except Exception as e:
+            log(f"[NOTIF] setup exception: {e}")
+    else:
+        log("[NOTIF] Skipping old notification system (new system active)")
 
     # Guess/Nudge worker
     stop_flag = threading.Event()
@@ -1897,12 +2119,13 @@ def run_agent():
         if NUDGE_ENABLED:
             t_guess = threading.Thread(
                 target=guess_worker,
-                args=(hostname, os_user, stop_flag, gui_menu_bar),
+                args=(hostname, os_user, stop_flag, gui_menu_bar, notif_manager),  # ← add notif_manager
                 daemon=True
             )
             t_guess.start()
     except Exception as e:
         log(f"[NUDGE] failed to start worker: {e}")
+
 
 
     # === TRACKING LOOP FUNCTION ===
@@ -1929,6 +2152,9 @@ def run_agent():
                 
                 if idle >= MOUSE_IDLE_PAUSE_S and not in_meeting:
                     if current_sig != IDLE_SIG:
+                        # === NOTIFY: Going idle ===
+                        if notif_manager:
+                            notif_manager.on_idle_start()
                         if current_sig and dwell_start:
                             now = time.time()
                             effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
@@ -1949,6 +2175,9 @@ def run_agent():
                     continue
                 else:
                     if current_sig == IDLE_SIG and dwell_start:
+                        # === NOTIFY: Returning from idle ===
+                        if notif_manager:
+                            notif_manager.on_idle_end()  # Sends "Welcome back" notification
                         dwell = time.time() - dwell_start
                         if dwell >= MIN_DWELL_SECONDS:
                             write_event(conn, cur, os_user, hostname, current_sig)
@@ -2000,9 +2229,18 @@ def run_agent():
                         log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} • [MEETING]")
                     else:
                         log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
+
+                    # === NEW: Local client detection ===
+                    detected = detect_client_in_window(title, fpath)
+                    current_id = None
+                    if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                        current_id = gui_menu_bar.state.current_client_id
+                    maybe_suggest_client(detected, current_id)
                 else:
                     if PRINT_EVERY_POLL:
                         log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")
+
+
 
                 time.sleep(POLL_SECONDS)
 
@@ -2021,6 +2259,8 @@ def run_agent():
                     t_guess.join(timeout=2.0)
             except Exception:
                 pass
+            if notif_worker:
+                notif_worker.stop()
             remove_pid()
 
     # === START TRACKING THREAD ===

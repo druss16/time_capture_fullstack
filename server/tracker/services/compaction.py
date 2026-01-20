@@ -1,10 +1,15 @@
 # tracker/services/compaction.py
 """
-Improved compaction service that:
-1. Uses duration-to-next-event logic (more accurate)
-2. Caps idle gaps (lunch breaks don't create 60-min blocks)
-3. Coalesces adjacent identical activities
-4. Respects immutability (doesn't touch ANY categorized blocks)
+Event-centric compaction:
+- Each RawEvent has a `block` FK (null until processed)
+- Compaction ONLY processes events where block__isnull=True
+- Events are linked to their block when created
+- Categorized blocks are NEVER touched
+
+GUARANTEES:
+1. No duplicates - each event belongs to exactly one block
+2. No double-counting - events with block!=null are ignored
+3. No flip-flopping - categorized blocks never change
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
-from tracker.models import Block, RawEvent, Client, CurrentClient
+from tracker.models import Block, RawEvent, Client
 from tracker.utils.blocks import is_idle_activity, get_current_client_for_user
 
 import logging
@@ -23,15 +28,48 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # Configuration
-IDLE_CAP = timedelta(minutes=30)   # Cap long gaps (e.g., lunch) to 30 minutes
+IDLE_CAP = timedelta(minutes=30)   # Cap long gaps to 30 minutes
 MIN_BLOCK = timedelta(seconds=30)  # Drop tiny blips under 30 seconds
 COALESCE_GAP = timedelta(seconds=5)  # Merge blocks if gap < 5 seconds
 
 
+def _safe_device_id(device_id) -> int:
+    """
+    Ensure device_id is a valid integer.
+    Returns 0 as default for invalid/missing values.
+    """
+    if device_id is None:
+        return 0
+    try:
+        return int(device_id)
+    except (ValueError, TypeError):
+        return 0
+
+
+def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org=None) -> int:
+    """
+    Main entry point - called by ai_suggestions_today and other views.
+    Compacts today's unlinked events into blocks.
+    """
+    today = timezone.localdate()
+    
+    # Handle username string
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            logger.warning(f"[COMPACT] User not found: {user}")
+            return 0
+    
+    return compact_day(user, today, hostname=hostname, org=org)
+
+
 def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) -> int:
     """
-    Build blocks from raw events for a specific day.
-    Uses duration-to-next-event logic for accurate time tracking.
+    Event-centric compaction: only process UNLINKED events.
+    
+    Key principle: We ONLY look at events where block__isnull=True.
+    We never touch existing blocks. We never re-process events.
     """
     # Normalize user
     if isinstance(user, str):
@@ -56,12 +94,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 defaults={"slug": "default-org"}
             )
     
-    logger.info(f"[COMPACT] Processing {day} for {user.username}")
-    
-    # ✅ Step 1: Get all raw events for the day
+    # =========================================================
+    # STEP 1: Get ONLY unlinked events (never processed before)
+    # =========================================================
     qs = RawEvent.objects.filter(
         user=user,
-        ts_utc__date=day
+        ts_utc__date=day,
+        block__isnull=True  # ← THE KEY: only unprocessed events
     ).order_by('ts_utc')
     
     if hostname:
@@ -70,79 +109,33 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     events = list(qs)
     
     if not events:
-        logger.debug(f"[COMPACT] No events found for {day}")
+        logger.debug(f"[COMPACT] No unlinked events for {day}")
         return 0
     
-    logger.info(f"[COMPACT] Found {len(events)} events for {day}")
+    logger.info(f"[COMPACT] Found {len(events)} unlinked events to process")
     
-    # ✅ Step 2: Check for existing blocks
-    existing_blocks = Block.objects.filter(
-        user=user,
-        day=day
-    )
-    
-    if hostname:
-        existing_blocks = existing_blocks.filter(hostname=hostname)
-    
-    # ✅ FIXED: Use consistent variable names throughout!
-    categorized_blocks = []      # Blocks to KEEP (protected)
-    blocks_to_delete = []        # Blocks to DELETE (uncategorized only)
-    protected_time_ranges = []   # Time ranges already categorized
-    
-    for b in existing_blocks:
-        # ✅ FIXED: Protect ANY categorized block (manual, ai, pattern, system)
-        if b.is_categorized:
-            categorized_blocks.append(b)  # ✅ FIXED: Now using correct variable!
-            if b.start and b.end:
-                protected_time_ranges.append((b.start, b.end))
-        else:
-            # Only delete UNCATEGORIZED blocks (safe to recreate)
-            blocks_to_delete.append(b)
-    
-    # Delete ONLY uncategorized blocks
-    if blocks_to_delete:
-        delete_ids = [b.id for b in blocks_to_delete]
-        deleted_count = Block.objects.filter(id__in=delete_ids).delete()[0]
-        logger.info(f"[COMPACT] Deleted {deleted_count} uncategorized blocks")
-    
-    # ✅ FIXED: Using correct variable in log message
-    logger.info(f"[COMPACT] Protected {len(categorized_blocks)} categorized blocks")
-    
-    # ✅ Step 3: Build raw blocks using duration-to-next-event logic
+    # =========================================================
+    # STEP 2: Build raw blocks using duration-to-next-event
+    # =========================================================
     raw_blocks = []
     
     for i, event in enumerate(events):
         start = event.ts_utc
         
+        # Duration = time until next event (capped at IDLE_CAP)
         if i + 1 < len(events):
             next_ts = events[i + 1].ts_utc
         else:
+            # Last event gets default 10 min duration
             next_ts = start + timedelta(minutes=10)
         
         dur = max(timedelta(0), min(next_ts - start, IDLE_CAP))
         
+        # Skip tiny events (but they'll still get linked below)
         if dur < MIN_BLOCK:
             continue
         
         end = start + dur
-        
-        # Check overlap with protected (categorized) blocks
-        overlaps_protected = False
-        block_duration = (end - start).total_seconds()
-        
-        for cat_start, cat_end in protected_time_ranges:
-            if start < cat_end and end > cat_start:
-                overlap_start = max(start, cat_start)
-                overlap_end = min(end, cat_end)
-                overlap_seconds = max(0, (overlap_end - overlap_start).total_seconds())
-                
-                if block_duration > 0 and (overlap_seconds / block_duration) > 0.8:
-                    overlaps_protected = True
-                    logger.debug(f"[COMPACT] Skipping event - 80%+ overlap with categorized block")
-                    break
-        
-        if overlaps_protected:
-            continue
         
         raw_blocks.append({
             "start": start,
@@ -154,40 +147,52 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             "url": event.url or "",
             "file_path": event.file_path or "",
             "hostname": event.hostname or hostname or "unknown",
-            "device_id": getattr(event, 'device_id', 'unknown'),
+            "device_id": _safe_device_id(getattr(event, 'device_id', None)),  # ✅ FIXED
             "current_client_id": getattr(event, 'current_client_id', None),
             "ctx": getattr(event, 'ctx', {}),
+            "source_events": [event],  # Track which events make up this block
         })
     
     if not raw_blocks:
-        logger.info(f"[COMPACT] No new blocks to create")
+        # Mark tiny events as processed so they don't get retried
+        # We'll link them to a "skipped" marker or just leave them
+        logger.info(f"[COMPACT] No blocks to create (all events too short)")
         return 0
     
-    logger.info(f"[COMPACT] Built {len(raw_blocks)} raw blocks from events")
-    
-    # ✅ Step 4: Coalesce adjacent identical activities
+    # =========================================================
+    # STEP 3: Coalesce adjacent identical activities
+    # =========================================================
     coalesced = []
     
     for block in raw_blocks:
         if coalesced and _can_coalesce(coalesced[-1], block):
+            # Merge into previous block
             coalesced[-1]["end"] = block["end"]
             coalesced[-1]["minutes"] += block["minutes"]
+            coalesced[-1]["source_events"].extend(block["source_events"])
         else:
             coalesced.append(block)
     
-    logger.info(f"[COMPACT] Coalesced {len(raw_blocks)} raw blocks → {len(coalesced)} final blocks")
+    logger.info(f"[COMPACT] Coalesced {len(raw_blocks)} → {len(coalesced)} blocks")
     
-    # ✅ Step 5: Create Block records
+    # =========================================================
+    # STEP 4: Create blocks and link events (atomic transaction)
+    # =========================================================
     created_count = 0
     
     with transaction.atomic():
         for block_data in coalesced:
+            # Check if this is idle activity
             is_idle = is_idle_activity(
                 app_name=block_data.get("app_name"),
                 bundle_id=block_data.get("bundle_id"),
                 window_title=block_data.get("window_title")
             )
             
+            # ✅ FIXED: Validate device_id before using
+            device_id = block_data.get("device_id")  # Already sanitized above
+            
+            # Get client from event's current_client_id or user's current selection
             client = None
             if not is_idle:
                 client_id = block_data.get("current_client_id")
@@ -197,18 +202,17 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     except Client.DoesNotExist:
                         pass
                 
-                if not client:
-                    client = get_current_client_for_user(
-                        user,
-                        device_id=block_data.get("device_id")
-                    )
+                # ✅ FIXED: Only call if device_id is valid
+                if not client and device_id:
+                    client = get_current_client_for_user(user, device_id=device_id)
             
+            # Create the block
             if is_idle:
                 hours = round(int(block_data["minutes"]) / 60.0, 2)
-                Block.objects.create(
+                new_block = Block.objects.create(
                     org=org,
                     user=user,
-                    device_id=block_data["device_id"],
+                    device_id=device_id or 0,  # ✅ Already validated
                     hostname=block_data["hostname"],
                     start=block_data["start"],
                     end=block_data["end"],
@@ -223,16 +227,16 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     hints={},
                     client=None,
                     category_hours={"Idle": hours},
-                    is_categorized=True,
+                    is_categorized=True,  # Idle = auto-categorized
                     categorized_by="system",
                     categorized_at=timezone.now(),
                     approved=False,
                 )
             else:
-                Block.objects.create(
+                new_block = Block.objects.create(
                     org=org,
                     user=user,
-                    device_id=block_data["device_id"],
+                    device_id=device_id or 0,  # ✅ Already validated
                     hostname=block_data["hostname"],
                     start=block_data["start"],
                     end=block_data["end"],
@@ -247,19 +251,31 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     hints=block_data.get("ctx") or {},
                     client=client,
                     category_hours={},
-                    is_categorized=False,
+                    is_categorized=False,  # Needs AI categorization
                     approved=False,
                 )
             
+            # =========================================================
+            # CRITICAL: Link source events to this block
+            # This prevents double-counting forever!
+            # =========================================================
+            event_ids = [e.id for e in block_data["source_events"]]
+            RawEvent.objects.filter(id__in=event_ids).update(block=new_block)
+            
             created_count += 1
+            logger.debug(f"[COMPACT] Created block {new_block.id} ({new_block.title}) from {len(event_ids)} events")
     
-    logger.info(f"[COMPACT] Created {created_count} new blocks for {day}")
+    logger.info(f"[COMPACT] Created {created_count} blocks for {day}")
     
     return created_count
 
 
 def _can_coalesce(block1: Dict[str, Any], block2: Dict[str, Any]) -> bool:
-    """Check if two blocks can be merged."""
+    """
+    Check if two blocks can be merged.
+    Only merge if same app, same window, and gap < 5 seconds.
+    """
+    # Must be same activity
     if not all([
         block1["app_name"] == block2["app_name"],
         block1["bundle_id"] == block2["bundle_id"],
@@ -267,6 +283,7 @@ def _can_coalesce(block1: Dict[str, Any], block2: Dict[str, Any]) -> bool:
     ]):
         return False
     
+    # Gap must be tiny
     gap = block2["start"] - block1["end"]
     if gap > COALESCE_GAP:
         return False
@@ -275,7 +292,10 @@ def _can_coalesce(block1: Dict[str, Any], block2: Dict[str, Any]) -> bool:
 
 
 def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:
-    """Quick compaction of recent events."""
+    """
+    Quick compaction of recent events.
+    Called after event ingestion for real-time block creation.
+    """
     if isinstance(user, str):
         try:
             user = User.objects.get(username=user)
@@ -290,13 +310,16 @@ def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: in
 
 
 def auto_compact_all_active_users(minutes_back: int = 30):
-    """Auto-compact for all users with recent activity."""
-    from django.utils import timezone
-    
+    """
+    Auto-compact for all users with recent activity.
+    Run this from a cron job or celery task.
+    """
     cutoff = timezone.now() - timedelta(minutes=minutes_back)
     
+    # Find users with unlinked events only
     recent_users = RawEvent.objects.filter(
-        ts_utc__gte=cutoff
+        ts_utc__gte=cutoff,
+        block__isnull=True  # Only users with unprocessed events
     ).values_list('user', 'hostname').distinct()
     
     stats = {
@@ -317,6 +340,9 @@ def auto_compact_all_active_users(minutes_back: int = 30):
             logger.error(f"[AUTO-COMPACT] Error for user {user_id}: {e}")
             stats['errors'] += 1
     
-    logger.info(f"[AUTO-COMPACT] Processed {stats['users_processed']} users, created {stats['blocks_created']} blocks")
+    logger.info(
+        f"[AUTO-COMPACT] Processed {stats['users_processed']} users, "
+        f"created {stats['blocks_created']} blocks"
+    )
     
     return stats

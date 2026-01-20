@@ -41,6 +41,9 @@ from rest_framework.throttling import AnonRateThrottle, UserRateThrottle, Scoped
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.views import APIView  # ← ADD THIS LINE
 
+# In your views file
+from tracker.services.compaction import compact_rawevents_into_blocks
+
 
 # --- Third-party ---
 from allauth.account import app_settings as allauth_settings
@@ -188,6 +191,95 @@ from .serializers_billing import (
     InvoiceExportSerializer
 )
 
+
+def match_client_in_text(text: str, clients: list, known_entities: list = None) -> list:
+    """
+    Smart client matching that handles various naming patterns.
+    
+    Returns: [(client, score, reason), ...] sorted by score descending
+    """
+    if not text:
+        return []
+    
+    text_lower = text.lower()
+    matches = []
+    
+    for client in clients:
+        score = 0.0
+        reasons = []
+        client_name = client.name or ""
+        client_name_lower = client_name.lower()
+        
+        # 1. Exact full name match (highest confidence)
+        if client_name_lower and client_name_lower in text_lower:
+            score += 0.50
+            reasons.append(f"Exact match '{client_name}'")
+        
+        # 2. First word match (e.g., "Aurelia" from "Aurelia LLC")
+        #    Only if first word is 3+ chars and not generic
+        first_word = client_name.split()[0].lower() if client_name else ""
+        generic_words = {'the', 'and', 'inc', 'llc', 'corp', 'ltd', 'company', 'co', 'group'}
+        
+        if (first_word 
+            and len(first_word) >= 3 
+            and first_word not in generic_words
+            and first_word in text_lower
+            and client_name_lower not in text_lower):  # Don't double-count
+            score += 0.40
+            reasons.append(f"First word '{first_word}'")
+        
+        # 3. Client code match (e.g., "ACME" in filename)
+        client_code = (getattr(client, 'code', '') or '').lower()
+        if client_code and len(client_code) >= 2 and client_code in text_lower:
+            # Make sure it's a word boundary match to avoid false positives
+            import re
+            if re.search(rf'\b{re.escape(client_code)}\b', text_lower):
+                score += 0.35
+                reasons.append(f"Code match '{client_code}'")
+        
+        # 4. Each significant word in client name (for multi-word names)
+        #    e.g., "Smith & Associates" - look for "smith" and "associates"
+        words = [w.lower() for w in client_name.split() if len(w) >= 4 and w.lower() not in generic_words]
+        word_matches = sum(1 for w in words if w in text_lower)
+        if word_matches > 0 and len(words) > 0:
+            word_score = 0.25 * (word_matches / len(words))
+            if word_score > 0 and score < 0.50:  # Don't add if already matched fully
+                score += word_score
+                matched_words = [w for w in words if w in text_lower]
+                reasons.append(f"Words: {', '.join(matched_words)}")
+        
+        # 5. Check aliases from KnownEntity
+        if known_entities:
+            for entity in known_entities:
+                if entity.name == client.name and entity.aliases:
+                    for alias in entity.aliases:
+                        alias_lower = (alias or '').lower()
+                        if alias_lower and len(alias_lower) >= 2 and alias_lower in text_lower:
+                            score += 0.45
+                            reasons.append(f"Alias '{alias}'")
+                            break
+        
+        if score > 0:
+            matches.append((client, score, '; '.join(reasons)))
+    
+    # Sort by score descending
+    matches.sort(key=lambda x: x[1], reverse=True)
+    return matches
+
+
+def extract_domain_from_url(url: str) -> str:
+    """Extract clean domain from URL."""
+    if not url:
+        return ""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        domain = (parsed.netloc or '').lower()
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        return domain
+    except:
+        return ""
 
 # ============================================================================
 # CONFIGURATION: Available Categories
@@ -2307,12 +2399,13 @@ from tracker.services.pattern_learning import PatternLearningService
 def ai_suggestions_today(request):
     """
     Generate AI-powered suggestions for today's blocks.
-    ✅ Skips already-categorized blocks (no wasted AI credits)
-    ✅ Auto-saves high-confidence results (>= 0.70 confidence)
-    ✅ Uses learned user patterns for better accuracy
-    ✅ Enhanced CPA-specific tool detection
-    ✅ Seasonal awareness for context
-    ✅ Immutability tracking with is_categorized flag
+    
+    GUARANTEES:
+    ✅ Categorized blocks NEVER change (is_categorized=True is permanent)
+    ✅ Only uncategorized blocks get AI suggestions
+    ✅ Auto-saves high-confidence results (>= 0.70)
+    ✅ No duplicates (event-centric compaction)
+    ✅ No flip-flopping (once saved, never touched again)
     """
     # Toggles
     username = request.GET.get("user") or None
@@ -2326,7 +2419,11 @@ def ai_suggestions_today(request):
 
     org = get_org_or_default(request)
 
-    # Build/refresh today's blocks
+    # =========================================================
+    # STEP 1: Compact any new unlinked events into blocks
+    # This only processes events where block__isnull=True
+    # Existing blocks are NEVER touched
+    # =========================================================
     compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
 
     start_utc = _start_of_local_day_utc()
@@ -2342,19 +2439,26 @@ def ai_suggestions_today(request):
     if not all_blocks:
         return Response([])
 
-    # ✅ UPDATED: Filter using explicit is_categorized flag
+    # =========================================================
+    # STEP 2: Split blocks into categorized vs uncategorized
+    # Categorized blocks are NEVER sent to AI
+    # =========================================================
     blocks_needing_ai = []
     already_categorized = []
 
     for b in all_blocks:
-        if b.is_categorized:  # ✅ Use explicit flag - much cleaner!
+        if b.is_categorized:
+            # This block is DONE - never touch it again
             already_categorized.append(b)
         else:
             blocks_needing_ai.append(b)
 
-    log(f"[AI] {len(already_categorized)} blocks already categorized, {len(blocks_needing_ai)} need AI")
+    log(f"[AI] {len(already_categorized)} blocks already categorized (LOCKED), {len(blocks_needing_ai)} need AI")
 
-    # If everything is already categorized, return early
+    # =========================================================
+    # STEP 3: If everything is categorized, return immediately
+    # No AI call needed - these blocks are permanent
+    # =========================================================
     if not blocks_needing_ai:
         out = []
         for b in already_categorized:
@@ -2369,7 +2473,7 @@ def ai_suggestions_today(request):
                     "categories": b.category_hours or {},
                     "confidence": 1.0,
                     "needs_review": False,
-                    "reasoning": "Already categorized",
+                    "reasoning": "Already categorized (locked)",
                     "source": "existing",
                     "auto_saved": False,
                 },
@@ -2378,7 +2482,7 @@ def ai_suggestions_today(request):
             })
         return Response(out)
 
-    # ✅ Only process uncategorized blocks
+    # Only process uncategorized blocks
     blocks = blocks_needing_ai
 
     # Get user object for pattern learning
@@ -2400,7 +2504,7 @@ def ai_suggestions_today(request):
         minutes = int((b.end - b.start).total_seconds() / 60) if b.end else 0
         hints = getattr(b, "hints", {}) or {}
         
-        # ✅ NEW: Add learned pattern hints to each block
+        # Add learned pattern hints to each block
         pattern_hints = []
         if user_obj:
             learned_patterns = PatternLearningService.get_patterns_for_block(b, user_obj)
@@ -2427,11 +2531,11 @@ def ai_suggestions_today(request):
             "learned_patterns": pattern_hints,
         })
 
-    # ✅ Build comprehensive context for AI
+    # Build comprehensive context for AI
     org_context = build_ai_context(org) or ""
     seasonal_context = get_seasonal_context()
     
-    # ✅ NEW: Add learned user patterns
+    # Add learned user patterns
     pattern_context = ""
     if user_obj:
         pattern_context = PatternLearningService.build_pattern_context(user_obj, org)
@@ -2507,7 +2611,7 @@ def ai_suggestions_today(request):
 
     client = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
 
-    # ✅ ENHANCED: Comprehensive system message with all context
+    # System message with all context
     system_msg = (
         "You are an expert time-tracking classifier for a CPA firm. "
         "Your goal is to accurately categorize every billable minute into the correct client and category. "
@@ -2549,57 +2653,21 @@ def ai_suggestions_today(request):
         "\n\n"
         "=== CRITICAL CLASSIFICATION RULES ===\n"
         "1. **Be Specific**: Use the most specific category that applies\n"
-        "   - \"Form 1040 preparation\" → Tax Preparation (NOT just \"Tax\")\n"
-        "   - \"QuickBooks reconciliation\" → Accounting/Bookkeeping\n"
-        "   - \"Zoom call with client\" → Meetings\n"
-        "\n"
-        "2. **Confidence Scoring**:\n"
-        "   - >= 0.90: Obvious professional tool detected (UltraTax, Xero, etc.)\n"
-        "   - >= 0.80: Clear work pattern (email @clientname.com, specific forms)\n"
-        "   - >= 0.70: Reasonable inference from context\n"
-        "   - < 0.70: Mark needs_review=true\n"
-        "\n"
-        "3. **Use Learned Patterns**: Each block may include 'learned_patterns' from this user's history\n"
-        "   - If learned_patterns shows high confidence for a client/category, weight that heavily\n"
-        "   - Example: If learned_patterns says 'Acme Corp' with 0.85 confidence, strongly consider that\n"
-        "\n"
-        "4. **Client Identification**:\n"
-        "   - Check window titles for client names\n"
-        "   - Check URLs for client domains\n"
-        "   - Check file paths for client folders\n"
-        "   - Match against known client list when provided\n"
-        "   - **Priority: learned_patterns > file_path > window_title > url**\n"
-        "\n"
-        "5. **Time Allocation**:\n"
-        "   - If working on multiple things, split the time proportionally\n"
-        "   - Round to nearest 0.1 hours (6-minute increments)\n"
-        "   - Example: 30 min meeting + 30 min email = {\"Meetings\": 0.5, \"Email/Communication\": 0.5}\n"
-        "\n"
-        "6. **CPA Tool Detection** (CRITICAL - these are HIGH confidence):\n"
-        "   - UltraTax/Drake/Lacerte/ProSeries/ATX → Tax Preparation (0.95+ confidence)\n"
-        "   - QuickBooks/Xero/Sage/FreshBooks → Accounting/Bookkeeping (0.93+ confidence)\n"
-        "   - CaseWare/Teammate/AuditBoard → Audit/Assurance (0.96+ confidence)\n"
-        "   - Checkpoint/Bloomberg Tax/RIA → Tax Research (0.94+ confidence)\n"
-        "   - ADP/Paychex/Gusto → Payroll Services (0.95+ confidence)\n"
-        "   - Zoom/Teams/Meet → Meetings (0.95+ confidence)\n"
-        "   - Gmail/Outlook mail.google.com → Email/Communication (0.90+ confidence)\n"
-        "   - IRS.gov → Tax Research (0.96+ confidence)\n"
-        "   - SEC.gov/EDGAR → SEC/Regulatory Compliance (0.97+ confidence)\n"
-        "\n"
-        "7. **Form Detection** (VERY HIGH confidence):\n"
-        "   - Form 1040/1120/1065/990/W-2/1099/K-1 → Tax Preparation (0.97+ confidence)\n"
-        "   - Form 5500 → Employee Benefits/ERISA (0.92+ confidence)\n"
-        "   - Form 10-K/10-Q/8-K → SEC/Regulatory Compliance (0.97+ confidence)\n"
+        "2. **Confidence Scoring**: >= 0.90 obvious tools, >= 0.80 clear patterns, >= 0.70 reasonable inference\n"
+        "3. **Use Learned Patterns**: Weight learned_patterns highly if present\n"
+        "4. **Client Identification**: Check window titles, URLs, file paths for client names\n"
+        "5. **Time Allocation**: Split time proportionally if multiple activities\n"
+        "6. **CPA Tool Detection**: UltraTax/Drake/Lacerte → Tax Prep, QuickBooks/Xero → Bookkeeping, etc.\n"
         "\n\n"
         "=== RESPONSE FORMAT ===\n"
         "Return ONLY a JSON array with one object per block:\n"
         "{\n"
         "  \"client\": \"Acme Corp\" | null,\n"
         "  \"project\": \"2024 Tax Return\" | null,\n"
-        "  \"categories\": {\"Tax Preparation\": 1.5, \"Email/Communication\": 0.3},\n"
+        "  \"categories\": {\"Tax Preparation\": 1.5},\n"
         "  \"confidence\": 0.92,\n"
         "  \"needs_review\": false,\n"
-        "  \"reasoning\": \"UltraTax detected with Form 1040 in title + learned pattern matches Acme Corp\"\n"
+        "  \"reasoning\": \"UltraTax detected with Form 1040 in title\"\n"
         "}\n"
         "\n\n"
         "=== ORGANIZATION CONTEXT ===\n" + org_context +
@@ -2652,7 +2720,11 @@ def ai_suggestions_today(request):
             })
         return Response(out, status=200)
 
-    # ✅ Process AI suggestions and auto-save high-confidence results
+    # =========================================================
+    # STEP 4: Process AI suggestions and auto-save
+    # CRITICAL: Only save if is_categorized=False
+    # Once saved, the block is LOCKED forever
+    # =========================================================
     out = []
     N = min(len(blocks), len(ai_suggestions))
     saved_count = 0
@@ -2662,12 +2734,10 @@ def ai_suggestions_today(request):
             b = blocks[i]
             sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
             
-            # ✅ Try pre-classification first (CPA tools, emails, meetings)
+            # Try pre-classification first (CPA tools, emails, meetings)
             pre_class = pre_classify_obvious_categories(b)
             if pre_class:
-                # Override AI suggestion with obvious classification
                 sug["categories"] = pre_class.get("categories", sug.get("categories", {}))
-                # Boost confidence if pre-classified
                 sug["confidence"] = max(float(sug.get("confidence", 0)), pre_class.get("confidence", 0))
                 if pre_class.get("reasoning"):
                     sug["reasoning"] = pre_class["reasoning"]
@@ -2677,25 +2747,29 @@ def ai_suggestions_today(request):
             client_name = (sug.get("client") or "").strip()
             categories = sug.get("categories", {})
             
-            # ✅ Auto-save if high confidence (>= 0.70)
+            # =========================================================
+            # AUTO-SAVE: Only if confidence >= 0.70 AND not already categorized
+            # This is the ONLY place where is_categorized gets set to True
+            # =========================================================
             auto_saved = False
             if confidence >= 0.70 and categories:
                 try:
-                    # ✅ UPDATED: Use is_categorized flag instead of manual check
-                    if not b.is_categorized:
-                        
-                        # Create/get client if provided AND block doesn't have one
-                        if client_name and not b.client:
+                    # SAFETY CHECK: Re-fetch block to ensure it's still uncategorized
+                    # (prevents race conditions)
+                    fresh_block = Block.objects.select_for_update().get(id=b.id)
+                    
+                    if not fresh_block.is_categorized:
+                        # Create/get client if provided
+                        if client_name and not fresh_block.client:
                             client_obj, _ = Client.objects.get_or_create(
                                 org=org,
                                 name=client_name,
                                 defaults={"is_active": True}
                             )
-                            b.client = client_obj
+                            fresh_block.client = client_obj
                         
                         # Save categories
                         if categories and isinstance(categories, dict):
-                            # Clean categories (ensure hours are floats)
                             clean_cats = {}
                             for k, v in categories.items():
                                 try:
@@ -2704,27 +2778,29 @@ def ai_suggestions_today(request):
                                     pass
                             
                             if clean_cats:
-                                # ✅ Set BOTH category_hours (dict) and ai_category (string)
-                                b.category_hours = clean_cats
-                                b.ai_category = list(clean_cats.keys())[0]  # Legacy compatibility
-                                b.is_categorized = True
-                                b.categorized_at = timezone.now()
-                                b.categorized_by = 'ai'
-                                b.ai_processed_at = timezone.now()
-                                b.ai_confidence = confidence
+                                # Set all categorization fields
+                                fresh_block.category_hours = clean_cats
+                                fresh_block.ai_category = list(clean_cats.keys())[0]
+                                fresh_block.is_categorized = True  # ← LOCK IT
+                                fresh_block.categorized_at = timezone.now()
+                                fresh_block.categorized_by = 'ai'
+                                fresh_block.ai_processed_at = timezone.now()
+                                fresh_block.ai_confidence = confidence
                                 
-                                # ✅ CRITICAL FIX: force_update=True bypasses protection check
-                                b.save(force_update=True)
+                                fresh_block.save()
                                 auto_saved = True
                                 saved_count += 1
                                 
-                                # ✅ Simple, clear logging
-                                client_name = getattr(b.client, "name", None)
-                                log(f"[AI] ✅ Saved {b.id} → {client_name or 'none'} | {list(clean_cats.keys())} ({confidence:.2f})")
+                                # Update local reference
+                                b.client = fresh_block.client
+                                b.is_categorized = True
+                                
+                                log(f"[AI] ✅ LOCKED block {b.id} → {client_name or 'none'} | {list(clean_cats.keys())} ({confidence:.2f})")
+                    else:
+                        log(f"[AI] ⚠️ Block {b.id} already categorized - skipping")
                 
                 except Exception as e:
                     log(f"[AI] ❌ Failed to save block {b.id}: {e}")
-                    # ✅ Added stack trace for debugging
                     import traceback
                     traceback.print_exc()
             
@@ -2747,7 +2823,10 @@ def ai_suggestions_today(request):
                 "current_project": getattr(b.project, "name", None),
             })
 
-    # ✅ Add already-categorized blocks to the response
+    # =========================================================
+    # STEP 5: Add already-categorized blocks to response
+    # These are READ-ONLY - just returned for display
+    # =========================================================
     for b in already_categorized:
         out.append({
             "block_id": b.id,
@@ -2760,7 +2839,7 @@ def ai_suggestions_today(request):
                 "categories": b.category_hours or {},
                 "confidence": 1.0,
                 "needs_review": False,
-                "reasoning": "Already categorized",
+                "reasoning": "Already categorized (locked)",
                 "source": "existing",
                 "auto_saved": False,
             },
@@ -2769,7 +2848,7 @@ def ai_suggestions_today(request):
         })
 
     if saved_count > 0:
-        log(f"[AI] Auto-saved {saved_count}/{N} high-confidence classifications")
+        log(f"[AI] Auto-saved and LOCKED {saved_count}/{N} blocks")
 
     return Response(out)
 
@@ -4280,10 +4359,16 @@ def list_clients(request):
 
 
 @api_view(["GET"])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def context_guess(request):
     """
     AI-powered client suggestion based on recent activity.
+    
+    Uses smart matching to find client names in:
+    - Window titles (e.g., "MavOps_Aurelia_Website_Proposal.pdf")
+    - URLs (e.g., "acmecorp.quickbooks.com")
+    - File paths (e.g., "/Users/dan/Clients/Aurelia/")
     
     Query params:
       - host: hostname (optional, from agent)
@@ -4293,17 +4378,14 @@ def context_guess(request):
     """
     user = request.user
     device = getattr(request, "agent_device", None)
-    host = request.GET.get("host", "")
-    device_id_param = request.GET.get("device_id", "")
     
-    # Get recent blocks (last 10 minutes)
-    from datetime import timedelta
-    cutoff = timezone.now() - timedelta(minutes=10)
+    # Get recent blocks (last 15 minutes for better coverage)
+    cutoff = timezone.now() - timedelta(minutes=15)
     
     recent_blocks = Block.objects.filter(
         user=user,
         start__gte=cutoff
-    ).order_by("-start")[:20]
+    ).order_by("-start")[:30]
     
     if not recent_blocks:
         return Response({
@@ -4313,14 +4395,14 @@ def context_guess(request):
             "reason": "No recent activity"
         })
     
-    # Get user's clients
+    # Get user's org and clients
     org = get_user_org(user)
     if not org:
         org, _ = Organization.objects.get_or_create(
             name="default-org",
             defaults={"slug": "default-org"}
         )
-        
+    
     clients = list(Client.objects.filter(org=org, is_active=True))
     if not clients:
         return Response({
@@ -4330,88 +4412,101 @@ def context_guess(request):
             "reason": "No clients defined"
         })
     
-    # Simple matching logic
-    scores = {}
-    reasons = {}
+    # Get known entities for alias matching
+    known_entities = list(KnownEntity.objects.filter(
+        org=org,
+        entity_type="client"
+    ))
     
-    for client in clients:
-        score = 0.0
-        reason_parts = []
+    # Score each client across all recent blocks
+    client_scores = {}  # client_id -> {'score': float, 'reasons': [], 'blocks': int}
+    
+    for block in recent_blocks:
+        # Skip idle blocks
+        if _is_idle_block(block):
+            continue
         
-        # Check window titles for client name
-        for block in recent_blocks:
-            window_title = (getattr(block, "window_title", "") or "").lower()
-            if client.name.lower() in window_title:
-                score += 0.3
-                reason_parts.append(f"Window title matches '{client.name}'")
-                break
+        # Collect all text to search
+        window_title = (getattr(block, "window_title", "") or "").strip()
+        url = (block.url or "").strip()
+        file_path = (block.file_path or "").strip()
+        app_name = (getattr(block, "app_name", "") or "").strip()
         
-        # Check URLs for client name/domain
-        for block in recent_blocks:
-            url = (block.url or "").lower()
-            if client.name.lower() in url:
-                score += 0.4
-                reason_parts.append(f"URL contains '{client.name}'")
-                break
+        # Combine for matching (with separators to avoid false joins)
+        combined_text = f"{window_title} | {url} | {file_path} | {app_name}"
         
-        # Check file paths
-        for block in recent_blocks:
-            file_path = (block.file_path or "").lower()
-            if client.name.lower() in file_path:
-                score += 0.2
-                reason_parts.append(f"File path contains '{client.name}'")
-                break
+        # Run smart matching
+        matches = match_client_in_text(combined_text, clients, known_entities)
         
-        # Check against KnownEntity aliases
-        try:
-            known = KnownEntity.objects.filter(
-                org=org,
-                entity_type="client",
-                name=client.name
-            ).first()
+        for client, score, reason in matches:
+            if client.id not in client_scores:
+                client_scores[client.id] = {
+                    'client': client,
+                    'score': 0.0,
+                    'reasons': set(),
+                    'blocks': 0
+                }
             
-            if known and known.aliases:
-                for alias in known.aliases:
-                    for block in recent_blocks:
-                        if alias.lower() in (getattr(block, "window_title", "") or "").lower():
-                            score += 0.3
-                            reason_parts.append(f"Alias '{alias}' matched")
-                            break
-        except:
-            pass
+            client_scores[client.id]['score'] += score
+            client_scores[client.id]['reasons'].add(reason)
+            client_scores[client.id]['blocks'] += 1
         
-        if score > 0:
-            scores[client.id] = score
-            reasons[client.id] = "; ".join(reason_parts[:2])
+        # Additional: Check URL domain against client name/code
+        domain = extract_domain_from_url(url)
+        if domain:
+            for client in clients:
+                client_name_lower = client.name.lower().replace(' ', '')
+                client_code_lower = (getattr(client, 'code', '') or '').lower()
+                
+                # Domain contains client name (e.g., "acmecorp.quickbooks.com")
+                if client_name_lower and client_name_lower in domain.replace('.', ''):
+                    if client.id not in client_scores:
+                        client_scores[client.id] = {
+                            'client': client,
+                            'score': 0.0,
+                            'reasons': set(),
+                            'blocks': 0
+                        }
+                    client_scores[client.id]['score'] += 0.35
+                    client_scores[client.id]['reasons'].add(f"Domain contains '{client.name}'")
+                    client_scores[client.id]['blocks'] += 1
     
     # Find best match
-    if not scores:
+    if not client_scores:
         return Response({
             "client_id": None,
             "client_name": None,
             "confidence": 0.0,
-            "reason": "No matches found"
+            "reason": "No matches found in recent activity"
         })
     
-    best_client_id = max(scores, key=scores.get)
-    best_score = scores[best_client_id]
+    # Get top match
+    best_match = max(client_scores.values(), key=lambda x: x['score'])
+    best_client = best_match['client']
+    raw_score = best_match['score']
+    block_count = best_match['blocks']
+    reasons = list(best_match['reasons'])[:3]  # Top 3 reasons
     
-    # Only suggest if confidence is reasonable
-    if best_score < 0.45:
+    # Normalize confidence (cap at 0.95)
+    # More blocks = more confidence, but diminishing returns
+    block_bonus = min(0.15, block_count * 0.03)
+    confidence = min(0.95, (raw_score / 2.0) + block_bonus)
+    
+    # Minimum threshold to suggest
+    if confidence < 0.35:
         return Response({
             "client_id": None,
             "client_name": None,
-            "confidence": best_score,
-            "reason": "Confidence too low"
+            "confidence": confidence,
+            "reason": f"Low confidence ({confidence:.2f}): {'; '.join(reasons)}"
         })
-    
-    best_client = Client.objects.get(id=best_client_id)
     
     return Response({
         "client_id": best_client.id,
         "client_name": best_client.name,
-        "confidence": min(best_score, 0.95),
-        "reason": reasons.get(best_client_id, "Pattern match")
+        "confidence": round(confidence, 2),
+        "reason": '; '.join(reasons),
+        "blocks_matched": block_count
     })
 
 

@@ -920,27 +920,38 @@ def run_agent():
             if gui_menu_bar:
                 try:
                     import keyboard
-                    import time as _time
+                    import time
+                    from client_picker import show_client_picker
                     
-                    _last_hotkey_time = [0]  # Mutable for closure
-                    _hotkey_debounce_ms = 1000  # 1 second debounce
+                    _hotkey_last = [0]
                     
                     def on_hotkey_pressed():
-                        now = _time.time() * 1000
-                        if now - _last_hotkey_time[0] < _hotkey_debounce_ms:
-                            log("[HOTKEY] Debounced - ignoring duplicate")
+                        now = time.time() * 1000
+                        if now - _hotkey_last[0] < 1000:
                             return
-                        _last_hotkey_time[0] = now
+                        _hotkey_last[0] = now
                         log("[HOTKEY] Alt+Shift+T pressed!")
-                        gui_menu_bar._show_client_picker()
+                        
+                        # IMPORTANT: Release the hotkey keys first!
+                        keyboard.release('alt')
+                        keyboard.release('shift')
+                        keyboard.release('t')
+                        time.sleep(0.1)  # Small delay to let keys release
+                        
+                        clients = gui_menu_bar.client_mgr.get_all()
+                        current_id = gui_menu_bar.state.current_client_id
+                        
+                        def on_select(cid, cname):
+                            if cid is not None or cname == "No Client":
+                                gui_menu_bar._switch_client(cid or 0, cname)
+                        
+                        show_client_picker(clients, current_id, on_select)
                     
                     keyboard.add_hotkey('alt+shift+t', on_hotkey_pressed)
                     log("[QUICK] Ready - Alt+Shift+T")
                     
                 except Exception as e:
-                    log(f"[QUICK] Failed to initialize: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    log(f"[QUICK] Failed: {e}")
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")

@@ -6,7 +6,7 @@ TimeTracker Windows System Tray GUI - Modern Version
 Features:
 - Beautiful system tray icon
 - Modern dialogs with CustomTkinter
-- Client switching
+- Client switching with ROBUST WINDOWS FOCUS
 - AI client prompts
 - Today's time viewer
 """
@@ -15,6 +15,7 @@ import os
 import json
 import threading
 import time as _time
+import ctypes
 from datetime import datetime
 from typing import Optional, List, Dict, Callable
 
@@ -49,59 +50,122 @@ GUI_AVAILABLE = TRAY_AVAILABLE
 # Config paths
 CLIENTS_FILE = os.path.expanduser("~/.timetracker/clients.json")
 GUI_STATE_FILE = os.path.expanduser("~/.timetracker/gui_state.json")
+CLIENT_USAGE_FILE = os.path.expanduser("~/.timetracker/client_usage.json")
 
-# Color scheme
+# ============================================================
+# COLOR SCHEME - GREEN/TEAL theme matching website
+# ============================================================
 COLORS = {
-    "primary": "#3B82F6",
-    "primary_hover": "#2563EB",
-    "success": "#10B981",
-    "success_hover": "#059669",
+    "primary": "#14B8A6",          # Teal (main brand color)
+    "primary_hover": "#0D9488",    # Darker teal
+    "primary_light": "#5EEAD4",    # Lighter teal
+    "success": "#10B981",          # Green
+    "success_hover": "#059669",    # Darker green
     "danger": "#EF4444",
     "danger_hover": "#DC2626",
     "warning": "#F59E0B",
-    "bg_dark": "#1F2937",
-    "bg_card": "#374151",
-    "text": "#F9FAFB",
-    "text_muted": "#9CA3AF",
-    "tray_bg": "#3B82F6",  # Blue tray icon
+    "bg_dark": "#1A1A1A",          # Dark background
+    "bg_card": "#252525",          # Card background
+    "bg_input": "#2A2A2A",         # Input background
+    "bg_item": "#252525",          # List item background
+    "bg_item_hover": "#333333",    # List item hover
+    "bg_item_selected": "#14B8A6", # Selected item (teal)
+    "border": "#3A3A3A",
+    "text": "#FFFFFF",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#888888",
+    "text_muted": "#666666",
+    "accent": "#14B8A6",           # Accent color (teal)
+    "tray_bg": "#14B8A6",          # Teal tray icon
+    "bg_window": "#1A1A1A",
 }
 
-CLIENT_USAGE_FILE = os.path.expanduser("~/.timetracker/client_usage.json")
 
-def _run_client_picker_process(clients_json: str, current_id: int, result_queue):
-    """Run client picker in separate process"""
-    import json
-    clients = json.loads(clients_json) if clients_json else []
-    
-    # Create a minimal client manager for the picker
-    class TempClientMgr:
-        def __init__(self, clients):
-            self.clients = clients
-        def get_all(self):
-            return self.clients
-    
-    selected = {"id": None, "name": None}
-    
-    def on_select(client_id, client_name):
-        selected["id"] = client_id
-        selected["name"] = client_name
-    
-    picker = ClientPickerWindow(TempClientMgr(clients), on_select)
-    picker.show()
-    
-    result_queue.put((selected["id"], selected["name"]))
+# ============================================================
+# ROBUST WINDOWS FOCUS HANDLING
+# ============================================================
+def get_hwnd_by_title(title):
+    """Find window handle by exact title - MORE RELIABLE than winfo_id()"""
+    try:
+        return ctypes.windll.user32.FindWindowW(None, title)
+    except:
+        return None
 
+
+def force_window_to_foreground(hwnd):
+    """Aggressively force a window to foreground on Windows"""
+    if not hwnd:
+        return False
+    
+    try:
+        user32 = ctypes.windll.user32
+        
+        # Get current foreground window's thread
+        foreground_hwnd = user32.GetForegroundWindow()
+        foreground_thread = user32.GetWindowThreadProcessId(foreground_hwnd, None)
+        current_thread = user32.GetCurrentThreadId()
+        
+        # Attach to foreground thread to steal focus
+        if foreground_thread != current_thread:
+            user32.AttachThreadInput(foreground_thread, current_thread, True)
+        
+        # Restore if minimized
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE = 9
+        
+        # Bring to top
+        user32.BringWindowToTop(hwnd)
+        
+        # Set as foreground
+        user32.SetForegroundWindow(hwnd)
+        
+        # Set focus
+        user32.SetFocus(hwnd)
+        
+        # Detach threads
+        if foreground_thread != current_thread:
+            user32.AttachThreadInput(foreground_thread, current_thread, False)
+        
+        return True
+    except Exception as e:
+        print(f"[Focus] Error: {e}")
+        return False
+
+
+def release_hotkeys():
+    """Release any held hotkey keys before showing picker"""
+    try:
+        import keyboard
+        keyboard.release('alt')
+        keyboard.release('shift')
+        keyboard.release('t')
+        keyboard.release('ctrl')
+    except:
+        pass
+    _time.sleep(0.05)
+
+
+def allow_set_foreground():
+    """Allow this process to set foreground window"""
+    try:
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)
+    except:
+        pass
+
+
+# ============================================================
+# Client Usage Tracking
+# ============================================================
 def load_client_usage() -> Dict[int, int]:
     """Load client selection counts"""
     if os.path.exists(CLIENT_USAGE_FILE):
         try:
             with open(CLIENT_USAGE_FILE, 'r') as f:
-                # Convert string keys back to int
                 data = json.load(f)
                 return {int(k): v for k, v in data.items()}
         except:
             pass
     return {}
+
 
 def save_client_usage(usage: Dict[int, int]):
     """Save client selection counts"""
@@ -112,6 +176,7 @@ def save_client_usage(usage: Dict[int, int]):
     except Exception as e:
         print(f"[GUI] Failed to save usage: {e}")
 
+
 def track_client_selection(client_id: int):
     """Increment selection count for a client"""
     if not client_id:
@@ -120,15 +185,16 @@ def track_client_selection(client_id: int):
     usage[client_id] = usage.get(client_id, 0) + 1
     save_client_usage(usage)
 
+
 def sort_clients_by_usage(clients: List[Dict]) -> List[Dict]:
     """Sort clients by usage frequency (most used first)"""
     usage = load_client_usage()
     return sorted(clients, key=lambda c: usage.get(c.get("id", 0), 0), reverse=True)
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Client Manager
-# ------------------------------------------------------------
+# ============================================================
 class ClientManager:
     """Manages the list of clients"""
     
@@ -184,9 +250,9 @@ class ClientManager:
         return None
 
 
-# ------------------------------------------------------------
+# ============================================================
 # GUI State
-# ------------------------------------------------------------
+# ============================================================
 class GUIState:
     """Manages GUI state"""
     
@@ -222,12 +288,397 @@ class GUIState:
         self.save()
 
 
-# ------------------------------------------------------------
+# ============================================================
+# Modern Client Picker with ROBUST FOCUS
+# ============================================================
+class ClientPickerWindow:
+    """Searchable client picker popup with robust Windows focus"""
+    
+    WINDOW_TITLE = "Switch Client"  # Used for FindWindowW
+    
+    def __init__(self, client_mgr: ClientManager, on_select: Callable, current_id: int = None):
+        self.client_mgr = client_mgr
+        self.on_select = on_select
+        self.current_id = current_id
+        self.all_clients = client_mgr.get_all()
+        self.usage_data = load_client_usage()
+        
+        # State
+        self._selected_id = None
+        self._selected_name = None
+        self.current_index = 0
+        self.visible_clients = []
+        self.item_widgets = []
+        self.shutting_down = False
+        self.after_ids = []
+        
+        # Dimensions
+        self.WIDTH = 450
+        self.MAX_HEIGHT = 550
+        self.ITEM_HEIGHT = 48
+        self.INPUT_HEIGHT = 50
+        self.PADDING = 12
+        
+        # Release hotkeys and allow foreground
+        release_hotkeys()
+        allow_set_foreground()
+        
+        self._setup_window()
+        self._setup_ui()
+        self._filter_clients("")
+    
+    def _setup_window(self):
+        ctk.set_appearance_mode("dark")
+        self.root = ctk.CTk()
+        self.root.title(self.WINDOW_TITLE)
+        self.root.attributes('-topmost', True)
+        
+        try:
+            self.root.attributes('-alpha', 0.98)
+        except:
+            pass
+        
+        self.root.update_idletasks()
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        self.x = (screen_w // 2) - (self.WIDTH // 2)
+        self.y = (screen_h // 3)
+        
+        self.root.geometry(f"{self.WIDTH}x{self.INPUT_HEIGHT + self.PADDING * 2}+{self.x}+{self.y}")
+        self.root.configure(fg_color=COLORS["bg_window"])
+    
+    def _setup_ui(self):
+        # Container
+        container = ctk.CTkFrame(self.root, fg_color=COLORS["bg_window"], corner_radius=12)
+        container.pack(fill="both", expand=True, padx=1, pady=1)
+        
+        # Header
+        header_frame = ctk.CTkFrame(container, fg_color="transparent")
+        header_frame.pack(fill="x", padx=self.PADDING, pady=(self.PADDING, 8))
+        
+        header_label = ctk.CTkLabel(
+            header_frame,
+            text="🔍  Switch Client",
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        header_label.pack(side="left")
+        
+        # Close button
+        close_btn = ctk.CTkButton(
+            header_frame,
+            text="✕",
+            width=30,
+            height=30,
+            corner_radius=15,
+            fg_color=COLORS["bg_item"],
+            hover_color=COLORS["bg_item_hover"],
+            text_color=COLORS["text_secondary"],
+            command=self._cancel
+        )
+        close_btn.pack(side="right")
+        
+        # Search input
+        self.search_var = ctk.StringVar()
+        self.search_var.trace_add("write", self._on_search)
+        
+        search_frame = ctk.CTkFrame(container, fg_color="transparent")
+        search_frame.pack(fill="x", padx=self.PADDING, pady=(0, 8))
+        
+        self.search_entry = ctk.CTkEntry(
+            search_frame,
+            textvariable=self.search_var,
+            placeholder_text="Type to search...",
+            font=ctk.CTkFont(family="Segoe UI", size=15),
+            fg_color=COLORS["bg_input"],
+            border_color=COLORS["accent"],
+            border_width=2,
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            height=self.INPUT_HEIGHT - 5,
+            corner_radius=10
+        )
+        self.search_entry.pack(fill="x")
+        
+        # Results frame
+        self.results_frame = ctk.CTkScrollableFrame(container, fg_color="transparent")
+        self.results_frame.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+        
+        # Clear client button
+        clear_btn = ctk.CTkButton(
+            container,
+            text="Clear Client",
+            command=self._clear_client,
+            fg_color=COLORS["bg_item"],
+            hover_color=COLORS["bg_item_hover"],
+            text_color=COLORS["text_secondary"],
+            height=35,
+            corner_radius=8
+        )
+        clear_btn.pack(fill="x", padx=self.PADDING, pady=(0, self.PADDING))
+        
+        # Bindings
+        self.search_entry.bind("<Escape>", lambda e: self._cancel())
+        self.search_entry.bind("<Return>", lambda e: self._confirm_selection())
+        self.search_entry.bind("<Down>", lambda e: [self._update_selection(self.current_index + 1), "break"][1])
+        self.search_entry.bind("<Up>", lambda e: [self._update_selection(self.current_index - 1), "break"][1])
+        
+        self.root.bind("<Escape>", lambda e: self._cancel())
+        self.root.bind("<Return>", lambda e: self._confirm_selection())
+        self.root.bind("<Down>", lambda e: self._update_selection(self.current_index + 1))
+        self.root.bind("<Up>", lambda e: self._update_selection(self.current_index - 1))
+    
+    def _fuzzy_match(self, query, text):
+        if not query:
+            return True, 0
+        query = query.lower()
+        text = text.lower()
+        if query in text:
+            if text.startswith(query):
+                return True, 1000 + (100 - len(text))
+            return True, 500 + (100 - text.index(query))
+        qi = 0
+        score = 0
+        for i, char in enumerate(text):
+            if qi < len(query) and char == query[qi]:
+                score += 5
+                qi += 1
+        if qi == len(query):
+            return True, score
+        return False, 0
+    
+    def _on_search(self, *args):
+        if self.shutting_down:
+            return
+        query = self.search_var.get()
+        self._filter_clients(query)
+    
+    def _filter_clients(self, query: str):
+        # Clear existing
+        for widget in self.results_frame.winfo_children():
+            widget.destroy()
+        self.item_widgets = []
+        
+        query = query.strip()
+        
+        if query:
+            scored = []
+            for client in self.all_clients:
+                name = client.get("name", "")
+                code = client.get("code", "")
+                match_name, score_name = self._fuzzy_match(query, name)
+                match_code, score_code = self._fuzzy_match(query, code)
+                if match_name or match_code:
+                    usage_bonus = min(self.usage_data.get(client.get("id", 0), 0) * 2, 200)
+                    total_score = max(score_name, score_code) + usage_bonus
+                    scored.append((client, total_score))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            self.visible_clients = [c for c, _ in scored][:15]
+        else:
+            self.visible_clients = sort_clients_by_usage(self.all_clients)[:15]
+        
+        if not self.visible_clients:
+            no_results = ctk.CTkLabel(
+                self.results_frame,
+                text="No clients found",
+                font=ctk.CTkFont(size=13),
+                text_color=COLORS["text_muted"]
+            )
+            no_results.pack(pady=20)
+            self._resize_window(1)
+            return
+        
+        # Build list
+        for i, client in enumerate(self.visible_clients):
+            cid = client.get("id")
+            cname = client.get("name", "Unknown")
+            ccode = client.get("code", "")
+            is_current = cid == self.current_id
+            
+            item_frame = ctk.CTkFrame(
+                self.results_frame,
+                fg_color=COLORS["bg_item_selected"] if i == 0 else COLORS["bg_item"],
+                corner_radius=8,
+                height=self.ITEM_HEIGHT
+            )
+            item_frame.pack(fill="x", pady=2, padx=4)
+            item_frame.pack_propagate(False)
+            
+            inner = ctk.CTkFrame(item_frame, fg_color="transparent")
+            inner.pack(fill="both", expand=True, padx=12, pady=8)
+            
+            display_name = f"● {cname}" if is_current else cname
+            name_label = ctk.CTkLabel(
+                inner,
+                text=display_name,
+                font=ctk.CTkFont(family="Segoe UI", size=14,
+                                weight="bold" if i < 3 else "normal"),
+                text_color=COLORS["text_primary"],
+                anchor="w"
+            )
+            name_label.pack(side="left", fill="x", expand=True)
+            
+            code_label = None
+            if ccode:
+                code_label = ctk.CTkLabel(
+                    inner,
+                    text=ccode,
+                    font=ctk.CTkFont(family="Segoe UI", size=11),
+                    text_color=COLORS["accent"]
+                )
+                code_label.pack(side="right")
+            
+            self.item_widgets.append((item_frame, name_label, code_label))
+            
+            # Click handlers
+            def make_click(idx):
+                def handler(e):
+                    self._update_selection(idx)
+                return handler
+            
+            def make_dblclick(idx):
+                def handler(e):
+                    self._update_selection(idx)
+                    self._confirm_selection()
+                return handler
+            
+            for widget in [item_frame, inner, name_label] + ([code_label] if code_label else []):
+                widget.bind("<Button-1>", make_click(i))
+                widget.bind("<Double-Button-1>", make_dblclick(i))
+            
+            # Hover effects
+            def make_hover(frame, idx):
+                def enter(e):
+                    if self.current_index != idx:
+                        frame.configure(fg_color=COLORS["bg_item_hover"])
+                def leave(e):
+                    if self.current_index != idx:
+                        frame.configure(fg_color=COLORS["bg_item"])
+                return enter, leave
+            
+            enter_fn, leave_fn = make_hover(item_frame, i)
+            item_frame.bind("<Enter>", enter_fn)
+            item_frame.bind("<Leave>", leave_fn)
+        
+        self.current_index = 0
+        self._resize_window(len(self.visible_clients))
+    
+    def _resize_window(self, num_items):
+        num_items = max(1, min(num_items, 12))
+        content_height = self.INPUT_HEIGHT + self.PADDING * 2 + (num_items * (self.ITEM_HEIGHT + 4)) + 100
+        content_height = min(content_height, self.MAX_HEIGHT)
+        self.root.geometry(f"{self.WIDTH}x{content_height}+{self.x}+{self.y}")
+    
+    def _update_selection(self, new_index):
+        if not self.visible_clients:
+            return
+        new_index = max(0, min(new_index, len(self.visible_clients) - 1))
+        self.current_index = new_index
+        for i, (frame, name_lbl, code_lbl) in enumerate(self.item_widgets):
+            if i == new_index:
+                frame.configure(fg_color=COLORS["bg_item_selected"])
+            else:
+                frame.configure(fg_color=COLORS["bg_item"])
+    
+    def _confirm_selection(self):
+        if self.visible_clients and 0 <= self.current_index < len(self.visible_clients):
+            client = self.visible_clients[self.current_index]
+            self._selected_id = client.get("id")
+            self._selected_name = client.get("name")
+        self._close()
+    
+    def _cancel(self):
+        self._selected_id = None
+        self._selected_name = None
+        self._close()
+    
+    def _clear_client(self):
+        self._selected_id = 0
+        self._selected_name = "No Client"
+        self._close()
+    
+    def _close(self):
+        self.shutting_down = True
+        for after_id in self.after_ids:
+            try:
+                self.root.after_cancel(after_id)
+            except:
+                pass
+        self.after_ids.clear()
+        self.root.quit()
+    
+    def _force_focus(self):
+        """ROBUST focus handling for Windows"""
+        if self.shutting_down:
+            return
+        try:
+            # Ensure window is visible
+            self.root.deiconify()
+            self.root.state('normal')
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.update()
+            
+            # Get HWND by window title (MORE RELIABLE than winfo_id)
+            hwnd = get_hwnd_by_title(self.WINDOW_TITLE)
+            if hwnd:
+                force_window_to_foreground(hwnd)
+            
+            # Tkinter focus
+            self.root.focus_force()
+            
+            # Focus the CTK entry's internal widget
+            if hasattr(self.search_entry, '_entry'):
+                self.search_entry._entry.focus_set()
+                self.search_entry._entry.focus_force()
+                self.search_entry._entry.icursor('end')
+            else:
+                self.search_entry.focus_set()
+            
+        except Exception as e:
+            print(f"[Picker] Focus error: {e}")
+    
+    def _stay_on_top(self):
+        """Keep window on top"""
+        if self.shutting_down:
+            return
+        try:
+            if self.root.winfo_exists():
+                self.root.lift()
+                self.root.attributes('-topmost', True)
+                after_id = self.root.after(300, self._stay_on_top)
+                self.after_ids.append(after_id)
+        except:
+            pass
+    
+    def show(self):
+        """Show the picker with robust focus"""
+        # Multiple aggressive focus attempts at different intervals
+        for delay in [10, 50, 100, 150, 200, 300, 400, 500]:
+            self.after_ids.append(self.root.after(delay, self._force_focus))
+        
+        # Keep window on top
+        self.after_ids.append(self.root.after(100, self._stay_on_top))
+        
+        # Run mainloop
+        self.root.mainloop()
+        
+        try:
+            self.root.destroy()
+        except:
+            pass
+        
+        # Callback
+        if self._selected_id is not None or self._selected_name == "No Client":
+            self.on_select(self._selected_id or 0, self._selected_name)
+
+
+# ============================================================
 # Modern AI Prompt Dialog
-# ------------------------------------------------------------
+# ============================================================
 def show_client_prompt_modern(client_id: int, client_name: str, confidence: float,
                               callback: Callable, client_mgr: ClientManager):
-    """Show beautiful AI suggestion dialog"""
+    """Show beautiful AI suggestion dialog with GREEN theme"""
     
     result = {"confirmed": False, "client_id": None, "client_name": None}
     
@@ -299,8 +750,8 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
     )
     client_label.pack(side="left")
     
-    # Confidence badge
-    conf_color = COLORS["success"] if confidence >= 0.7 else COLORS["warning"]
+    # Confidence badge - GREEN themed
+    conf_color = COLORS["primary"] if confidence >= 0.7 else COLORS["warning"]
     conf_badge = ctk.CTkLabel(
         card_inner,
         text=f"{int(confidence * 100)}%",
@@ -312,7 +763,7 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
     )
     conf_badge.pack(side="right")
     
-    # Buttons
+    # Buttons - GREEN theme
     btn_frame = ctk.CTkFrame(content, fg_color="transparent")
     btn_frame.pack(fill="x", pady=(0, 10))
     
@@ -320,8 +771,8 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
         btn_frame,
         text="✓  Yes",
         command=on_yes,
-        fg_color=COLORS["success"],
-        hover_color=COLORS["success_hover"],
+        fg_color=COLORS["primary"],
+        hover_color=COLORS["primary_hover"],
         height=42,
         font=ctk.CTkFont(size=14, weight="bold")
     )
@@ -367,11 +818,11 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
         callback(False, None, None, {})
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Modern Today's Time Window
-# ------------------------------------------------------------
+# ============================================================
 class TodayTimeWindowModern:
-    """Beautiful window showing today's time"""
+    """Beautiful window showing today's time - GREEN theme"""
     
     def __init__(self, api_callback: Callable):
         self.api_callback = api_callback
@@ -427,6 +878,8 @@ class TodayTimeWindowModern:
             btn_frame,
             text="🔄  Refresh",
             command=self._on_refresh,
+            fg_color=COLORS["primary"],
+            hover_color=COLORS["primary_hover"],
             height=40
         )
         refresh_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
@@ -504,9 +957,9 @@ class TodayTimeWindowModern:
         self.root.mainloop()
 
 
-# ------------------------------------------------------------
+# ============================================================
 # System Tray Controller
-# ------------------------------------------------------------
+# ============================================================
 class TimeTrackerSystemTray:
     """Main system tray controller with modern UI"""
     
@@ -524,76 +977,18 @@ class TimeTrackerSystemTray:
         self.get_current_client_callback = None
         
         self.icon = None
-        # Toast disabled - win10toast causes WNDPROC errors with pystray
-        # self.toaster = ToastNotifier() if TOAST_AVAILABLE else None
         
-        self._start_ai_timer()
-    
-    def _start_ai_timer(self):
-        """Start periodic AI suggestion check"""
-        def ai_tick():
-            while True:
-                _time.sleep(15)
-                try:
-                    if self.get_ai_guess_callback:
-                        guess = self.get_ai_guess_callback()
-                        if guess and guess.get("client_id"):
-                            self._maybe_show_prompt(guess)
-                except Exception as e:
-                    print(f"[AI] Error: {e}")
-        
-        threading.Thread(target=ai_tick, daemon=True).start()
-    
-    def _maybe_show_prompt(self, guess: dict):
-        """Show AI prompt if conditions are met"""
-        client_id = guess.get("client_id")
-        client_name = guess.get("client_name")
-        confidence = float(guess.get("confidence", 0))
-        
-        if not client_id or confidence < 0.45:
-            return
-        if confidence >= 0.80:
-            return
-        if self.state.current_client_id == client_id:
-            return
-        
-        def show():
-            if MODERN_UI:
-                show_client_prompt_modern(
-                    client_id, client_name, confidence,
-                    self._on_prompt_response,
-                    self.client_mgr
-                )
-            else:
-                # Fallback to basic prompt
-                pass
-        
-        threading.Thread(target=show, daemon=True).start()
-    
-    def _on_prompt_response(self, confirmed: bool, client_id: Optional[int],
-                           client_name: Optional[str], prompt_data: dict):
-        if confirmed and client_id and client_name:
-            self.state.set_client(client_id, client_name)
-            print(f"[GUI] Client confirmed: {client_name}")
-            
-            if self.set_current_client_callback:
-                self.set_current_client_callback(client_id)
-            
-            if self.on_client_confirmed_callback:
-                self.on_client_confirmed_callback(client_id, client_name, prompt_data)
-            # Menu rebuilds automatically on next click via callable
-        else:
-            print(f"[GUI] Client rejected")
-            if self.on_client_rejected_callback:
-                self.on_client_rejected_callback(prompt_data)
+        # Debounce tracking
+        self._last_picker_time = 0
+        self._picker_lock = threading.Lock()
     
     def _create_image(self):
-        """Create beautiful system tray icon"""
+        """Create beautiful system tray icon - GREEN/TEAL THEME"""
         size = 64
         img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         
-        # Draw rounded rectangle background
+        # Draw rounded rectangle background - TEAL
         draw.rounded_rectangle(
             [(4, 4), (size-4, size-4)],
             radius=12,
@@ -620,23 +1015,19 @@ class TimeTrackerSystemTray:
         return img
         
     def _build_menu_items(self):
-        """Build system tray menu items (returns tuple for pystray callable)"""
-        # Current client header
+        """Build system tray menu items"""
         client_display = self.state.current_client_name or "No Client"
         
-        # Quick switch submenu
         def make_switch_handler(cid, cname):
             def handler(icon, item):
-                # Schedule work and return immediately to avoid WNDPROC errors
                 threading.Thread(target=lambda: self._switch_client(cid, cname), daemon=True).start()
             return handler
 
         clients = sort_clients_by_usage(self.client_mgr.get_all())
         
-        # Show only first 10 clients in menu, rest via search
         client_items = [Item("Clear Client", make_switch_handler(0, "No Client"))]
         
-        for client in clients[:10]:  # Limit to 10
+        for client in clients[:10]:
             client_id = client["id"]
             client_name = client["name"]
             is_current = client_id == self.state.current_client_id
@@ -668,36 +1059,40 @@ class TimeTrackerSystemTray:
         )
 
     def _show_client_picker(self):
-        """Show searchable client picker in subprocess to avoid threading issues"""
-        import multiprocessing
+        """Show searchable client picker with ROBUST FOCUS"""
         
-        # Serialize data for subprocess
-        clients_json = json.dumps(self.client_mgr.get_all())
-        current_id = self.state.current_client_id
+        # Debounce
+        now = _time.time() * 1000
+        with self._picker_lock:
+            if now - self._last_picker_time < 1000:
+                print("[GUI] Client picker debounced")
+                return
+            self._last_picker_time = now
         
-        result_queue = multiprocessing.Queue()
-        
-        p = multiprocessing.Process(
-            target=_run_client_picker_process,
-            args=(clients_json, current_id, result_queue)
-        )
-        p.start()
-        p.join(timeout=60)
-        
-        if p.is_alive():
-            p.terminate()
-            return
-        
-        try:
-            selected_id, selected_name = result_queue.get(timeout=1)
+        def run_picker():
+            selected_id = None
+            selected_name = None
+            
+            def on_select(cid, cname):
+                nonlocal selected_id, selected_name
+                selected_id = cid
+                selected_name = cname
+            
+            picker = ClientPickerWindow(
+                self.client_mgr, 
+                on_select,
+                current_id=self.state.current_client_id
+            )
+            picker.show()
+            
             if selected_id is not None or selected_name == "No Client":
                 self._switch_client(selected_id or 0, selected_name)
-        except:
-            pass
+        
+        # Run in thread
+        threading.Thread(target=run_picker, daemon=True).start()
     
     def _switch_client(self, client_id: int, client_name: str):
         """Handle client switch"""
-        # Track usage
         track_client_selection(client_id)
         
         if client_id == 0:
@@ -712,18 +1107,12 @@ class TimeTrackerSystemTray:
                 self.set_current_client_callback(client_id if client_id else 0)
             except Exception as e:
                 print(f"[GUI] Failed to sync client: {e}")
-        
-        # Toast disabled - win10toast causes WNDPROC errors with pystray
-        # TODO: Replace with windows-toasts or winotify library
     
     def _on_today_time(self):
         """Show today's time window"""
         if MODERN_UI:
             window = TodayTimeWindowModern(self.get_today_time_callback)
-        else:
-            from timetracker_gui import TodayTimeWindow
-            window = TodayTimeWindow(self.get_today_time_callback)
-        window.show_and_refresh()
+            window.show_and_refresh()
     
     def _on_quit(self):
         """Quit the application"""
@@ -734,7 +1123,6 @@ class TimeTrackerSystemTray:
         """Called by sync to update client list"""
         self.client_mgr.clients = clients
         self.client_mgr.save()
-        # Menu rebuilds automatically on next click via callable
         print(f"[GUI] Refreshed client list with {len(clients)} clients")
     
     def run(self):
@@ -747,199 +1135,46 @@ class TimeTrackerSystemTray:
             "timetracker",
             self._create_image(),
             "TimeTracker",
-            menu=pystray.Menu(self._build_menu_items)  # Pass callable - rebuilds on each click
+            menu=pystray.Menu(self._build_menu_items)
         )
         
         print("[GUI] System tray started")
         self.icon.run()
 
-# ------------------------------------------------------------
-# Searchable Client Picker
-# ------------------------------------------------------------
-class ClientPickerWindow:
-    """Searchable client picker popup"""
-    
-    def __init__(self, client_mgr: ClientManager, on_select: Callable):
-        self.client_mgr = client_mgr
-        self.on_select = on_select
-        self.all_clients = client_mgr.get_all()
-        
-        ctk.set_appearance_mode("dark")
-        self.root = ctk.CTk()
-        self.root.title("Switch Client")
-        self.root.geometry("400x500")
-        self.root.resizable(False, False)
-        self.root.attributes('-topmost', True)
-        
-        # Center window
-        self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - 200
-        y = (self.root.winfo_screenheight() // 2) - 250
-        self.root.geometry(f"+{x}+{y}")
-        
-        self._setup_ui()
-        self._filter_clients("")
-        
-        # Focus search box
-        self.search_var.set("")
-        self.search_entry.focus_set()
-    
-    def _setup_ui(self):
-        content = ctk.CTkFrame(self.root, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # Header
-        header = ctk.CTkLabel(
-            content,
-            text="🔍  Switch Client",
-            font=ctk.CTkFont(size=18, weight="bold"),
-            anchor="w"
-        )
-        header.pack(fill="x", pady=(0, 15))
-        
-        # Search box
-        self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *args: self._on_search())
-        
-        self.search_entry = ctk.CTkEntry(
-            content,
-            textvariable=self.search_var,
-            placeholder_text="Type to search...",
-            height=45,
-            font=ctk.CTkFont(size=14)
-        )
-        self.search_entry.pack(fill="x", pady=(0, 15))
-        
-        # Bindings
-        self.search_entry.bind("<Return>", self._select_first)
-        self.search_entry.bind("<Escape>", lambda e: self.root.destroy())
-        self.root.bind("<Escape>", lambda e: self.root.destroy())
-        self.root.bind("<Button-1>", lambda e: self.search_entry.focus_set())
-        
-        # Results list
-        self.results_frame = ctk.CTkScrollableFrame(content, corner_radius=10)
-        self.results_frame.pack(fill="both", expand=True, pady=(0, 10))
-        
-        # Clear client button
-        clear_btn = ctk.CTkButton(
-            content,
-            text="Clear Client",
-            command=lambda: self._select_client(0, "No Client"),
-            fg_color=COLORS["bg_card"],
-            hover_color=COLORS["bg_dark"],
-            height=35
-        )
-        clear_btn.pack(fill="x")
-    
-    def _on_search(self):
-        query = self.search_var.get()
-        self._filter_clients(query)
-    
-    def _filter_clients(self, query: str):
-        # Clear existing results
-        for widget in self.results_frame.winfo_children():
-            widget.destroy()
-        
-        query_lower = query.lower().strip()
-        
-        # Filter clients
-        if query_lower:
-            filtered = [c for c in self.all_clients 
-                       if query_lower in c.get("name", "").lower() 
-                       or query_lower in c.get("code", "").lower()]
-        else:
-            filtered = self.all_clients
 
-        # Sort by usage (most selected first)
-        filtered = sort_clients_by_usage(filtered)
-        
-        if not filtered:
-            no_results = ctk.CTkLabel(
-                self.results_frame,
-                text="No clients found",
-                font=ctk.CTkFont(size=13),
-                text_color=COLORS["text_muted"]
-            )
-            no_results.pack(pady=20)
-            return
-        
-        # Show filtered results
-        for i, client in enumerate(filtered):
-            self._create_client_row(client, is_first=(i == 0))
+# ============================================================
+# Standalone show_client_picker function (for hotkey use)
+# ============================================================
+def show_client_picker(clients: list, current_id: int = None, on_select=None):
+    """
+    Standalone function to show client picker.
+    Can be called from hotkey handlers.
+    """
+    release_hotkeys()
+    allow_set_foreground()
     
-    def _create_client_row(self, client: dict, is_first: bool = False):
-        client_id = client.get("id")
-        client_name = client.get("name", "Unknown")
-        client_code = client.get("code", "")
-        
-        # Display text with code if available
-        display_text = f"{client_name}  ({client_code})" if client_code else client_name
-        
-        row = ctk.CTkButton(
-            self.results_frame,
-            text=display_text,
-            command=lambda cid=client_id, cname=client_name: self._select_client(cid, cname),
-            fg_color=COLORS["primary"] if is_first else "transparent",
-            hover_color=COLORS["primary_hover"] if is_first else COLORS["bg_card"],
-            corner_radius=8,
-            height=45,
-            anchor="w",
-            font=ctk.CTkFont(size=14, weight="bold" if is_first else "normal")
-        )
-        row.pack(fill="x", pady=2, padx=5)
+    # Create a temporary client manager
+    class TempClientMgr:
+        def get_all(self):
+            return clients
     
-    def _select_first(self, event=None):
-        """Select the first filtered result"""
-        query_lower = self.search_var.get().lower().strip()
-        if query_lower:
-            filtered = [c for c in self.all_clients 
-                       if query_lower in c.get("name", "").lower()
-                       or query_lower in c.get("code", "").lower()]
-        else:
-            filtered = self.all_clients
-        
-        # Sort by usage
-        filtered = sort_clients_by_usage(filtered)
-        
-        if filtered:
-            self._selected_id = filtered[0]["id"]
-            self._selected_name = filtered[0]["name"]
-            self.root.destroy()
+    selected = {"id": None, "name": None}
     
-    def _select_client(self, client_id: int, client_name: str):
-        self._selected_id = client_id
-        self._selected_name = client_name
-        self.root.destroy()
+    def handle_select(cid, cname):
+        selected["id"] = cid
+        selected["name"] = cname
+        if on_select:
+            on_select(cid, cname)
+    
+    picker = ClientPickerWindow(TempClientMgr(), handle_select, current_id)
+    picker.show()
+    
+    return selected.get("id"), selected.get("name")
 
-    def show(self):
-        self._selected_id = None
-        self._selected_name = None
-        
-        # Force focus to window and search box
-        def grab_focus():
-            try:
-                self.root.lift()
-                self.root.attributes('-topmost', True)
-                self.root.focus_force()
-                self.root.grab_set()
-                self.search_entry.focus_set()
-                self.search_entry.focus_force()
-            except:
-                pass
-        
-        self.root.after(50, grab_focus)
-        self.root.after(200, grab_focus)
-        self.root.after(500, grab_focus)
-        
-        self.root.mainloop()
-        
-        # After mainloop exits, call the callback safely
-        if self._selected_id is not None or self._selected_name == "No Client":
-            self.on_select(self._selected_id or 0, self._selected_name)
 
-# ------------------------------------------------------------
+# ============================================================
 # Entrypoint
-# ------------------------------------------------------------
+# ============================================================
 def run_gui_app(on_client_confirmed: Callable,
                 on_client_rejected: Callable,
                 get_today_time: Callable,
@@ -947,6 +1182,7 @@ def run_gui_app(on_client_confirmed: Callable,
                 fetch_clients: Callable = None,
                 set_current_client: Callable = None,
                 get_current_client: Callable = None,
+                repair_callback: Callable = None,
                 sync=None):
     """Start the GUI system tray app."""
     if not GUI_AVAILABLE:

@@ -1,17 +1,19 @@
 # tracker/services/compaction.py
 """
-Event-centric compaction - FINAL VERSION
+Event-centric compaction - FIXED VERSION
 
 FIXES ALL ISSUES:
 1. Session awareness - gap > 30 min = new session (no 9-hour blocks)
 2. Event-duration minutes - no double counting (each minute counted once)
 3. Smart app merging - one block per app per session (fewer blocks to categorize)
+4. **FIX**: Recalculate minutes from linked events, never accumulate
 
 GUARANTEES:
 - Minutes are calculated from EVENT DURATIONS, not block spans
-- No double-counting: if you work 1 hour, total is 1 hour (not 3 hours across overlapping blocks)
+- No double-counting: if you work 1 hour, total is 1 hour
 - Categorized blocks are NEVER touched
 - Each event belongs to exactly one block
+- Merging recalculates from all linked events (not additive)
 """
 
 from __future__ import annotations
@@ -53,6 +55,29 @@ def _app_key(event_or_block) -> str:
     return (getattr(event_or_block, 'app_name', None) or "").lower().strip()
 
 
+def _calculate_minutes_from_events(events_qs) -> int:
+    """
+    Calculate total minutes from a queryset of events.
+    
+    This is the SINGLE SOURCE OF TRUTH for block minutes.
+    Duration = time to next event (capped at 30 min), last event = 5 min.
+    """
+    events = list(events_qs.order_by('ts_utc'))
+    if not events:
+        return 0
+    
+    total_seconds = 0
+    for i, event in enumerate(events):
+        if i + 1 < len(events):
+            duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+            duration = min(duration, IDLE_CAP.total_seconds())
+        else:
+            duration = 300  # 5 min for last event
+        total_seconds += duration
+    
+    return int(total_seconds / 60)
+
+
 def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org=None) -> int:
     """Main entry point."""
     today = timezone.localdate()
@@ -77,6 +102,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     3. Split into sessions (gap > 30 min = new session)
     4. Within each session, group events by app
     5. Create one block per app per session, with minutes = SUM of event durations
+    6. **FIX**: When merging, recalculate minutes from ALL linked events
     """
     if isinstance(user, str):
         try:
@@ -200,10 +226,10 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             block_start = min(starts)
             block_end = max(starts) + timedelta(minutes=app_events[-1]['duration_minutes'])
             
-            # CRITICAL: Minutes = SUM of event durations (no double counting!)
-            total_minutes = sum(e['duration_minutes'] for e in app_events)
+            # Minutes for NEW events only (used for min threshold check)
+            new_event_minutes = sum(e['duration_minutes'] for e in app_events)
             
-            if total_minutes < MIN_BLOCK_MINUTES:
+            if new_event_minutes < MIN_BLOCK_MINUTES:
                 continue
             
             # Pick best window title (longest/most descriptive)
@@ -218,7 +244,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             blocks_to_create.append({
                 'start': block_start,
                 'end': block_end,
-                'minutes': total_minutes,
+                'new_event_minutes': new_event_minutes,  # Only for threshold check
                 'app_name': app_events[0]['app_name'],
                 'bundle_id': app_events[0]['bundle_id'],
                 'window_title': window_title,
@@ -245,6 +271,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     
     # =========================================================
     # STEP 6: Create blocks (or merge into existing)
+    # **FIX**: Always recalculate minutes from linked events
     # =========================================================
     created_count = 0
     merged_count = 0
@@ -259,19 +286,23 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 try:
                     locked = Block.objects.select_for_update().get(id=existing.id)
                     if not locked.is_categorized:
-                        # Extend time range
-                        locked.start = min(locked.start, block_data['start'])
-                        locked.end = max(locked.end, block_data['end'])
-                        # ADD minutes (don't recalculate from span!)
-                        locked.minutes = locked.minutes + int(block_data['minutes'])
-                        locked.save(update_fields=['start', 'end', 'minutes'])
-                        
-                        # Link events
+                        # Link events FIRST
                         event_ids = [e.id for e in block_data['source_events']]
                         RawEvent.objects.filter(id__in=event_ids).update(block=locked)
                         
+                        # Extend time range
+                        locked.start = min(locked.start, block_data['start'])
+                        locked.end = max(locked.end, block_data['end'])
+                        
+                        # **FIX**: RECALCULATE minutes from ALL linked events
+                        # This prevents double-counting on repeated compaction runs
+                        locked.minutes = _calculate_minutes_from_events(
+                            RawEvent.objects.filter(block=locked)
+                        )
+                        locked.save(update_fields=['start', 'end', 'minutes'])
+                        
                         merged_count += 1
-                        logger.debug(f"[COMPACT] Merged {len(event_ids)} events into block {locked.id}")
+                        logger.debug(f"[COMPACT] Merged {len(event_ids)} events into block {locked.id}, recalculated to {locked.minutes} min")
                         continue
                 except Block.DoesNotExist:
                     pass
@@ -295,7 +326,22 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     )
     
     device_id = block_data.get("device_id", 0)
-    minutes = int(block_data["minutes"])
+    
+    # Calculate minutes from the source events
+    source_events = block_data.get('source_events', [])
+    if source_events:
+        # Calculate from events for accuracy
+        total_seconds = 0
+        for i, event in enumerate(source_events):
+            if i + 1 < len(source_events):
+                duration = (source_events[i + 1].ts_utc - event.ts_utc).total_seconds()
+                duration = min(duration, IDLE_CAP.total_seconds())
+            else:
+                duration = 300
+            total_seconds += duration
+        minutes = int(total_seconds / 60)
+    else:
+        minutes = int(block_data.get("new_event_minutes", 0))
     
     client = None
     if not is_idle:
@@ -363,6 +409,64 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     
     logger.debug(f"[COMPACT] Created block {new_block.id} ({new_block.app_name}) - {minutes} min")
     return new_block
+
+
+def recalculate_block_minutes(block_id: int) -> int:
+    """
+    Recalculate minutes for a specific block from its linked events.
+    Useful for fixing blocks with incorrect minutes.
+    
+    Returns the new minutes value.
+    """
+    try:
+        block = Block.objects.get(id=block_id)
+        new_minutes = _calculate_minutes_from_events(
+            RawEvent.objects.filter(block=block)
+        )
+        if new_minutes != block.minutes:
+            logger.info(f"[COMPACT] Block {block_id} minutes: {block.minutes} -> {new_minutes}")
+            block.minutes = new_minutes
+            block.save(update_fields=['minutes'])
+        return new_minutes
+    except Block.DoesNotExist:
+        return 0
+
+
+def recalculate_all_blocks_for_day(user, day: date_type) -> Dict[str, int]:
+    """
+    Recalculate minutes for ALL blocks on a given day.
+    Use this to fix existing data with incorrect minutes.
+    
+    Returns stats dict.
+    """
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            return {'error': 'User not found'}
+    
+    blocks = Block.objects.filter(user=user, day=day)
+    stats = {'checked': 0, 'fixed': 0, 'total_diff': 0}
+    
+    for block in blocks:
+        old_minutes = block.minutes
+        new_minutes = _calculate_minutes_from_events(
+            RawEvent.objects.filter(block=block)
+        )
+        
+        stats['checked'] += 1
+        
+        if new_minutes != old_minutes:
+            diff = old_minutes - new_minutes
+            stats['fixed'] += 1
+            stats['total_diff'] += diff
+            
+            logger.info(f"[COMPACT] Fixing block {block.id} ({block.app_name}): {old_minutes} -> {new_minutes} (diff: {diff})")
+            block.minutes = new_minutes
+            block.save(update_fields=['minutes'])
+    
+    logger.info(f"[COMPACT] Recalculated {stats['checked']} blocks, fixed {stats['fixed']}, removed {stats['total_diff']} phantom minutes")
+    return stats
 
 
 def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:

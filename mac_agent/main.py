@@ -2032,6 +2032,8 @@ def run_agent():
     # === GUI INITIALIZATION (after pairing succeeds) ===
     gui_menu_bar = None
     quick_switcher = None
+    _hotkey_global_monitor = None   # ADD
+    _hotkey_local_monitor = None    # ADD
     if GUI_AVAILABLE:
         try:
             gui_menu_bar = run_gui_app(
@@ -2054,28 +2056,69 @@ def run_agent():
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
             
             # === QUICK SWITCHER (Option+Shift+T) ===
+            # === QUICK SWITCHER (Ctrl+Option+T) ===
+# === QUICK SWITCHER (Ctrl+Option+T) ===
+            print("[QUICK] Setting up hotkey...")
             try:
-                from pynput import keyboard
+                from AppKit import NSEvent
+                from PyObjCTools import AppHelper
                 
-                def on_hotkey():
-                    if gui_menu_bar and gui_menu_bar.app:
-                        gui_menu_bar.app._on_search(None)
+                NSKeyDownMask = 1 << 10
+                NSControlKeyMask = 1 << 18
+                NSAlternateKeyMask = 1 << 19
+                KEY_T = 17
                 
-                def for_canonical(f):
-                    return lambda k: f(listener.canonical(k))
+                def handle_hotkey(event):
+                    try:
+                        keycode = event.keyCode()
+                        flags = event.modifierFlags()
+                        ctrl = (flags & NSControlKeyMask) != 0
+                        option = (flags & NSAlternateKeyMask) != 0
+                        
+                        if keycode == KEY_T and ctrl and option:
+                            print("[QUICK] >>> Ctrl+Option+T <<<")
+                            
+                            def do_open():
+                                from quick_switcher import QuickSwitcher
+                                
+                                def on_select(client_id, client_name):
+                                    print(f"[QUICK] Selected: {client_name}")
+                                    api_key = config.get("api_key") or API_KEY
+                                    if api_key and API_BASE:
+                                        set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
+                                    if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                                        gui_menu_bar.state.set_client(client_id, client_name)
+                                
+                                switcher = QuickSwitcher(
+                                    get_clients=lambda: fetch_clients_from_backend(API_BASE, API_KEY),
+                                    on_select=on_select,
+                                    get_usage=lambda: {},
+                                    get_current_id=lambda: gui_menu_bar.state.current_client_id if gui_menu_bar and hasattr(gui_menu_bar, 'state') else None
+                                )
+                                switcher.show()
+                            
+                            AppHelper.callAfter(do_open)
+                            return None
+                    except Exception as e:
+                        print(f"[QUICK] Handler error: {e}")
+                    return event
                 
-                hotkey = keyboard.HotKey(
-                    keyboard.HotKey.parse('<alt>+<shift>+t'),
-                    on_hotkey
+                _hotkey_global_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                    NSKeyDownMask, handle_hotkey
                 )
-                listener = keyboard.Listener(
-                    on_press=for_canonical(hotkey.press),
-                    on_release=for_canonical(hotkey.release)
+                _hotkey_local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+                    NSKeyDownMask, handle_hotkey
                 )
-                listener.start()
-                log("[QUICK] Ready - Option+Shift+T")
+                
+                if _hotkey_global_monitor and _hotkey_local_monitor:
+                    print("[QUICK] ✅ Ready - Ctrl+Option+T")
+                else:
+                    print("[QUICK] ⚠️ Monitor setup incomplete")
+                    
             except Exception as e:
-                log(f"[QUICK] Failed: {e}")
+                print(f"[QUICK] ❌ Failed: {e}")
+                import traceback
+                traceback.print_exc()
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
@@ -2286,6 +2329,21 @@ def run_agent():
             tracking_thread.join()
         except KeyboardInterrupt:
             log("[TRACKING] Interrupted")
+
+    # === ADD CLEANUP HERE ===
+    # Cleanup hotkey monitor
+    if _hotkey_monitor:
+        try:
+            from AppKit import NSEvent
+            NSEvent.removeMonitor_(_hotkey_monitor)
+            log("[QUICK] Hotkey monitor removed")
+        except:
+            pass
+    
+    if sync:
+        sync.stop()
+        log("[SYNC] Stopped")
+    # === END CLEANUP ===
 
     log("[AGENT] Shutdown complete")
 

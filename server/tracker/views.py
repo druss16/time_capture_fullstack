@@ -4988,7 +4988,11 @@ def today_time(request):
         total_client_minutes = 0
         
         for cat_name, cat_data in sorted(client_data['categories'].items()):
-            minutes = union_minutes(cat_data['spans'])
+            # Use actual event-based minutes, not span calculation
+            minutes = cat_data.get('actual_minutes', 0)
+            if minutes <= 0:
+                # Fallback to union if no minutes recorded
+                minutes = union_minutes(cat_data['spans'])
             total_client_minutes += minutes
             
             # Build aggregated sample list, sorted by time (most time first)

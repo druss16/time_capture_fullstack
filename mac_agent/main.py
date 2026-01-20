@@ -2057,68 +2057,49 @@ def run_agent():
             
             # === QUICK SWITCHER (Option+Shift+T) ===
             # === QUICK SWITCHER (Ctrl+Option+T) ===
-# === QUICK SWITCHER (Ctrl+Option+T) ===
-            print("[QUICK] Setting up hotkey...")
+            _hotkey_monitor = None
             try:
-                from AppKit import NSEvent
+                from AppKit import NSEvent, NSKeyDownMask, NSControlKeyMask, NSAlternateKeyMask
                 from PyObjCTools import AppHelper
                 
-                NSKeyDownMask = 1 << 10
-                NSControlKeyMask = 1 << 18
-                NSAlternateKeyMask = 1 << 19
-                KEY_T = 17
+                KEY_T = 17  # keycode for 'T'
                 
-                def handle_hotkey(event):
+                def on_global_key(event):
+                    """Handle global key events."""
                     try:
                         keycode = event.keyCode()
                         flags = event.modifierFlags()
+                        
                         ctrl = (flags & NSControlKeyMask) != 0
                         option = (flags & NSAlternateKeyMask) != 0
                         
                         if keycode == KEY_T and ctrl and option:
-                            print("[QUICK] >>> Ctrl+Option+T <<<")
-                            
-                            def do_open():
-                                from quick_switcher import QuickSwitcher
-                                
-                                def on_select(client_id, client_name):
-                                    print(f"[QUICK] Selected: {client_name}")
-                                    api_key = config.get("api_key") or API_KEY
-                                    if api_key and API_BASE:
-                                        set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
-                                    if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
-                                        gui_menu_bar.state.set_client(client_id, client_name)
-                                
-                                switcher = QuickSwitcher(
-                                    get_clients=lambda: fetch_clients_from_backend(API_BASE, API_KEY),
-                                    on_select=on_select,
-                                    get_usage=lambda: {},
-                                    get_current_id=lambda: gui_menu_bar.state.current_client_id if gui_menu_bar and hasattr(gui_menu_bar, 'state') else None
-                                )
-                                switcher.show()
-                            
-                            AppHelper.callAfter(do_open)
-                            return None
+                            log("[QUICK] Ctrl+Option+T pressed!")
+                            if gui_menu_bar and gui_menu_bar.app:
+                                # Use callAfter to run on main thread
+                                AppHelper.callAfter(gui_menu_bar.app._on_search, None)
                     except Exception as e:
-                        print(f"[QUICK] Handler error: {e}")
+                        log(f"[QUICK] Error: {e}")
                     return event
                 
-                _hotkey_global_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
-                    NSKeyDownMask, handle_hotkey
+                _hotkey_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                    NSKeyDownMask,
+                    on_global_key
                 )
-                _hotkey_local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
-                    NSKeyDownMask, handle_hotkey
-                )
-                
-                if _hotkey_global_monitor and _hotkey_local_monitor:
-                    print("[QUICK] ✅ Ready - Ctrl+Option+T")
+                _hotkey_global_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSKeyDownMask,
+                    on_global_key)
+                _hotkey_local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSKeyDownMask,
+                    on_global_key)
+
+                if _hotkey_monitor:
+                    log("[QUICK] ✅ Ready - Ctrl+Option+T (⌃⌥T)")
                 else:
-                    print("[QUICK] ⚠️ Monitor setup incomplete")
+                    log("[QUICK] ⚠️ Failed - check Accessibility permissions")
                     
+            except ImportError as e:
+                log(f"[QUICK] AppKit not available: {e}")
             except Exception as e:
-                print(f"[QUICK] ❌ Failed: {e}")
-                import traceback
-                traceback.print_exc()
+                log(f"[QUICK] Failed: {e}")
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")

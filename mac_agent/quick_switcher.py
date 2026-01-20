@@ -398,11 +398,7 @@ def run_picker(clients_json, usage_json, current_id):
         # Also try osascript to bring window to front
         try:
             import subprocess as sp
-            sp.Popen(['osascript', '-e', '''
-                tell application "System Events"
-                    set frontmost of every process whose name contains "Python" to true
-                end tell
-            '''], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+            sp.Popen(['osascript', '-e', 'tell application "System Events" to set frontmost of every process whose name contains "Python" to true'], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
         except:
             pass
     

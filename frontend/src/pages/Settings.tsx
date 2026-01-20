@@ -3,6 +3,12 @@
  * With Plan-Based Feature Gating & Bulk Assignment
  * Professional plan: Organization, Team, Clients, Devices, Token
  * Executive plan: All features including Billing Rates & Employee Costs
+ * 
+ * FIXES APPLIED:
+ * 1. Added getUserDisplayName() helper for consistent name display
+ * 2. Fixed employee dropdowns in BillingRatesTab, EmployeeCostRatesTab
+ * 3. Fixed OrganizationTab state refresh after save
+ * 4. Fixed BulkAssignModal user display
  */
 
 import { useEffect, useState, useCallback, useRef } from "react";
@@ -145,6 +151,30 @@ interface TabConfig {
   requiredPlan?: PlanType[];
   requiredRole?: ('owner' | 'admin' | 'manager')[];
 }
+
+// ============================================================================
+// HELPER: Get user display name with fallbacks
+// ============================================================================
+const getUserDisplayName = (user: TeamMember): string => {
+  // Try full name first
+  const fullName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+  if (fullName) return fullName;
+  
+  // Fallback to first_name only
+  if (user.first_name) return user.first_name;
+  
+  // Fallback to last_name only
+  if (user.last_name) return user.last_name;
+  
+  // Fallback to username
+  if (user.username) return user.username;
+  
+  // Fallback to email
+  if (user.email) return user.email;
+  
+  // Last resort: User ID
+  return `User ${user.id}`;
+};
 
 // ============================================================================
 // Upgrade Prompt Component
@@ -488,7 +518,7 @@ export default function Settings() {
 }
 
 // ============================================================================
-// Organization Tab
+// Organization Tab - FIXED: Form state refresh after save
 // ============================================================================
 function OrganizationTab({ orgInfo, orgPlan, onUpdate, onSuccess, onError }: { orgInfo: OrgInfo | null; orgPlan: PlanType; onUpdate: (org: OrgInfo) => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [editing, setEditing] = useState(false);
@@ -497,15 +527,35 @@ function OrganizationTab({ orgInfo, orgPlan, onUpdate, onSuccess, onError }: { o
 
   useEffect(() => {
     if (orgInfo) {
-      setForm({ name: orgInfo.name || '', billing_email: orgInfo.billing_email || '', billing_contact: orgInfo.billing_contact || '', billing_rate_default: orgInfo.billing_rate_default || '150.00' });
+      setForm({ 
+        name: orgInfo.name || '', 
+        billing_email: orgInfo.billing_email || '', 
+        billing_contact: orgInfo.billing_contact || '', 
+        billing_rate_default: orgInfo.billing_rate_default || '150.00' 
+      });
     }
   }, [orgInfo]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const updated = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      const updated = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`, { 
+        method: 'PATCH', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(form) 
+      });
+      
+      // FIX: Update both parent state AND local form state
       onUpdate(updated);
+      
+      // Sync form state with returned data to ensure consistency
+      setForm({
+        name: updated.name || '',
+        billing_email: updated.billing_email || '',
+        billing_contact: updated.billing_contact || '',
+        billing_rate_default: updated.billing_rate_default || '150.00'
+      });
+      
       setEditing(false);
       onSuccess('Organization updated');
     } catch (err: any) {
@@ -750,15 +800,16 @@ function TeamTab({ members, currentUserId, currentUserRole, onRefresh, onSuccess
           <tbody className="divide-y divide-slate-200">
             {members.map(member => {
               const isCurrentUser = member.id === currentUserId;
+              const displayName = getUserDisplayName(member);
               return (
                 <tr key={member.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
-                        <span className="text-sm font-bold text-primary">{(member.first_name?.[0] || member.username[0]).toUpperCase()}</span>
+                        <span className="text-sm font-bold text-primary">{displayName[0].toUpperCase()}</span>
                       </div>
                       <div>
-                        <p className="font-bold text-slate-900 text-sm">{member.first_name} {member.last_name || member.username}{isCurrentUser && <span className="ml-2 text-xs text-slate-500 font-semibold">(you)</span>}</p>
+                        <p className="font-bold text-slate-900 text-sm">{displayName}{isCurrentUser && <span className="ml-2 text-xs text-slate-500 font-semibold">(you)</span>}</p>
                         <p className="text-xs text-slate-500 font-medium">@{member.username}</p>
                       </div>
                     </div>
@@ -1030,7 +1081,7 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
 }
 
 // ============================================================================
-// Bulk Assign Modal
+// Bulk Assign Modal - FIXED: User display with getUserDisplayName
 // ============================================================================
 function BulkAssignModal({ isOpen, onClose, selectedClients, users, onSuccess }: { isOpen: boolean; onClose: () => void; selectedClients: Client[]; users: TeamMember[]; onSuccess: () => void; }) {
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
@@ -1125,22 +1176,25 @@ function BulkAssignModal({ isOpen, onClose, selectedClients, users, onSuccess }:
                 </select>
               </div>
 
-              {/* User Selection */}
+              {/* User Selection - FIXED with getUserDisplayName */}
               <div>
                 <label className="block text-sm font-bold text-slate-800 mb-3">Select Team Members</label>
                 <div className="border-2 border-slate-200 rounded-xl max-h-64 overflow-y-auto">
-                  {users.map(user => (
-                    <button key={user.id} onClick={() => handleToggleUser(user.id)} className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', selectedUserIds.has(user.id) && 'bg-primary/5')}>
-                      {selectedUserIds.has(user.id) ? <CheckSquare className="w-5 h-5 text-primary flex-shrink-0" /> : <Square className="w-5 h-5 text-slate-400 flex-shrink-0" />}
-                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                        <span className="text-xs font-bold text-primary">{(user.first_name?.[0] || user.username[0]).toUpperCase()}</span>
-                      </div>
-                      <div className="flex-1 text-left">
-                        <p className="font-bold text-slate-900 text-sm">{user.first_name} {user.last_name || user.username}</p>
-                        <p className="text-xs text-slate-500">{user.email}</p>
-                      </div>
-                    </button>
-                  ))}
+                  {users.map(user => {
+                    const displayName = getUserDisplayName(user);
+                    return (
+                      <button key={user.id} onClick={() => handleToggleUser(user.id)} className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', selectedUserIds.has(user.id) && 'bg-primary/5')}>
+                        {selectedUserIds.has(user.id) ? <CheckSquare className="w-5 h-5 text-primary flex-shrink-0" /> : <Square className="w-5 h-5 text-slate-400 flex-shrink-0" />}
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                          <span className="text-xs font-bold text-primary">{displayName[0].toUpperCase()}</span>
+                        </div>
+                        <div className="flex-1 text-left">
+                          <p className="font-bold text-slate-900 text-sm">{displayName}</p>
+                          <p className="text-xs text-slate-500">{user.email || `@${user.username}`}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
                   {users.length === 0 && <div className="text-center py-8 text-slate-500">No team members</div>}
                 </div>
                 {selectedUserIds.size > 0 && (
@@ -1525,7 +1579,7 @@ function CopyAssignmentsModal({ isOpen, onClose, clients, onSuccess }: { isOpen:
 }
 
 // ============================================================================
-// Billing Rates Tab
+// Billing Rates Tab - FIXED: Employee dropdown with getUserDisplayName
 // ============================================================================
 function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onSuccess, onError }: { rates: BillingRate[]; users: TeamMember[]; clients: Client[]; orgDefaultRate: string; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -1606,11 +1660,14 @@ function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onS
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
           <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Rate' : 'Add Rate Override'}</h3>
           <div className="grid grid-cols-4 gap-4">
+            {/* FIXED: Employee dropdown with getUserDisplayName */}
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Employee</label>
               <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
                 <option value="">All Employees</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>)}
+                {users.map(u => (
+                  <option key={u.id} value={u.id}>{getUserDisplayName(u)}</option>
+                ))}
               </select>
             </div>
             <div>
@@ -1683,7 +1740,7 @@ function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onS
 }
 
 // ============================================================================
-// Employee Cost Rates Tab
+// Employee Cost Rates Tab - FIXED: Employee dropdown with getUserDisplayName
 // ============================================================================
 function EmployeeCostRatesTab({ rates, users, onRefresh, onSuccess, onError }: { rates: EmployeeCostRate[]; users: TeamMember[]; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -1752,11 +1809,14 @@ function EmployeeCostRatesTab({ rates, users, onRefresh, onSuccess, onError }: {
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
           <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Cost Rate' : 'Add Cost Rate'}</h3>
           <div className="grid grid-cols-3 gap-4">
+            {/* FIXED: Employee dropdown with getUserDisplayName */}
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Employee *</label>
               <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
                 <option value="">Select Employee</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>)}
+                {users.map(u => (
+                  <option key={u.id} value={u.id}>{getUserDisplayName(u)}</option>
+                ))}
               </select>
             </div>
             <div>

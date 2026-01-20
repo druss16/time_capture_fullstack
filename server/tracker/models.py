@@ -1384,7 +1384,8 @@ class BillingRate(models.Model):
     Rates can change over time (effective_date).
     """
     org = models.ForeignKey('Organization', on_delete=models.CASCADE, related_name='billing_rates')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='billing_rates')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True,
+        blank=True, related_name='billing_rates')
     
     # If null, this is the user's default rate; if set, it's client-specific
     client = models.ForeignKey('Client', on_delete=models.CASCADE, null=True, blank=True, related_name='billing_rates')

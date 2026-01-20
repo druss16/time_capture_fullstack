@@ -8,7 +8,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import Client, Organization, OrganizationMembership, ClientAssignment
+from .models import ClientRequest, Client, Organization, OrganizationMembership, ClientAssignment
+
 
 
 def get_user_org(user):
@@ -393,22 +394,20 @@ def client_requests(request):
         return Response({'error': 'No organization'}, status=404)
     
     if request.method == 'POST':
-        name = request.data.get('name', '').strip()
+        # Accept both 'name' and 'client_name' for compatibility
+        name = request.data.get('name', '') or request.data.get('client_name', '')
+        name = name.strip()
         notes = request.data.get('notes', '').strip()
         
         if not name:
             return Response({'error': 'Client name required'}, status=400)
         
-        # Create the request
         client_request = ClientRequest.objects.create(
             organization=org,
             requested_by=request.user,
-            client_name=name,
+            client_name=name,  # Model field is client_name
             notes=notes,
         )
-        
-        # TODO: Send notification to admins (email, Slack, etc.)
-        # notify_admins_of_client_request(org, client_request)
         
         return Response({
             'success': True,

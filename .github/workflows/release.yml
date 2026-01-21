@@ -198,3 +198,4 @@ jobs:
             ./windows/*.exe
           tag_name: ${{ github.ref_name }}
           token: ${{ secrets.RELEASES_PAT }}
+          make_latest: true

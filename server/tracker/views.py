@@ -4363,9 +4363,9 @@ def import_clients_csv(request):
     
     csv_file = request.FILES['file']
     
-    # Decode file
+    # Decode file - use utf-8-sig to automatically strip BOM
     try:
-        text = csv_file.read().decode('utf-8')
+        text = csv_file.read().decode('utf-8-sig')
     except UnicodeDecodeError:
         try:
             csv_file.seek(0)
@@ -4375,6 +4375,9 @@ def import_clients_csv(request):
                 {"error": "Invalid file encoding. Please use UTF-8."},
                 status=400
             )
+    
+    # Also strip BOM manually just in case (belt and suspenders)
+    text = text.lstrip('\ufeff')
     
     # Get org
     org = get_user_org(user)
@@ -4387,25 +4390,21 @@ def import_clients_csv(request):
     # Parse CSV
     reader = csv.DictReader(io.StringIO(text))
     
-    # DEBUG: Log what we're seeing
+    # Check if first row looks like valid headers - if not, might have a title row
     fieldnames = reader.fieldnames or []
-    print(f"DEBUG CSV fieldnames: {fieldnames}")
-    
     valid_header_names = ['name', 'client', 'client_name', 'code', 'project', 'active', 'email', 'contact']
     has_valid_header = any(
         col.lower().strip() in valid_header_names 
         for col in fieldnames
     )
-    print(f"DEBUG has_valid_header: {has_valid_header}")
     
     if not has_valid_header:
+        # Skip first row (title row) and re-parse
         lines = text.strip().split('\n')
-        print(f"DEBUG first few lines: {lines[:3]}")
         if len(lines) > 1:
             text = '\n'.join(lines[1:])
             reader = csv.DictReader(io.StringIO(text))
-            print(f"DEBUG new fieldnames after skip: {reader.fieldnames}")
-                
+    
     clients_created = 0
     projects_created = 0
     clients_skipped = 0
@@ -4440,7 +4439,7 @@ def import_clients_csv(request):
             # Generate code if not provided
             if not code:
                 code = client_name[:10].upper().replace(" ", "")
-
+            
             # Parse active field
             active_str = str(row.get('active', row.get('Active', 'true'))).lower().strip()
             is_active = active_str in ('1', 'true', 'yes', 'y', '')

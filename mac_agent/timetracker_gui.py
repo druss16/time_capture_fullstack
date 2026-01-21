@@ -776,64 +776,14 @@ def _run_client_picker_process(clients_json: str, usage_json: str, result_queue)
                                  text_color=colors["text_muted"], anchor="w")
     results_label.pack(fill="x", pady=(0, 8))
     
-    # === MANUAL SCROLLABLE FRAME WITH CANVAS ===
-    # This gives us full control over scrolling behavior on macOS
-    
-    scroll_container = ctk.CTkFrame(container, fg_color="transparent")
-    scroll_container.pack(fill="both", expand=True, pady=(0, 12))
-    
-    # Create canvas for scrolling
-    canvas = tk.Canvas(scroll_container, bg=colors["bg_window"], 
-                       highlightthickness=0, bd=0)
-    
-    # Scrollbar
-    scrollbar = ctk.CTkScrollbar(scroll_container, command=canvas.yview,
-                                  button_color=colors["bg_scrollbar"],
-                                  button_hover_color=colors["bg_scrollbar_hover"])
-    scrollbar.pack(side="right", fill="y")
-    
-    canvas.pack(side="left", fill="both", expand=True)
-    canvas.configure(yscrollcommand=scrollbar.set)
-    
-    # Inner frame for content
-    inner_frame = ctk.CTkFrame(canvas, fg_color="transparent")
-    canvas_window = canvas.create_window((0, 0), window=inner_frame, anchor="nw")
-    
-    def configure_scroll_region(event=None):
-        canvas.configure(scrollregion=canvas.bbox("all"))
-    
-    def configure_canvas_width(event):
-        canvas.itemconfig(canvas_window, width=event.width)
-    
-    inner_frame.bind("<Configure>", configure_scroll_region)
-    canvas.bind("<Configure>", configure_canvas_width)
-    
-    # Mouse wheel scrolling for macOS
-    def on_mousewheel(event):
-        # macOS uses event.delta directly (positive = scroll up)
-        canvas.yview_scroll(int(-1 * event.delta), "units")
-    
-    def on_mousewheel_legacy(event):
-        # For older systems or different scroll directions
-        if event.num == 4:
-            canvas.yview_scroll(-3, "units")
-        elif event.num == 5:
-            canvas.yview_scroll(3, "units")
-    
-    # Bind mouse wheel to canvas and all children
-    def bind_mousewheel(widget):
-        widget.bind("<MouseWheel>", on_mousewheel)  # macOS/Windows
-        widget.bind("<Button-4>", on_mousewheel_legacy)  # Linux scroll up
-        widget.bind("<Button-5>", on_mousewheel_legacy)  # Linux scroll down
-    
-    bind_mousewheel(canvas)
-    bind_mousewheel(root)
-    
-    # Also bind to the inner frame
-    def bind_all_children(widget):
-        bind_mousewheel(widget)
-        for child in widget.winfo_children():
-            bind_all_children(child)
+    # === USE CTkScrollableFrame for native macOS trackpad support ===
+    scroll_frame = ctk.CTkScrollableFrame(
+        container, 
+        fg_color="transparent",
+        scrollbar_button_color=colors["bg_scrollbar"],
+        scrollbar_button_hover_color=colors["bg_scrollbar_hover"],
+    )
+    scroll_frame.pack(fill="both", expand=True, pady=(0, 12))
     
     # Buttons at bottom
     btn_frame = ctk.CTkFrame(container, fg_color="transparent")
@@ -875,7 +825,7 @@ def _run_client_picker_process(clients_json: str, usage_json: str, result_queue)
         row_widgets = []
         
         # Clear existing
-        for w in inner_frame.winfo_children():
+        for w in scroll_frame.winfo_children():
             w.destroy()
         
         query_lower = query.lower().strip()
@@ -893,10 +843,9 @@ def _run_client_picker_process(clients_json: str, usage_json: str, result_queue)
         results_label.configure(text=f"{showing} of {total}" if query_lower else f"{total} clients")
         
         if not filtered:
-            empty = ctk.CTkLabel(inner_frame, text="No clients found",
+            empty = ctk.CTkLabel(scroll_frame, text="No clients found",
                                 font=ctk.CTkFont(size=13), text_color=colors["text_muted"])
             empty.pack(pady=30)
-            bind_mousewheel(empty)
             return
         
         for idx, client in enumerate(filtered):
@@ -905,7 +854,7 @@ def _run_client_picker_process(clients_json: str, usage_json: str, result_queue)
             ccode = client.get("code", "")
             
             # Card row
-            card = ctk.CTkFrame(inner_frame, fg_color=colors["bg_card"],
+            card = ctk.CTkFrame(scroll_frame, fg_color=colors["bg_card"],
                                corner_radius=10)
             card.pack(fill="x", pady=3, padx=2)
             
@@ -939,11 +888,10 @@ def _run_client_picker_process(clients_json: str, usage_json: str, result_queue)
             click_fn = make_click(cid, cname, card)
             dblclick_fn = make_dblclick(cid, cname, card)
             
-            # Bind clicks and mousewheel to all widgets in the card
+            # Bind clicks to all widgets in the card
             for widget in [card, content, name_label] + ([code_label] if code_label else []):
                 widget.bind("<Button-1>", click_fn)
                 widget.bind("<Double-Button-1>", dblclick_fn)
-                bind_mousewheel(widget)
             
             # Hover effect
             def make_hover(c, cid_val):
@@ -958,15 +906,6 @@ def _run_client_picker_process(clients_json: str, usage_json: str, result_queue)
             enter_fn, leave_fn = make_hover(card, cid)
             card.bind("<Enter>", enter_fn)
             card.bind("<Leave>", leave_fn)
-        
-        # Reset scroll to top
-        canvas.yview_moveto(0)
-        
-        # Re-bind mousewheel to all new children
-        bind_all_children(inner_frame)
-        
-        # Update scroll region after building
-        root.after(10, configure_scroll_region)
         
         # Re-highlight if previously selected client is still in list
         if selected["id"] is not None and selected["name"] != "No Client":
@@ -1323,30 +1262,21 @@ if RUMPS_AVAILABLE:
             self.menu.add(quit_item)
         
         def _on_search(self, _):
-            """Native macOS search dialog"""
-            clients = sort_clients_by_usage(self.controller.client_mgr.get_all())
+            """Open the searchable client picker window"""
+            # Refresh clients from backend first
+            if self.controller.fetch_clients_callback:
+                try:
+                    self.controller.client_mgr.load(self.controller.fetch_clients_callback)
+                except Exception as e:
+                    print(f"[GUI] Failed to refresh clients: {e}")
             
-            # Build a quick reference list
-            client_list = "\n".join([f"{c['name']}" for c in clients[:10]])
+            # Run picker in a thread to avoid blocking rumps
+            def show_picker():
+                picker = ClientPickerWindow(self.controller.client_mgr, self._switch_client)
+                picker.show()
             
-            window = rumps.Window(
-                message=f'Top clients:\n{client_list}\n\nType name to switch:',
-                title='Switch Client',
-                default_text='',
-                ok='Switch',
-                cancel='Cancel',
-                dimensions=(320, 24)
-            )
-            response = window.run()
-            
-            if response.clicked and response.text:
-                query = response.text.lower().strip()
-                for client in clients:
-                    if query in client.get("name", "").lower() or query in client.get("code", "").lower():
-                        self._switch_client(client["id"], client["name"])
-                        return
-                rumps.alert("Not found", f"No client matching: {response.text}")
-                
+            threading.Thread(target=show_picker, daemon=True).start()
+        
         def _show_client_picker(self):
             if self.controller.fetch_clients_callback:
                 try:
@@ -1469,9 +1399,9 @@ class TimeTrackerSystemTray:
     def refresh_client_menu(self, clients):
         self.client_mgr.clients = clients
         self.client_mgr.save()
-        if self.app and hasattr(self.app, '_rebuild_menu'):
-            self.app._rebuild_menu()
-        print(f"[GUI] Refreshed {len(clients)} clients")
+        # DON'T call _rebuild_menu from background thread - it corrupts rumps menu state
+        # The menu will be built correctly when the app runs
+        print(f"[GUI] Updated client cache ({len(clients)} clients)")
     
     def run(self):
         if RUMPS_AVAILABLE:

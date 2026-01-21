@@ -1969,8 +1969,7 @@ def run_agent():
             # Update GUI state
             if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
                 gui_menu_bar.state.set_client(client_id, client_name)
-                if hasattr(gui_menu_bar, 'app') and hasattr(gui_menu_bar.app, '_rebuild_menu'):
-                    gui_menu_bar.app._rebuild_menu()
+                # DON'T call _rebuild_menu here - it corrupts rumps from background thread
             
             # Sync to backend
             api_key = config.get("api_key") or API_KEY
@@ -2032,8 +2031,8 @@ def run_agent():
     # === GUI INITIALIZATION (after pairing succeeds) ===
     gui_menu_bar = None
     quick_switcher = None
-    _hotkey_global_monitor = None   # ADD
-    _hotkey_local_monitor = None    # ADD
+    # _hotkey_global_monitor = None   # ADD
+    # _hotkey_local_monitor = None    # ADD
     if GUI_AVAILABLE:
         try:
             gui_menu_bar = run_gui_app(
@@ -2057,49 +2056,29 @@ def run_agent():
             
             # === QUICK SWITCHER (Option+Shift+T) ===
             # === QUICK SWITCHER (Ctrl+Option+T) ===
-            _hotkey_monitor = None
             try:
-                from AppKit import NSEvent, NSKeyDownMask, NSControlKeyMask, NSAlternateKeyMask
-                from PyObjCTools import AppHelper
+                from pynput import keyboard
                 
-                KEY_T = 17  # keycode for 'T'
+                def on_hotkey_activate():
+                    """Called when Ctrl+Option+T is pressed"""
+                    log("[QUICK] Ctrl+Option+T pressed!")
+                    if gui_menu_bar and gui_menu_bar.app:
+                        # Run picker in thread to avoid blocking
+                        def show_picker():
+                            gui_menu_bar.app._on_search(None)
+                        threading.Thread(target=show_picker, daemon=True).start()
                 
-                def on_global_key(event):
-                    """Handle global key events."""
-                    try:
-                        keycode = event.keyCode()
-                        flags = event.modifierFlags()
-                        
-                        ctrl = (flags & NSControlKeyMask) != 0
-                        option = (flags & NSAlternateKeyMask) != 0
-                        
-                        if keycode == KEY_T and ctrl and option:
-                            log("[QUICK] Ctrl+Option+T pressed!")
-                            if gui_menu_bar and gui_menu_bar.app:
-                                # Use callAfter to run on main thread
-                                AppHelper.callAfter(gui_menu_bar.app._on_search, None)
-                    except Exception as e:
-                        log(f"[QUICK] Error: {e}")
-                    return event
+                # Register global hotkey
+                hotkey_listener = keyboard.GlobalHotKeys({
+                    '<ctrl>+<alt>+t': on_hotkey_activate
+                })
+                hotkey_listener.start()
+                log("[QUICK] ✅ Ready - Ctrl+Option+T (⌃⌥T)")
                 
-                _hotkey_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
-                    NSKeyDownMask,
-                    on_global_key
-                )
-                _hotkey_global_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSKeyDownMask,
-                    on_global_key)
-                _hotkey_local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSKeyDownMask,
-                    on_global_key)
-
-                if _hotkey_monitor:
-                    log("[QUICK] ✅ Ready - Ctrl+Option+T (⌃⌥T)")
-                else:
-                    log("[QUICK] ⚠️ Failed - check Accessibility permissions")
-                    
-            except ImportError as e:
-                log(f"[QUICK] AppKit not available: {e}")
+            except ImportError:
+                log("[QUICK] pynput not installed - hotkey disabled (pip install pynput)")
             except Exception as e:
-                log(f"[QUICK] Failed: {e}")
+                log(f"[QUICK] Failed to setup hotkey: {e}")
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")

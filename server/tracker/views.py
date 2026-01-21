@@ -4429,16 +4429,20 @@ def create_client(request):
 
 
 @api_view(["POST"])
-@permission_classes([PermUI])  # ← Use this instead
+@permission_classes([PermUI])
 def import_clients_csv(request):
     """
     Import clients from CSV file.
     
-    Expected CSV format:
-    name,code,email,billable_rate
-    Acme Corp,ACME,contact@acme.com,250
-    Smith LLC,SMITH,info@smith.com,200
+    Supported columns:
+      - name/client/client_name (required): Client name
+      - code (optional): Short code (e.g., "ACME")
+      - project (optional): Default project name
+      - active (optional): true/false (default: true)
     """
+    import csv
+    import io
+    
     user = request.user
     
     if 'file' not in request.FILES:
@@ -4448,12 +4452,16 @@ def import_clients_csv(request):
     
     # Decode file
     try:
-        decoded_file = csv_file.read().decode('utf-8')
+        text = csv_file.read().decode('utf-8')
     except UnicodeDecodeError:
-        return Response(
-            {"error": "Invalid file encoding. Please use UTF-8."},
-            status=400
-        )
+        try:
+            csv_file.seek(0)
+            text = csv_file.read().decode('latin-1')
+        except Exception:
+            return Response(
+                {"error": "Invalid file encoding. Please use UTF-8."},
+                status=400
+            )
     
     # Get org
     org = get_user_org(user)
@@ -4464,40 +4472,86 @@ def import_clients_csv(request):
         )
     
     # Parse CSV
-    import csv
-    import io
+    reader = csv.DictReader(io.StringIO(text))
     
-    io_string = io.StringIO(decoded_file)
-    reader = csv.DictReader(io_string)
+    # Check if first row looks like valid headers - if not, might have a title row
+    fieldnames = reader.fieldnames or []
+    valid_header_names = ['name', 'client', 'client_name', 'code', 'project', 'active', 'email', 'contact']
+    has_valid_header = any(
+        col.lower().strip() in valid_header_names 
+        for col in fieldnames
+    )
+    
+    if not has_valid_header:
+        # Skip first row (title row) and re-parse
+        lines = text.strip().split('\n')
+        if len(lines) > 1:
+            text = '\n'.join(lines[1:])
+            reader = csv.DictReader(io.StringIO(text))
     
     clients_created = 0
+    projects_created = 0
     clients_skipped = 0
     errors = []
     
     for row_num, row in enumerate(reader, start=2):
         try:
-            name = row.get('name', '').strip()
-            if not name:
+            # Flexible column name matching for client name
+            client_name = None
+            for col in ['name', 'client', 'client_name', 'Name', 'Client', 'Client Name', 'CLIENT', 'NAME']:
+                if col in row and row[col]:
+                    client_name = row[col].strip()
+                    break
+            
+            if not client_name:
                 errors.append(f"Row {row_num}: Missing client name")
                 clients_skipped += 1
                 continue
             
-            code = row.get('code', '').strip() or name[:10].upper().replace(" ", "")
-            
-            # Check if exists
-            if Client.objects.filter(org=org, code=code).exists():
+            # Check if client already exists
+            if Client.objects.filter(org=org, name=client_name).exists():
                 clients_skipped += 1
                 continue
             
-            # Create client
-            Client.objects.create(
-                org=org,
-                name=name,
-                code=code,
-                is_active=True
-            )
+            # Get optional code field (flexible matching)
+            code = None
+            for col in ['code', 'Code', 'CODE']:
+                if col in row and row[col]:
+                    code = row[col].strip()
+                    break
             
+            # Generate code if not provided
+            if not code:
+                code = client_name[:10].upper().replace(" ", "")
+            
+            # Parse active field
+            active_str = str(row.get('active', row.get('Active', 'true'))).lower().strip()
+            is_active = active_str in ('1', 'true', 'yes', 'y', '')
+            
+            # Create client
+            client = Client.objects.create(
+                org=org,
+                name=client_name,
+                code=code,
+                is_active=is_active
+            )
             clients_created += 1
+            
+            # Optional: Create default project
+            project_name = None
+            for col in ['project', 'Project', 'PROJECT', 'default_project']:
+                if col in row and row[col]:
+                    project_name = row[col].strip()
+                    break
+            
+            if project_name:
+                Project.objects.create(
+                    org=org,
+                    client=client,
+                    name=project_name,
+                    is_active=True
+                )
+                projects_created += 1
             
         except Exception as e:
             errors.append(f"Row {row_num}: {str(e)}")
@@ -4506,11 +4560,11 @@ def import_clients_csv(request):
     return Response({
         "ok": True,
         "clients": clients_created,
+        "projects": projects_created,
         "skipped": clients_skipped,
-        "errors": errors,
+        "errors": errors if errors else None,
         "message": f"Successfully imported {clients_created} clients ({clients_skipped} skipped)"
     })
-
 
 # ============================================================================
 # BACKEND FIX: tracker/views.py (around line 4390)

@@ -47,6 +47,16 @@ const STEPS: Step[] = [
   { id: 6, name: 'Start Tracking', icon: Download, key: 'agent_installed' },
 ];
 
+// Map URL step params to step numbers
+const STEP_PARAM_MAP: Record<string, number> = {
+  'signup': 1,
+  'integration': 2,
+  'team': 3,
+  'pricing': 4,
+  'rates': 5,
+  'complete': 6,
+};
+
 interface OnboardingWizardProps {
   initialStep?: number;
 }
@@ -64,19 +74,33 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
   const isLoggedIn = !!localStorage.getItem('auth_token');
 
   useEffect(() => {
-    // Check for step override from URL (e.g., after Stripe checkout)
+    // Check for step override from URL (e.g., after Stripe cancel or success)
     const stepParam = searchParams.get('step');
     const sessionId = searchParams.get('session_id');
     
-    // If returning from Stripe checkout with step=complete
-    if (stepParam === 'complete' || sessionId) {
+    // If returning from Stripe checkout with session_id = success
+    if (sessionId) {
       setCurrentStep(6);
       setHighestStepReached(6);
       setLoading(false);
       
-      // Load organization data for CompleteStep
       if (isLoggedIn) {
         loadOrganizationOnly();
+      }
+      return;
+    }
+    
+    // Handle explicit step parameter (e.g., ?step=pricing from Stripe cancel)
+    if (stepParam && STEP_PARAM_MAP[stepParam]) {
+      const targetStep = STEP_PARAM_MAP[stepParam];
+      
+      // Load org data but override the step
+      if (isLoggedIn) {
+        loadStatusWithStepOverride(targetStep);
+      } else {
+        setCurrentStep(targetStep);
+        setHighestStepReached(targetStep);
+        setLoading(false);
       }
       return;
     }
@@ -95,6 +119,29 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
       setOrganization(data.organization);
     } catch (err) {
       console.error('Failed to load organization:', err);
+    }
+  };
+
+  const loadStatusWithStepOverride = async (overrideStep: number) => {
+    try {
+      const data = await getOnboardingStatus();
+      setStatus({ steps: data.steps, is_complete: data.is_complete });
+      setOrganization(data.organization);
+      
+      if (data.is_complete) {
+        navigate('/daily');
+        return;
+      }
+      
+      // Use the override step, but track highest reached from server
+      const serverStep = data.current_step || 2;
+      setCurrentStep(overrideStep);
+      setHighestStepReached(Math.max(serverStep, overrideStep));
+    } catch (err) {
+      setCurrentStep(overrideStep);
+      setHighestStepReached(overrideStep);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -296,7 +343,6 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
           <PricingStep 
             organizationId={organization?.id || 0}
             onComplete={() => handleStepComplete(4)}
-            onStartTrial={() => handleStepComplete(4)}
           />
         )}
         

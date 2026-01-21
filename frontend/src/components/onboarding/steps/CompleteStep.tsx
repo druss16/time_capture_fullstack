@@ -22,7 +22,7 @@ interface CompleteStepProps {
 
 const DOWNLOAD_URLS = {
   macos: 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker.pkg',
-  windows: 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker-Setup.exe',
+  windows: 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker-Windows-Setup.exe',
 };
 
 export default function CompleteStep({ organization, onComplete }: CompleteStepProps) {

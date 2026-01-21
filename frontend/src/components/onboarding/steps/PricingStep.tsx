@@ -1,368 +1,287 @@
-// src/components/onboarding/OnboardingWizard.tsx
-/**
- * Self-Service Onboarding Wizard - Green Theme
- * With clickable step navigation and back button
- */
+// src/components/onboarding/steps/PricingStep.tsx
 
-import React, { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getOnboardingStatus, Organization, OnboardingSteps } from '../../services/onboardingApi';
+import React, { useState } from 'react';
+import { Check, Star, Crown, ArrowRight, Shield, Clock, Users, BarChart3, Loader2, CreditCard } from 'lucide-react';
 
-// Step components
-import SignupStep from './steps/SignupStep';
-import IntegrationStep from './steps/IntegrationStep';
-import TeamInviteStep from './steps/TeamInviteStep';
-import PricingStep from './steps/PricingStep';
-import BillingRatesStep from './steps/BillingRatesStep';
-import CompleteStep from './steps/CompleteStep';
-
-// Icons
-import { 
-  UserPlus, 
-  Link2, 
-  Users, 
-  CreditCard,
-  DollarSign, 
-  Download,
-  Check,
-  ChevronRight,
-  ChevronLeft,
-  Clock,
-  LucideIcon
-} from 'lucide-react';
-
-interface Step {
-  id: number;
-  name: string;
-  icon: LucideIcon;
-  key: keyof OnboardingSteps | 'plan_selected';
+interface PricingStepProps {
+  onComplete: () => void;
+  organizationId: number;
+  userCount?: number;
 }
 
-const STEPS: Step[] = [
-  { id: 1, name: 'Create Account', icon: UserPlus, key: 'account_created' },
-  { id: 2, name: 'Connect Integration', icon: Link2, key: 'integration_connected' },
-  { id: 3, name: 'Invite Team', icon: Users, key: 'team_invited' },
-  { id: 4, name: 'Choose Plan', icon: CreditCard, key: 'plan_selected' },
-  { id: 5, name: 'Set Rates', icon: DollarSign, key: 'rates_configured' },
-  { id: 6, name: 'Start Tracking', icon: Download, key: 'agent_installed' },
+interface PricingTier {
+  id: 'professional' | 'executive';
+  name: string;
+  price: number;
+  description: string;
+  icon: React.ReactNode;
+  emoji: string;
+  popular?: boolean;
+  features: string[];
+  notIncluded?: string[];
+}
+
+const PRICING_TIERS: PricingTier[] = [
+  {
+    id: 'professional',
+    name: 'Professional',
+    price: 29.99,
+    priceId: 'price_1SnryXKdcg3wPfHV3FymP9kw',
+    description: 'Essential time tracking for growing firms',
+    icon: <Star className="w-6 h-6" />,
+    emoji: '⭐',
+    features: [
+      'Automatic time tracking',
+      'AI-powered categorization',
+      'Client & project management',
+      'Weekly timesheets',
+      'Timesheet approvals',
+      'Team invites & roles',
+      'Basic reporting',
+      'Desktop app (Mac & Windows)',
+      'Email support',
+    ],
+    notIncluded: [
+      'Billing rates management',
+      'Employee cost tracking',
+      'Profitability dashboards',
+    ],
+  },
+  {
+    id: 'executive',
+    name: 'Executive',
+    price: 49.99,
+    priceId: 'price_1SnrzDKdcg3wPfHVydp72wac',
+    description: 'Full suite with profitability insights',
+    icon: <Crown className="w-6 h-6" />,
+    emoji: '💎',
+    popular: true,
+    features: [
+      'Everything in Professional, plus:',
+      'Client billing & invoicing',
+      'Custom billing rates',
+      'Employee cost tracking',
+      'Profitability dashboards',
+      'Client profitability reports',
+      'Timesheet history & archive',
+      'Advanced analytics',
+      'Priority support',
+      'API access',
+    ],
+  },
 ];
 
-// Map URL step params to step numbers
-const STEP_PARAM_MAP: Record<string, number> = {
-  'signup': 1,
-  'integration': 2,
-  'team': 3,
-  'pricing': 4,
-  'rates': 5,
-  'complete': 6,
-};
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
-interface OnboardingWizardProps {
-  initialStep?: number;
-}
+export default function PricingStep({ 
+  onComplete, 
+  organizationId,
+  userCount = 1 
+}: PricingStepProps) {
+  const [selectedTier, setSelectedTier] = useState<'professional' | 'executive'>('executive');
+  const [loading, setLoading] = useState(false);
+  const [seats, setSeats] = useState(userCount);
 
-export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const [currentStep, setCurrentStep] = useState(initialStep);
-  const [highestStepReached, setHighestStepReached] = useState(initialStep);
-  const [status, setStatus] = useState<{ steps: OnboardingSteps; is_complete: boolean } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [organization, setOrganization] = useState<Organization | null>(null);
+  const selectedPlan = PRICING_TIERS.find(t => t.id === selectedTier)!;
+  const monthlyTotal = selectedPlan.price * seats;
 
-  // Check if user is logged in (has completed step 1)
-  const isLoggedIn = !!localStorage.getItem('auth_token');
-
-  useEffect(() => {
-    // Check for step override from URL (e.g., after Stripe cancel or success)
-    const stepParam = searchParams.get('step');
-    const sessionId = searchParams.get('session_id');
-    
-    // If returning from Stripe checkout with session_id = success
-    if (sessionId) {
-      setCurrentStep(6);
-      setHighestStepReached(6);
-      setLoading(false);
-      
-      if (isLoggedIn) {
-        loadOrganizationOnly();
-      }
-      return;
-    }
-    
-    // Handle explicit step parameter (e.g., ?step=pricing from Stripe cancel)
-    if (stepParam && STEP_PARAM_MAP[stepParam]) {
-      const targetStep = STEP_PARAM_MAP[stepParam];
-      
-      // Load org data but override the step
-      if (isLoggedIn) {
-        loadStatusWithStepOverride(targetStep);
-      } else {
-        setCurrentStep(targetStep);
-        setHighestStepReached(targetStep);
-        setLoading(false);
-      }
-      return;
-    }
-    
-    // Normal flow - load status from server
-    if (isLoggedIn) {
-      loadStatus();
-    } else {
-      setLoading(false);
-    }
-  }, [searchParams]);
-
-  const loadOrganizationOnly = async () => {
+  const handleSubscribe = async () => {
+    setLoading(true);
     try {
-      const data = await getOnboardingStatus();
-      setOrganization(data.organization);
-    } catch (err) {
-      console.error('Failed to load organization:', err);
-    }
-  };
+      const token = localStorage.getItem('auth_token');
 
-  const loadStatusWithStepOverride = async (overrideStep: number) => {
-    try {
-      const data = await getOnboardingStatus();
-      setStatus({ steps: data.steps, is_complete: data.is_complete });
-      setOrganization(data.organization);
-      
-      if (data.is_complete) {
-        navigate('/daily');
-        return;
-      }
-      
-      // Use the override step, but track highest reached from server
-      const serverStep = data.current_step || 2;
-      setCurrentStep(overrideStep);
-      setHighestStepReached(Math.max(serverStep, overrideStep));
+      const response = await fetch(`${API_BASE}/billing/create-checkout-session/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          plan: selectedTier,
+          interval: 'monthly',
+          quantity: seats,
+          success_url: `${window.location.origin}/onboarding?step=complete&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${window.location.origin}/onboarding?step=pricing`,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to create checkout session');
+
+      if (data.checkout_url) window.location.href = data.checkout_url;
+      else throw new Error('No checkout URL returned');
     } catch (err) {
-      setCurrentStep(overrideStep);
-      setHighestStepReached(overrideStep);
+      console.error('Failed to create checkout session:', err);
+      alert('Unable to start checkout. Please try again.');
     } finally {
       setLoading(false);
     }
   };
-
-  const loadStatus = async () => {
-    try {
-      const data = await getOnboardingStatus();
-      setStatus({ steps: data.steps, is_complete: data.is_complete });
-      setOrganization(data.organization);
-      
-      if (data.is_complete) {
-        navigate('/daily');
-        return;
-      }
-      
-      // Set current step from server, but allow navigation back
-      const serverStep = data.current_step || 2;
-      setCurrentStep(serverStep);
-      setHighestStepReached(serverStep);
-    } catch (err) {
-      // If API fails but we have a token, start at step 2
-      setCurrentStep(isLoggedIn ? 2 : 1);
-      setHighestStepReached(isLoggedIn ? 2 : 1);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleStepComplete = (stepNum: number, data?: { organization?: Organization }) => {
-    if (data?.organization) {
-      setOrganization(data.organization);
-    }
-    
-    if (stepNum < 6) {
-      const nextStep = stepNum + 1;
-      setCurrentStep(nextStep);
-      setHighestStepReached(Math.max(highestStepReached, nextStep));
-    } else {
-      navigate('/daily');
-    }
-  };
-
-  const handleSkip = (stepNum: number) => {
-    if (stepNum < 6) {
-      const nextStep = stepNum + 1;
-      setCurrentStep(nextStep);
-      setHighestStepReached(Math.max(highestStepReached, nextStep));
-    }
-  };
-
-  // Navigate to a specific step
-  const goToStep = (stepId: number) => {
-    // Can't go back to step 1 after signup
-    if (stepId === 1 && isLoggedIn) return;
-    
-    // Can go to any step up to highest reached
-    if (stepId >= 1 && stepId <= highestStepReached) {
-      setCurrentStep(stepId);
-    }
-  };
-
-  // Go back one step
-  const handleBack = () => {
-    const minStep = isLoggedIn ? 2 : 1;
-    if (currentStep > minStep) {
-      setCurrentStep(currentStep - 1);
-    }
-  };
-
-  // Can we go back?
-  const canGoBack = isLoggedIn ? currentStep > 2 : currentStep > 1;
-  
-  // Can this step be clicked?
-  const canClickStep = (stepId: number) => {
-    // Can't click step 1 if logged in
-    if (stepId === 1 && isLoggedIn) return false;
-    // Can click any step we've reached
-    return stepId <= highestStepReached;
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600" />
-      </div>
-    );
-  }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 shadow-sm">
-        <div className="max-w-5xl mx-auto px-4 py-4">
+      <div className="text-center mb-8">
+        <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <Crown className="w-8 h-8 text-primary" />
+        </div>
+        <h2 className="text-2xl font-bold text-slate-900">Choose Your Plan</h2>
+        <p className="text-slate-600 mt-2 font-medium">
+          Simple pricing • Cancel anytime
+        </p>
+      </div>
+
+      {/* Pricing Cards */}
+      <div className="grid md:grid-cols-2 gap-6 mb-8">
+        {PRICING_TIERS.map((tier) => (
+          <div
+            key={tier.id}
+            onClick={() => setSelectedTier(tier.id)}
+            className={`
+              relative cursor-pointer rounded-2xl border-2 p-6 transition-all
+              ${selectedTier === tier.id 
+                ? 'border-primary bg-primary/5 shadow-lg shadow-primary/10' 
+                : 'border-slate-200 hover:border-slate-300 hover:shadow-md'}
+            `}
+          >
+            {/* Popular Badge */}
+            {tier.popular && (
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                <span className="bg-primary text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">
+                  MOST POPULAR
+                </span>
+              </div>
+            )}
+
+            {/* Selection Indicator */}
+            <div className={`
+              absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all
+              ${selectedTier === tier.id ? 'border-primary bg-primary' : 'border-slate-300'}
+            `}>
+              {selectedTier === tier.id && <Check className="w-4 h-4 text-white" />}
+            </div>
+
+            {/* Tier Header */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className={`
+                w-12 h-12 rounded-xl flex items-center justify-center
+                ${tier.id === 'executive' 
+                  ? 'bg-primary text-white' 
+                  : 'bg-amber-100 text-amber-600'}
+              `}>
+                {tier.icon}
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">
+                  {tier.emoji} {tier.name}
+                </h3>
+                <p className="text-sm text-slate-500 font-medium">{tier.description}</p>
+              </div>
+            </div>
+
+            {/* Price */}
+            <div className="mb-6">
+              <div className="flex items-baseline gap-1">
+                <span className="text-4xl font-extrabold text-slate-900">${tier.price}</span>
+                <span className="text-slate-500 font-medium">/user/month</span>
+              </div>
+              <p className="text-sm text-slate-500 mt-1 font-medium">Billed monthly</p>
+            </div>
+
+            {/* Features */}
+            <ul className="space-y-3">
+              {tier.features.map((feature, idx) => (
+                <li key={idx} className="flex items-start gap-2">
+                  <Check className={`w-5 h-5 mt-0.5 flex-shrink-0 ${
+                    tier.id === 'executive' ? 'text-primary' : 'text-emerald-500'
+                  }`} />
+                  <span className="text-sm text-slate-700 font-medium">{feature}</span>
+                </li>
+              ))}
+              {tier.notIncluded?.map((feature, idx) => (
+                <li key={`not-${idx}`} className="flex items-start gap-2 opacity-50">
+                  <span className="w-5 h-5 mt-0.5 flex-shrink-0 text-center text-slate-400">—</span>
+                  <span className="text-sm text-slate-500 line-through font-medium">{feature}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      {/* Seat Selection */}
+      <div className="mb-8 p-5 bg-slate-50 rounded-xl border-2 border-slate-200">
+        <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-600/25">
-              <Clock className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-slate-900">TimeTracker</h1>
-              {organization && (
-                <p className="text-sm text-slate-500 font-medium">{organization.name}</p>
-              )}
-            </div>
+            <Users className="w-5 h-5 text-slate-600" />
+            <span className="font-bold text-slate-900">Team Size</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSeats(Math.max(1, seats - 1))}
+              className="w-8 h-8 rounded-lg border-2 border-slate-300 flex items-center justify-center hover:bg-slate-100 transition-colors font-bold"
+            >
+              -
+            </button>
+            <span className="w-12 text-center font-bold text-lg">{seats}</span>
+            <button
+              onClick={() => setSeats(seats + 1)}
+              className="w-8 h-8 rounded-lg border-2 border-slate-300 flex items-center justify-center hover:bg-slate-100 transition-colors font-bold"
+            >
+              +
+            </button>
           </div>
         </div>
-      </header>
 
-      {/* Progress Steps - Clickable */}
-      <div className="bg-white border-b border-slate-200 py-4">
-        <div className="max-w-5xl mx-auto px-4">
-          <nav aria-label="Progress">
-            <ol className="flex items-center justify-between">
-              {STEPS.map((step, idx) => {
-                const StepIcon = step.icon;
-                const isComplete = currentStep > step.id;
-                const isCurrent = currentStep === step.id;
-                const isClickable = canClickStep(step.id);
-                
-                return (
-                  <li key={step.id} className="flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => goToStep(step.id)}
-                      disabled={!isClickable}
-                      className={`
-                        flex items-center gap-2 px-3 py-2 rounded-xl transition-all
-                        ${isCurrent ? 'bg-emerald-50 text-emerald-700' : ''}
-                        ${isComplete && !isCurrent ? 'text-emerald-600' : ''}
-                        ${!isComplete && !isCurrent ? 'text-slate-400' : ''}
-                        ${isClickable && !isCurrent ? 'cursor-pointer hover:bg-slate-100 hover:text-emerald-600' : ''}
-                        ${!isClickable ? 'cursor-not-allowed opacity-60' : ''}
-                      `}
-                      title={isClickable ? `Go to ${step.name}` : (step.id === 1 && isLoggedIn ? 'Account already created' : 'Complete previous steps first')}
-                    >
-                      <div className={`
-                        w-8 h-8 rounded-full flex items-center justify-center transition-all
-                        ${isComplete ? 'bg-emerald-100 text-emerald-600' : ''}
-                        ${isCurrent ? 'bg-emerald-100 text-emerald-600 ring-2 ring-emerald-600 ring-offset-2' : ''}
-                        ${!isComplete && !isCurrent ? 'bg-slate-100 text-slate-400' : ''}
-                      `}>
-                        {isComplete ? (
-                          <Check className="w-4 h-4" />
-                        ) : (
-                          <StepIcon className="w-4 h-4" />
-                        )}
-                      </div>
-                      <span className="hidden sm:block text-sm font-semibold">
-                        {step.name}
-                      </span>
-                    </button>
-                    
-                    {idx < STEPS.length - 1 && (
-                      <ChevronRight className="w-5 h-5 text-slate-300 mx-2" />
-                    )}
-                  </li>
-                );
-              })}
-            </ol>
-          </nav>
+        {/* Summary */}
+        <div className="flex items-center justify-between pt-4 border-t-2 border-slate-200">
+          <div>
+            <p className="text-sm text-slate-500 font-medium">Monthly total</p>
+            <p className="text-2xl font-extrabold text-slate-900">
+              ${monthlyTotal.toFixed(2)}<span className="text-sm font-medium text-slate-500">/month</span>
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-slate-500 font-medium">Annual pricing available</p>
+            <p className="text-sm text-primary font-bold">Save 20% with yearly billing</p>
+          </div>
         </div>
       </div>
 
-      {/* Step Content */}
-      <main className="max-w-2xl mx-auto px-4 py-8">
-        {/* Back Button */}
-        {canGoBack && (
-          <button
-            type="button"
-            onClick={handleBack}
-            className="mb-4 flex items-center gap-2 text-slate-600 hover:text-emerald-600 font-medium transition-colors group"
-          >
-            <ChevronLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-            Back to {STEPS[currentStep - 2]?.name}
-          </button>
+      {/* CTA Button */}
+      <button
+        onClick={handleSubscribe}
+        disabled={loading}
+        className="w-full py-4 px-6 bg-primary hover:opacity-90 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/25 disabled:opacity-50"
+      >
+        {loading ? (
+          <Loader2 className="w-5 h-5 animate-spin" />
+        ) : (
+          <>
+            <CreditCard className="w-5 h-5" />
+            Subscribe Now
+            <ArrowRight className="w-5 h-5" />
+          </>
         )}
+      </button>
 
-        {currentStep === 1 && (
-          <SignupStep 
-            onComplete={(data) => handleStepComplete(1, data)} 
-          />
-        )}
-        
-        {currentStep === 2 && (
-          <IntegrationStep 
-            organization={organization}
-            onComplete={() => handleStepComplete(2)} 
-            onSkip={() => handleSkip(2)}
-          />
-        )}
-        
-        {currentStep === 3 && (
-          <TeamInviteStep 
-            organization={organization}
-            onComplete={() => handleStepComplete(3)} 
-            onSkip={() => handleSkip(3)}
-          />
-        )}
-        
-        {currentStep === 4 && (
-          <PricingStep 
-            organizationId={organization?.id || 0}
-            onComplete={() => handleStepComplete(4)}
-          />
-        )}
-        
-        {currentStep === 5 && (
-          <BillingRatesStep 
-            organization={organization}
-            onComplete={() => handleStepComplete(5)} 
-            onSkip={() => handleSkip(5)}
-          />
-        )}
-        
-        {currentStep === 6 && (
-          <CompleteStep 
-            organization={organization}
-            onComplete={() => handleStepComplete(6)} 
-          />
-        )}
-      </main>
+      {/* Trust Badges */}
+      <div className="mt-8 pt-6 border-t-2 border-slate-200">
+        <div className="flex items-center justify-center gap-8 text-sm text-slate-500">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4" />
+            <span className="font-medium">Secure payment</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4" />
+            <span className="font-medium">Cancel anytime</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-4 h-4" />
+            <span className="font-medium">No hidden fees</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
-
-export default OnboardingWizard;

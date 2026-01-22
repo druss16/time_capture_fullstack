@@ -1,7 +1,6 @@
 ; TimeTracker Windows Installer Script
 ; Inno Setup 6.x
 ; Download Inno Setup from: https://jrsoftware.org/isinfo.php
-
 #define MyAppName "TimeTracker"
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
@@ -20,12 +19,12 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 ; Output settings
 OutputDir=Output
-OutputBaseFilename=TimeTracker-Windows-v{#MyAppVersion}
+OutputBaseFilename=TimeTracker-Windows-Setup
 ; Compression
 Compression=lzma
 SolidCompression=yes
@@ -38,6 +37,10 @@ WizardStyle=modern
 ; Privileges - install for current user by default
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+; Close running applications
+CloseApplications=force
+CloseApplicationsFilter=*.exe
+RestartApplications=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -48,9 +51,9 @@ Name: "startupicon"; Description: "Start TimeTracker Agent when Windows starts";
 
 [Files]
 ; Main GUI application
-Source: "dist\TimeTracker.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\TimeTracker.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
 ; Background agent
-Source: "dist\TimeTrackerAgent.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\TimeTrackerAgent.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
 ; Icon file (for uninstaller and shortcuts)
 Source: "timetracker.ico"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -69,7 +72,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 
 [UninstallRun]
 ; Stop agent before uninstall
-Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopAgent"
+Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopAgent"
 
 [UninstallDelete]
 ; Clean up config and data on uninstall (optional - uncomment if desired)
@@ -77,14 +80,28 @@ Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden wai
 ; Type: filesandordirs; Name: "{userpf}\.timetracker"
 
 [Code]
-// Stop agent if running during install/upgrade
+// Kill TimeTracker processes before install
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
 begin
   if CurStep = ssInstall then
   begin
-    // Try to stop existing agent
-    Exec(ExpandConstant('{app}\TimeTrackerAgent.exe'), 'stop', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    // Kill any running TimeTracker processes
+    Exec('taskkill', '/F /IM TimeTracker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('taskkill', '/F /IM TimeTrackerAgent.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    // Small delay to let processes fully terminate
+    Sleep(500);
   end;
+end;
+
+// Also kill on initialize in case upgrade is happening
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Exec('taskkill', '/F /IM TimeTracker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill', '/F /IM TimeTrackerAgent.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(500);
+  Result := True;
 end;

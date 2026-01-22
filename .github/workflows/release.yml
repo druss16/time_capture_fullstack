@@ -165,10 +165,15 @@ jobs:
           python -m PyInstaller --onefile --windowed --name "TimeTracker" gui.py
           python -m PyInstaller --onefile --noconsole --name "TimeTrackerAgent" --hidden-import=timetracker_gui --add-data "timetracker_gui.py;." main.py
       
+      - name: Get version without v prefix
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+      
       - name: Build installer
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
         with:
           path: windows_agent/installer.iss
+          options: /DMyAppVersion=${{ env.VERSION }}
       
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4

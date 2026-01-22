@@ -3,7 +3,9 @@
 ; Download Inno Setup from: https://jrsoftware.org/isinfo.php
 
 #define MyAppName "TimeTracker"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "MavOps"
 #define MyAppURL "https://github.com/druss16/timetracker-releases"
 #define MyAppExeName "TimeTracker.exe"

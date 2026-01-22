@@ -42,7 +42,10 @@ from Quartz import (
 
 from quick_switcher import QuickSwitcher, start_hotkey_listener, stop_hotkey_listener
 
+import certifi
+import ssl
 
+os.environ['SSL_CERT_FILE'] = certifi.where()
 
 # Notifications (PyObjC)
 try:

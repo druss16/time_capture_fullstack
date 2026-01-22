@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         working-directory: mac_agent
         run: |
-          pip install pyinstaller rumps pyobjc-framework-Cocoa pyobjc-framework-Quartz requests customtkinter
+          pip install pyinstaller rumps pyobjc-framework-Cocoa pyobjc-framework-Quartz requests customtkinter certifi
       
       - name: Build Mac app
         working-directory: mac_agent
@@ -29,11 +29,9 @@ jobs:
             --collect-all=customtkinter \
             --hidden-import=Quartz \
             --hidden-import=Quartz.CoreGraphics \
+            --hidden-import=certifi \
+            --collect-data=certifi \
             main.py
-          # List what was created
-          echo "=== Contents of dist/ ==="
-          ls -la dist/
-          ls -la dist/TimeTracker.app/Contents/MacOS/
       
       - name: Import signing certificates
         env:

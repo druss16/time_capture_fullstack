@@ -1150,16 +1150,55 @@ class PairingWindowModern:
             self.success = True
             self.api_key = result.get("api_key")
             
+            # Clear existing UI
+            for widget in self.root.winfo_children():
+                widget.destroy()
+            
+            # Show success screen
+            container = ctk.CTkFrame(self.root, fg_color="transparent")
+            container.pack(fill="both", expand=True, padx=24, pady=20)
+            
+            # Success icon
+            icon_frame = ctk.CTkFrame(container, fg_color=COLORS["success_muted"],
+                                      corner_radius=40, width=80, height=80)
+            icon_frame.pack(pady=(40, 20))
+            icon_frame.pack_propagate(False)
+            
+            icon = ctk.CTkLabel(icon_frame, text="✓", 
+                               font=ctk.CTkFont(size=40, weight="bold"),
+                               text_color=COLORS["success"])
+            icon.place(relx=0.5, rely=0.5, anchor="center")
+            
+            # Title
+            title = ctk.CTkLabel(container, text="Device Paired!",
+                                font=ctk.CTkFont(family="SF Pro Display", size=24, weight="bold"),
+                                text_color=COLORS["text_primary"])
+            title.pack(pady=(0, 8))
+            
+            # User info
             username = result.get("username", "")
             org = result.get("org_name", "")
-            info = f"Paired as {username}"
+            info = f"Signed in as {username}"
             if org:
-                info += f" ({org})"
+                info += f" • {org}"
             
-            self.status_label.configure(text=f"✓ {info}", text_color=COLORS["success"])
+            info_label = ctk.CTkLabel(container, text=info,
+                                     font=ctk.CTkFont(family="SF Pro Text", size=14),
+                                     text_color=COLORS["text_secondary"])
+            info_label.pack(pady=(0, 24))
             
-            self.pair_btn.pack_forget()
-            self.continue_btn.pack(fill="x", pady=(12, 0))
+            # Instructions
+            instruction = ctk.CTkLabel(container, 
+                                       text="Look for the ⏱ icon in your menu bar\nat the top of your screen.",
+                                       font=ctk.CTkFont(family="SF Pro Text", size=14),
+                                       text_color=COLORS["text_secondary"],
+                                       justify="center")
+            instruction.pack(pady=(0, 24))
+            
+            # Start button
+            start_btn = StyledButton(container, text="Start TimeTracker", variant="success",
+                                    command=self._on_continue, height=46)
+            start_btn.pack(fill="x")
         else:
             error = result.get("error", "Pairing failed") if result else "Pairing failed"
             self.status_label.configure(text=error, text_color=COLORS["danger"])

@@ -24,10 +24,11 @@ jobs:
       - name: Build Mac app
         working-directory: mac_agent
         run: |
-          pyinstaller --onefile --windowed --name "TimeTracker" main.py
+          pyinstaller --onedir --windowed --name "TimeTracker" main.py
           # List what was created
           echo "=== Contents of dist/ ==="
           ls -la dist/
+          ls -la dist/TimeTracker.app/Contents/MacOS/
       
       - name: Import signing certificates
         env:
@@ -62,20 +63,19 @@ jobs:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         working-directory: mac_agent
         run: |
-          # Check if it's a .app bundle or standalone binary
-          if [ -d "dist/TimeTracker.app" ]; then
-            echo "Signing .app bundle..."
-            codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
-            codesign --verify --verbose dist/TimeTracker.app
-          elif [ -f "dist/TimeTracker" ]; then
-            echo "Signing standalone binary..."
-            codesign --force --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker
-            codesign --verify --verbose dist/TimeTracker
-          else
-            echo "ERROR: No TimeTracker found in dist/"
-            ls -la dist/
-            exit 1
-          fi
+          echo "Signing all internal binaries first..."
+          find dist/TimeTracker.app -type f \( -name "*.so" -o -name "*.dylib" \) -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
+          
+          # Sign Python framework if present
+          find dist/TimeTracker.app -type f -name "Python*" -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
+          
+          # Sign the main executable
+          codesign --force --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app/Contents/MacOS/TimeTracker
+          
+          # Sign the entire app bundle
+          echo "Signing app bundle..."
+          codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
+          codesign --verify --verbose dist/TimeTracker.app
       
       - name: Create signed pkg installer
         env:

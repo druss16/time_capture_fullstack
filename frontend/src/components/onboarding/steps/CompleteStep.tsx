@@ -10,7 +10,6 @@ import {
   Check,
   ArrowRight,
   Sparkles,
-  Clock,
   ExternalLink
 } from 'lucide-react';
 import { Organization } from '../../../services/onboardingApi';
@@ -91,17 +90,6 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
         <p className="text-slate-600 mt-2 font-medium">
           {organization?.name} is ready for automatic time tracking
         </p>
-      </div>
-
-      {/* Trial Info */}
-      <div className="mb-8 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
-        <div className="flex items-center gap-3">
-          <Clock className="w-6 h-6 text-emerald-600" />
-          <div>
-            <p className="font-bold text-emerald-900">Your 7-day trial has started</p>
-            <p className="text-sm text-emerald-700 font-medium">Full access to all features • No credit card required</p>
-          </div>
-        </div>
       </div>
 
       {/* Download Section */}

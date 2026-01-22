@@ -19,12 +19,15 @@ jobs:
       - name: Install dependencies
         working-directory: mac_agent
         run: |
-          pip install pyinstaller rumps pyobjc-framework-Cocoa requests
+          pip install pyinstaller rumps pyobjc-framework-Cocoa requests customtkinter
       
       - name: Build Mac app
         working-directory: mac_agent
         run: |
-          pyinstaller --onedir --windowed --name "TimeTracker" main.py
+          pyinstaller --onedir --windowed --name "TimeTracker" \
+            --hidden-import=customtkinter \
+            --collect-all=customtkinter \
+            main.py
           # List what was created
           echo "=== Contents of dist/ ==="
           ls -la dist/

@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         working-directory: mac_agent
         run: |
-          pip install pyinstaller rumps pyobjc-framework-Cocoa requests customtkinter
+          pip install pyinstaller rumps pyobjc-framework-Cocoa pyobjc-framework-Quartz requests customtkinter
       
       - name: Build Mac app
         working-directory: mac_agent
@@ -27,6 +27,8 @@ jobs:
           pyinstaller --onedir --windowed --name "TimeTracker" \
             --hidden-import=customtkinter \
             --collect-all=customtkinter \
+            --hidden-import=Quartz \
+            --hidden-import=Quartz.CoreGraphics \
             main.py
           # List what was created
           echo "=== Contents of dist/ ==="

@@ -11,8 +11,23 @@ Mac Activity Agent with device pairing:
 - GUI-based pairing when available
 """
 
-import os
+import multiprocessing
 import sys
+
+# CRITICAL: Must be first for PyInstaller frozen apps
+if __name__ == '__main__':
+    multiprocessing.freeze_support()
+
+# Check if this is a multiprocessing child - if so, let it run without CLI parsing
+_is_multiprocessing_child = (
+    len(sys.argv) > 1 and (
+        '--multiprocessing-fork' in sys.argv[1] or
+        'multiprocessing' in sys.argv[1].lower() or
+        sys.argv[1].startswith('--')
+    )
+)
+
+import os
 import time
 import json
 import sqlite3
@@ -2340,6 +2355,10 @@ def cmd_stop():
         print(f"Error stopping agent: {e}")
 
 def main():
+    # Skip CLI parsing for multiprocessing children
+    if _is_multiprocessing_child:
+        return
+    
     if len(sys.argv) >= 2:
         sub = sys.argv[1].lower()
         if sub in ("stop", "kill"):

@@ -4566,13 +4566,7 @@ After:  Union of spans = 42 min (correct - actual clock time)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def today_time(request):
-    """
-    Get tracked time organized by client → category with aggregated activities.
-    
-    ✅ FIXED: Uses UNION of time spans instead of SUM to handle overlapping blocks.
-    When user switches between Chrome, Terminal, and VSCode during the same time period,
-    we now correctly calculate the total clock time, not sum each app separately.
-    """
+    """Get tracked time organized by client → category with aggregated activities."""
     from datetime import datetime, timedelta
     from datetime import timezone as dt_timezone
     from collections import defaultdict
@@ -4609,23 +4603,14 @@ def today_time(request):
         user=user,
         start__gte=start_utc,
         start__lt=end_utc,
-        deleted_at__isnull=True  # Exclude soft-deleted blocks
+        deleted_at__isnull=True
     ).select_related('client').order_by('start')
     
-    # =========================================================================
-    # Helper: UNION of time spans (handles overlapping blocks correctly)
-    # =========================================================================
+    # Helper: union of time spans (avoid overlaps)
     def union_minutes(spans):
         """
         Calculate the UNION of time spans, not the SUM.
-        
-        Example:
-          Block A: 11:15 - 12:02 (Chrome)
-          Block B: 11:40 - 11:52 (VSCode)  <- overlaps with A
-          Block C: 11:46 - 11:58 (Terminal) <- overlaps with A and B
-          
-          SUM would give: 47 + 12 + 11 = 70 min (WRONG)
-          UNION gives: 11:15 - 12:02 = 47 min (CORRECT - actual clock time)
+        This correctly handles overlapping blocks from different apps.
         """
         if not spans:
             return 0
@@ -4653,32 +4638,45 @@ def today_time(request):
         
         for start, end in ranges[1:]:
             if start <= cur_end:
-                # Overlapping or adjacent - extend current range
                 cur_end = max(cur_end, end)
             else:
-                # Gap - save current and start new
                 merged.append((cur_start, cur_end))
                 cur_start, cur_end = start, end
         
-        # Don't forget the last range
         merged.append((cur_start, cur_end))
         
-        # Sum the merged (non-overlapping) ranges
         total_ms = sum(end - start for start, end in merged)
-        
-        return total_ms / 60000  # Convert milliseconds to minutes
+        return total_ms / 60000  # Convert to minutes
     
     # =========================================================================
-    # Group blocks by client → category
+    # ✅ GLOBAL UNION: Calculate union of ALL non-idle blocks
+    # =========================================================================
+    all_spans = []
+    billable_spans = []  # Only non-idle, assigned blocks
+    
+    for block in blocks:
+        span = {'start': block.start, 'end': block.end}
+        all_spans.append(span)
+        
+        # Billable = has client AND not idle
+        is_idle = (block.category_hours or {}).get('Idle') is not None
+        if block.client and not is_idle:
+            billable_spans.append(span)
+    
+    global_union_minutes = union_minutes(all_spans)
+    global_billable_minutes = union_minutes(billable_spans)
+    
+    # =========================================================================
+    # Group by client → category
     # =========================================================================
     data = defaultdict(lambda: {
         'client_id': None,
         'client_name': None,
         'categories': defaultdict(lambda: {
-            'spans': [],           # Time spans for union calculation
-            'count': 0,            # Number of blocks
-            'actual_minutes': 0,   # Sum of block.minutes (for proportional breakdown)
-            'by_title': {}         # Aggregate by window title
+            'spans': [], 
+            'count': 0, 
+            'actual_minutes': 0,
+            'by_title': {}
         })
     })
     
@@ -4686,7 +4684,6 @@ def today_time(request):
         client_name = block.client.name if block.client else 'Unassigned'
         client_id = block.client.id if block.client else None
         
-        # Determine category from category_hours JSON field
         if block.category_hours and isinstance(block.category_hours, dict):
             categories = list(block.category_hours.keys())
             category = categories[0] if categories else 'Uncategorized'
@@ -4701,12 +4698,10 @@ def today_time(request):
         cat_data['count'] += 1
         cat_data['actual_minutes'] += (block.minutes or 0)
         
-        # Build title for aggregation (truncate long titles)
         title = block.window_title or block.url or block.app_name or 'Unknown'
         if len(title) > 60:
             title = title[:57] + '...'
         
-        # Aggregate blocks by title
         if title in cat_data['by_title']:
             cat_data['by_title'][title]['count'] += 1
             cat_data['by_title'][title]['minutes'] += (block.minutes or 0)
@@ -4721,48 +4716,37 @@ def today_time(request):
             }
     
     # =========================================================================
-    # ✅ FIX: Calculate UNION minutes (not SUM) for each client
+    # Build response with per-client union
     # =========================================================================
     result = []
     for client_name, client_data in sorted(data.items()):
         categories = []
         
-        # ✅ KEY FIX: Collect ALL spans for this client across ALL categories
-        # This handles the case where user switches between apps during same time period
         all_client_spans = []
         for cat_name, cat_data in client_data['categories'].items():
             all_client_spans.extend(cat_data['spans'])
         
-        # ✅ Calculate UNION of all spans (correctly handles overlapping apps)
         total_client_minutes = union_minutes(all_client_spans)
         
-        # Calculate sum of actual_minutes for proportional breakdown by category
         total_actual = sum(
             cat_data.get('actual_minutes', 0) 
             for cat_data in client_data['categories'].values()
         )
         
-        # Build category breakdown
         for cat_name, cat_data in sorted(client_data['categories'].items()):
             actual_mins = cat_data.get('actual_minutes', 0)
             
-            # ✅ Scale category minutes proportionally to union total
-            # Example: If Chrome had 47 of 70 total actual minutes (67%),
-            # and union total is 42 min, Chrome gets 42 * 0.67 = 28 min
             if total_actual > 0 and total_client_minutes > 0:
                 proportion = actual_mins / total_actual
                 minutes = total_client_minutes * proportion
             else:
-                # Fallback to category-specific union if no actual minutes
                 minutes = union_minutes(cat_data['spans'])
             
-            # Build aggregated activity list, sorted by time (most time first)
             aggregated_samples = []
             by_title = cat_data.get('by_title', {})
             
             for title, info in sorted(by_title.items(), key=lambda x: -x[1]['minutes']):
                 if info['count'] > 1:
-                    # Multiple blocks with same title - show count and total time
                     mins = info['minutes']
                     if mins >= 60:
                         time_str = f"{mins/60:.1f}h"
@@ -4772,7 +4756,6 @@ def today_time(request):
                         f"[id:{info['id']}] {info['title']} ({info['count']}x, {time_str})"
                     )
                 else:
-                    # Single occurrence
                     aggregated_samples.append(f"[id:{info['id']}] {info['title']}")
             
             categories.append({
@@ -4786,11 +4769,19 @@ def today_time(request):
         result.append({
             'client_id': client_data['client_id'],
             'client': client_name,
-            'total_hours': round(total_client_minutes / 60, 2),  # ✅ UNION, not SUM
+            'total_hours': round(total_client_minutes / 60, 2),
             'categories': categories
         })
     
-    return Response(result)
+    # =========================================================================
+    # ✅ RETURN with global union for header
+    # =========================================================================
+    return Response({
+        'clients': result,
+        'global_hours': round(global_union_minutes / 60, 2),      # Total work time (union)
+        'billable_hours': round(global_billable_minutes / 60, 2), # Billable only (union)
+        'date': target_date.isoformat(),
+    })
 
 # ============================================================================
 # VIEW 1: Get Uncategorized Blocks + Dropdown Options

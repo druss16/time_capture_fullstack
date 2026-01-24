@@ -35,6 +35,14 @@ type ClientTime = { client_id: number | null; client: string; total_hours: numbe
 type ClientOption = { id: number; name: string; };
 type ParsedActivity = { blockId: number | null; title: string; raw: string; };
 
+// ADD THIS:
+type TodayTimeResponse = {
+  clients: ClientTime[];
+  billable_hours: number;
+  global_hours: number;
+  date: string;
+};
+
 // Toast Component
 const Toast = ({ message, type }: { message: string; type: 'success' | 'error' }) => (
   <div className={cn(
@@ -70,6 +78,7 @@ export default function DailyReview() {
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
   const [availableClients, setAvailableClients] = useState<ClientOption[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [billableHours, setBillableHours] = useState(0);
   // Add these with your other useState declarations
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [manualEntry, setManualEntry] = useState<{
@@ -130,14 +139,18 @@ export default function DailyReview() {
     }
   }, [timeSummary, availableClients.length]);
 
+  // Update loadTimeSummary (around line 111)
   const loadTimeSummary = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const json = await safeFetchJson<ClientTime[]>(`${API_BASE}/today-time/?date=${date}`);
-      setTimeSummary(Array.isArray(json) ? json : []);
+      const json = await safeFetchJson<TodayTimeResponse>(`${API_BASE}/today-time/?date=${date}`);
+      setTimeSummary(json.clients || []);
+      setBillableHours(json.billable_hours || 0);  // ADD THIS STATE
     } catch (err: any) { setErr(err?.message || 'Failed to load'); setTimeSummary([]); }
     finally { setBusy(false); }
   }, [date]);
+
+
 
   const loadUncategorizedCount = useCallback(async () => {
     try {
@@ -250,10 +263,6 @@ export default function DailyReview() {
   const isUnassignedClient = (n: string) => n.toLowerCase() === 'unassigned';
   const isNonBillable = (n: string) => isIdleCategory(n) || isUncategorizedCategory(n);
 
-  const summaryTotalHours = timeSummary.reduce((sum, client) => {
-    if (isUnassignedClient(client.client)) return sum;
-    return sum + client.categories.filter(cat => !isNonBillable(cat.name)).reduce((s, cat) => s + cat.hours, 0);
-  }, 0);
 
   const getClientBillableHours = (client: ClientTime) => 
     client.categories.filter(cat => !isNonBillable(cat.name)).reduce((sum, cat) => sum + cat.hours, 0);
@@ -325,7 +334,7 @@ export default function DailyReview() {
               
               {/* Billable Total */}
               <div className="px-4 py-2 bg-primary/10 border-2 border-primary/20 rounded-xl">
-                <span className="text-xl font-extrabold text-primary">{summaryTotalHours.toFixed(2)}h</span>
+                <span className="text-xl font-extrabold text-primary">{billableHours.toFixed(2)}h</span>
                 <span className="text-primary font-semibold text-sm ml-1.5">billable</span>
               </div>
             </div>

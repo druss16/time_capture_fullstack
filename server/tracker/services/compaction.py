@@ -1,24 +1,14 @@
 # tracker/services/compaction.py
 """
-Event-centric compaction with AUTO-CATEGORIZATION
+Event-centric compaction - FIXED to prevent duplicate blocks
 
-FEATURES:
-1. Session awareness - gap > 30 min = new session (no 9-hour blocks)
-2. Event-duration minutes - no double counting (each minute counted once)
-3. Smart app merging - one block per app per session (fewer blocks to categorize)
-4. **NEW**: Auto-categorization using pattern matching (no API calls)
-
-GUARANTEES:
-- Minutes are calculated from EVENT DURATIONS, not block spans
-- No double-counting: if you work 1 hour, total is 1 hour
-- Categorized blocks are NEVER touched
-- Each event belongs to exactly one block
-- New blocks are auto-categorized if patterns match with >= 70% confidence
+KEY FIX: Merge into ANY existing block for same app+session, even if already categorized.
+Only the minutes/start/end are updated - category stays locked.
 """
 
 from __future__ import annotations
 from datetime import datetime, timedelta, date as date_type
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -33,14 +23,13 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # Configuration
-IDLE_CAP = timedelta(minutes=30)           # Cap event duration at 30 minutes
-MIN_BLOCK_MINUTES = 0.5                    # Minimum block size (30 seconds)
-SESSION_GAP = timedelta(minutes=30)        # Gap > 30 min = new session
-AUTO_CATEGORIZE_THRESHOLD = 0.70           # Min confidence to auto-categorize
+IDLE_CAP = timedelta(minutes=30)
+MIN_BLOCK_MINUTES = 0.5
+SESSION_GAP = timedelta(minutes=30)
+AUTO_CATEGORIZE_THRESHOLD = 0.70
 
 
 def _safe_device_id(device_id) -> int:
-    """Ensure device_id is a valid integer."""
     if device_id is None:
         return 0
     try:
@@ -50,19 +39,13 @@ def _safe_device_id(device_id) -> int:
 
 
 def _app_key(event_or_block) -> str:
-    """Get normalized app name."""
     if isinstance(event_or_block, dict):
         return (event_or_block.get("app_name") or "").lower().strip()
     return (getattr(event_or_block, 'app_name', None) or "").lower().strip()
 
 
 def _calculate_minutes_from_events(events_qs) -> int:
-    """
-    Calculate total minutes from a queryset of events.
-    
-    This is the SINGLE SOURCE OF TRUTH for block minutes.
-    Duration = time to next event (capped at 30 min), last event = 5 min.
-    """
+    """Calculate total minutes from events. SINGLE SOURCE OF TRUTH."""
     events = list(events_qs.order_by('ts_utc'))
     if not events:
         return 0
@@ -80,191 +63,136 @@ def _calculate_minutes_from_events(events_qs) -> int:
 
 
 # =============================================================================
-# AUTO-CATEGORIZATION PATTERNS (No API calls - fast pattern matching)
+# AUTO-CATEGORIZATION PATTERNS
 # =============================================================================
 
+PATTERNS = {
+    'Meetings': {
+        'apps': ['zoom', 'teams', 'meet', 'webex', 'slack huddle', 'discord', 'skype'],
+        'domains': ['zoom.us', 'meet.google.com', 'teams.microsoft.com'],
+        'keywords': ['meeting', 'call with', 'video call', 'conference'],
+        'confidence': 0.92,
+    },
+    'Software Development': {
+        'apps': ['code', 'vscode', 'visual studio', 'sublime', 'sublime_text', 'atom', 
+                 'intellij', 'pycharm', 'webstorm', 'xcode', 'android studio',
+                 'terminal', 'iterm', 'iterm2', 'hyper', 'warp'],
+        'domains': ['github.com', 'gitlab.com', 'bitbucket.org', 'localhost', '127.0.0.1',
+                   'portal.azure.com', 'dev.azure.com', 'console.neon.tech', 
+                   'dashboard.render.com', 'vercel.com'],
+        'keywords': [':3000', ':8000', ':5173', ':5000', ':7123', 'docker', 'npm', 
+                    'yarn', 'pip', 'git ', 'python manage.py', '.py -', '.js -', 
+                    '.tsx -', '.jsx -', 'views.py', 'models.py'],
+        'confidence': 0.90,
+    },
+    'Research/AI Assistance': {
+        'apps': [],
+        'domains': ['claude.ai', 'chat.openai.com', 'chatgpt.com', 'stackoverflow.com',
+                   'docs.python.org', 'docs.djangoproject.com', 'developer.mozilla.org'],
+        'keywords': ['stack overflow', 'api docs'],
+        'confidence': 0.88,
+    },
+    'Email/Communication': {
+        'apps': ['mail', 'outlook', 'thunderbird'],
+        'domains': ['mail.google.com', 'outlook.office', 'slack.com'],
+        'keywords': ['inbox', 'compose'],
+        'confidence': 0.90,
+    },
+    'Tax Preparation': {
+        'apps': ['ultratax', 'lacerte', 'proseries', 'drake'],
+        'domains': ['cchaxcess.com', 'irs.gov'],
+        'keywords': ['ultratax', 'lacerte', '1040', '1120', '1065', 'form 990'],
+        'confidence': 0.93,
+    },
+    'Accounting/Bookkeeping': {
+        'apps': ['quickbooks', 'xero'],
+        'domains': ['qbo.intuit.com', 'quickbooks.intuit.com', 'xero.com'],
+        'keywords': ['quickbooks', 'xero', 'reconciliation'],
+        'confidence': 0.92,
+    },
+    'Administration': {
+        'apps': ['word', 'excel', 'powerpoint'],
+        'domains': ['docs.google.com', 'drive.google.com', 'dropbox.com', 'notion.so'],
+        'keywords': ['.docx', '.xlsx', '.pdf'],
+        'confidence': 0.75,
+    },
+    'Design/Creative': {
+        'apps': ['figma', 'sketch', 'photoshop', 'canva'],
+        'domains': ['figma.com', 'canva.com'],
+        'keywords': [],
+        'confidence': 0.88,
+    },
+}
+
+
 def auto_categorize_block(block: Block) -> bool:
-    """
-    Attempt to auto-categorize a block using pattern matching.
-    Returns True if categorized, False otherwise.
-    
-    This is FAST (no API calls) and runs on every new block.
-    """
+    """Auto-categorize using pattern matching. Returns True if categorized."""
     if block.is_categorized:
         return False
     
-    # Get block context
     title = (block.window_title or block.title or "").lower()
     url = (block.url or "").lower()
     app_name = (block.app_name or "").lower()
     file_path = (block.file_path or "").lower()
     bundle_id = (block.bundle_id or "").lower()
-    
     combined = f"{title} {url} {app_name} {file_path} {bundle_id}"
     
-    # Calculate hours for category_hours
     hours = round((block.minutes or 0) / 60.0, 2)
     if hours <= 0:
-        hours = 0.01  # Minimum
+        hours = 0.01
     
-    # =================================================================
-    # PATTERN MATCHING - Order matters! More specific patterns first.
-    # =================================================================
+    best_match = None
+    best_confidence = 0.0
     
-    result = None
-    
-    # -----------------------------------------------------------------
-    # MEETINGS (Highest priority - even low mouse activity is billable)
-    # -----------------------------------------------------------------
-    meeting_apps = ['zoom', 'teams', 'meet', 'webex', 'slack huddle', 'discord']
-    meeting_domains = ['zoom.us', 'meet.google.com', 'teams.microsoft.com']
-    meeting_keywords = ['meeting', 'call with', 'video call', 'conference']
-    
-    if any(app in app_name for app in meeting_apps):
-        result = {'category': 'Meetings', 'confidence': 0.92, 'reason': 'Meeting app detected'}
-    elif any(domain in url for domain in meeting_domains):
-        result = {'category': 'Meetings', 'confidence': 0.90, 'reason': 'Meeting URL detected'}
-    elif any(kw in title for kw in meeting_keywords):
-        result = {'category': 'Meetings', 'confidence': 0.85, 'reason': 'Meeting keyword in title'}
-    
-    # -----------------------------------------------------------------
-    # SOFTWARE DEVELOPMENT
-    # -----------------------------------------------------------------
-    if not result:
-        dev_apps = ['code', 'vscode', 'visual studio', 'sublime', 'atom', 'intellij', 
-                    'pycharm', 'webstorm', 'xcode', 'android studio']
-        dev_indicators = ['terminal', 'iterm', 'iterm2', 'hyper', 'warp',
-                         'github.com', 'gitlab.com', 'bitbucket.org',
-                         'localhost', '127.0.0.1', ':3000', ':8000', ':5173', ':5000',
-                         'docker', 'npm', 'yarn', 'pip', 'git ', 'python manage.py',
-                         '.py -', '.js -', '.tsx -', '.jsx -', '.ts -', '.vue -',
-                         'views.py', 'models.py', 'settings.py', 'urls.py',
-                         'component', 'index.tsx', 'app.tsx']
+    for category, patterns in PATTERNS.items():
+        confidence = 0.0
         
-        if any(app in app_name for app in dev_apps):
-            result = {'category': 'Software Development', 'confidence': 0.95, 'reason': 'Code editor detected'}
-        elif any(ind in combined for ind in dev_indicators):
-            result = {'category': 'Software Development', 'confidence': 0.88, 'reason': 'Development activity detected'}
-    
-    # -----------------------------------------------------------------
-    # AI / RESEARCH
-    # -----------------------------------------------------------------
-    if not result:
-        ai_indicators = ['claude.ai', 'chat.openai.com', 'chatgpt', 'anthropic',
-                        'stackoverflow.com', 'stack overflow',
-                        'docs.python.org', 'docs.djangoproject.com', 'reactjs.org',
-                        'developer.mozilla.org', 'mdn web docs']
+        if any(app in app_name for app in patterns.get('apps', [])):
+            confidence = max(confidence, patterns['confidence'])
+        if any(domain in url for domain in patterns.get('domains', [])):
+            confidence = max(confidence, patterns['confidence'])
+        if any(kw in combined for kw in patterns.get('keywords', [])):
+            confidence = max(confidence, patterns['confidence'] - 0.05)
         
-        if any(ind in combined for ind in ai_indicators):
-            result = {'category': 'Research/AI Assistance', 'confidence': 0.88, 'reason': 'AI/research tool detected'}
+        if confidence > best_confidence:
+            best_confidence = confidence
+            best_match = {'category': category, 'confidence': confidence}
     
-    # -----------------------------------------------------------------
-    # EMAIL / COMMUNICATION
-    # -----------------------------------------------------------------
-    if not result:
-        email_indicators = ['mail.google.com', 'gmail', 'outlook.office', 'outlook.live',
-                           'yahoo.com/mail', 'mail.yahoo', 'protonmail',
-                           'slack.com', 'app.slack.com', 'discord.com']
-        
-        if any(ind in combined for ind in email_indicators):
-            result = {'category': 'Email/Communication', 'confidence': 0.90, 'reason': 'Email/chat detected'}
-    
-    # -----------------------------------------------------------------
-    # TAX SOFTWARE (CPA-specific)
-    # -----------------------------------------------------------------
-    if not result:
-        tax_indicators = ['ultratax', 'lacerte', 'proseries', 'drake', 'taxact',
-                         'cchaxcess', 'thomson reuters', 'wolters kluwer',
-                         'irs.gov', '1040', '1120', '1065', 'form 990', 'w-2', '1099']
-        
-        if any(ind in combined for ind in tax_indicators):
-            result = {'category': 'Tax Preparation', 'confidence': 0.93, 'reason': 'Tax software detected'}
-    
-    # -----------------------------------------------------------------
-    # ACCOUNTING SOFTWARE
-    # -----------------------------------------------------------------
-    if not result:
-        accounting_indicators = ['quickbooks', 'qbo.intuit', 'xero.com', 'freshbooks',
-                                'wave', 'sage', 'netsuite', 'intacct']
-        
-        if any(ind in combined for ind in accounting_indicators):
-            result = {'category': 'Accounting/Bookkeeping', 'confidence': 0.92, 'reason': 'Accounting software detected'}
-    
-    # -----------------------------------------------------------------
-    # DOCUMENT / ADMIN WORK
-    # -----------------------------------------------------------------
-    if not result:
-        doc_indicators = ['docs.google.com', 'drive.google.com', 'dropbox.com',
-                         'onedrive', 'sharepoint', 'notion.so', 'confluence',
-                         '.docx', '.xlsx', '.pdf', 'word', 'excel', 'powerpoint']
-        
-        if any(ind in combined for ind in doc_indicators):
-            result = {'category': 'Administration', 'confidence': 0.75, 'reason': 'Document work detected'}
-    
-    # -----------------------------------------------------------------
-    # DESIGN / CREATIVE
-    # -----------------------------------------------------------------
-    if not result:
-        design_indicators = ['figma.com', 'canva.com', 'adobe', 'photoshop',
-                            'illustrator', 'sketch', 'invision']
-        
-        if any(ind in combined for ind in design_indicators):
-            result = {'category': 'Design/Creative', 'confidence': 0.88, 'reason': 'Design tool detected'}
-    
-    # =================================================================
-    # Apply categorization if confidence meets threshold
-    # =================================================================
-    if result and result['confidence'] >= AUTO_CATEGORIZE_THRESHOLD:
+    if best_match and best_match['confidence'] >= AUTO_CATEGORIZE_THRESHOLD:
         try:
-            block.category_hours = {result['category']: hours}
+            block.category_hours = {best_match['category']: hours}
             block.is_categorized = True
             block.categorized_at = timezone.now()
             block.categorized_by = 'pattern'
-            block.ai_confidence = result['confidence']
-            block.ai_category = result['category']
+            block.ai_confidence = best_match['confidence']
+            block.ai_category = best_match['category']
             block.save(update_fields=[
                 'category_hours', 'is_categorized', 'categorized_at',
                 'categorized_by', 'ai_confidence', 'ai_category'
             ])
-            
-            logger.info(
-                f"[AUTO-CAT] Block {block.id} ({block.app_name}) → "
-                f"{result['category']} ({result['confidence']:.0%}) - {result['reason']}"
-            )
+            logger.info(f"[AUTO-CAT] Block {block.id} ({block.app_name}) → {best_match['category']}")
             return True
-            
         except Exception as e:
-            logger.error(f"[AUTO-CAT] Failed to save block {block.id}: {e}")
-            return False
-    
+            logger.error(f"[AUTO-CAT] Failed: {e}")
     return False
 
 
 def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org=None) -> int:
     """Main entry point."""
     today = timezone.localdate()
-    
     if isinstance(user, str):
         try:
             user = User.objects.get(username=user)
         except User.DoesNotExist:
-            logger.warning(f"[COMPACT] User not found: {user}")
             return 0
-    
     return compact_day(user, today, hostname=hostname, org=org)
 
 
 def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) -> int:
     """
-    Main compaction logic with auto-categorization.
+    Main compaction logic - FIXED to prevent duplicates.
     
-    Algorithm:
-    1. Get all unlinked events for the day, ordered by time
-    2. Calculate duration for each event (time to next event, capped at 30 min)
-    3. Split into sessions (gap > 30 min = new session)
-    4. Within each session, group events by app
-    5. Create one block per app per session, with minutes = SUM of event durations
-    6. **NEW**: Auto-categorize new blocks using pattern matching
+    KEY CHANGE: Merge into ANY existing block (categorized or not) for same app+session.
     """
     if isinstance(user, str):
         try:
@@ -275,7 +203,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if not user:
         return 0
     
-    # Get org
     if not org:
         from tracker.models import Organization, OrganizationMembership
         membership = OrganizationMembership.objects.filter(user=user).first()
@@ -283,13 +210,10 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             org = membership.organization
         else:
             org, _ = Organization.objects.get_or_create(
-                name="default-org",
-                defaults={"slug": "default-org"}
+                name="default-org", defaults={"slug": "default-org"}
             )
     
-    # =========================================================
-    # STEP 1: Get all unlinked events, ordered by time
-    # =========================================================
+    # Get unlinked events
     qs = RawEvent.objects.filter(
         user=user,
         ts_utc__date=day,
@@ -300,32 +224,24 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         qs = qs.filter(hostname=hostname)
     
     events = list(qs)
-    
     if not events:
-        logger.debug(f"[COMPACT] No unlinked events for {day}")
         return 0
     
     logger.info(f"[COMPACT] Processing {len(events)} unlinked events")
     
-    # =========================================================
-    # STEP 2: Calculate duration for EACH event
-    # =========================================================
+    # Calculate durations
     events_with_duration = []
-    
     for i, event in enumerate(events):
         if i + 1 < len(events):
-            next_ts = events[i + 1].ts_utc
-            duration_seconds = (next_ts - event.ts_utc).total_seconds()
+            duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
         else:
-            duration_seconds = 300
-        
-        duration_seconds = min(duration_seconds, IDLE_CAP.total_seconds())
-        duration_minutes = duration_seconds / 60.0
+            duration = 300
+        duration = min(duration, IDLE_CAP.total_seconds())
         
         events_with_duration.append({
             'event': event,
             'start': event.ts_utc,
-            'duration_minutes': duration_minutes,
+            'duration_minutes': duration / 60.0,
             'app_name': event.app_name or "",
             'bundle_id': event.bundle_id or "",
             'window_title': event.window_title or "",
@@ -336,16 +252,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             'current_client_id': getattr(event, 'current_client_id', None),
         })
     
-    # =========================================================
-    # STEP 3: Split into sessions (gap > 30 min = new session)
-    # =========================================================
+    # Split into sessions
     sessions = []
     current_session = [events_with_duration[0]]
     
     for i in range(1, len(events_with_duration)):
         prev = events_with_duration[i - 1]
         curr = events_with_duration[i]
-        
         gap = (curr['start'] - prev['start']).total_seconds() - prev['duration_minutes'] * 60
         
         if gap > SESSION_GAP.total_seconds():
@@ -357,13 +270,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if current_session:
         sessions.append(current_session)
     
-    logger.info(f"[COMPACT] Split into {len(sessions)} sessions")
-    
-    # =========================================================
-    # STEP 4: Within each session, group by APP
-    # =========================================================
+    # Group by app within each session
     blocks_to_create = []
-    
     for session in sessions:
         by_app: Dict[str, List] = {}
         for ev in session:
@@ -379,7 +287,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             starts = [e['start'] for e in app_events]
             block_start = min(starts)
             block_end = max(starts) + timedelta(minutes=app_events[-1]['duration_minutes'])
-            
             new_event_minutes = sum(e['duration_minutes'] for e in app_events)
             
             if new_event_minutes < MIN_BLOCK_MINUTES:
@@ -395,7 +302,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             blocks_to_create.append({
                 'start': block_start,
                 'end': block_end,
-                'new_event_minutes': new_event_minutes,
                 'app_name': app_events[0]['app_name'],
                 'bundle_id': app_events[0]['bundle_id'],
                 'window_title': window_title,
@@ -407,78 +313,110 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 'source_events': [e['event'] for e in app_events],
             })
     
-    logger.info(f"[COMPACT] Creating {len(blocks_to_create)} blocks")
+    # =========================================================================
+    # KEY FIX: Get ALL existing blocks for this day (not just uncategorized)
+    # We'll merge into any block that overlaps our session
+    # =========================================================================
+    existing_blocks = list(Block.objects.filter(
+        user=user,
+        day=day,
+    ).order_by('start'))
     
-    # =========================================================
-    # STEP 5: Check for existing uncategorized blocks to merge
-    # =========================================================
-    existing_uncategorized = {
-        _app_key(b): b for b in Block.objects.filter(
-            user=user,
-            day=day,
-            is_categorized=False,
-        )
-    }
+    # Build lookup by app -> list of blocks
+    existing_by_app = {}
+    for b in existing_blocks:
+        app = _app_key(b)
+        if app not in existing_by_app:
+            existing_by_app[app] = []
+        existing_by_app[app].append(b)
     
-    # =========================================================
-    # STEP 6: Create blocks (or merge into existing)
-    # =========================================================
     created_count = 0
     merged_count = 0
-    auto_categorized_count = 0
-    new_blocks = []  # Track new blocks for auto-categorization
+    blocks_to_categorize = []
     
     with transaction.atomic():
         for block_data in blocks_to_create:
             app = _app_key(block_data)
-            existing = existing_uncategorized.get(app)
+            new_start = block_data['start']
+            new_end = block_data['end']
             
-            if existing:
-                # Merge into existing block
+            # Find an existing block for this app that we can merge into
+            # Criteria: same app AND overlapping or within session gap
+            merge_target = None
+            
+            for existing in existing_by_app.get(app, []):
+                # Check if new events overlap or are close to existing block
+                gap_to_existing = (new_start - existing.end).total_seconds() if existing.end else float('inf')
+                gap_from_existing = (existing.start - new_end).total_seconds() if existing.start else float('inf')
+                
+                # Merge if: overlapping OR gap < 30 min
+                if gap_to_existing < SESSION_GAP.total_seconds() or gap_from_existing < SESSION_GAP.total_seconds():
+                    merge_target = existing
+                    break
+                
+                # Also merge if our events fall within the existing block's time range
+                if existing.start and existing.end:
+                    if new_start >= existing.start and new_start <= existing.end:
+                        merge_target = existing
+                        break
+            
+            if merge_target:
+                # MERGE into existing block (even if categorized!)
                 try:
-                    locked = Block.objects.select_for_update().get(id=existing.id)
-                    if not locked.is_categorized:
-                        event_ids = [e.id for e in block_data['source_events']]
-                        RawEvent.objects.filter(id__in=event_ids).update(block=locked)
-                        
-                        locked.start = min(locked.start, block_data['start'])
-                        locked.end = max(locked.end, block_data['end'])
-                        
-                        locked.minutes = _calculate_minutes_from_events(
-                            RawEvent.objects.filter(block=locked)
-                        )
-                        locked.save(update_fields=['start', 'end', 'minutes'])
-                        
-                        merged_count += 1
-                        new_blocks.append(locked)  # Try to categorize merged blocks too
-                        continue
+                    locked = Block.objects.select_for_update().get(id=merge_target.id)
+                    
+                    # Link events to this block
+                    event_ids = [e.id for e in block_data['source_events']]
+                    RawEvent.objects.filter(id__in=event_ids).update(block=locked)
+                    
+                    # Expand time range
+                    locked.start = min(locked.start, new_start)
+                    locked.end = max(locked.end, new_end)
+                    
+                    # Recalculate minutes from ALL linked events
+                    locked.minutes = _calculate_minutes_from_events(
+                        RawEvent.objects.filter(block=locked)
+                    )
+                    
+                    # If categorized, update category_hours to reflect new minutes
+                    if locked.is_categorized and locked.category_hours:
+                        # Keep same category, just update hours
+                        category = list(locked.category_hours.keys())[0]
+                        locked.category_hours = {category: round(locked.minutes / 60.0, 2)}
+                    
+                    locked.save(update_fields=['start', 'end', 'minutes', 'category_hours'])
+                    merged_count += 1
+                    
+                    logger.debug(f"[COMPACT] Merged into block {locked.id} ({locked.app_name})")
+                    continue
+                    
                 except Block.DoesNotExist:
-                    pass
+                    pass  # Block was deleted, create new one
             
-            # Create new block
+            # CREATE new block (no existing block to merge into)
             new_block = _create_block(block_data, user, org, day)
             if new_block:
                 created_count += 1
-                if not new_block.is_categorized:  # Don't add idle blocks
-                    new_blocks.append(new_block)
+                if not new_block.is_categorized:
+                    blocks_to_categorize.append(new_block)
+                
+                # Add to our lookup for subsequent iterations
+                if app not in existing_by_app:
+                    existing_by_app[app] = []
+                existing_by_app[app].append(new_block)
     
-    # =========================================================
-    # STEP 7: AUTO-CATEGORIZE new/merged blocks
-    # =========================================================
-    for block in new_blocks:
+    # Auto-categorize ONLY truly new blocks
+    auto_cat_count = 0
+    for block in blocks_to_categorize:
         if auto_categorize_block(block):
-            auto_categorized_count += 1
+            auto_cat_count += 1
     
-    logger.info(
-        f"[COMPACT] Created {created_count}, merged {merged_count}, "
-        f"auto-categorized {auto_categorized_count} for {day}"
-    )
+    logger.info(f"[COMPACT] Created {created_count}, merged {merged_count}, auto-cat {auto_cat_count}")
     return created_count + merged_count
 
 
 def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
     """Create a new block."""
-    
     is_idle = is_idle_activity(
         app_name=block_data.get("app_name"),
         bundle_id=block_data.get("bundle_id"),
@@ -486,9 +424,8 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     )
     
     device_id = block_data.get("device_id", 0)
-    
-    # Calculate minutes from the source events
     source_events = block_data.get('source_events', [])
+    
     if source_events:
         total_seconds = 0
         for i, event in enumerate(source_events):
@@ -500,7 +437,7 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             total_seconds += duration
         minutes = int(total_seconds / 60)
     else:
-        minutes = int(block_data.get("new_event_minutes", 0))
+        minutes = 5  # fallback
     
     client = None
     if not is_idle:
@@ -510,7 +447,6 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
                 client = Client.objects.get(id=client_id)
             except Client.DoesNotExist:
                 pass
-        
         if not client and device_id:
             client = get_current_client_for_user(user, device_id=device_id)
     
@@ -566,19 +502,51 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     event_ids = [e.id for e in block_data['source_events']]
     RawEvent.objects.filter(id__in=event_ids).update(block=new_block)
     
-    logger.debug(f"[COMPACT] Created block {new_block.id} ({new_block.app_name}) - {minutes} min")
     return new_block
 
 
+def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:
+    """Quick compaction of recent events."""
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            return 0
+    if not user:
+        return 0
+    today = timezone.localdate()
+    return compact_day(user, today, hostname=hostname)
+
+
+def auto_categorize_existing_blocks(user, day: date_type = None) -> Dict[str, int]:
+    """Backfill auto-categorization on existing uncategorized blocks."""
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            return {'error': 'User not found'}
+    
+    if day is None:
+        day = timezone.localdate()
+    
+    blocks = Block.objects.filter(user=user, day=day, is_categorized=False)
+    stats = {'checked': 0, 'categorized': 0}
+    
+    for block in blocks:
+        stats['checked'] += 1
+        if auto_categorize_block(block):
+            stats['categorized'] += 1
+    
+    logger.info(f"[AUTO-CAT] Checked {stats['checked']}, categorized {stats['categorized']}")
+    return stats
+
+
 def recalculate_block_minutes(block_id: int) -> int:
-    """Recalculate minutes for a specific block from its linked events."""
+    """Recalculate minutes for a specific block."""
     try:
         block = Block.objects.get(id=block_id)
-        new_minutes = _calculate_minutes_from_events(
-            RawEvent.objects.filter(block=block)
-        )
+        new_minutes = _calculate_minutes_from_events(RawEvent.objects.filter(block=block))
         if new_minutes != block.minutes:
-            logger.info(f"[COMPACT] Block {block_id} minutes: {block.minutes} -> {new_minutes}")
             block.minutes = new_minutes
             block.save(update_fields=['minutes'])
         return new_minutes
@@ -586,93 +554,19 @@ def recalculate_block_minutes(block_id: int) -> int:
         return 0
 
 
-def recalculate_all_blocks_for_day(user, day: date_type) -> Dict[str, int]:
-    """Recalculate minutes for ALL blocks on a given day."""
-    if isinstance(user, str):
-        try:
-            user = User.objects.get(username=user)
-        except User.DoesNotExist:
-            return {'error': 'User not found'}
-    
-    blocks = Block.objects.filter(user=user, day=day)
-    stats = {'checked': 0, 'fixed': 0, 'total_diff': 0}
-    
-    for block in blocks:
-        old_minutes = block.minutes
-        new_minutes = _calculate_minutes_from_events(
-            RawEvent.objects.filter(block=block)
-        )
-        
-        stats['checked'] += 1
-        
-        if new_minutes != old_minutes:
-            diff = old_minutes - new_minutes
-            stats['fixed'] += 1
-            stats['total_diff'] += diff
-            
-            logger.info(f"[COMPACT] Fixing block {block.id} ({block.app_name}): {old_minutes} -> {new_minutes}")
-            block.minutes = new_minutes
-            block.save(update_fields=['minutes'])
-    
-    return stats
+# =============================================================================
+# CLEANUP FUNCTIONS
+# =============================================================================
 
-
-def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:
-    """Quick compaction of recent events (includes auto-categorization)."""
-    if isinstance(user, str):
-        try:
-            user = User.objects.get(username=user)
-        except User.DoesNotExist:
-            return 0
-    
-    if not user:
-        return 0
-    
-    today = timezone.localdate()
-    return compact_day(user, today, hostname=hostname)
-
-
-def auto_compact_all_active_users(minutes_back: int = 30):
-    """Auto-compact for all users with recent activity."""
-    cutoff = timezone.now() - timedelta(minutes=minutes_back)
-    
-    recent_users = RawEvent.objects.filter(
-        ts_utc__gte=cutoff,
-        block__isnull=True
-    ).values_list('user', 'hostname').distinct()
-    
-    stats = {
-        'users_processed': 0,
-        'blocks_created': 0,
-        'errors': 0
-    }
-    
-    today = timezone.localdate()
-    
-    for user_id, hostname in recent_users:
-        try:
-            user = User.objects.get(id=user_id)
-            count = compact_day(user, today, hostname=hostname)
-            stats['blocks_created'] += count
-            stats['users_processed'] += 1
-        except Exception as e:
-            logger.error(f"[AUTO-COMPACT] Error for user {user_id}: {e}")
-            stats['errors'] += 1
-    
-    logger.info(
-        f"[AUTO-COMPACT] Processed {stats['users_processed']} users, "
-        f"created {stats['blocks_created']} blocks"
-    )
-    
-    return stats
-
-
-def auto_categorize_existing_blocks(user, day: date_type = None) -> Dict[str, int]:
+def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) -> Dict[str, int]:
     """
-    Run auto-categorization on existing uncategorized blocks.
-    Use this to backfill categorization on old data.
+    Find and remove duplicate blocks.
     
-    Returns stats dict.
+    Duplicates are blocks with:
+    - Same app_name
+    - Overlapping time ranges (>80% overlap)
+    
+    Keeps the block with more linked events.
     """
     if isinstance(user, str):
         try:
@@ -683,22 +577,80 @@ def auto_categorize_existing_blocks(user, day: date_type = None) -> Dict[str, in
     if day is None:
         day = timezone.localdate()
     
-    blocks = Block.objects.filter(
-        user=user,
-        day=day,
-        is_categorized=False
-    )
+    blocks = list(Block.objects.filter(user=user, day=day).order_by('start'))
     
-    stats = {'checked': 0, 'categorized': 0}
+    to_delete = []
+    checked = set()
     
-    for block in blocks:
-        stats['checked'] += 1
-        if auto_categorize_block(block):
-            stats['categorized'] += 1
+    for i, b1 in enumerate(blocks):
+        if b1.id in checked:
+            continue
+        
+        for b2 in blocks[i+1:]:
+            if b2.id in checked:
+                continue
+            
+            # Same app?
+            if _app_key(b1) != _app_key(b2):
+                continue
+            
+            # Check overlap
+            if not (b1.start and b1.end and b2.start and b2.end):
+                continue
+            
+            # Calculate overlap
+            overlap_start = max(b1.start, b2.start)
+            overlap_end = min(b1.end, b2.end)
+            
+            if overlap_start >= overlap_end:
+                continue  # No overlap
+            
+            overlap_seconds = (overlap_end - overlap_start).total_seconds()
+            b1_seconds = (b1.end - b1.start).total_seconds()
+            b2_seconds = (b2.end - b2.start).total_seconds()
+            
+            # Check if significant overlap (>80% of smaller block)
+            smaller_seconds = min(b1_seconds, b2_seconds)
+            if smaller_seconds > 0 and (overlap_seconds / smaller_seconds) > 0.8:
+                # Keep the one with more events or longer duration
+                b1_events = RawEvent.objects.filter(block=b1).count()
+                b2_events = RawEvent.objects.filter(block=b2).count()
+                
+                if b1_events > b2_events:
+                    victim = b2
+                elif b2_events > b1_events:
+                    victim = b1
+                elif b1.minutes >= b2.minutes:
+                    victim = b2
+                else:
+                    victim = b1
+                
+                to_delete.append(victim)
+                checked.add(victim.id)
+                logger.info(f"[CLEANUP] Duplicate: {victim.app_name} block {victim.id}")
     
-    logger.info(
-        f"[AUTO-CAT] Checked {stats['checked']} blocks, "
-        f"categorized {stats['categorized']} for {day}"
-    )
+    stats = {'checked': len(blocks), 'duplicates': len(to_delete), 'deleted': 0}
     
+    if not dry_run:
+        for block in to_delete:
+            # Reassign events to the surviving block
+            app = _app_key(block)
+            survivor = Block.objects.filter(
+                user=user, day=day
+            ).exclude(id=block.id).filter(
+                app_name__iexact=block.app_name
+            ).first()
+            
+            if survivor:
+                RawEvent.objects.filter(block=block).update(block=survivor)
+                # Recalculate survivor's minutes
+                survivor.minutes = _calculate_minutes_from_events(
+                    RawEvent.objects.filter(block=survivor)
+                )
+                survivor.save(update_fields=['minutes'])
+            
+            block.delete()
+            stats['deleted'] += 1
+    
+    logger.info(f"[CLEANUP] {stats}")
     return stats

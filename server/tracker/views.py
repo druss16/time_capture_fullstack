@@ -4563,10 +4563,31 @@ Before: 47 + 12 + 11 = 70 min (wrong - counts overlap twice)
 After:  Union of spans = 42 min (correct - actual clock time)
 """
 
+# =============================================================================
+# EVENT-BASED today_time() - Correct time attribution
+# =============================================================================
+#
+# KEY INSIGHT: At any given moment, only ONE app is active.
+# The app with the most recent event "owns" that time.
+#
+# OLD (wrong): Block spans → Chrome 16:15-18:03 = 1.81h, Sublime 16:40-17:38 = 0.97h
+#              Total billed: 2.78h (but you only worked 1.81h!)
+#
+# NEW (correct): Event-by-event → Each minute belongs to ONE client only
+#                Chrome gets time when YOU were using Chrome
+#                Sublime gets time when YOU were using Sublime
+#                No double-counting!
+# =============================================================================
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def today_time(request):
-    """Get tracked time organized by client → category with aggregated activities."""
+    """
+    Get tracked time organized by client → category.
+    
+    Uses EVENT-BASED attribution: each minute belongs to the app
+    that had the most recent activity, not block spans.
+    """
     from datetime import datetime, timedelta
     from datetime import timezone as dt_timezone
     from collections import defaultdict
@@ -4580,24 +4601,192 @@ def today_time(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
     
-    # Get date from query param, default to today
     date_str = request.GET.get('date')
     if date_str:
         target_date = parse_date(date_str)
     else:
         target_date = timezone.localdate()
     
-    # Get date range
     tz = timezone.get_current_timezone()
     start_local = timezone.make_aware(
         datetime.combine(target_date, datetime.min.time()), 
         tz
     )
     end_local = start_local + timedelta(days=1)
-    
-    # Convert to UTC
     start_utc = start_local.astimezone(dt_timezone.utc)
     end_utc = end_local.astimezone(dt_timezone.utc)
+    
+    # =========================================================================
+    # STEP 1: Get ALL events for the day, ordered by time
+    # =========================================================================
+    events = list(RawEvent.objects.filter(
+        user=user,
+        ts_utc__gte=start_utc,
+        ts_utc__lt=end_utc,
+    ).select_related('block', 'block__client').order_by('ts_utc'))
+    
+    if not events:
+        # Fallback to blocks if no events (e.g., manual entries)
+        return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
+    
+    # =========================================================================
+    # STEP 2: Calculate duration for each event
+    # Duration = time until next event (capped at 30 min)
+    # =========================================================================
+    IDLE_CAP_SECONDS = 1800  # 30 minutes
+    
+    event_durations = []
+    for i, event in enumerate(events):
+        if i + 1 < len(events):
+            next_ts = events[i + 1].ts_utc
+            duration_sec = (next_ts - event.ts_utc).total_seconds()
+            duration_sec = min(duration_sec, IDLE_CAP_SECONDS)
+        else:
+            duration_sec = 300  # 5 min for last event
+        
+        # Get client and category from linked block
+        block = event.block
+        if block:
+            client_id = block.client_id
+            client_name = block.client.name if block.client else 'Unassigned'
+            
+            # Get category from block
+            if block.category_hours and isinstance(block.category_hours, dict):
+                categories = list(block.category_hours.keys())
+                category = categories[0] if categories else 'Uncategorized'
+            else:
+                category = 'Uncategorized'
+            
+            # Check if idle
+            is_idle = category.lower() == 'idle'
+        else:
+            client_id = None
+            client_name = 'Unassigned'
+            category = 'Uncategorized'
+            is_idle = False
+        
+        event_durations.append({
+            'ts': event.ts_utc,
+            'duration_minutes': duration_sec / 60.0,
+            'client_id': client_id,
+            'client_name': client_name,
+            'category': category,
+            'is_idle': is_idle,
+            'app_name': event.app_name or 'Unknown',
+            'window_title': event.window_title or '',
+            'block_id': block.id if block else None,
+        })
+    
+    # =========================================================================
+    # STEP 3: Aggregate by client → category
+    # Each event's duration goes to exactly ONE client
+    # =========================================================================
+    data = defaultdict(lambda: {
+        'client_id': None,
+        'categories': defaultdict(lambda: {
+            'minutes': 0.0,
+            'block_count': 0,
+            'blocks_seen': set(),
+            'by_title': {},
+        })
+    })
+    
+    total_minutes = 0.0
+    billable_minutes = 0.0
+    
+    for ev in event_durations:
+        client_name = ev['client_name']
+        category = ev['category']
+        minutes = ev['duration_minutes']
+        
+        data[client_name]['client_id'] = ev['client_id']
+        cat_data = data[client_name]['categories'][category]
+        cat_data['minutes'] += minutes
+        
+        # Track unique blocks for count
+        if ev['block_id'] and ev['block_id'] not in cat_data['blocks_seen']:
+            cat_data['blocks_seen'].add(ev['block_id'])
+            cat_data['block_count'] += 1
+        
+        # Aggregate by title
+        title = ev['window_title'] or ev['app_name'] or 'Unknown'
+        if len(title) > 60:
+            title = title[:57] + '...'
+        
+        if title in cat_data['by_title']:
+            cat_data['by_title'][title]['minutes'] += minutes
+        else:
+            cat_data['by_title'][title] = {
+                'id': ev['block_id'],
+                'title': title,
+                'minutes': minutes,
+            }
+        
+        # Track totals
+        total_minutes += minutes
+        if ev['client_id'] and not ev['is_idle']:
+            billable_minutes += minutes
+    
+    # =========================================================================
+    # STEP 4: Build response
+    # =========================================================================
+    result = []
+    for client_name, client_data in sorted(data.items()):
+        categories = []
+        client_total_minutes = 0.0
+        
+        for cat_name, cat_data in sorted(client_data['categories'].items()):
+            minutes = cat_data['minutes']
+            client_total_minutes += minutes
+            
+            # Build sample activities (top 10 by time)
+            aggregated_samples = []
+            sorted_titles = sorted(
+                cat_data['by_title'].items(), 
+                key=lambda x: -x[1]['minutes']
+            )[:10]
+            
+            for title, info in sorted_titles:
+                mins = info['minutes']
+                if mins >= 60:
+                    time_str = f"{mins/60:.1f}h"
+                else:
+                    time_str = f"{mins:.0f}m"
+                
+                if info['id']:
+                    aggregated_samples.append(f"[id:{info['id']}] {info['title']} ({time_str})")
+                else:
+                    aggregated_samples.append(f"{info['title']} ({time_str})")
+            
+            categories.append({
+                'name': cat_name,
+                'hours': round(minutes / 60, 2),
+                'block_count': cat_data['block_count'],
+                'unique_activities': len(cat_data['by_title']),
+                'sample_activities': aggregated_samples,
+            })
+        
+        result.append({
+            'client_id': client_data['client_id'],
+            'client': client_name,
+            'total_hours': round(client_total_minutes / 60, 2),
+            'categories': categories,
+        })
+    
+    return Response({
+        'clients': result,
+        'global_hours': round(total_minutes / 60, 2),
+        'billable_hours': round(billable_minutes / 60, 2),
+        'date': target_date.isoformat(),
+    })
+
+
+def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
+    """
+    Fallback for manual entries or when no events exist.
+    Uses block-level data (less accurate but necessary for manual time).
+    """
+    from collections import defaultdict
     
     blocks = Block.objects.filter(
         user=user,
@@ -4606,83 +4795,22 @@ def today_time(request):
         deleted_at__isnull=True
     ).select_related('client').order_by('start')
     
-    # Helper: union of time spans (avoid overlaps)
-    def union_minutes(spans):
-        """
-        Calculate the UNION of time spans, not the SUM.
-        This correctly handles overlapping blocks from different apps.
-        """
-        if not spans:
-            return 0
-        
-        # Convert spans to millisecond ranges
-        ranges = []
-        for s in spans:
-            start_dt = s.get('start')
-            end_dt = s.get('end')
-            if start_dt and end_dt:
-                start_ms = int(start_dt.timestamp() * 1000)
-                end_ms = int(end_dt.timestamp() * 1000)
-                if start_ms < end_ms:
-                    ranges.append((start_ms, end_ms))
-        
-        if not ranges:
-            return 0
-        
-        # Sort by start time
-        ranges.sort()
-        
-        # Merge overlapping ranges
-        merged = []
-        cur_start, cur_end = ranges[0]
-        
-        for start, end in ranges[1:]:
-            if start <= cur_end:
-                cur_end = max(cur_end, end)
-            else:
-                merged.append((cur_start, cur_end))
-                cur_start, cur_end = start, end
-        
-        merged.append((cur_start, cur_end))
-        
-        total_ms = sum(end - start for start, end in merged)
-        return total_ms / 60000  # Convert to minutes
-    
-    # =========================================================================
-    # ✅ GLOBAL UNION: Calculate union of ALL non-idle blocks
-    # =========================================================================
-    all_spans = []
-    billable_spans = []  # Only non-idle, assigned blocks
-    
-    for block in blocks:
-        span = {'start': block.start, 'end': block.end}
-        all_spans.append(span)
-        
-        # Billable = has client AND not idle
-        is_idle = (block.category_hours or {}).get('Idle') is not None
-        if block.client and not is_idle:
-            billable_spans.append(span)
-    
-    global_union_minutes = union_minutes(all_spans)
-    global_billable_minutes = union_minutes(billable_spans)
-    
-    # =========================================================================
-    # Group by client → category
-    # =========================================================================
     data = defaultdict(lambda: {
         'client_id': None,
-        'client_name': None,
         'categories': defaultdict(lambda: {
-            'spans': [], 
-            'count': 0, 
-            'actual_minutes': 0,
-            'by_title': {}
+            'minutes': 0.0,
+            'block_count': 0,
+            'by_title': {},
         })
     })
     
+    total_minutes = 0.0
+    billable_minutes = 0.0
+    
     for block in blocks:
         client_name = block.client.name if block.client else 'Unassigned'
-        client_id = block.client.id if block.client else None
+        client_id = block.client_id
+        minutes = block.minutes or 0
         
         if block.category_hours and isinstance(block.category_hours, dict):
             categories = list(block.category_hours.keys())
@@ -4690,96 +4818,61 @@ def today_time(request):
         else:
             category = 'Uncategorized'
         
-        data[client_name]['client_id'] = client_id
-        data[client_name]['client_name'] = client_name
+        is_idle = category.lower() == 'idle'
         
+        data[client_name]['client_id'] = client_id
         cat_data = data[client_name]['categories'][category]
-        cat_data['spans'].append({'start': block.start, 'end': block.end})
-        cat_data['count'] += 1
-        cat_data['actual_minutes'] += (block.minutes or 0)
+        cat_data['minutes'] += minutes
+        cat_data['block_count'] += 1
         
         title = block.window_title or block.url or block.app_name or 'Unknown'
         if len(title) > 60:
             title = title[:57] + '...'
         
-        if title in cat_data['by_title']:
-            cat_data['by_title'][title]['count'] += 1
-            cat_data['by_title'][title]['minutes'] += (block.minutes or 0)
-            cat_data['by_title'][title]['ids'].append(block.id)
-        else:
-            cat_data['by_title'][title] = {
-                'id': block.id,
-                'title': title,
-                'count': 1,
-                'minutes': block.minutes or 0,
-                'ids': [block.id]
-            }
+        cat_data['by_title'][title] = {
+            'id': block.id,
+            'title': title,
+            'minutes': minutes,
+        }
+        
+        total_minutes += minutes
+        if client_id and not is_idle:
+            billable_minutes += minutes
     
-    # =========================================================================
-    # Build response with per-client union
-    # =========================================================================
     result = []
     for client_name, client_data in sorted(data.items()):
         categories = []
-        
-        all_client_spans = []
-        for cat_name, cat_data in client_data['categories'].items():
-            all_client_spans.extend(cat_data['spans'])
-        
-        total_client_minutes = union_minutes(all_client_spans)
-        
-        total_actual = sum(
-            cat_data.get('actual_minutes', 0) 
-            for cat_data in client_data['categories'].values()
-        )
+        client_total = 0.0
         
         for cat_name, cat_data in sorted(client_data['categories'].items()):
-            actual_mins = cat_data.get('actual_minutes', 0)
+            minutes = cat_data['minutes']
+            client_total += minutes
             
-            if total_actual > 0 and total_client_minutes > 0:
-                proportion = actual_mins / total_actual
-                minutes = total_client_minutes * proportion
-            else:
-                minutes = union_minutes(cat_data['spans'])
-            
-            aggregated_samples = []
-            by_title = cat_data.get('by_title', {})
-            
-            for title, info in sorted(by_title.items(), key=lambda x: -x[1]['minutes']):
-                if info['count'] > 1:
-                    mins = info['minutes']
-                    if mins >= 60:
-                        time_str = f"{mins/60:.1f}h"
-                    else:
-                        time_str = f"{mins}m"
-                    aggregated_samples.append(
-                        f"[id:{info['id']}] {info['title']} ({info['count']}x, {time_str})"
-                    )
-                else:
-                    aggregated_samples.append(f"[id:{info['id']}] {info['title']}")
+            samples = []
+            for title, info in sorted(cat_data['by_title'].items(), key=lambda x: -x[1]['minutes'])[:10]:
+                mins = info['minutes']
+                time_str = f"{mins/60:.1f}h" if mins >= 60 else f"{mins:.0f}m"
+                samples.append(f"[id:{info['id']}] {info['title']} ({time_str})")
             
             categories.append({
                 'name': cat_name,
                 'hours': round(minutes / 60, 2),
-                'block_count': cat_data['count'],
-                'unique_activities': len(by_title),
-                'sample_activities': aggregated_samples
+                'block_count': cat_data['block_count'],
+                'unique_activities': len(cat_data['by_title']),
+                'sample_activities': samples,
             })
         
         result.append({
             'client_id': client_data['client_id'],
             'client': client_name,
-            'total_hours': round(total_client_minutes / 60, 2),
-            'categories': categories
+            'total_hours': round(client_total / 60, 2),
+            'categories': categories,
         })
     
-    # =========================================================================
-    # ✅ RETURN with global union for header
-    # =========================================================================
     return Response({
         'clients': result,
-        'global_hours': round(global_union_minutes / 60, 2),      # Total work time (union)
-        'billable_hours': round(global_billable_minutes / 60, 2), # Billable only (union)
+        'global_hours': round(total_minutes / 60, 2),
+        'billable_hours': round(billable_minutes / 60, 2),
         'date': target_date.isoformat(),
     })
 

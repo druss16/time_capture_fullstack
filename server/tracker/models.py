@@ -941,7 +941,7 @@ class Block(models.Model):
         # ===============================
         if self.start:
             self.day = self.start.astimezone(timezone.get_current_timezone()).date()
-        if self.start and self.end:
+        if self.start and self.end and not self.minutes:
             mins = int((self.end - self.start).total_seconds() // 60)
             self.minutes = max(0, mins)
         
@@ -1361,7 +1361,7 @@ from django.dispatch import receiver
 def _denormalize_block(sender, instance: Block, **kwargs):
     if instance.start:
         instance.day = instance.start.astimezone(timezone.get_current_timezone()).date()
-    if instance.start and instance.end:
+    if instance.start and instance.end and not instance.minutes:
         mins = int((instance.end - instance.start).total_seconds() // 60)
         instance.minutes = max(0, mins)
 

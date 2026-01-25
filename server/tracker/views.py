@@ -7107,3 +7107,45 @@ def sync_check(request):
         'clients_updated': latest_client.updated_at if latest_client else None,
         'server_time': timezone.now(),
     })
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.utils import timezone
+import logging
+
+logger = logging.getLogger(__name__)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def agent_error_report(request):
+    '''
+    Receive error reports from desktop agents.
+    POST /api/agent/errors/
+    '''
+    data = request.data
+    
+    # Log to Django logs
+    logger.error(
+        f"[AGENT-ERROR] {data.get('error_type', 'unknown')} | "
+        f"device={data.get('device_id', '?')[:8]} | "
+        f"host={data.get('hostname', '?')} | "
+        f"v={data.get('app_version', '?')} | "
+        f"msg={data.get('error_message', '?')[:200]}"
+    )
+    
+    # Optional: Store in database for dashboard
+    AgentError.objects.create(
+        user=request.user,
+        error_type=data.get('error_type'),
+        error_message=data.get('error_message'),
+        traceback=data.get('traceback'),
+        device_id=data.get('device_id'),
+        hostname=data.get('hostname'),
+        app_version=data.get('app_version'),
+        platform=data.get('platform'),
+        context=data.get('context', {}),
+    )
+    
+    return Response({"ok": True})

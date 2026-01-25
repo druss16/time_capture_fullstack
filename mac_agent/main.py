@@ -62,6 +62,9 @@ import ssl
 
 os.environ['SSL_CERT_FILE'] = certifi.where()
 
+import logging
+from logging.handlers import RotatingFileHandlerZ
+
 # Notifications (PyObjC)
 try:
     import objc
@@ -570,6 +573,53 @@ NOTIF_IDLE_THRESHOLD = int(_get("notif_idle_threshold", os.getenv("AGENT_NOTIF_I
 NOTIF_NO_CLIENT_MINUTES = int(_get("notif_no_client_minutes", os.getenv("AGENT_NOTIF_NO_CLIENT_MINUTES")) or 15)
 
 
+# ---------------- Logging Setup ----------------
+LOG_DIR = os.path.expanduser("~/Library/Logs/TimeTracker")
+LOG_FILE = os.path.join(LOG_DIR, "agent.log")
+ERROR_LOG_FILE = os.path.join(LOG_DIR, "agent_errors.log")
+
+def setup_logging():
+    """Setup file-based logging with rotation."""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        
+        # Main log - rotates at 5MB, keeps 3 backups
+        main_handler = RotatingFileHandler(
+            LOG_FILE, 
+            maxBytes=5*1024*1024,  # 5MB
+            backupCount=3
+        )
+        main_handler.setLevel(logging.INFO)
+        main_handler.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
+        
+        # Error log - separate file for crashes only
+        error_handler = RotatingFileHandler(
+            ERROR_LOG_FILE,
+            maxBytes=2*1024*1024,  # 2MB
+            backupCount=5
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s\n%(exc_info)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
+        
+        # Configure root logger
+        logger = logging.getLogger('timetracker')
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(main_handler)
+        logger.addHandler(error_handler)
+        
+        return logger
+    except Exception as e:
+        print(f"[WARN] Failed to setup logging: {e}")
+        return None
+
+_logger = setup_logging()
+
 def detect_client_in_window(title: str, file_path: str = None) -> Optional[dict]:
     """
     Check if any known client name appears in window title or file path.
@@ -599,6 +649,76 @@ def detect_client_in_window(title: str, file_path: str = None) -> Optional[dict]
     
     return None
 
+
+_error_report_cache = {}  # Prevent spamming same error
+ERROR_REPORT_COOLDOWN = 300  # 5 minutes between same errors
+
+def report_error_to_backend(
+    error_type: str, 
+    error_msg: str, 
+    traceback_str: str = None,
+    context: dict = None
+):
+    """
+    Send error report to backend for remote debugging.
+    
+    Args:
+        error_type: Category like 'tracking_loop', 'notification', 'sync'
+        error_msg: The error message
+        traceback_str: Full traceback string
+        context: Additional context (current_sig, idle state, etc.)
+    """
+    api_key = config.get("api_key") or API_KEY
+    if not api_key or not API_BASE:
+        return False
+    
+    # Rate limit - don't spam same error
+    error_key = f"{error_type}:{error_msg[:100]}"
+    now = time.time()
+    last_sent = _error_report_cache.get(error_key, 0)
+    if now - last_sent < ERROR_REPORT_COOLDOWN:
+        return False
+    _error_report_cache[error_key] = now
+    
+    url = f"{API_BASE}/agent/errors/"
+    
+    payload = {
+        "error_type": error_type,
+        "error_message": error_msg[:1000],  # Limit size
+        "traceback": (traceback_str or "")[:5000],  # Limit size
+        "device_id": get_device_id(),
+        "hostname": platform.node(),
+        "os_username": get_os_username(),
+        "app_version": APP_VERSION,
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "context": context or {},
+    }
+    
+    def _send():
+        try:
+            req = urllib.request.Request(
+                url, 
+                data=json.dumps(payload).encode("utf-8"), 
+                method="POST"
+            )
+            req.add_header("Authorization", f"DeviceKey {api_key}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                log(f"[ERROR-REPORT] Sent to backend: {error_type}")
+                return True
+        except urllib.error.HTTPError as e:
+            # 404 = endpoint doesn't exist yet, that's ok
+            if e.code != 404:
+                log(f"[ERROR-REPORT] HTTP {e.code} sending error report")
+        except Exception as e:
+            log(f"[ERROR-REPORT] Failed to send: {e}")
+        return False
+    
+    # Send async to not block
+    threading.Thread(target=_send, daemon=True).start()
+    return True
 
 def maybe_suggest_client(detected_client: dict, current_client_id: int):
     """
@@ -649,15 +769,28 @@ def maybe_suggest_client(detected_client: dict, current_client_id: int):
                 log(f"[CLIENT-DETECT] Set current client to {client_name}")
 
 
-# ---------------- Logging ----------------
-def log(msg: str):
+def log(msg: str, level: str = "info"):
+    """Log to console (if verbose) and to file."""
     if VERBOSE:
         print(msg, flush=True)
+    
+    if _logger:
+        if level == "error":
+            _logger.error(msg)
+        elif level == "warning":
+            _logger.warning(msg)
+        elif level == "debug":
+            _logger.debug(msg)
+        else:
+            _logger.info(msg)
 
-# ---------------- Logging ----------------
-def log(msg: str):
+
+def log_error(msg: str, exc_info=True):
+    """Log an error with optional traceback."""
     if VERBOSE:
-        print(msg, flush=True)
+        print(f"[ERROR] {msg}", flush=True)
+    if _logger:
+        _logger.error(msg, exc_info=exc_info)
 
 # ---------------- Context bus ----------------
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -2154,120 +2287,174 @@ def run_agent():
 
 
     # === TRACKING LOOP FUNCTION ===
+    # === TRACKING LOOP FUNCTION ===
     def tracking_loop():
         """Main tracking loop - monitors frontmost app and records dwell time"""
-        conn = ensure_db()
-        cur = conn.cursor()
+        log("[TRACKING] Initializing...")
+        
+        try:
+            conn = ensure_db()
+            cur = conn.cursor()
+        except Exception as e:
+            log_error(f"[TRACKING] ❌ Failed to init DB: {e}")
+            report_error_to_backend("tracking_init", str(e), traceback.format_exc())
+            return
+        
         current_sig = None
         dwell_start = None
-        paused = False
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_ERRORS = 10
 
         try:
             while True:
-                if should_stop(CONTROL_URL, os_user, hostname):
-                    log("[CTRL] Stopping agent per admin request.")
-                    break
+                try:
+                    if should_stop(CONTROL_URL, os_user, hostname):
+                        log("[CTRL] Stopping agent per admin request.")
+                        break
 
-                idle = mouse_idle_seconds()
-                
-                in_meeting = False
-                if current_sig and current_sig != IDLE_SIG:
-                    app_name, bundle_id, title, url, fpath = current_sig
-                    in_meeting = is_in_meeting(bundle_id, url, app_name, title)
-                
-                if idle >= MOUSE_IDLE_PAUSE_S and not in_meeting:
-                    if current_sig != IDLE_SIG:
-                        # === NOTIFY: Going idle ===
-                        if notif_manager:
-                            notif_manager.on_idle_start()
+                    idle = mouse_idle_seconds()
+                    
+                    in_meeting = False
+                    if current_sig and current_sig != IDLE_SIG:
+                        app_name, bundle_id, title, url, fpath = current_sig
+                        in_meeting = is_in_meeting(bundle_id, url, app_name, title)
+                    
+                    if idle >= MOUSE_IDLE_PAUSE_S and not in_meeting:
+                        if current_sig != IDLE_SIG:
+                            # === NOTIFY: Going idle ===
+                            if notif_manager:
+                                try:
+                                    notif_manager.on_idle_start()
+                                except Exception as e:
+                                    log(f"[TRACKING] notif on_idle_start error: {e}", "warning")
+                                    report_error_to_backend("notification", str(e), traceback.format_exc(), 
+                                                          {"event": "on_idle_start"})
+                            if current_sig and dwell_start:
+                                now = time.time()
+                                effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                                dwell = effective_end - dwell_start
+                                if dwell >= MIN_DWELL_SECONDS:
+                                    write_event(conn, cur, os_user, hostname, current_sig)
+                                else:
+                                    log(f"[SKIP] dwell too short ({int(dwell)}s) before idle for {current_sig[0]}")
+                            current_sig = IDLE_SIG
+                            dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
+                            log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
+                        time.sleep(POLL_SECONDS)
+                        consecutive_errors = 0  # Reset on success
+                        continue
+                    elif in_meeting and idle >= MOUSE_IDLE_PAUSE_S:
+                        if PRINT_EVERY_POLL or (int(idle) % 60 < POLL_SECONDS):
+                            log(f"[MEETING] In meeting ({current_sig[0]}), skipping idle check (mouse idle {int(idle)}s)")
+                        time.sleep(POLL_SECONDS)
+                        consecutive_errors = 0
+                        continue
+                    else:
+                        if current_sig == IDLE_SIG and dwell_start:
+                            # === NOTIFY: Returning from idle ===
+                            if notif_manager:
+                                try:
+                                    notif_manager.on_idle_end()
+                                except Exception as e:
+                                    log(f"[TRACKING] notif on_idle_end error: {e}", "warning")
+                                    report_error_to_backend("notification", str(e), traceback.format_exc(),
+                                                          {"event": "on_idle_end"})
+                            dwell = time.time() - dwell_start
+                            if dwell >= MIN_DWELL_SECONDS:
+                                write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
+                                log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
+                            else:
+                                log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
+                            current_sig = None
+                            dwell_start = None
+
+                    front = get_frontmost_app()
+                    if not front:
+                        if PRINT_EVERY_POLL:
+                            log("[POLL] No frontmost")
+                        time.sleep(POLL_SECONDS)
+                        consecutive_errors = 0
+                        continue
+
+                    app_name, bundle_id, pid, fallback_title = front
+
+                    if bundle_id in EXCLUDE_BUNDLES:
+                        if PRINT_EVERY_POLL:
+                            log(f"[POLL] Excluded: {bundle_id}")
                         if current_sig and dwell_start:
-                            now = time.time()
-                            effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
-                            dwell = effective_end - dwell_start
+                            dwell = time.time() - dwell_start
+                            if dwell >= MIN_DWELL_SECONDS:
+                                write_event(conn, cur, os_user, hostname, current_sig)
+                        current_sig = None
+                        dwell_start = None
+                        time.sleep(POLL_SECONDS)
+                        consecutive_errors = 0
+                        continue
+
+                    title_ax = get_window_title_via_ax(pid) or ""
+                    title = title_ax or (fallback_title or "")
+
+                    extras = try_get_url_or_path(bundle_id)
+                    url, fpath = extras.get("url"), extras.get("file_path")
+                    sig = (app_name, bundle_id, title, url, fpath)
+
+                    if sig != current_sig:
+                        if current_sig and dwell_start:
+                            dwell = time.time() - dwell_start
                             if dwell >= MIN_DWELL_SECONDS:
                                 write_event(conn, cur, os_user, hostname, current_sig)
                             else:
-                                log(f"[SKIP] dwell too short ({int(dwell)}s) before idle for {current_sig[0]}")
-                        current_sig = IDLE_SIG
-                        dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
-                        log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
-                    time.sleep(POLL_SECONDS)
-                    continue
-                elif in_meeting and idle >= MOUSE_IDLE_PAUSE_S:
-                    if PRINT_EVERY_POLL or (int(idle) % 60 < POLL_SECONDS):
-                        log(f"[MEETING] In meeting ({current_sig[0]}), skipping idle check (mouse idle {int(idle)}s)")
-                    time.sleep(POLL_SECONDS)
-                    continue
-                else:
-                    if current_sig == IDLE_SIG and dwell_start:
-                        # === NOTIFY: Returning from idle ===
-                        if notif_manager:
-                            notif_manager.on_idle_end()  # Sends "Welcome back" notification
-                        dwell = time.time() - dwell_start
-                        if dwell >= MIN_DWELL_SECONDS:
-                            write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
-                            log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
+                                log(f"[SKIP] dwell too short ({int(dwell)}s) for {current_sig[0]}")
+                        current_sig = sig
+                        dwell_start = time.time()
+                        
+                        if is_in_meeting(bundle_id, url, app_name, title):
+                            log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} • [MEETING]")
                         else:
-                            log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
-                        current_sig = None
-                        dwell_start = None
+                            log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
 
-                front = get_frontmost_app()
-                if not front:
-                    if PRINT_EVERY_POLL:
-                        log("[POLL] No frontmost")
-                    time.sleep(POLL_SECONDS)
-                    continue
-
-                app_name, bundle_id, pid, fallback_title = front
-
-                if bundle_id in EXCLUDE_BUNDLES:
-                    if PRINT_EVERY_POLL:
-                        log(f"[POLL] Excluded: {bundle_id}")
-                    if current_sig and dwell_start:
-                        dwell = time.time() - dwell_start
-                        if dwell >= MIN_DWELL_SECONDS:
-                            write_event(conn, cur, os_user, hostname, current_sig)
-                    current_sig = None
-                    dwell_start = None
-                    time.sleep(POLL_SECONDS)
-                    continue
-
-                title_ax = get_window_title_via_ax(pid) or ""
-                title = title_ax or (fallback_title or "")
-
-                extras = try_get_url_or_path(bundle_id)
-                url, fpath = extras.get("url"), extras.get("file_path")
-                sig = (app_name, bundle_id, title, url, fpath)
-
-                if sig != current_sig:
-                    if current_sig and dwell_start:
-                        dwell = time.time() - dwell_start
-                        if dwell >= MIN_DWELL_SECONDS:
-                            write_event(conn, cur, os_user, hostname, current_sig)
-                        else:
-                            log(f"[SKIP] dwell too short ({int(dwell)}s) for {current_sig[0]}")
-                    current_sig = sig
-                    dwell_start = time.time()
-                    
-                    if is_in_meeting(bundle_id, url, app_name, title):
-                        log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} • [MEETING]")
+                        # === Local client detection ===
+                        try:
+                            detected = detect_client_in_window(title, fpath)
+                            current_id = None
+                            if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                                current_id = gui_menu_bar.state.current_client_id
+                            maybe_suggest_client(detected, current_id)
+                        except Exception as e:
+                            log(f"[TRACKING] client detection error: {e}", "warning")
                     else:
-                        log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
+                        if PRINT_EVERY_POLL:
+                            log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")
 
-                    # === NEW: Local client detection ===
-                    detected = detect_client_in_window(title, fpath)
-                    current_id = None
-                    if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
-                        current_id = gui_menu_bar.state.current_client_id
-                    maybe_suggest_client(detected, current_id)
-                else:
-                    if PRINT_EVERY_POLL:
-                        log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")
+                    time.sleep(POLL_SECONDS)
+                    consecutive_errors = 0  # Reset on successful iteration
 
-
-
-                time.sleep(POLL_SECONDS)
+                except Exception as e:
+                    consecutive_errors += 1
+                    error_context = {
+                        "current_sig": str(current_sig) if current_sig else None,
+                        "dwell_start": dwell_start,
+                        "consecutive_errors": consecutive_errors,
+                    }
+                    
+                    log_error(f"[TRACKING] ⚠️ Error in loop iteration ({consecutive_errors}): {e}")
+                    import traceback
+                    tb = traceback.format_exc()
+                    traceback.print_exc()
+                    
+                    # Report to backend
+                    report_error_to_backend("tracking_loop", str(e), tb, error_context)
+                    
+                    # If too many consecutive errors, something is very wrong
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        log_error(f"[TRACKING] ❌ Too many consecutive errors ({consecutive_errors}), pausing 60s")
+                        report_error_to_backend("tracking_loop_critical", 
+                                               f"Too many errors: {consecutive_errors}", tb, error_context)
+                        time.sleep(60)
+                        consecutive_errors = 0  # Reset after pause
+                    else:
+                        time.sleep(POLL_SECONDS)
+                    continue
 
         except KeyboardInterrupt:
             log("=== Stopping (Ctrl+C) ===")
@@ -2275,7 +2462,14 @@ def run_agent():
                 dwell = time.time() - dwell_start
                 if dwell >= MIN_DWELL_SECONDS:
                     write_event(conn, cur, os_user, hostname, current_sig)
+        except Exception as e:
+            log_error(f"[TRACKING] ❌ Fatal error: {e}")
+            import traceback
+            tb = traceback.format_exc()
+            traceback.print_exc()
+            report_error_to_backend("tracking_fatal", str(e), tb)
         finally:
+            log("[TRACKING] Cleaning up...")
             try:
                 conn.close()
                 if stop_flag:

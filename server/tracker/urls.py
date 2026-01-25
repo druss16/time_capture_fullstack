@@ -241,4 +241,7 @@ urlpatterns = [
     path('sync/task-types/', views_sync.sync_task_types, name='sync-task-types'),
     path('sync/full/', views_sync.sync_full, name='sync-full'),
 
+    path('agent/errors/', views.agent_error_report, name='agent-error-report'),
+
+
 ]

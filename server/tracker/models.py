@@ -1799,3 +1799,27 @@ class EmployeeCostRate(models.Model):
         
         return rate.cost_rate if rate else None
 
+
+
+class AgentError(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+    error_type = models.CharField(max_length=50, db_index=True)
+    error_message = models.TextField()
+    traceback = models.TextField(blank=True)
+    device_id = models.CharField(max_length=100, db_index=True)
+    hostname = models.CharField(max_length=100)
+    app_version = models.CharField(max_length=20)
+    platform = models.CharField(max_length=100, blank=True)
+    context = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    resolved = models.BooleanField(default=False)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['error_type', 'created_at']),
+            models.Index(fields=['device_id', 'created_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.error_type} @ {self.hostname} ({self.created_at})"

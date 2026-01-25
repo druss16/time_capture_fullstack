@@ -4633,7 +4633,7 @@ def today_time(request):
     # STEP 2: Calculate duration for each event
     # Duration = time until next event (capped at 30 min)
     # =========================================================================
-    IDLE_CAP_SECONDS = 1800  # 30 minutes
+    IDLE_CAP_SECONDS = 180  # 3 minutes - matches agent idle threshold
     
     event_durations = []
     for i, event in enumerate(events):

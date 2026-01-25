@@ -7109,43 +7109,273 @@ def sync_check(request):
     })
 
 
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
+from django.db.models import Count
+from datetime import timedelta
 import logging
 
 logger = logging.getLogger(__name__)
 
+
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def agent_error_report(request):
-    '''
+    """
     Receive error reports from desktop agents.
     POST /api/agent/errors/
-    '''
+    
+    No auth required - uses device_id to find user.
+    """
+    from tracker.models import AgentError, Device
+    
     data = request.data
+    device_id = data.get('device_id')
     
-    # Log to Django logs
-    logger.error(
-        f"[AGENT-ERROR] {data.get('error_type', 'unknown')} | "
-        f"device={data.get('device_id', '?')[:8]} | "
-        f"host={data.get('hostname', '?')} | "
-        f"v={data.get('app_version', '?')} | "
-        f"msg={data.get('error_message', '?')[:200]}"
-    )
+    # Find user from device
+    user = None
+    org = None
+    if device_id:
+        try:
+            device = Device.objects.select_related('user', 'org').get(device_id=device_id)
+            user = device.user
+            org = device.org
+        except Device.DoesNotExist:
+            pass
     
-    # Optional: Store in database for dashboard
-    AgentError.objects.create(
-        user=request.user,
-        error_type=data.get('error_type'),
-        error_message=data.get('error_message'),
-        traceback=data.get('traceback'),
-        device_id=data.get('device_id'),
-        hostname=data.get('hostname'),
-        app_version=data.get('app_version'),
-        platform=data.get('platform'),
+    # Parse client timestamp
+    client_ts = None
+    if data.get('timestamp'):
+        try:
+            from dateutil.parser import parse
+            client_ts = parse(data['timestamp'])
+        except:
+            pass
+    
+    # Create error record
+    error = AgentError.objects.create(
+        user=user,
+        org=org,
+        error_type=data.get('error_type', 'unknown')[:50],
+        error_message=data.get('error_message', '')[:5000],
+        traceback=data.get('traceback', '')[:10000],
+        device_id=device_id or 'unknown',
+        hostname=data.get('hostname', '')[:100],
+        app_version=data.get('app_version', '')[:20],
+        platform=data.get('platform', '')[:100],
+        python_version=data.get('python_version', '')[:20],
+        os_username=data.get('os_username', '')[:100],
         context=data.get('context', {}),
+        client_timestamp=client_ts,
     )
+    
+    # Log for immediate visibility
+    logger.warning(
+        f"[AGENT-ERROR] id={error.id} | {error.error_type} | "
+        f"user={user.username if user else '?'} | "
+        f"host={error.hostname} | v={error.app_version}"
+    )
+    
+    return Response({"ok": True, "error_id": error.id})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def agent_errors_list(request):
+    """
+    List agent errors with filtering.
+    GET /api/agent/errors/list/
+    
+    Query params:
+    - user_id: Filter by user
+    - device_id: Filter by device
+    - hostname: Filter by hostname (partial match)
+    - error_type: Filter by error type
+    - app_version: Filter by version
+    - resolved: true/false
+    - days: Last N days (default 7)
+    - limit: Max results (default 100)
+    """
+    from tracker.models import AgentError
+    
+    # Check if user is admin/manager
+    if not request.user.is_staff:
+        # Regular users can only see their own errors
+        qs = AgentError.objects.filter(user=request.user)
+    else:
+        qs = AgentError.objects.all()
+    
+    # Filters
+    if request.GET.get('user_id'):
+        qs = qs.filter(user_id=request.GET['user_id'])
+    
+    if request.GET.get('device_id'):
+        qs = qs.filter(device_id=request.GET['device_id'])
+    
+    if request.GET.get('hostname'):
+        qs = qs.filter(hostname__icontains=request.GET['hostname'])
+    
+    if request.GET.get('error_type'):
+        qs = qs.filter(error_type=request.GET['error_type'])
+    
+    if request.GET.get('app_version'):
+        qs = qs.filter(app_version=request.GET['app_version'])
+    
+    if request.GET.get('resolved'):
+        qs = qs.filter(resolved=request.GET['resolved'].lower() == 'true')
+    
+    # Time filter
+    days = int(request.GET.get('days', 7))
+    cutoff = timezone.now() - timedelta(days=days)
+    qs = qs.filter(created_at__gte=cutoff)
+    
+    # Limit
+    limit = min(int(request.GET.get('limit', 100)), 500)
+    
+    errors = qs.select_related('user')[:limit]
+    
+    return Response({
+        "count": qs.count(),
+        "errors": [
+            {
+                "id": e.id,
+                "error_type": e.error_type,
+                "error_message": e.error_message[:200],
+                "user": e.user.username if e.user else None,
+                "hostname": e.hostname,
+                "device_id": e.device_id[:12],
+                "app_version": e.app_version,
+                "created_at": e.created_at.isoformat(),
+                "resolved": e.resolved,
+            }
+            for e in errors
+        ]
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def agent_errors_summary(request):
+    """
+    Summary dashboard of agent errors.
+    GET /api/agent/errors/summary/
+    """
+    from tracker.models import AgentError
+    
+    if not request.user.is_staff:
+        return Response({"error": "Admin only"}, status=403)
+    
+    days = int(request.GET.get('days', 7))
+    cutoff = timezone.now() - timedelta(days=days)
+    
+    qs = AgentError.objects.filter(created_at__gte=cutoff)
+    
+    # Summary stats
+    total = qs.count()
+    unresolved = qs.filter(resolved=False).count()
+    
+    # By error type
+    by_type = list(
+        qs.values('error_type')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:10]
+    )
+    
+    # By app version
+    by_version = list(
+        qs.values('app_version')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:10]
+    )
+    
+    # Most affected users
+    by_user = list(
+        qs.filter(user__isnull=False)
+        .values('user__username', 'hostname')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:10]
+    )
+    
+    # Recent unique errors (deduped by type + message)
+    recent = list(
+        qs.order_by('-created_at')
+        .values('error_type', 'error_message', 'hostname', 'app_version', 'created_at')[:20]
+    )
+    
+    return Response({
+        "period_days": days,
+        "total_errors": total,
+        "unresolved": unresolved,
+        "by_error_type": by_type,
+        "by_app_version": by_version,
+        "most_affected_users": by_user,
+        "recent_errors": recent,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def agent_error_detail(request, error_id):
+    """
+    Get full error details including traceback.
+    GET /api/agent/errors/<id>/
+    """
+    from tracker.models import AgentError
+    
+    try:
+        error = AgentError.objects.select_related('user', 'resolved_by').get(id=error_id)
+    except AgentError.DoesNotExist:
+        return Response({"error": "Not found"}, status=404)
+    
+    # Check permissions
+    if not request.user.is_staff and error.user != request.user:
+        return Response({"error": "Forbidden"}, status=403)
+    
+    return Response({
+        "id": error.id,
+        "error_type": error.error_type,
+        "error_message": error.error_message,
+        "traceback": error.traceback,
+        "user": error.user.username if error.user else None,
+        "hostname": error.hostname,
+        "device_id": error.device_id,
+        "app_version": error.app_version,
+        "platform": error.platform,
+        "python_version": error.python_version,
+        "os_username": error.os_username,
+        "context": error.context,
+        "created_at": error.created_at.isoformat(),
+        "client_timestamp": error.client_timestamp.isoformat() if error.client_timestamp else None,
+        "resolved": error.resolved,
+        "resolved_at": error.resolved_at.isoformat() if error.resolved_at else None,
+        "resolved_by": error.resolved_by.username if error.resolved_by else None,
+        "notes": error.notes,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def agent_error_resolve(request, error_id):
+    """
+    Mark an error as resolved.
+    POST /api/agent/errors/<id>/resolve/
+    """
+    from tracker.models import AgentError
+    
+    if not request.user.is_staff:
+        return Response({"error": "Admin only"}, status=403)
+    
+    try:
+        error = AgentError.objects.get(id=error_id)
+    except AgentError.DoesNotExist:
+        return Response({"error": "Not found"}, status=404)
+    
+    error.resolved = True
+    error.resolved_at = timezone.now()
+    error.resolved_by = request.user
+    error.notes = request.data.get('notes', '')
+    error.save()
     
     return Response({"ok": True})

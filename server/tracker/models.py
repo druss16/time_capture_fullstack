@@ -1802,24 +1802,59 @@ class EmployeeCostRate(models.Model):
 
 
 class AgentError(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+    """Track agent errors from all clients for debugging."""
+    
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, 
+        null=True, blank=True,
+        related_name='agent_errors'
+    )
+    org = models.ForeignKey(
+        'Organization', on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='agent_errors'
+    )
+    
+    # Error details
     error_type = models.CharField(max_length=50, db_index=True)
     error_message = models.TextField()
     traceback = models.TextField(blank=True)
+    
+    # Device info
     device_id = models.CharField(max_length=100, db_index=True)
-    hostname = models.CharField(max_length=100)
-    app_version = models.CharField(max_length=20)
+    hostname = models.CharField(max_length=100, db_index=True)
+    app_version = models.CharField(max_length=20, db_index=True)
     platform = models.CharField(max_length=100, blank=True)
+    python_version = models.CharField(max_length=20, blank=True)
+    os_username = models.CharField(max_length=100, blank=True)
+    
+    # Context
     context = models.JSONField(default=dict, blank=True)
+    
+    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    client_timestamp = models.DateTimeField(null=True, blank=True)
+    
+    # Status
     resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, 
+        null=True, blank=True,
+        related_name='resolved_errors'
+    )
+    notes = models.TextField(blank=True)
     
     class Meta:
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['error_type', 'created_at']),
             models.Index(fields=['device_id', 'created_at']),
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['resolved', 'created_at']),
+            models.Index(fields=['app_version', 'created_at']),
         ]
     
     def __str__(self):
-        return f"{self.error_type} @ {self.hostname} ({self.created_at})"
+        username = self.user.username if self.user else self.os_username or 'unknown'
+        return f"{self.error_type} | {username}@{self.hostname} | {self.created_at:%Y-%m-%d %H:%M}"

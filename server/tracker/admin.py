@@ -170,3 +170,45 @@ class OrganizationMembershipAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+from tracker.models import AgentError
+
+@admin.register(AgentError)
+class AgentErrorAdmin(admin.ModelAdmin):
+    list_display = ['id', 'error_type', 'user', 'hostname', 'app_version', 'created_at', 'resolved']
+    list_filter = ['error_type', 'app_version', 'resolved', 'created_at']
+    search_fields = ['hostname', 'device_id', 'error_message', 'user__username', 'os_username']
+    readonly_fields = ['created_at', 'client_timestamp']
+    date_hierarchy = 'created_at'
+    
+    list_per_page = 50
+    
+    fieldsets = (
+        ('Error', {
+            'fields': ('error_type', 'error_message', 'traceback')
+        }),
+        ('Device', {
+            'fields': ('user', 'hostname', 'device_id', 'os_username', 'app_version', 'platform')
+        }),
+        ('Context', {
+            'fields': ('context',),
+            'classes': ('collapse',)
+        }),
+        ('Resolution', {
+            'fields': ('resolved', 'resolved_at', 'resolved_by', 'notes')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'client_timestamp'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    actions = ['mark_resolved', 'mark_unresolved']
+    
+    def mark_resolved(self, request, queryset):
+        queryset.update(resolved=True, resolved_at=timezone.now(), resolved_by=request.user)
+    mark_resolved.short_description = "Mark selected errors as resolved"
+    
+    def mark_unresolved(self, request, queryset):
+        queryset.update(resolved=False, resolved_at=None, resolved_by=None)
+    mark_unresolved.short_description = "Mark selected errors as unresolved"

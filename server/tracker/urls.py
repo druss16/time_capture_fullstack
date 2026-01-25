@@ -242,6 +242,10 @@ urlpatterns = [
     path('sync/full/', views_sync.sync_full, name='sync-full'),
 
     path('agent/errors/', views.agent_error_report, name='agent-error-report'),
+    path('agent/errors/list/', views.agent_errors_list, name='agent-errors-list'),
+    path('agent/errors/summary/', views.agent_errors_summary, name='agent-errors-summary'),
+    path('agent/errors/<int:error_id>/', views.agent_error_detail, name='agent-error-detail'),
+    path('agent/errors/<int:error_id>/resolve/', views.agent_error_resolve, name='agent-error-resolve'),
 
 
 ]

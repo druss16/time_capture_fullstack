@@ -4633,7 +4633,7 @@ def today_time(request):
     # STEP 2: Calculate duration for each event
     # Duration = time until next event (capped at 30 min)
     # =========================================================================
-    IDLE_CAP_SECONDS = 180  # 3 minutes - matches agent idle threshold
+    IDLE_CAP_SECONDS = 180  # 3 minutes - matches agent's MOUSE_IDLE_PAUSE_S
     
     event_durations = []
     for i, event in enumerate(events):
@@ -4642,7 +4642,7 @@ def today_time(request):
             duration_sec = (next_ts - event.ts_utc).total_seconds()
             duration_sec = min(duration_sec, IDLE_CAP_SECONDS)
         else:
-            duration_sec = 300  # 5 min for last event
+            duration_sec = 180  # 3 min for last event
         
         # Get client and category from linked block
         block = event.block

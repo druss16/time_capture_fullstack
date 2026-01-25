@@ -1,16 +1,18 @@
 # tracker/services/compaction.py
 """
-Event-centric compaction - FIXED to prevent duplicate blocks
+Event-centric compaction - FIXED VERSION
 
-KEY FIX: Merge into ANY existing block for same app+session, even if already categorized.
-Only the minutes/start/end are updated - category stays locked.
+FIXES:
+1. Added auto_compact_all_active_users() - was missing, Celery task was failing
+2. Use .update() instead of .save() to bypass Block protection when merging
+3. 3-minute idle cap to match agent's MOUSE_IDLE_PAUSE_S
 """
 
 from __future__ import annotations
 from datetime import datetime, timedelta, date as date_type
 from typing import Optional, List, Dict, Any
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Count
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
@@ -23,7 +25,7 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # Configuration
-IDLE_CAP = timedelta(minutes=30)
+IDLE_CAP = timedelta(minutes=3)  # ✅ FIXED: Was 30, now 3 to match agent
 MIN_BLOCK_MINUTES = 0.5
 SESSION_GAP = timedelta(minutes=30)
 AUTO_CATEGORIZE_THRESHOLD = 0.70
@@ -54,9 +56,9 @@ def _calculate_minutes_from_events(events_qs) -> int:
     for i, event in enumerate(events):
         if i + 1 < len(events):
             duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
-            duration = min(duration, IDLE_CAP.total_seconds())
+            duration = min(duration, IDLE_CAP.total_seconds())  # 3 min cap
         else:
-            duration = 300  # 5 min for last event
+            duration = 180  # 3 min for last event (was 300)
         total_seconds += duration
     
     return int(total_seconds / 60)
@@ -177,6 +179,67 @@ def auto_categorize_block(block: Block) -> bool:
     return False
 
 
+# =============================================================================
+# ✅ FIX #1: This function was MISSING - Celery was failing silently!
+# =============================================================================
+
+def auto_compact_all_active_users(minutes_back: int = 30) -> Dict[str, int]:
+    """
+    Auto-compact recent events for ALL active users.
+    Called by Celery beat every 5 minutes.
+    
+    Args:
+        minutes_back: How far back to look for unlinked events (default 30 min)
+    
+    Returns:
+        Dict with stats: users_processed, blocks_created, errors
+    """
+    stats = {
+        'users_processed': 0,
+        'blocks_created': 0,
+        'errors': 0,
+    }
+    
+    # Find all users with unlinked events in the last N minutes
+    cutoff = timezone.now() - timedelta(minutes=minutes_back)
+    
+    users_with_events = RawEvent.objects.filter(
+        ts_utc__gte=cutoff,
+        block__isnull=True
+    ).values('user').annotate(count=Count('id')).filter(count__gt=0)
+    
+    logger.info(f"[AUTO-COMPACT] Found {len(users_with_events)} users with unlinked events")
+    
+    for user_data in users_with_events:
+        user_id = user_data['user']
+        event_count = user_data['count']
+        
+        try:
+            user = User.objects.get(id=user_id)
+            logger.info(f"[AUTO-COMPACT] Processing {user.username}: {event_count} events")
+            
+            # Compact today's events for this user
+            today = timezone.localdate()
+            result = compact_day(user, today)
+            
+            stats['users_processed'] += 1
+            stats['blocks_created'] += result
+            
+        except User.DoesNotExist:
+            logger.warning(f"[AUTO-COMPACT] User {user_id} not found")
+            stats['errors'] += 1
+        except Exception as e:
+            logger.error(f"[AUTO-COMPACT] Error for user {user_id}: {e}", exc_info=True)
+            stats['errors'] += 1
+    
+    logger.info(
+        f"[AUTO-COMPACT] Complete: {stats['users_processed']} users, "
+        f"{stats['blocks_created']} blocks, {stats['errors']} errors"
+    )
+    
+    return stats
+
+
 def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org=None) -> int:
     """Main entry point."""
     today = timezone.localdate()
@@ -192,7 +255,9 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     """
     Main compaction logic - FIXED to prevent duplicates.
     
-    KEY CHANGE: Merge into ANY existing block (categorized or not) for same app+session.
+    KEY CHANGES:
+    1. Merge into ANY existing block (categorized or not) for same app+session
+    2. Use .update() instead of .save() to bypass Block protection
     """
     if isinstance(user, str):
         try:
@@ -227,7 +292,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if not events:
         return 0
     
-    logger.info(f"[COMPACT] Processing {len(events)} unlinked events")
+    logger.info(f"[COMPACT] Processing {len(events)} unlinked events for {user.username}")
     
     # Calculate durations
     events_with_duration = []
@@ -235,8 +300,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         if i + 1 < len(events):
             duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
         else:
-            duration = 300
-        duration = min(duration, IDLE_CAP.total_seconds())
+            duration = 180  # 3 min for last event
+        duration = min(duration, IDLE_CAP.total_seconds())  # 3 min cap
         
         events_with_duration.append({
             'event': event,
@@ -313,16 +378,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 'source_events': [e['event'] for e in app_events],
             })
     
-    # =========================================================================
-    # KEY FIX: Get ALL existing blocks for this day (not just uncategorized)
-    # We'll merge into any block that overlaps our session
-    # =========================================================================
+    # Get ALL existing blocks for this day
     existing_blocks = list(Block.objects.filter(
         user=user,
         day=day,
     ).order_by('start'))
     
-    # Build lookup by app -> list of blocks
+    # Build lookup by app
     existing_by_app = {}
     for b in existing_blocks:
         app = _app_key(b)
@@ -340,28 +402,26 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             new_start = block_data['start']
             new_end = block_data['end']
             
-            # Find an existing block for this app that we can merge into
-            # Criteria: same app AND overlapping or within session gap
+            # Find an existing block to merge into
             merge_target = None
             
             for existing in existing_by_app.get(app, []):
-                # Check if new events overlap or are close to existing block
                 gap_to_existing = (new_start - existing.end).total_seconds() if existing.end else float('inf')
                 gap_from_existing = (existing.start - new_end).total_seconds() if existing.start else float('inf')
                 
-                # Merge if: overlapping OR gap < 30 min
                 if gap_to_existing < SESSION_GAP.total_seconds() or gap_from_existing < SESSION_GAP.total_seconds():
                     merge_target = existing
                     break
                 
-                # Also merge if our events fall within the existing block's time range
                 if existing.start and existing.end:
                     if new_start >= existing.start and new_start <= existing.end:
                         merge_target = existing
                         break
             
             if merge_target:
-                # MERGE into existing block (even if categorized!)
+                # =========================================================
+                # ✅ FIX #2: Use .update() to bypass Block.save() protection
+                # =========================================================
                 try:
                     locked = Block.objects.select_for_update().get(id=merge_target.id)
                     
@@ -369,43 +429,47 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     event_ids = [e.id for e in block_data['source_events']]
                     RawEvent.objects.filter(id__in=event_ids).update(block=locked)
                     
-                    # Expand time range
-                    locked.start = min(locked.start, new_start)
-                    locked.end = max(locked.end, new_end)
-                    
-                    # Recalculate minutes from ALL linked events
-                    locked.minutes = _calculate_minutes_from_events(
+                    # Calculate new values
+                    updated_start = min(locked.start, new_start)
+                    updated_end = max(locked.end, new_end)
+                    updated_minutes = _calculate_minutes_from_events(
                         RawEvent.objects.filter(block=locked)
                     )
                     
-                    # If categorized, update category_hours to reflect new minutes
+                    # Build update dict
+                    update_fields = {
+                        'start': updated_start,
+                        'end': updated_end,
+                        'minutes': updated_minutes,
+                    }
+                    
+                    # If categorized, update category_hours
                     if locked.is_categorized and locked.category_hours:
-                        # Keep same category, just update hours
                         category = list(locked.category_hours.keys())[0]
-                        locked.category_hours = {category: round(locked.minutes / 60.0, 2)}
+                        update_fields['category_hours'] = {category: round(updated_minutes / 60.0, 2)}
                     
-                    locked.save(update_fields=['start', 'end', 'minutes', 'category_hours'])
+                    # ✅ Use .update() to bypass Block.save() protection
+                    Block.objects.filter(id=locked.id).update(**update_fields)
+                    
                     merged_count += 1
-                    
                     logger.debug(f"[COMPACT] Merged into block {locked.id} ({locked.app_name})")
                     continue
                     
                 except Block.DoesNotExist:
-                    pass  # Block was deleted, create new one
+                    pass
             
-            # CREATE new block (no existing block to merge into)
+            # CREATE new block
             new_block = _create_block(block_data, user, org, day)
             if new_block:
                 created_count += 1
                 if not new_block.is_categorized:
                     blocks_to_categorize.append(new_block)
                 
-                # Add to our lookup for subsequent iterations
                 if app not in existing_by_app:
                     existing_by_app[app] = []
                 existing_by_app[app].append(new_block)
     
-    # Auto-categorize ONLY truly new blocks
+    # Auto-categorize new blocks
     auto_cat_count = 0
     for block in blocks_to_categorize:
         if auto_categorize_block(block):
@@ -433,11 +497,11 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
                 duration = (source_events[i + 1].ts_utc - event.ts_utc).total_seconds()
                 duration = min(duration, IDLE_CAP.total_seconds())
             else:
-                duration = 300
+                duration = 180  # 3 min for last event
             total_seconds += duration
         minutes = int(total_seconds / 60)
     else:
-        minutes = 5  # fallback
+        minutes = 3  # fallback (was 5)
     
     client = None
     if not is_idle:
@@ -547,8 +611,7 @@ def recalculate_block_minutes(block_id: int) -> int:
         block = Block.objects.get(id=block_id)
         new_minutes = _calculate_minutes_from_events(RawEvent.objects.filter(block=block))
         if new_minutes != block.minutes:
-            block.minutes = new_minutes
-            block.save(update_fields=['minutes'])
+            Block.objects.filter(id=block_id).update(minutes=new_minutes)
         return new_minutes
     except Block.DoesNotExist:
         return 0
@@ -559,15 +622,7 @@ def recalculate_block_minutes(block_id: int) -> int:
 # =============================================================================
 
 def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) -> Dict[str, int]:
-    """
-    Find and remove duplicate blocks.
-    
-    Duplicates are blocks with:
-    - Same app_name
-    - Overlapping time ranges (>80% overlap)
-    
-    Keeps the block with more linked events.
-    """
+    """Find and remove duplicate blocks."""
     if isinstance(user, str):
         try:
             user = User.objects.get(username=user)
@@ -590,29 +645,24 @@ def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) 
             if b2.id in checked:
                 continue
             
-            # Same app?
             if _app_key(b1) != _app_key(b2):
                 continue
             
-            # Check overlap
             if not (b1.start and b1.end and b2.start and b2.end):
                 continue
             
-            # Calculate overlap
             overlap_start = max(b1.start, b2.start)
             overlap_end = min(b1.end, b2.end)
             
             if overlap_start >= overlap_end:
-                continue  # No overlap
+                continue
             
             overlap_seconds = (overlap_end - overlap_start).total_seconds()
             b1_seconds = (b1.end - b1.start).total_seconds()
             b2_seconds = (b2.end - b2.start).total_seconds()
             
-            # Check if significant overlap (>80% of smaller block)
             smaller_seconds = min(b1_seconds, b2_seconds)
             if smaller_seconds > 0 and (overlap_seconds / smaller_seconds) > 0.8:
-                # Keep the one with more events or longer duration
                 b1_events = RawEvent.objects.filter(block=b1).count()
                 b2_events = RawEvent.objects.filter(block=b2).count()
                 
@@ -633,7 +683,6 @@ def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) 
     
     if not dry_run:
         for block in to_delete:
-            # Reassign events to the surviving block
             app = _app_key(block)
             survivor = Block.objects.filter(
                 user=user, day=day
@@ -643,11 +692,10 @@ def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) 
             
             if survivor:
                 RawEvent.objects.filter(block=block).update(block=survivor)
-                # Recalculate survivor's minutes
-                survivor.minutes = _calculate_minutes_from_events(
+                new_minutes = _calculate_minutes_from_events(
                     RawEvent.objects.filter(block=survivor)
                 )
-                survivor.save(update_fields=['minutes'])
+                Block.objects.filter(id=survivor.id).update(minutes=new_minutes)
             
             block.delete()
             stats['deleted'] += 1

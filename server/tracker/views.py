@@ -7177,6 +7177,8 @@ def agent_error_report(request):
         f"user={user.username if user else '?'} | "
         f"host={error.hostname} | v={error.app_version}"
     )
+
+    maybe_send_alert(error)
     
     return Response({"ok": True, "error_id": error.id})
 
@@ -7379,3 +7381,46 @@ def agent_error_resolve(request, error_id):
     error.save()
     
     return Response({"ok": True})
+
+
+from django.core.mail import send_mail
+from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
+
+def maybe_send_alert(error):
+    '''Send email for critical errors.'''
+    CRITICAL_TYPES = ['tracking_fatal', 'tracking_loop_critical']
+    
+    if error.error_type not in CRITICAL_TYPES:
+        return
+    
+    # Only alert once per device per hour
+    recent = AgentError.objects.filter(
+        device_id=error.device_id,
+        error_type=error.error_type,
+        created_at__gte=timezone.now() - timedelta(hours=1)
+    ).count()
+    
+    if recent > 1:
+        return  # Already alerted
+    
+    send_mail(
+        subject=f"[TimeTracker] Critical Agent Error: {error.error_type}",
+        message=f'''
+Critical error from agent:
+
+User: {error.user.username if error.user else 'Unknown'}
+Host: {error.hostname}
+Device: {error.device_id}
+Version: {error.app_version}
+
+Error: {error.error_message}
+
+View details: https://timetracker-api-k375.onrender.com/admin/tracker/agenterror/{error.id}/
+        ''',
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=['dan@mavops.ai'],
+        fail_silently=True,
+    )
+

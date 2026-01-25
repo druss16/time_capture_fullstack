@@ -503,16 +503,17 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     else:
         minutes = 3  # fallback (was 5)
     
+    # ✅ FIX: Get client for ALL blocks (including idle)
+    # Idle time should show under the active client, but won't count as billable
     client = None
-    if not is_idle:
-        client_id = block_data.get("current_client_id")
-        if client_id:
-            try:
-                client = Client.objects.get(id=client_id)
-            except Client.DoesNotExist:
-                pass
-        if not client and device_id:
-            client = get_current_client_for_user(user, device_id=device_id)
+    client_id = block_data.get("current_client_id")
+    if client_id:
+        try:
+            client = Client.objects.get(id=client_id)
+        except Client.DoesNotExist:
+            pass
+    if not client and device_id:
+        client = get_current_client_for_user(user, device_id=device_id)
     
     if is_idle:
         hours = round(minutes / 60.0, 2)
@@ -532,7 +533,7 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             app_name=block_data.get("app_name") or "Idle",
             bundle_id=block_data.get("bundle_id") or "__idle__",
             hints={},
-            client=None,
+            client=client,  # ✅ FIX: Idle shows under active client (but not billable)
             category_hours={"Idle": hours},
             is_categorized=True,
             categorized_by="system",

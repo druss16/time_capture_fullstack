@@ -2205,7 +2205,7 @@ def run_agent():
                             notif_manager.on_idle_end()  # Sends "Welcome back" notification
                         dwell = time.time() - dwell_start
                         if dwell >= MIN_DWELL_SECONDS:
-                            write_event(conn, cur, os_user, hostname, current_sig)
+                            write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
                             log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
                         else:
                             log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")

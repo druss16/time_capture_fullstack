@@ -250,7 +250,10 @@ jobs:
           repository: druss16/timetracker-releases
           files: |
             ./mac/TimeTracker.pkg
-            ./windows/*.exe
+            ./windows/TimeTracker-Windows-Setup.exe
+          tag_name: ${{ github.ref_name }}
+          token: ${{ secrets.RELEASES_PAT }}
+          make_latest: true
           tag_name: ${{ github.ref_name }}
           token: ${{ secrets.RELEASES_PAT }}
           make_latest: true

@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+env:
+  # Set to 'true' when Azure Trusted Signing certificate is ready
+  ENABLE_WINDOWS_SIGNING: 'false'
+
 jobs:
   build-mac:
     runs-on: macos-latest
@@ -170,8 +174,10 @@ jobs:
       
       # ========================================
       # AZURE TRUSTED SIGNING - Sign executables
+      # Disabled until certificate is ready
       # ========================================
       - name: Sign Windows executables
+        if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
         uses: azure/trusted-signing-action@v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -198,8 +204,10 @@ jobs:
       
       # ========================================
       # AZURE TRUSTED SIGNING - Sign installer
+      # Disabled until certificate is ready
       # ========================================
       - name: Sign Windows installer
+        if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
         uses: azure/trusted-signing-action@v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}

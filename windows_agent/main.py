@@ -12,6 +12,8 @@ Features:
 - AI client suggestions
 - Context bus server
 - System tray GUI integration
+- Error logging and remote error reporting
+- Watchdog thread for crash recovery
 """
 
 import os
@@ -26,7 +28,10 @@ import signal
 import uuid
 import getpass
 import ctypes
-from datetime import datetime, timezone
+import traceback
+import logging
+from logging.handlers import RotatingFileHandler
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Tuple, List
 from urllib.parse import urlparse
 
@@ -168,13 +173,147 @@ sync = None
 notif_manager = None
 notif_worker = None
 
+# ---------------- Logging Setup ----------------
+LOG_DIR = os.path.join(APPDATA, "TimeTracker", "Logs")
+LOG_FILE = os.path.join(LOG_DIR, "agent.log")
+ERROR_LOG_FILE = os.path.join(LOG_DIR, "agent_errors.log")
+
+def setup_logging():
+    """Setup file-based logging with rotation."""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        
+        # Main log - rotates at 5MB, keeps 3 backups
+        main_handler = RotatingFileHandler(
+            LOG_FILE, 
+            maxBytes=5*1024*1024,  # 5MB
+            backupCount=3
+        )
+        main_handler.setLevel(logging.INFO)
+        main_handler.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
+        
+        # Error log - separate file for crashes only
+        error_handler = RotatingFileHandler(
+            ERROR_LOG_FILE,
+            maxBytes=2*1024*1024,  # 2MB
+            backupCount=5
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
+        
+        # Configure root logger
+        logger = logging.getLogger('timetracker')
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(main_handler)
+        logger.addHandler(error_handler)
+        
+        return logger
+    except Exception as e:
+        print(f"[WARN] Failed to setup logging: {e}")
+        return None
+
+_logger = setup_logging()
+
 # ---------------- Logging ----------------
-def log(msg: str):
+def log(msg: str, level: str = "info"):
+    """Log to console (if verbose) and to file."""
     if VERBOSE:
         print(msg, flush=True)
+    
+    if _logger:
+        if level == "error":
+            _logger.error(msg)
+        elif level == "warning":
+            _logger.warning(msg)
+        elif level == "debug":
+            _logger.debug(msg)
+        else:
+            _logger.info(msg)
+
+
+def log_error(msg: str, exc_info=True):
+    """Log an error with optional traceback."""
+    if VERBOSE:
+        print(f"[ERROR] {msg}", flush=True)
+    if _logger:
+        _logger.error(msg, exc_info=exc_info)
+
+
+# ---------------- Error Reporting ----------------
+_error_report_cache = {}  # Prevent spamming same error
+ERROR_REPORT_COOLDOWN = 300  # 5 minutes between same errors
+
+def report_error_to_backend(
+    error_type: str, 
+    error_msg: str, 
+    traceback_str: str = None,
+    context: dict = None
+):
+    """
+    Send error report to backend for remote debugging.
+    """
+    api_key = config.get("api_key") or API_KEY
+    if not api_key or not API_BASE:
+        return False
+    
+    # Rate limit - don't spam same error
+    error_key = f"{error_type}:{error_msg[:100]}"
+    now = time.time()
+    last_sent = _error_report_cache.get(error_key, 0)
+    if now - last_sent < ERROR_REPORT_COOLDOWN:
+        return False
+    _error_report_cache[error_key] = now
+    
+    url = f"{API_BASE}/agent/errors/"
+    
+    payload = {
+        "error_type": error_type,
+        "error_message": error_msg[:1000],
+        "traceback": (traceback_str or "")[:5000],
+        "device_id": get_device_id(),
+        "hostname": platform.node(),
+        "os_username": get_os_username(),
+        "app_version": APP_VERSION,
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "context": context or {},
+    }
+    
+    def _send():
+        try:
+            req = urllib.request.Request(
+                url, 
+                data=json.dumps(payload).encode("utf-8"), 
+                method="POST"
+            )
+            req.add_header("Authorization", f"DeviceKey {api_key}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                log(f"[ERROR-REPORT] Sent to backend: {error_type}")
+                return True
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                log(f"[ERROR-REPORT] HTTP {e.code} sending error report")
+        except Exception as e:
+            log(f"[ERROR-REPORT] Failed to send: {e}")
+        return False
+    
+    # Send async to not block
+    threading.Thread(target=_send, daemon=True).start()
+    return True
+
 
 # ---------------- Context Bus ----------------
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import urllib.request
+import urllib.error
 
 _CONTEXT: Dict[str, dict] = {}
 
@@ -293,9 +432,6 @@ def get_foreground_window_info() -> Optional[Tuple[str, str, int, Optional[str]]
 def try_get_url_or_path(exe_name: str, window_title: str) -> Dict[str, Optional[str]]:
     """
     Try to extract URL or file path from window context.
-    
-    For browsers: Parse from title (format: "Page Title - Browser Name")
-    For Office: Try COM automation
     """
     exe_lower = exe_name.lower()
     
@@ -312,24 +448,15 @@ def try_get_url_or_path(exe_name: str, window_title: str) -> Dict[str, Optional[
     return {"url": None, "file_path": None}
 
 def extract_url_from_browser_title(title: str, exe: str) -> Optional[str]:
-    """
-    Parse URL from browser window title.
-    Common formats:
-    - "Page Title - Google Chrome"
-    - "Page Title — Mozilla Firefox"
-    - "localhost:3000/dashboard - Chrome"
-    """
+    """Parse URL from browser window title."""
     if not title:
         return None
     
-    # Remove browser name suffixes
     for suffix in [" - Google Chrome", " — Mozilla Firefox", " - Microsoft Edge", " - Brave"]:
         if title.endswith(suffix):
             title = title[:-len(suffix)].strip()
     
-    # Check if title contains URL-like patterns
     if "://" in title or title.startswith("localhost") or "/" in title:
-        # Try to extract clean URL
         parts = title.split()
         for part in parts:
             if "://" in part or part.startswith("localhost"):
@@ -338,10 +465,7 @@ def extract_url_from_browser_title(title: str, exe: str) -> Optional[str]:
     return None
 
 def get_office_file_path(exe: str) -> Optional[str]:
-    """
-    Get currently open file path from Office application via COM.
-    Requires: pip install pywin32
-    """
+    """Get currently open file path from Office application via COM."""
     try:
         import win32com.client
         
@@ -386,14 +510,12 @@ def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, st
 
 # ---------------- Device Identity ----------------
 def get_device_id():
-    # Prefer server's integer device_id if we have it
     print(f"[DEBUG get_device_id] config.get('server_device_id') = {config.get('server_device_id')}")
     if config.get("server_device_id"):
         print(f"[DEBUG get_device_id] Returning server_device_id: {config['server_device_id']}")
         return config["server_device_id"]
     print("[DEBUG get_device_id] Falling back to UUID file")
     
-    # Fall back to UUID for initial pairing
     try:
         if os.path.exists(DEVICE_ID_FILE):
             with open(DEVICE_ID_FILE, "r") as f:
@@ -412,9 +534,6 @@ def get_os_username() -> str:
     return getpass.getuser() or os.environ.get("USERNAME", "unknown")
 
 # ---------------- Pairing ----------------
-import urllib.request
-import urllib.error
-
 _pair_lock = threading.Lock()
 
 def _claim_pair(code: str, hostname: str) -> Optional[str]:
@@ -429,11 +548,11 @@ def _claim_pair(code: str, hostname: str) -> Optional[str]:
         raw = http_post_json(PAIR_CLAIM, payload, {"Content-Type": "application/json"})
         data = json.loads(raw or b"{}")
         key = data.get("api_key")
-        server_device_id = data.get("device_id")  # Get server's integer device_id
+        server_device_id = data.get("device_id")
         if key:
             config["api_key"] = key
             if server_device_id:
-                config["server_device_id"] = server_device_id  # Save it!
+                config["server_device_id"] = server_device_id
             if "pair_code" in config:
                 del config["pair_code"]
             save_config(config)
@@ -452,7 +571,6 @@ def ensure_api_key_interactive(hostname: str):
     if key:
         return key
     
-    # Headless pre-provided code
     pair_code = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
     if pair_code:
         with _pair_lock:
@@ -460,7 +578,6 @@ def ensure_api_key_interactive(hostname: str):
             API_KEY = key
             return key
     
-    # Interactive prompt
     if sys.stdin and sys.stdin.isatty():
         print("\n🧩 Enter pairing code from the web app to link this device:")
         code = input("> ").strip()
@@ -600,7 +717,6 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
     )
     conn.commit()
     
-    # Get current client from backend
     api_key = config.get("api_key") or API_KEY
     current_client_id = None
     current_client_name = None
@@ -614,7 +730,6 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
         except Exception as e:
             log(f"[CLIENT] Failed to get current client: {e}")
     
-    # === NOTIFY: Update notification state with current client ===
     if notif_manager:
         notif_manager.set_current_client(current_client_id, current_client_name)
     
@@ -766,8 +881,7 @@ def read_pid():
     except Exception:
         return None
 
-# ---------------- Main Tracking Loop ----------------
-# ---------------- Main Tracking Loop ----------------
+# ---------------- Main Agent ----------------
 def run_agent():
     """Main agent function with GUI integration"""
     global API_KEY, notif_manager, notif_worker, sync
@@ -793,7 +907,6 @@ def run_agent():
             
             def on_sync_update():
                 print(f"[SYNC] Data updated: {len(sync.clients)} clients")
-                # Safe check for gui_menu_bar attribute
                 if hasattr(sync, 'gui_menu_bar') and sync.gui_menu_bar and hasattr(sync.gui_menu_bar, 'refresh_client_menu'):
                     sync.gui_menu_bar.refresh_client_menu(sync.clients)
                     print("[SYNC] GUI menu refreshed")
@@ -808,7 +921,7 @@ def run_agent():
 
     # === PUSH NOTIFICATION SYSTEM ===
     notif_worker = None
-    gui_menu_bar = None  # Initialize before it's referenced
+    gui_menu_bar = None
     
     if PUSH_NOTIF_AVAILABLE and NOTIF_ENABLED:
         log("[NOTIF] Initializing push notification system...")
@@ -832,16 +945,20 @@ def run_agent():
             """Handle user confirming client from notification"""
             log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
             
-            # Update GUI state if available
-            if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
-                gui_menu_bar.state.set_client(client_id, client_name)
-                if hasattr(gui_menu_bar, 'app') and hasattr(gui_menu_bar.app, '_rebuild_menu'):
-                    gui_menu_bar.app._rebuild_menu()
-            
             # Sync to backend
             api_key = config.get("api_key") or API_KEY
             if api_key and API_BASE:
                 set_current_client_backend(API_BASE, api_key, client_id)
+            
+            # Update GUI state AND title
+            if gui_menu_bar:
+                if hasattr(gui_menu_bar, 'state'):
+                    gui_menu_bar.state.set_client(client_id, client_name)
+                log(f"[NOTIF] Updated GUI state to: {client_name}")
+
+            # Update notification state
+            if notif_manager:
+                notif_manager.set_current_client(client_id, client_name)
         
         def on_notif_switch():
             """Handle user requesting client switch from notification"""
@@ -908,7 +1025,6 @@ def run_agent():
             )
             log("[GUI] System tray initialized")
             
-            # Register GUI with sync
             if sync and gui_menu_bar:
                 sync.gui_menu_bar = gui_menu_bar
                 if sync.clients and hasattr(gui_menu_bar, 'refresh_client_menu'):
@@ -916,11 +1032,9 @@ def run_agent():
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
             
             # === QUICK SWITCHER (Alt+Shift+T) ===
-            # === QUICK SWITCHER (Alt+Shift+T) ===
             if gui_menu_bar:
                 try:
                     import keyboard
-                    import time
                     from client_picker import show_client_picker
                     
                     _hotkey_last = [0]
@@ -932,11 +1046,10 @@ def run_agent():
                         _hotkey_last[0] = now
                         log("[HOTKEY] Alt+Shift+T pressed!")
                         
-                        # IMPORTANT: Release the hotkey keys first!
                         keyboard.release('alt')
                         keyboard.release('shift')
                         keyboard.release('t')
-                        time.sleep(0.1)  # Small delay to let keys release
+                        time.sleep(0.1)
                         
                         clients = gui_menu_bar.client_mgr.get_all()
                         current_id = gui_menu_bar.state.current_client_id
@@ -971,7 +1084,6 @@ def run_agent():
     
     write_pid()
     
-    # Ensure API key
     key = config.get("api_key") or API_KEY
     if not key:
         key = ensure_api_key_interactive(hostname)
@@ -980,7 +1092,6 @@ def run_agent():
             remove_pid()
             return
     
-    # Hello
     if not hello(HELLO_URL, os_user, hostname, device_id):
         log("[HELLO] Attempting re-pair after hello failure.")
         drop_api_key()
@@ -990,7 +1101,6 @@ def run_agent():
             remove_pid()
             return
     
-    # Restore client state from backend
     if gui_menu_bar:
         api_key = config.get("api_key") or API_KEY
         if api_key and API_BASE:
@@ -1001,73 +1111,116 @@ def run_agent():
             except Exception as e:
                 log(f"[CLIENT] Failed to restore client state: {e}")
     
-    # === TRACKING LOOP (must be at this indentation level, NOT inside if gui_menu_bar) ===
+    # === TRACKING LOOP WITH ERROR HANDLING ===
     def tracking_loop():
-        conn = ensure_db()
-        cur = conn.cursor()
+        log("[TRACKING] Initializing...")
+        
+        try:
+            conn = ensure_db()
+            cur = conn.cursor()
+        except Exception as e:
+            log_error(f"[TRACKING] ❌ Failed to init DB: {e}")
+            report_error_to_backend("tracking_init", str(e), traceback.format_exc())
+            return
+        
         current_sig = None
         dwell_start = None
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_ERRORS = 10
         
         try:
             while True:
-                if should_stop(CONTROL_URL, os_user, hostname):
-                    log("[CTRL] Stopping agent per admin request.")
-                    break
-                
-                idle = mouse_idle_seconds()
-                if idle >= MOUSE_IDLE_PAUSE_S:
-                    if current_sig != IDLE_SIG:
-                        # === NOTIFY: Going idle ===
-                        if notif_manager:
-                            notif_manager.on_idle_start()
-                        
-                        if current_sig and dwell_start:
-                            now = time.time()
-                            effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
-                            dwell = effective_end - dwell_start
-                            if dwell >= MIN_DWELL_SECONDS:
-                                write_event(conn, cur, os_user, hostname, current_sig)
-                        current_sig = IDLE_SIG
-                        dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
-                        log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
-                    time.sleep(POLL_SECONDS)
-                else:
-                    if current_sig == IDLE_SIG and dwell_start:
-                        # === NOTIFY: Returning from idle ===
-                        if notif_manager:
-                            notif_manager.on_idle_end()
-                        
-                        dwell = time.time() - dwell_start
-                        if dwell >= MIN_DWELL_SECONDS:
-                            write_event(conn, cur, os_user, hostname, current_sig)
-                            log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
-                        else:
-                            log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
-                        current_sig = None
-                        dwell_start = None
+                try:
+                    if should_stop(CONTROL_URL, os_user, hostname):
+                        log("[CTRL] Stopping agent per admin request.")
+                        break
                     
-                    front = get_foreground_window_info()
-                    if not front:
+                    idle = mouse_idle_seconds()
+                    if idle >= MOUSE_IDLE_PAUSE_S:
+                        if current_sig != IDLE_SIG:
+                            if notif_manager:
+                                try:
+                                    notif_manager.on_idle_start()
+                                except Exception as e:
+                                    log(f"[TRACKING] notif on_idle_start error: {e}", "warning")
+                            
+                            if current_sig and dwell_start:
+                                now = time.time()
+                                effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                                dwell = effective_end - dwell_start
+                                if dwell >= MIN_DWELL_SECONDS:
+                                    write_event(conn, cur, os_user, hostname, current_sig)
+                            current_sig = IDLE_SIG
+                            dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
+                            log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
                         time.sleep(POLL_SECONDS)
+                        consecutive_errors = 0
                         continue
-                    
-                    app_name, exe_name, pid, window_title = front
-                    
-                    extras = try_get_url_or_path(exe_name, window_title)
-                    url, fpath = extras.get("url"), extras.get("file_path")
-                    
-                    sig = (app_name, exe_name, window_title, url, fpath)
-                    
-                    if sig != current_sig:
-                        if current_sig and dwell_start:
+                    else:
+                        if current_sig == IDLE_SIG and dwell_start:
+                            if notif_manager:
+                                try:
+                                    notif_manager.on_idle_end()
+                                except Exception as e:
+                                    log(f"[TRACKING] notif on_idle_end error: {e}", "warning")
+                            
                             dwell = time.time() - dwell_start
                             if dwell >= MIN_DWELL_SECONDS:
-                                write_event(conn, cur, os_user, hostname, current_sig)
-                        current_sig = sig
-                        dwell_start = time.time()
-                        log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
+                                write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
+                                log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
+                            else:
+                                log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
+                            current_sig = None
+                            dwell_start = None
+                        
+                        front = get_foreground_window_info()
+                        if not front:
+                            time.sleep(POLL_SECONDS)
+                            consecutive_errors = 0
+                            continue
+                        
+                        app_name, exe_name, pid, window_title = front
+                        
+                        extras = try_get_url_or_path(exe_name, window_title)
+                        url, fpath = extras.get("url"), extras.get("file_path")
+                        
+                        sig = (app_name, exe_name, window_title, url, fpath)
+                        
+                        if sig != current_sig:
+                            if current_sig and dwell_start:
+                                dwell = time.time() - dwell_start
+                                if dwell >= MIN_DWELL_SECONDS:
+                                    write_event(conn, cur, os_user, hostname, current_sig)
+                            current_sig = sig
+                            dwell_start = time.time()
+                            log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
+                        
+                        time.sleep(POLL_SECONDS)
+                        consecutive_errors = 0
+
+                except Exception as e:
+                    consecutive_errors += 1
+                    error_context = {
+                        "current_sig": str(current_sig) if current_sig else None,
+                        "dwell_start": dwell_start,
+                        "consecutive_errors": consecutive_errors,
+                    }
                     
-                    time.sleep(POLL_SECONDS)
+                    log_error(f"[TRACKING] ⚠️ Error in loop iteration ({consecutive_errors}): {e}")
+                    tb = traceback.format_exc()
+                    traceback.print_exc()
+                    
+                    report_error_to_backend("tracking_loop", str(e), tb, error_context)
+                    
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        log_error(f"[TRACKING] ❌ Too many consecutive errors ({consecutive_errors}), pausing 60s")
+                        report_error_to_backend("tracking_loop_critical", 
+                                               f"Too many errors: {consecutive_errors}", tb, error_context)
+                        time.sleep(60)
+                        consecutive_errors = 0
+                    else:
+                        time.sleep(POLL_SECONDS)
+                    continue
         
         except KeyboardInterrupt:
             log("=== Stopping (Ctrl+C) ===")
@@ -1075,23 +1228,44 @@ def run_agent():
                 dwell = time.time() - dwell_start
                 if dwell >= MIN_DWELL_SECONDS:
                     write_event(conn, cur, os_user, hostname, current_sig)
+        except Exception as e:
+            log_error(f"[TRACKING] ❌ Fatal error: {e}")
+            tb = traceback.format_exc()
+            traceback.print_exc()
+            report_error_to_backend("tracking_fatal", str(e), tb)
         finally:
+            log("[TRACKING] Cleaning up...")
             conn.close()
             remove_pid()
-            # === CLEANUP: Stop notification worker ===
             if notif_worker:
                 notif_worker.stop()
 
-    # Run tracking in thread
+    # === START TRACKING THREAD ===
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
     tracking_thread.start()
     log("[TRACKING] Started tracking thread")
+    
+    # === WATCHDOG: Restart tracking if it dies ===
+    def watchdog():
+        nonlocal tracking_thread
+        while True:
+            time.sleep(30)
+            if not tracking_thread.is_alive():
+                log("[WATCHDOG] ⚠️ Tracking thread died! Restarting...")
+                report_error_to_backend("watchdog", "Tracking thread died, restarting", "")
+                tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
+                tracking_thread.start()
+                log("[WATCHDOG] ✅ Tracking thread restarted")
+    
+    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+    watchdog_thread.start()
+    log("[WATCHDOG] Started watchdog thread")
     
     # Run GUI if available
     if gui_menu_bar and GUI_AVAILABLE:
         log("[GUI] Starting GUI event loop...")
         try:
-            gui_menu_bar.run()  # Blocks here
+            gui_menu_bar.run()
         except KeyboardInterrupt:
             log("[GUI] Interrupted")
     else:

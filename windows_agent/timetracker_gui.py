@@ -9,6 +9,7 @@ Features:
 - Client switching with ROBUST WINDOWS FOCUS
 - AI client prompts
 - Today's time viewer
+- Clean menu without duplicates
 """
 
 import os
@@ -56,27 +57,27 @@ CLIENT_USAGE_FILE = os.path.expanduser("~/.timetracker/client_usage.json")
 # COLOR SCHEME - GREEN/TEAL theme matching website
 # ============================================================
 COLORS = {
-    "primary": "#14B8A6",          # Teal (main brand color)
-    "primary_hover": "#0D9488",    # Darker teal
-    "primary_light": "#5EEAD4",    # Lighter teal
-    "success": "#10B981",          # Green
-    "success_hover": "#059669",    # Darker green
+    "primary": "#14B8A6",
+    "primary_hover": "#0D9488",
+    "primary_light": "#5EEAD4",
+    "success": "#10B981",
+    "success_hover": "#059669",
     "danger": "#EF4444",
     "danger_hover": "#DC2626",
     "warning": "#F59E0B",
-    "bg_dark": "#1A1A1A",          # Dark background
-    "bg_card": "#252525",          # Card background
-    "bg_input": "#2A2A2A",         # Input background
-    "bg_item": "#252525",          # List item background
-    "bg_item_hover": "#333333",    # List item hover
-    "bg_item_selected": "#14B8A6", # Selected item (teal)
+    "bg_dark": "#1A1A1A",
+    "bg_card": "#252525",
+    "bg_input": "#2A2A2A",
+    "bg_item": "#252525",
+    "bg_item_hover": "#333333",
+    "bg_item_selected": "#14B8A6",
     "border": "#3A3A3A",
     "text": "#FFFFFF",
     "text_primary": "#FFFFFF",
     "text_secondary": "#888888",
     "text_muted": "#666666",
-    "accent": "#14B8A6",           # Accent color (teal)
-    "tray_bg": "#14B8A6",          # Teal tray icon
+    "accent": "#14B8A6",
+    "tray_bg": "#14B8A6",
     "bg_window": "#1A1A1A",
 }
 
@@ -85,7 +86,7 @@ COLORS = {
 # ROBUST WINDOWS FOCUS HANDLING
 # ============================================================
 def get_hwnd_by_title(title):
-    """Find window handle by exact title - MORE RELIABLE than winfo_id()"""
+    """Find window handle by exact title"""
     try:
         return ctypes.windll.user32.FindWindowW(None, title)
     except:
@@ -100,28 +101,18 @@ def force_window_to_foreground(hwnd):
     try:
         user32 = ctypes.windll.user32
         
-        # Get current foreground window's thread
         foreground_hwnd = user32.GetForegroundWindow()
         foreground_thread = user32.GetWindowThreadProcessId(foreground_hwnd, None)
         current_thread = user32.GetCurrentThreadId()
         
-        # Attach to foreground thread to steal focus
         if foreground_thread != current_thread:
             user32.AttachThreadInput(foreground_thread, current_thread, True)
         
-        # Restore if minimized
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE = 9
-        
-        # Bring to top
+        user32.ShowWindow(hwnd, 9)
         user32.BringWindowToTop(hwnd)
-        
-        # Set as foreground
         user32.SetForegroundWindow(hwnd)
-        
-        # Set focus
         user32.SetFocus(hwnd)
         
-        # Detach threads
         if foreground_thread != current_thread:
             user32.AttachThreadInput(foreground_thread, current_thread, False)
         
@@ -294,7 +285,7 @@ class GUIState:
 class ClientPickerWindow:
     """Searchable client picker popup with robust Windows focus"""
     
-    WINDOW_TITLE = "Switch Client"  # Used for FindWindowW
+    WINDOW_TITLE = "Switch Client"
     
     def __init__(self, client_mgr: ClientManager, on_select: Callable, current_id: int = None):
         self.client_mgr = client_mgr
@@ -303,7 +294,6 @@ class ClientPickerWindow:
         self.all_clients = client_mgr.get_all()
         self.usage_data = load_client_usage()
         
-        # State
         self._selected_id = None
         self._selected_name = None
         self.current_index = 0
@@ -312,14 +302,12 @@ class ClientPickerWindow:
         self.shutting_down = False
         self.after_ids = []
         
-        # Dimensions
         self.WIDTH = 450
         self.MAX_HEIGHT = 550
         self.ITEM_HEIGHT = 48
         self.INPUT_HEIGHT = 50
         self.PADDING = 12
         
-        # Release hotkeys and allow foreground
         release_hotkeys()
         allow_set_foreground()
         
@@ -348,23 +336,20 @@ class ClientPickerWindow:
         self.root.configure(fg_color=COLORS["bg_window"])
     
     def _setup_ui(self):
-        # Container
         container = ctk.CTkFrame(self.root, fg_color=COLORS["bg_window"], corner_radius=12)
         container.pack(fill="both", expand=True, padx=1, pady=1)
         
-        # Header
         header_frame = ctk.CTkFrame(container, fg_color="transparent")
         header_frame.pack(fill="x", padx=self.PADDING, pady=(self.PADDING, 8))
         
         header_label = ctk.CTkLabel(
             header_frame,
-            text="🔍  Switch Client",
+            text="Switch Client",
             font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
             text_color=COLORS["text_primary"]
         )
         header_label.pack(side="left")
         
-        # Close button
         close_btn = ctk.CTkButton(
             header_frame,
             text="✕",
@@ -378,7 +363,6 @@ class ClientPickerWindow:
         )
         close_btn.pack(side="right")
         
-        # Search input
         self.search_var = ctk.StringVar()
         self.search_var.trace_add("write", self._on_search)
         
@@ -400,11 +384,9 @@ class ClientPickerWindow:
         )
         self.search_entry.pack(fill="x")
         
-        # Results frame
         self.results_frame = ctk.CTkScrollableFrame(container, fg_color="transparent")
         self.results_frame.pack(fill="both", expand=True, padx=4, pady=(0, 8))
         
-        # Clear client button
         clear_btn = ctk.CTkButton(
             container,
             text="Clear Client",
@@ -417,7 +399,6 @@ class ClientPickerWindow:
         )
         clear_btn.pack(fill="x", padx=self.PADDING, pady=(0, self.PADDING))
         
-        # Bindings
         self.search_entry.bind("<Escape>", lambda e: self._cancel())
         self.search_entry.bind("<Return>", lambda e: self._confirm_selection())
         self.search_entry.bind("<Down>", lambda e: [self._update_selection(self.current_index + 1), "break"][1])
@@ -454,7 +435,6 @@ class ClientPickerWindow:
         self._filter_clients(query)
     
     def _filter_clients(self, query: str):
-        # Clear existing
         for widget in self.results_frame.winfo_children():
             widget.destroy()
         self.item_widgets = []
@@ -488,7 +468,6 @@ class ClientPickerWindow:
             self._resize_window(1)
             return
         
-        # Build list
         for i, client in enumerate(self.visible_clients):
             cid = client.get("id")
             cname = client.get("name", "Unknown")
@@ -507,12 +486,12 @@ class ClientPickerWindow:
             inner = ctk.CTkFrame(item_frame, fg_color="transparent")
             inner.pack(fill="both", expand=True, padx=12, pady=8)
             
+            # Simple prefix - just bullet for current, no medals
             display_name = f"● {cname}" if is_current else cname
             name_label = ctk.CTkLabel(
                 inner,
                 text=display_name,
-                font=ctk.CTkFont(family="Segoe UI", size=14,
-                                weight="bold" if i < 3 else "normal"),
+                font=ctk.CTkFont(family="Segoe UI", size=14),
                 text_color=COLORS["text_primary"],
                 anchor="w"
             )
@@ -530,7 +509,6 @@ class ClientPickerWindow:
             
             self.item_widgets.append((item_frame, name_label, code_label))
             
-            # Click handlers
             def make_click(idx):
                 def handler(e):
                     self._update_selection(idx)
@@ -546,7 +524,6 @@ class ClientPickerWindow:
                 widget.bind("<Button-1>", make_click(i))
                 widget.bind("<Double-Button-1>", make_dblclick(i))
             
-            # Hover effects
             def make_hover(frame, idx):
                 def enter(e):
                     if self.current_index != idx:
@@ -612,22 +589,18 @@ class ClientPickerWindow:
         if self.shutting_down:
             return
         try:
-            # Ensure window is visible
             self.root.deiconify()
             self.root.state('normal')
             self.root.lift()
             self.root.attributes('-topmost', True)
             self.root.update()
             
-            # Get HWND by window title (MORE RELIABLE than winfo_id)
             hwnd = get_hwnd_by_title(self.WINDOW_TITLE)
             if hwnd:
                 force_window_to_foreground(hwnd)
             
-            # Tkinter focus
             self.root.focus_force()
             
-            # Focus the CTK entry's internal widget
             if hasattr(self.search_entry, '_entry'):
                 self.search_entry._entry.focus_set()
                 self.search_entry._entry.focus_force()
@@ -653,14 +626,11 @@ class ClientPickerWindow:
     
     def show(self):
         """Show the picker with robust focus"""
-        # Multiple aggressive focus attempts at different intervals
         for delay in [10, 50, 100, 150, 200, 300, 400, 500]:
             self.after_ids.append(self.root.after(delay, self._force_focus))
         
-        # Keep window on top
         self.after_ids.append(self.root.after(100, self._stay_on_top))
         
-        # Run mainloop
         self.root.mainloop()
         
         try:
@@ -668,7 +638,6 @@ class ClientPickerWindow:
         except:
             pass
         
-        # Callback
         if self._selected_id is not None or self._selected_name == "No Client":
             self.on_select(self._selected_id or 0, self._selected_name)
 
@@ -678,7 +647,7 @@ class ClientPickerWindow:
 # ============================================================
 def show_client_prompt_modern(client_id: int, client_name: str, confidence: float,
                               callback: Callable, client_mgr: ClientManager):
-    """Show beautiful AI suggestion dialog with GREEN theme"""
+    """Show beautiful AI suggestion dialog"""
     
     result = {"confirmed": False, "client_id": None, "client_name": None}
     
@@ -689,7 +658,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
     root.resizable(False, False)
     root.attributes('-topmost', True)
     
-    # Center window
     root.update_idletasks()
     x = (root.winfo_screenwidth() // 2) - 210
     y = (root.winfo_screenheight() // 2) - 140
@@ -713,11 +681,9 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
             result["client_name"] = client["name"]
         root.destroy()
     
-    # Main content
     content = ctk.CTkFrame(root, fg_color="transparent")
     content.pack(fill="both", expand=True, padx=25, pady=20)
     
-    # Icon and question
     header = ctk.CTkFrame(content, fg_color="transparent")
     header.pack(fill="x", pady=(0, 15))
     
@@ -736,7 +702,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
     )
     question.pack(side="left", padx=(15, 0))
     
-    # Client card
     client_card = ctk.CTkFrame(content, corner_radius=10)
     client_card.pack(fill="x", pady=(0, 15))
     
@@ -750,7 +715,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
     )
     client_label.pack(side="left")
     
-    # Confidence badge - GREEN themed
     conf_color = COLORS["primary"] if confidence >= 0.7 else COLORS["warning"]
     conf_badge = ctk.CTkLabel(
         card_inner,
@@ -763,7 +727,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
     )
     conf_badge.pack(side="right")
     
-    # Buttons - GREEN theme
     btn_frame = ctk.CTkFrame(content, fg_color="transparent")
     btn_frame.pack(fill="x", pady=(0, 10))
     
@@ -789,7 +752,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
     )
     no_btn.pack(side="left", expand=True, fill="x", padx=(5, 0))
     
-    # Different client dropdown
     client_names = [c["name"] for c in client_mgr.get_all()]
     if client_names:
         dropdown = ctk.CTkOptionMenu(
@@ -803,7 +765,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
         )
         dropdown.pack(fill="x")
     
-    # Auto-close after 15 seconds
     def timeout():
         if root.winfo_exists():
             root.destroy()
@@ -811,7 +772,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
     root.after(15000, timeout)
     root.mainloop()
     
-    # Callback
     if result["confirmed"]:
         callback(True, result["client_id"], result["client_name"], {})
     else:
@@ -822,7 +782,7 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
 # Modern Today's Time Window
 # ============================================================
 class TodayTimeWindowModern:
-    """Beautiful window showing today's time - GREEN theme"""
+    """Beautiful window showing today's time"""
     
     def __init__(self, api_callback: Callable):
         self.api_callback = api_callback
@@ -834,7 +794,6 @@ class TodayTimeWindowModern:
         self.root.resizable(False, False)
         self.root.attributes('-topmost', True)
         
-        # Center window
         self.root.update_idletasks()
         x = (self.root.winfo_screenwidth() // 2) - 250
         y = (self.root.winfo_screenheight() // 2) - 225
@@ -846,14 +805,13 @@ class TodayTimeWindowModern:
         content = ctk.CTkFrame(self.root, fg_color="transparent")
         content.pack(fill="both", expand=True, padx=20, pady=20)
         
-        # Header
         header = ctk.CTkFrame(content, fg_color="transparent")
         header.pack(fill="x", pady=(0, 15))
         
         date_str = datetime.now().strftime("%A, %B %d")
         date_label = ctk.CTkLabel(
             header,
-            text=f"📅  {date_str}",
+            text=f"{date_str}",
             font=ctk.CTkFont(size=20, weight="bold")
         )
         date_label.pack(side="left")
@@ -866,17 +824,15 @@ class TodayTimeWindowModern:
         )
         self.total_label.pack(side="right")
         
-        # Time entries list
         self.entries_frame = ctk.CTkScrollableFrame(content, corner_radius=10)
         self.entries_frame.pack(fill="both", expand=True, pady=(0, 15))
         
-        # Buttons
         btn_frame = ctk.CTkFrame(content, fg_color="transparent")
         btn_frame.pack(fill="x")
         
         refresh_btn = ctk.CTkButton(
             btn_frame,
-            text="🔄  Refresh",
+            text="Refresh",
             command=self._on_refresh,
             fg_color=COLORS["primary"],
             hover_color=COLORS["primary_hover"],
@@ -894,7 +850,6 @@ class TodayTimeWindowModern:
         )
         close_btn.pack(side="right", expand=True, fill="x", padx=(5, 0))
         
-        # Escape to close
         self.root.bind("<Escape>", lambda e: self.root.destroy())
     
     def _on_refresh(self):
@@ -904,7 +859,6 @@ class TodayTimeWindowModern:
         try:
             data = self.api_callback()
             
-            # Clear existing entries
             for widget in self.entries_frame.winfo_children():
                 widget.destroy()
             
@@ -924,7 +878,6 @@ class TodayTimeWindowModern:
                     hours = entry.get("hours", 0)
                     total_hours += hours
                     
-                    # Entry row
                     row = ctk.CTkFrame(self.entries_frame, corner_radius=8)
                     row.pack(fill="x", pady=3, padx=5)
                     
@@ -967,7 +920,6 @@ class TimeTrackerSystemTray:
         self.client_mgr = ClientManager()
         self.state = GUIState()
         
-        # Callbacks
         self.on_client_confirmed_callback = None
         self.on_client_rejected_callback = None
         self.get_today_time_callback = None
@@ -978,28 +930,24 @@ class TimeTrackerSystemTray:
         
         self.icon = None
         
-        # Debounce tracking
         self._last_picker_time = 0
         self._picker_lock = threading.Lock()
     
     def _create_image(self):
-        """Create beautiful system tray icon - GREEN/TEAL THEME"""
+        """Create system tray icon"""
         size = 64
         img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         
-        # Draw rounded rectangle background - TEAL
         draw.rounded_rectangle(
             [(4, 4), (size-4, size-4)],
             radius=12,
             fill=COLORS["tray_bg"]
         )
         
-        # Draw clock icon (circle with hands)
         center = size // 2
         radius = 18
         
-        # Clock face
         draw.ellipse(
             [(center - radius, center - radius), 
              (center + radius, center + radius)],
@@ -1007,16 +955,13 @@ class TimeTrackerSystemTray:
             width=3
         )
         
-        # Hour hand
         draw.line([(center, center), (center, center - 10)], fill='white', width=3)
-        # Minute hand
         draw.line([(center, center), (center + 8, center)], fill='white', width=2)
         
         return img
         
     def _build_menu_items(self):
-        """Build system tray menu items"""
-        client_display = self.state.current_client_name or "No Client"
+        """Build system tray menu items - CLEAN VERSION"""
         
         def make_switch_handler(cid, cname):
             def handler(icon, item):
@@ -1031,7 +976,10 @@ class TimeTrackerSystemTray:
             client_id = client["id"]
             client_name = client["name"]
             is_current = client_id == self.state.current_client_id
-            prefix = "● " if is_current else "   "
+            
+            # Simple prefix - just bullet for current, no medals
+            prefix = "● " if is_current else ""
+            
             client_items.append(
                 Item(f"{prefix}{client_name}", make_switch_handler(client_id, client_name))
             )
@@ -1048,20 +996,18 @@ class TimeTrackerSystemTray:
         def on_quit(icon, item):
             self._on_quit()
         
+        # Clean menu - no duplicate header, shortcut shown as text
         return (
-            Item(f"⏱  {client_display}", None, enabled=False),
-            Item("─" * 20, None, enabled=False),
-            Item("🔍  Search Clients...", on_search),
+            Item("Search Clients...    Alt+Shift+T", on_search),
             Item("Switch Client", pystray.Menu(*client_items)),
-            Item("📊  Today's Time...", on_today),
-            Item("─" * 20, None, enabled=False),
+            Item("Today's Time...", on_today),
+            pystray.Menu.SEPARATOR,
             Item("Quit", on_quit),
         )
 
     def _show_client_picker(self):
         """Show searchable client picker with ROBUST FOCUS"""
         
-        # Debounce
         now = _time.time() * 1000
         with self._picker_lock:
             if now - self._last_picker_time < 1000:
@@ -1088,7 +1034,6 @@ class TimeTrackerSystemTray:
             if selected_id is not None or selected_name == "No Client":
                 self._switch_client(selected_id or 0, selected_name)
         
-        # Run in thread
         threading.Thread(target=run_picker, daemon=True).start()
     
     def _switch_client(self, client_id: int, client_name: str):
@@ -1153,7 +1098,6 @@ def show_client_picker(clients: list, current_id: int = None, on_select=None):
     release_hotkeys()
     allow_set_foreground()
     
-    # Create a temporary client manager
     class TempClientMgr:
         def get_all(self):
             return clients
@@ -1224,7 +1168,6 @@ def run_gui_app(on_client_confirmed: Callable,
 
 
 if __name__ == "__main__":
-    # Test
     def test_confirmed(cid, cname, data):
         print(f"Confirmed: {cname}")
     

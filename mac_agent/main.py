@@ -63,7 +63,7 @@ import ssl
 os.environ['SSL_CERT_FILE'] = certifi.where()
 
 import logging
-from logging.handlers import RotatingFileHandlerZ
+from logging.handlers import RotatingFileHandler
 
 # Notifications (PyObjC)
 try:
@@ -2117,16 +2117,30 @@ def run_agent():
             """Handle user confirming client from notification"""
             log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
             
-            # Update GUI state
-            if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
-                gui_menu_bar.state.set_client(client_id, client_name)
-                # DON'T call _rebuild_menu here - it corrupts rumps from background thread
-            
             # Sync to backend
             api_key = config.get("api_key") or API_KEY
             if api_key and API_BASE:
                 set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
-        
+            
+            # Update GUI state AND title AND menu
+            if gui_menu_bar:
+                if hasattr(gui_menu_bar, 'state'):
+                    gui_menu_bar.state.set_client(client_id, client_name)
+                
+                # Update menu bar title
+                if hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
+                    gui_menu_bar.app.title = f"⏱ {client_name}" if client_name else "⏱ None"
+                    log(f"[NOTIF] Updated menu title to: {client_name}")
+                
+                # Rebuild menu to update bullet indicator
+                if hasattr(gui_menu_bar, 'app') and hasattr(gui_menu_bar.app, '_rebuild_menu'):
+                    gui_menu_bar.app._rebuild_menu()
+                    log(f"[NOTIF] Rebuilt menu")
+
+            # Update notification state
+            if notif_manager:
+                notif_manager.set_current_client(client_id, client_name)
+                
         def on_notif_switch():
             """Handle user requesting client switch from notification"""
             log("[NOTIF] User requested client switch - opening picker")
@@ -2486,6 +2500,22 @@ def run_agent():
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
     tracking_thread.start()
     log("[TRACKING] Started tracking thread")
+
+    # === WATCHDOG: Restart tracking if it dies ===
+    def watchdog():
+        nonlocal tracking_thread  # <-- ADD THIS
+        while True:
+            time.sleep(30)  # Check every 30 seconds
+            if not tracking_thread.is_alive():
+                log("[WATCHDOG] ⚠️ Tracking thread died! Restarting...")
+                report_error_to_backend("watchdog", "Tracking thread died, restarting", "")
+                tracking_thread = threading.Thread(target=tracking_loop, daemon=False)  # <-- Update reference
+                tracking_thread.start()
+                log("[WATCHDOG] ✅ Tracking thread restarted")
+
+    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+    watchdog_thread.start()
+    log("[WATCHDOG] Started watchdog thread")
 
     # === RUN GUI IN MAIN THREAD ===
     if gui_menu_bar and GUI_AVAILABLE:

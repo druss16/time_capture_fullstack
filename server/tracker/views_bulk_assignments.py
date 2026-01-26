@@ -100,7 +100,7 @@ def bulk_assign_clients(request):
                     ClientAssignment.objects.create(
                         organization=org,        # From request.user's membership
                         client=client,
-                        user=user,
+                        user_id=user_id,        # FIX: Use user_id= since we're iterating over IDs
                         role=role,              # Make sure this matches ROLE_CHOICES
                         assigned_by=request.user,
                     )

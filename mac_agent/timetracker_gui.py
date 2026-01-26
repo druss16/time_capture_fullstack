@@ -1227,21 +1227,22 @@ if RUMPS_AVAILABLE:
             super().__init__("⏱", quit_button=None)
             self.controller = controller
             self._client_callbacks = {}
+            
+            # Set initial title from state
+            client_name = self.controller.state.current_client_name
+            if client_name and client_name != "No Client":
+                self.title = f"⏱ {client_name}"
+            else:
+                self.title = "⏱ None"
+            
             self._rebuild_menu()
         
         def _rebuild_menu(self):
             self.menu.clear()
             self._client_callbacks.clear()
             
-            # Current client header
-            client_display = self.controller.state.current_client_name or "No Client"
-            header_item = rumps.MenuItem(f"⏱  {client_display}")
-            header_item.set_callback(None)
-            self.menu.add(header_item)
-            self.menu.add(None)
-            
             # Search clients
-            search_item = rumps.MenuItem("🔍  Search Clients...")
+            search_item = rumps.MenuItem("Search Clients...    ⌃⌥T")
             search_item.set_callback(self._on_search)
             self.menu.add(search_item)
             
@@ -1260,15 +1261,7 @@ if RUMPS_AVAILABLE:
                 client_name = client["name"]
                 is_current = client_id == self.controller.state.current_client_id
                 
-                # Rank indicator for top 3
-                if idx == 0:
-                    prefix = "🥇 " if not is_current else "● 🥇 "
-                elif idx == 1:
-                    prefix = "🥈 " if not is_current else "● 🥈 "
-                elif idx == 2:
-                    prefix = "🥉 " if not is_current else "● 🥉 "
-                else:
-                    prefix = "● " if is_current else "    "
+                prefix = "● " if is_current else ""
                 
                 callback_key = f"client_{client_id}"
                 
@@ -1284,7 +1277,7 @@ if RUMPS_AVAILABLE:
                 switch_menu.add(item)
             
             if len(clients) > 15:
-                more_item = rumps.MenuItem(f"    ... {len(clients) - 15} more (use Search)")
+                more_item = rumps.MenuItem(f"... {len(clients) - 15} more (use Search)")
                 more_item.set_callback(None)
                 switch_menu.add(more_item)
             
@@ -1292,7 +1285,7 @@ if RUMPS_AVAILABLE:
             self.menu.add(None)
             
             # Today's time
-            today_item = rumps.MenuItem("📊  Today's Time...")
+            today_item = rumps.MenuItem("Today's Time...")
             today_item.set_callback(self._on_today_time)
             self.menu.add(today_item)
             
@@ -1338,9 +1331,11 @@ if RUMPS_AVAILABLE:
             
             if client_id == 0:
                 self.controller.state.set_client(None, "No Client")
+                self.title = "⏱ None"  # ADD THIS
                 print(f"[GUI] Client cleared")
             else:
                 self.controller.state.set_client(client_id, client_name)
+                self.title = f"⏱ {client_name}"  # ADD THIS
                 print(f"[GUI] Switched to: {client_name}")
             
             if self.controller.set_current_client_callback:

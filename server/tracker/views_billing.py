@@ -1564,6 +1564,9 @@ def billing_rates_list(request):
         }, status=201)
 
 
+# REPLACE billing_rates_detail in views_billing.py with this fixed version:
+# The BillingRate model uses 'rate' not 'hourly_rate'
+
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 @require_professional_plan
@@ -1586,14 +1589,15 @@ def billing_rates_detail(request, rate_id):
             'user_name': rate.user.username if rate.user else None,
             'client': rate.client.id if rate.client else None,
             'client_name': rate.client.name if rate.client else None,
-            'hourly_rate': str(rate.hourly_rate),
+            'rate': str(rate.rate),  # FIX: was 'hourly_rate'
             'effective_date': safe_date(rate.effective_date),
         })
     
     elif request.method in ['PUT', 'PATCH']:
-        # Update rate
-        if 'hourly_rate' in request.data:
-            rate.hourly_rate = Decimal(str(request.data['hourly_rate']))
+        # Update rate - accept both 'rate' and 'hourly_rate' for compatibility
+        new_rate = request.data.get('rate') or request.data.get('hourly_rate')
+        if new_rate:
+            rate.rate = Decimal(str(new_rate))  # FIX: was rate.hourly_rate
         if 'effective_date' in request.data:
             rate.effective_date = request.data['effective_date']
         if 'user' in request.data:
@@ -1609,7 +1613,7 @@ def billing_rates_detail(request, rate_id):
             'user_name': rate.user.username if rate.user else None,
             'client': rate.client.id if rate.client else None,
             'client_name': rate.client.name if rate.client else None,
-            'hourly_rate': str(rate.hourly_rate),
+            'rate': str(rate.rate),  # FIX: was 'hourly_rate'
             'effective_date': safe_date(rate.effective_date),
         })
     

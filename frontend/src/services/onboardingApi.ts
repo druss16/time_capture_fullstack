@@ -423,10 +423,17 @@ export const getDownloadInfo = async (): Promise<DownloadInfoResponse> => {
 };
 
 // ============================================================================
+// ALIAS EXPORTS (for backward compatibility)
+// ============================================================================
+
+export const onboardingSignup = signup;
+
+// ============================================================================
 // DEFAULT EXPORT
 // ============================================================================
 
 const onboardingApi = {
+  onboardingSignup,
   getIndustryOptions,
   getOrgCategories,
   signup,

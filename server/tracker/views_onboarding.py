@@ -33,13 +33,20 @@ User = get_user_model()
 # STEP 1: Firm Signup
 # ============================================================================
 
+# ============================================================================
+# UPDATED onboarding_signup - Replace in views_onboarding.py
+# ============================================================================
+
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def onboarding_signup(request):
     """
-    Create new CPA firm account with owner.
+    Create new firm account with owner.
+    NOW ACCEPTS industry_type and seeds appropriate task types!
     """
+    from tracker.industry_categories import INDUSTRY_CHOICES, get_task_types_for_industry
+    
     data = request.data
     
     firm_name = (data.get('firm_name') or '').strip()
@@ -47,6 +54,7 @@ def onboarding_signup(request):
     password = data.get('password') or ''
     owner_name = (data.get('owner_name') or '').strip()
     tz = data.get('timezone', 'America/New_York')
+    industry_type = data.get('industry_type', 'general')  # ✅ NEW
     
     errors = {}
     if not firm_name:
@@ -61,6 +69,11 @@ def onboarding_signup(request):
     if errors:
         return Response({'ok': False, 'errors': errors}, status=400)
     
+    # ✅ Validate industry type
+    valid_industries = [choice[0] for choice in INDUSTRY_CHOICES]
+    if industry_type not in valid_industries:
+        industry_type = 'general'
+    
     if User.objects.filter(email=email).exists():
         return Response({
             'ok': False, 
@@ -68,7 +81,7 @@ def onboarding_signup(request):
         }, status=400)
     
     with transaction.atomic():
-        # 1. Create Organization
+        # 1. Create Organization WITH industry_type
         base_slug = slugify(firm_name)[:40]
         slug = base_slug
         counter = 1
@@ -79,6 +92,7 @@ def onboarding_signup(request):
         org = Organization.objects.create(
             name=firm_name,
             slug=slug,
+            industry_type=industry_type,  # ✅ SET INDUSTRY TYPE
             plan='trial',
             trial_ends_at=timezone.now() + timedelta(days=14),
             timezone=tz,
@@ -111,8 +125,9 @@ def onboarding_signup(request):
             role='owner',
         )
         
-        # 4. Seed Default Task Types
-        for idx, tt_data in enumerate(DEFAULT_CPA_TASK_TYPES):
+        # 4. ✅ Seed Task Types BASED ON INDUSTRY (not hardcoded CPA!)
+        task_types = get_task_types_for_industry(industry_type)
+        for idx, tt_data in enumerate(task_types):
             TaskType.objects.create(
                 org=org,
                 name=tt_data['name'],
@@ -153,6 +168,7 @@ def onboarding_signup(request):
             'name': org.name,
             'slug': org.slug,
             'plan': org.plan,
+            'industry_type': org.industry_type,  # ✅ Return industry type
             'trial_ends_at': org.trial_ends_at.isoformat() if org.trial_ends_at else None,
         },
         'install_token': install_token.token,

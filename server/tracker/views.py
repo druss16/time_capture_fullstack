@@ -191,6 +191,16 @@ from .serializers_billing import (
     InvoiceExportSerializer
 )
 
+# ADD THESE IMPORTS AT TOP OF views.py:
+from tracker.industry_categories import (
+    INDUSTRY_CHOICES,
+    INDUSTRY_TYPES,
+    get_categories_for_industry,
+    get_combined_tool_detection,
+    get_task_types_for_industry,
+    get_seasonal_context_for_industry,
+    build_ai_prompt_for_industry,
+)
 
 def match_client_in_text(text: str, clients: list, known_entities: list = None) -> list:
     """
@@ -1710,22 +1720,14 @@ def label_block(request):
 # UPDATED: AI-Enhanced Suggestions (context-aware)
 # Prioritizes Development/Consulting patterns over CPA patterns
 # -------------------------------------------------------------------
-def pre_classify_obvious_categories(block) -> dict:
+def pre_classify_obvious_categories(block, industry_type='general') -> dict:
     """
     Pre-classify obvious patterns before AI runs.
-    Enhanced with both CPA-specific and Consulting/Dev tool detection.
-    
-    Priority Order:
-    0. **Meetings & Calls** (HIGHEST - even with low mouse activity)
-    1. Development tools (VSCode, GitHub, localhost)
-    2. AI/Research tools (Claude, ChatGPT, documentation)
-    3. Email & Communication
-    4. CPA professional tools
-    5. File patterns
-    
-    Returns: {"categories": {...}, "confidence": float, "reasoning": str} or empty dict
+    NOW USES INDUSTRY-SPECIFIC TOOL DETECTION!
     """
-    title = (getattr(block, "window_title", "") or block.title or "").lower()
+    from tracker.industry_categories import get_combined_tool_detection
+    
+    title = (getattr(block, "window_title", "") or getattr(block, "title", "") or "").lower()
     url = (block.url or "").lower()
     app_name = (getattr(block, "app_name", "") or "").lower()
     file_path = (block.file_path or "").lower()
@@ -1736,251 +1738,41 @@ def pre_classify_obvious_categories(block) -> dict:
     elif hasattr(block, 'minutes') and block.minutes:
         hours = round(block.minutes / 60.0, 2)
     else:
-        hours = 0.1  # fallback
+        hours = 0.1
     
     combined_text = f"{title} {url} {app_name} {file_path}"
     
-    # ========================================================================
-    # PRIORITY 0: MEETINGS & CALLS (HIGHEST PRIORITY)
-    # People on video calls often don't move their mouse - never mark as idle!
-    # ========================================================================
-    
-    meeting_apps = ['zoom', 'teams', 'meet', 'slack', 'webex', 'discord', 'skype', 'bluejeans', 'gotomeeting']
-    meeting_keywords = ['meeting', 'zoom meeting', 'teams meeting', 'call with', 'video call', 'conference call']
+    # MEETINGS (universal - all industries)
+    meeting_apps = ['zoom', 'teams', 'meet', 'slack', 'webex', 'discord', 'skype']
     meeting_domains = ['zoom.us', 'meet.google.com', 'teams.microsoft.com']
     
-    # Check app name first (most reliable)
     if any(app in app_name for app in meeting_apps):
-        return {
-            'categories': {'Meetings': hours},
-            'confidence': 0.90,
-            'reasoning': f'Video call/meeting app detected: {app_name}'
-        }
+        return {'categories': {'Meetings': hours}, 'confidence': 0.90, 'reasoning': f'Meeting app: {app_name}'}
     
-    # Check URL (for web-based meetings)
     if any(domain in url for domain in meeting_domains):
-        return {
-            'categories': {'Meetings': hours},
-            'confidence': 0.85,
-            'reasoning': 'Meeting URL detected'
-        }
+        return {'categories': {'Meetings': hours}, 'confidence': 0.85, 'reasoning': 'Meeting URL detected'}
     
-    # Check window title (for scheduled meetings)
-    if any(keyword in title for keyword in meeting_keywords):  # ✅ Fixed: use 'title' not 'window_title'
-        return {
-            'categories': {'Meetings': hours},
-            'confidence': 0.80,
-            'reasoning': 'Meeting keyword in window title'
-        }
+    # INDUSTRY-SPECIFIC TOOL DETECTION
+    tool_detection = get_combined_tool_detection(industry_type)
     
-    # ========================================================================
-    # PRIORITY 1: DEVELOPMENT TOOLS (Check BEFORE CPA tools)
-    # ========================================================================
+    for tool_key, tool_config in tool_detection.items():
+        keywords = tool_config.get('keywords', [])
+        domains = tool_config.get('domains', [])
+        category = tool_config.get('category', 'Administration')
+        confidence = tool_config.get('confidence', 0.80)
+        
+        if any(keyword in combined_text for keyword in keywords):
+            return {'categories': {category: hours}, 'confidence': confidence, 'reasoning': f'{category} via {tool_key}'}
+        
+        if any(domain in url for domain in domains):
+            return {'categories': {category: hours}, 'confidence': confidence, 'reasoning': f'{category} from URL'}
     
-    # VSCode detection
-    vscode_indicators = [
-        "visual studio code", "vscode", "vs code", "code - ",
-        "● ", "  - visual studio code",  # VSCode window patterns
-        ".py - ", ".js - ", ".tsx - ", ".jsx - ", ".ts - ",  # Code files
-        "tasks.py", "views.py", "models.py", "settings.py",  # Django
-        "component.tsx", "index.tsx", "app.tsx",  # React
-    ]
-    if any(indicator in combined_text for indicator in vscode_indicators):
-        return {
-            "categories": {"Software Development": hours},
-            "confidence": 0.95,
-            "reasoning": "Code editor detected"
-        }
-    
-    # Terminal/Command Line
-    terminal_indicators = [
-        "terminal", "iterm", "iterm2",
-        "docker compose", "python manage.py", "npm run", "celery -A",
-        "git ", "pip install", "yarn", "pnpm"
-    ]
-    if any(indicator in combined_text for indicator in terminal_indicators):
-        return {
-            "categories": {"Software Development": hours},
-            "confidence": 0.90,
-            "reasoning": "Terminal/command line activity"
-        }
-    
-    # GitHub
-    if "github" in combined_text or "github.com" in url:
-        return {
-            "categories": {"Software Development": hours},
-            "confidence": 0.92,
-            "reasoning": "GitHub repository activity"
-        }
-    
-    # Localhost development
-    localhost_indicators = [
-        "localhost", "127.0.0.1",
-        "localhost:5173", "localhost:7123", "localhost:3000", "localhost:8000",
-        "vite", "hot module replacement", "hmr"
-    ]
-    if any(indicator in combined_text for indicator in localhost_indicators):
-        return {
-            "categories": {"Software Development": hours},
-            "confidence": 0.88,
-            "reasoning": "Local development environment"
-        }
-    
-    # Deployment/Infrastructure
-    deployment_indicators = [
-        "deploying", "deployment", "render.com", "dashboard.render.com",
-        "vercel", "heroku", "neon.tech", "console.neon.tech",
-        "docker", "kubernetes"
-    ]
-    if any(indicator in combined_text for indicator in deployment_indicators):
-        return {
-            "categories": {"Software Development": hours},
-            "confidence": 0.90,
-            "reasoning": "Deployment/infrastructure work"
-        }
-    
-    # ========================================================================
-    # PRIORITY 2: AI & RESEARCH TOOLS
-    # ========================================================================
-    
-    # Claude AI
-    claude_indicators = [
-        "claude", "claude.ai", "anthropic",
-        "ai classification", "document revision",
-        "code review", "prompt"
-    ]
-    if any(indicator in combined_text for indicator in claude_indicators):
-        return {
-            "categories": {"Research/AI Assistance": hours},
-            "confidence": 0.92,
-            "reasoning": "Claude AI assistant usage"
-        }
-    
-    # ChatGPT
-    if any(indicator in combined_text for indicator in ["chatgpt", "chat.openai.com", "openai"]):
-        return {
-            "categories": {"Research/AI Assistance": hours},
-            "confidence": 0.92,
-            "reasoning": "ChatGPT usage"
-        }
-    
-    # Stack Overflow & Documentation
-    research_indicators = [
-        "stackoverflow", "stack overflow",
-        "docs.python.org", "reactjs.org", "docs.djangoproject.com",
-        "developer.mozilla.org", "mdn web docs",
-        "documentation", "api reference"
-    ]
-    if any(indicator in combined_text for indicator in research_indicators):
-        return {
-            "categories": {"Research/AI Assistance": hours},
-            "confidence": 0.85,
-            "reasoning": "Technical documentation/research"
-        }
-    
-    # ========================================================================
-    # PRIORITY 3: EMAIL & COMMUNICATION (non-meeting)
-    # ========================================================================
-    
-    # Email detection
-    email_indicators = [
-        "@gmail.com", "@outlook.com", "@yahoo.com", "@hotmail.com",
-        "mail.google.com", "outlook.office.com", "inbox",
-        "compose", "draft", "sent mail", "email", "message"
-    ]
+    # EMAIL (universal)
+    email_indicators = ["mail.google.com", "outlook.office.com", "inbox", "compose"]
     if any(indicator in combined_text for indicator in email_indicators):
-        # Make sure it's not a meeting (already caught above)
-        if "meet" not in combined_text and "zoom" not in combined_text:
-            return {
-                "categories": {"Email/Communication": hours},
-                "confidence": 0.90,
-                "reasoning": "Email activity detected"
-            }
+        return {'categories': {'Email/Communication': hours}, 'confidence': 0.90, 'reasoning': 'Email activity'}
     
-    # ========================================================================
-    # PRIORITY 4: CPA PROFESSIONAL TOOLS
-    # ========================================================================
-    
-    # IRS.GOV special case (high priority for CPAs)
-    if "irs.gov" in url:
-        return {
-            "categories": {"Tax Research": hours},
-            "confidence": 0.93,
-            "reasoning": "IRS website research"
-        }
-    
-    # CPA Tool detection (UltraTax, QuickBooks, etc.)
-    for tool_key, tool_config in CPA_TOOL_DETECTION.items():
-        # Check keywords
-        if any(keyword in combined_text for keyword in tool_config["keywords"]):
-            return {
-                "categories": {tool_config["category"]: hours},
-                "confidence": tool_config["confidence"],
-                "reasoning": f"{tool_config['category']} software detected"
-            }
-        
-        # Check domains
-        if any(domain in url for domain in tool_config["domains"]):
-            return {
-                "categories": {tool_config["category"]: hours},
-                "confidence": tool_config["confidence"],
-                "reasoning": f"{tool_config['category']} platform detected from URL"
-            }
-        
-        # Check URL patterns
-        if any(pattern in combined_text for pattern in tool_config.get("urls", [])):
-            return {
-                "categories": {tool_config["category"]: hours},
-                "confidence": tool_config["confidence"] - 0.05,
-                "reasoning": f"{tool_config['category']} content detected"
-            }
-    
-    # ========================================================================
-    # PRIORITY 5: FILE PATTERN DETECTION
-    # ========================================================================
-    
-    if file_path:
-        file_lower = file_path.lower()
-        
-        # Excel/spreadsheet patterns
-        if any(ext in file_lower for ext in ['.xlsx', '.xls', '.xlsm']):
-            if any(pattern in file_lower for pattern in ['workpaper', 'wp', 'audit', 'schedule']):
-                return {
-                    "categories": {"Audit/Assurance": hours},
-                    "confidence": 0.88,
-                    "reasoning": "Audit workpaper detected from filename"
-                }
-            elif any(pattern in file_lower for pattern in ['trial balance', 'tb', 'reconciliation', 'rec']):
-                return {
-                    "categories": {"Accounting/Bookkeeping": hours},
-                    "confidence": 0.87,
-                    "reasoning": "Accounting file detected"
-                }
-            elif any(pattern in file_lower for pattern in ['depreciation', 'fixed asset', 'fa schedule']):
-                return {
-                    "categories": {"Tax Preparation": hours},
-                    "confidence": 0.86,
-                    "reasoning": "Tax schedule detected"
-                }
-        
-        # PDF patterns
-        if '.pdf' in file_lower:
-            if any(pattern in file_lower for pattern in ['1040', '1120', '1065', 'k-1', 'tax return']):
-                return {
-                    "categories": {"Tax Preparation": hours},
-                    "confidence": 0.92,
-                    "reasoning": "Tax return PDF detected"
-                }
-            elif any(pattern in file_lower for pattern in ['engagement letter', 'signed']):
-                return {
-                    "categories": {"Administration": hours},
-                    "confidence": 0.85,
-                    "reasoning": "Administrative document"
-                }
-    
-    # No patterns matched - return empty dict for AI to decide
     return {}
-
 
 # tracker/views.py - REPLACE YOUR EXISTING get_seasonal_context
 
@@ -5010,6 +4802,10 @@ def get_categorization_data(request):
     if not org:
         org, _ = Organization.objects.get_or_create(name="default-org", defaults={"slug": "default-org"})
     
+    # ✅ Get industry-specific categories
+    industry_type = getattr(org, 'industry_type', 'general') or 'general'
+    categories = get_categories_for_industry(industry_type)
+    
     # Parse target date
     if date_str:
         target_date = parse_date(date_str)
@@ -5030,15 +4826,13 @@ def get_categorization_data(request):
     
     # Only show blocks older than 10 minutes
     cutoff_time = timezone.now() - timedelta(minutes=10)
-    
-    # ✅ FIX: Use the more restrictive end time (earlier of the two)
     effective_end = min(end_utc, cutoff_time)
     
     # Get uncategorized blocks
     blocks = Block.objects.filter(
         user=user,
         start__gte=start_utc,
-        start__lt=effective_end,  # ✅ FIXED: Only ONE start__lt
+        start__lt=effective_end,
         is_categorized=False
     ).select_related('client').order_by('start')[:limit]
     
@@ -5092,14 +4886,14 @@ def get_categorization_data(request):
         'date': target_date.isoformat(),
         'blocks': blocks_data,
         'clients': clients_list,
-        'categories': CPA_CATEGORIES,
+        'categories': categories,  # ✅ NOW INDUSTRY-SPECIFIC!
+        'industry_type': industry_type,  # ✅ Include for frontend
         'stats': {
             'uncategorized_count': len(blocks_data),
             'total_minutes': sum(b['duration_minutes'] for b in blocks_data),
             'original_block_count': original_count,
         }
     })
-
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -6320,15 +6114,10 @@ from rest_framework.response import Response
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def settings_org(request):
-    """
-    GET: Return organization info including plan (all members)
-    PATCH: Update organization info (owner/admin only)
-    """
+    """GET/PATCH organization settings including industry_type."""
     from decimal import Decimal
-    import stripe
-    from django.conf import settings as django_settings
+    from tracker.industry_categories import INDUSTRY_CHOICES
 
-    # Get user's membership and org
     membership = OrganizationMembership.objects.filter(
         user=request.user
     ).select_related('organization').first()
@@ -6338,114 +6127,67 @@ def settings_org(request):
 
     org = membership.organization
     is_admin_or_owner = membership.role in ["owner", "admin"]
-
-    # ✅ Ensure profile exists (so GET always has a place to read from)
     profile, _ = OrgProfile.objects.get_or_create(org=org)
 
-    def compute_actual_plan(org_obj):
-        actual = "none"
-        if getattr(org_obj, "stripe_customer_id", None):
-            try:
-                stripe.api_key = getattr(django_settings, "STRIPE_SECRET_KEY", None)
-                subs = stripe.Subscription.list(
-                    customer=org_obj.stripe_customer_id,
-                    status="active",
-                    limit=1
-                )
-                if subs.data:
-                    actual = getattr(org_obj, "plan", "professional") or "professional"
-            except Exception as e:
-                print(f"[settings_org] Stripe check failed: {e}")
-                actual = "none"
-        return actual
-
     if request.method == "GET":
-        response_data = {
+        return Response({
             "id": org.id,
             "name": org.name,
             "slug": getattr(org, "slug", "") or "",
-
-            "plan": compute_actual_plan(org),
+            "industry_type": getattr(org, 'industry_type', 'general') or 'general',  # ✅ ADD
+            "industry_name": dict(INDUSTRY_CHOICES).get(
+                getattr(org, 'industry_type', 'general'), 
+                'General Professional Services'
+            ),  # ✅ Human-readable
+            "plan": getattr(org, "plan", "none"),
             "seat_count": getattr(org, "seat_count", 1),
-
-            "trial_ends_at": org.trial_ends_at.isoformat()
-            if getattr(org, "trial_ends_at", None) else None,
-
-            # ✅ Billing fields live on OrgProfile
-            # Recommended: visible to all members
+            "trial_ends_at": org.trial_ends_at.isoformat() if getattr(org, "trial_ends_at", None) else None,
             "billing_email": profile.billing_email or "",
             "billing_contact": profile.billing_contact or "",
-
-            # Default billing rate - visible to all (needed for time tracking)
             "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
-
-            # Default cost rate - only for admin/owner
-            "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00")
-            if is_admin_or_owner else "0.00",
-
-            "created_at": org.created_at.isoformat()
-            if getattr(org, "created_at", None) else None,
-
-            # Helpful flags for frontend
+            "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if is_admin_or_owner else "0.00",
+            "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
             "can_edit_org": is_admin_or_owner,
             "role": membership.role,
-        }
-        return Response(response_data)
+        })
 
-    # =========================
-    # PATCH (owner/admin only)
-    # =========================
+    # PATCH
     if not is_admin_or_owner:
-        return Response({"error": "Only owner or admin can update organization settings"}, status=403)
+        return Response({"error": "Only owner/admin can update"}, status=403)
 
-    # Update org fields
     if "name" in request.data:
         org.name = request.data["name"]
 
-    if "billing_rate_default" in request.data and hasattr(org, "billing_rate_default"):
+    # ✅ Allow updating industry_type
+    if "industry_type" in request.data:
+        new_industry = request.data["industry_type"]
+        valid_industries = [choice[0] for choice in INDUSTRY_CHOICES]
+        if new_industry in valid_industries:
+            org.industry_type = new_industry
+
+    if "billing_rate_default" in request.data:
         org.billing_rate_default = Decimal(str(request.data["billing_rate_default"]))
 
-    if "cost_rate_default" in request.data and hasattr(org, "cost_rate_default"):
+    if "cost_rate_default" in request.data:
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
 
     org.save()
 
-    # ✅ Update profile billing fields
     if "billing_email" in request.data:
-        # Normalize empty string → None (since field allows null)
-        val = (request.data.get("billing_email") or "").strip()
-        profile.billing_email = val or None
-
+        profile.billing_email = (request.data.get("billing_email") or "").strip() or None
     if "billing_contact" in request.data:
         profile.billing_contact = (request.data.get("billing_contact") or "").strip()
-
     profile.save()
 
-    # Build response
-    response_data = {
+    return Response({
         "id": org.id,
         "name": org.name,
-        "slug": getattr(org, "slug", "") or "",
-        "plan": compute_actual_plan(org),
-        "seat_count": getattr(org, "seat_count", 1),
+        "industry_type": getattr(org, 'industry_type', 'general'),
+        "industry_name": dict(INDUSTRY_CHOICES).get(getattr(org, 'industry_type', 'general'), 'General'),
+        "plan": org.plan,
+        "message": "Settings updated"
+    })
 
-        "trial_ends_at": org.trial_ends_at.isoformat()
-        if getattr(org, "trial_ends_at", None) else None,
-
-        "billing_email": profile.billing_email or "",
-        "billing_contact": profile.billing_contact or "",
-
-        "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
-        "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00"),
-
-        "created_at": org.created_at.isoformat()
-        if getattr(org, "created_at", None) else None,
-
-        "can_edit_org": True,
-        "role": membership.role,
-    }
-
-    return Response(response_data)
 
 # ============================================================================
 # Team Members
@@ -7425,3 +7167,41 @@ View details: https://timetracker-api-k375.onrender.com/admin/tracker/agenterror
         fail_silently=True,
     )
 
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_org_categories(request):
+    """Get the category list for the current user's organization."""
+    from tracker.industry_categories import get_categories_for_industry, INDUSTRY_CHOICES, GENERAL_CATEGORIES
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({
+            'industry_type': 'general',
+            'industry_name': 'General Professional Services',
+            'categories': GENERAL_CATEGORIES
+        })
+    
+    industry_type = getattr(org, 'industry_type', 'general') or 'general'
+    categories = get_categories_for_industry(industry_type)
+    industry_name = dict(INDUSTRY_CHOICES).get(industry_type, 'General Professional Services')
+    
+    return Response({
+        'industry_type': industry_type,
+        'industry_name': industry_name,
+        'categories': categories
+    })
+    
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_industry_options(request):
+    """Get available industry types for signup form."""
+    from tracker.industry_categories import INDUSTRY_TYPES
+    
+    return Response({
+        'industries': [
+            {'value': k, 'label': v}
+            for k, v in INDUSTRY_TYPES
+        ]
+    })

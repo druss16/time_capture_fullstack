@@ -1,12 +1,13 @@
 /**
  * ManualCategorization.tsx - Compact manual time block categorization interface
+ * UPDATED: Now receives industry-specific categories from API
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Clock, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Clock, RefreshCw, CheckCircle2, AlertCircle, Briefcase } from 'lucide-react';
 import BlockCard from './BlockCard';
 
-import { safeFetchJson } from "@/lib/api";  // ✅ ADD THIS
+import { safeFetchJson } from "@/lib/api";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -45,6 +46,7 @@ interface CategorizationData {
   blocks: Block[];
   clients: Client[];
   categories: string[];
+  industry_type?: string;  // ✅ NEW: Industry type from backend
   stats: {
     uncategorized_count: number;
     total_minutes: number;
@@ -56,12 +58,21 @@ interface ManualCategorizationProps {
   onComplete?: () => void;
 }
 
+// Industry display names
+const INDUSTRY_LABELS: Record<string, string> = {
+  cpa: 'CPA / Accounting',
+  ai_consulting: 'AI / Tech Consulting',
+  marketing: 'Marketing Agency',
+  legal: 'Legal Services',
+  general: 'General',
+};
 
 const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [industryType, setIndustryType] = useState<string>('general');  // ✅ MOVED INSIDE COMPONENT
   
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
@@ -77,15 +88,18 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
       setError(null);
       
       const url = `${API_BASE}/categorization/data/?date=${selectedDate}`;
-      console.log('🔍 Fetching:', url);  // ✅ ADD THIS
+      console.log('🔍 Fetching:', url);
       
       const data = await safeFetchJson<CategorizationData>(url);
       
-      console.log('✅ Got data:', data);  // ✅ ADD THIS
+      console.log('✅ Got data:', data);
+      console.log('📋 Categories:', data.categories);
+      console.log('🏢 Industry:', data.industry_type);
       
       setBlocks(data.blocks || []);
       setClients(data.clients || []);
-      setCategories(data.categories || []);
+      setCategories(data.categories || []);  // ✅ Categories now come from backend (industry-specific!)
+      setIndustryType(data.industry_type || 'general');  // ✅ Store industry type
       setStats(data.stats || null);
     } catch (error: any) {
       console.error('❌ Failed to load data:', error);
@@ -120,7 +134,6 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
       );
 
       // ✅ OPTIMISTIC UPDATE: Remove categorized block from local state
-      // instead of refetching everything
       setBlocks(prevBlocks => prevBlocks.filter(b => b.id !== blockId));
       
       // Update stats
@@ -142,7 +155,7 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
     } catch (error: any) {
       console.error('categorizeBlock ERROR:', error);
       setError(error.message || 'Failed to save categorization');
-      // ✅ On error, refetch to get correct state
+      // On error, refetch to get correct state
       await fetchCategorizationData();
       throw error;
     }
@@ -179,6 +192,15 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
               className="w-full max-w-xs border border-border rounded px-3 py-1.5 bg-card text-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
+          
+          {/* ✅ NEW: Industry badge */}
+          {industryType && industryType !== 'general' && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary text-xs font-semibold rounded-full">
+              <Briefcase className="w-3 h-3" />
+              {INDUSTRY_LABELS[industryType] || industryType}
+            </div>
+          )}
+          
           <button
             onClick={fetchCategorizationData}
             disabled={loading}

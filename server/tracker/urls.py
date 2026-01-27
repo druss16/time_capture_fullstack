@@ -247,5 +247,8 @@ urlpatterns = [
     path('agent/errors/<int:error_id>/', views.agent_error_detail, name='agent-error-detail'),
     path('agent/errors/<int:error_id>/resolve/', views.agent_error_resolve, name='agent-error-resolve'),
 
+    path('categories/', views.get_org_categories, name='get_org_categories'),
+    path('industries/', views.get_industry_options, name='get_industry_options'),
+
 
 ]

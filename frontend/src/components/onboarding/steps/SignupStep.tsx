@@ -1,253 +1,249 @@
 // src/components/onboarding/steps/SignupStep.tsx
+/**
+ * Step 1: Create Account - NOW WITH INDUSTRY SELECTOR
+ */
 
-import React, { useState, FormEvent, ChangeEvent } from 'react';
-import { signup, Organization, ApiError } from '../../../services/onboardingApi';
-import { Building2, Mail, Lock, User, AlertCircle, Loader2, Clock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Building2, Mail, Lock, User, ChevronRight, Briefcase } from 'lucide-react';
+import { onboardingSignup, Organization, getIndustryOptions } from '../../../services/onboardingApi';
 
-interface FormData {
-  firmName: string;
-  email: string;
-  password: string;
-  confirmPassword: string;
-  ownerName: string;
+interface IndustryOption {
+  value: string;
+  label: string;
 }
+
+// Industry icons/descriptions for better UX
+const INDUSTRY_INFO: Record<string, { icon: string; description: string }> = {
+  cpa: { icon: '📊', description: 'Tax, audit, bookkeeping, and accounting services' },
+  ai_consulting: { icon: '🤖', description: 'Software development, AI/ML, and tech consulting' },
+  marketing: { icon: '📢', description: 'Digital marketing, content, design, and advertising' },
+  legal: { icon: '⚖️', description: 'Legal research, document drafting, and litigation' },
+  general: { icon: '💼', description: 'General professional services and consulting' },
+};
 
 interface SignupStepProps {
   onComplete: (data: { organization: Organization }) => void;
 }
 
 export default function SignupStep({ onComplete }: SignupStepProps) {
-  const [formData, setFormData] = useState<FormData>({
-    firmName: '',
+  const [formData, setFormData] = useState({
+    firm_name: '',
+    owner_name: '',
     email: '',
     password: '',
-    confirmPassword: '',
-    ownerName: '',
+    industry_type: 'general',  // ✅ NEW
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+  const [industries, setIndustries] = useState<IndustryOption[]>([]);
+  const [loadingIndustries, setLoadingIndustries] = useState(true);
 
-  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-    if (errors[name]) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
-    }
-  };
+  // Load industry options on mount
+  useEffect(() => {
+    loadIndustries();
+  }, []);
 
-  const validate = (): boolean => {
-    const newErrors: Record<string, string> = {};
-    
-    if (!formData.firmName.trim()) {
-      newErrors.firmName = 'Firm name is required';
-    }
-    
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-      newErrors.email = 'Invalid email format';
-    }
-    
-    if (!formData.password) {
-      newErrors.password = 'Password is required';
-    } else if (formData.password.length < 8) {
-      newErrors.password = 'Password must be at least 8 characters';
-    }
-    
-    if (formData.password !== formData.confirmPassword) {
-      newErrors.confirmPassword = 'Passwords do not match';
-    }
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    
-    if (!validate()) return;
-    
-    setLoading(true);
-    setErrors({});
-    
+  const loadIndustries = async () => {
     try {
-      const data = await signup({
-        firmName: formData.firmName,
+      const data = await getIndustryOptions();
+      setIndustries(data.industries || []);
+    } catch (err) {
+      // Fallback to hardcoded options
+      setIndustries([
+        { value: 'cpa', label: 'CPA / Accounting Firm' },
+        { value: 'ai_consulting', label: 'AI / Technology Consulting' },
+        { value: 'marketing', label: 'Marketing / Creative Agency' },
+        { value: 'legal', label: 'Law Firm / Legal Services' },
+        { value: 'general', label: 'General Professional Services' },
+      ]);
+    } finally {
+      setLoadingIndustries(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrors({});
+    setLoading(true);
+
+    try {
+      const result = await onboardingSignup({
+        firm_name: formData.firm_name,
+        owner_name: formData.owner_name,
         email: formData.email,
         password: formData.password,
-        ownerName: formData.ownerName,
+        industry_type: formData.industry_type,  // ✅ Pass industry
       });
-      
-      onComplete({ organization: data.organization });
-    } catch (err) {
-      const apiError = err as ApiError;
-      if (apiError.errors) {
-        setErrors(apiError.errors);
+
+      if (result.ok) {
+        // Store auth token
+        localStorage.setItem('auth_token', result.token);
+        onComplete({ organization: result.organization });
       } else {
-        setErrors({ general: apiError.error || 'Failed to create account' });
+        setErrors(result.errors || { general: 'Signup failed' });
       }
+    } catch (err: any) {
+      setErrors({ general: err.message || 'Network error' });
     } finally {
       setLoading(false);
     }
   };
 
+  const selectedIndustryInfo = INDUSTRY_INFO[formData.industry_type] || INDUSTRY_INFO.general;
+
   return (
-    <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
-      <div className="text-center mb-8">
-        <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <Clock className="w-8 h-8 text-emerald-600" />
-        </div>
-        <h2 className="text-2xl font-bold text-slate-900">Create Your Firm Account</h2>
-        <p className="text-slate-600 mt-2 font-medium">
-          Get started with automatic time tracking in 2 minutes
-        </p>
+    <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 px-6 py-8 text-white">
+        <h2 className="text-2xl font-bold mb-2">Create Your Account</h2>
+        <p className="text-emerald-100">Set up your firm in under a minute</p>
       </div>
 
-      {errors.general && (
-        <div className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-red-500 mt-0.5" />
-          <p className="text-red-700 font-medium">{errors.general}</p>
-        </div>
-      )}
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        {errors.general && (
+          <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm font-medium">
+            {errors.general}
+          </div>
+        )}
 
-      <form onSubmit={handleSubmit} className="space-y-5">
         {/* Firm Name */}
         <div>
-          <label className="block text-sm font-bold text-slate-800 mb-2">
-            Firm Name *
+          <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+            Firm Name
           </label>
           <div className="relative">
             <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
               type="text"
-              name="firmName"
-              value={formData.firmName}
-              onChange={handleChange}
+              value={formData.firm_name}
+              onChange={(e) => setFormData({ ...formData, firm_name: e.target.value })}
               placeholder="Smith & Associates CPA"
-              className={`
-                w-full pl-10 pr-4 py-3 border-2 rounded-xl font-medium transition-all
-                focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none
-                ${errors.firmName ? 'border-red-300' : 'border-slate-200'}
-              `}
+              className={`w-full pl-11 pr-4 py-3 border-2 rounded-xl font-medium transition-all
+                ${errors.firm_name ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-emerald-500'}
+                focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+              required
             />
           </div>
-          {errors.firmName && (
-            <p className="mt-1.5 text-sm text-red-600 font-medium">{errors.firmName}</p>
-          )}
+          {errors.firm_name && <p className="mt-1 text-sm text-red-600">{errors.firm_name}</p>}
         </div>
 
-        {/* Owner Name */}
+        {/* ✅ NEW: Industry Type Selector */}
         <div>
-          <label className="block text-sm font-bold text-slate-800 mb-2">
+          <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+            Industry Type
+          </label>
+          <div className="relative">
+            <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <select
+              value={formData.industry_type}
+              onChange={(e) => setFormData({ ...formData, industry_type: e.target.value })}
+              disabled={loadingIndustries}
+              className={`w-full pl-11 pr-4 py-3 border-2 rounded-xl font-medium transition-all appearance-none
+                border-slate-200 focus:border-emerald-500
+                focus:outline-none focus:ring-2 focus:ring-emerald-500/20
+                ${loadingIndustries ? 'opacity-50' : ''}`}
+            >
+              {industries.map((ind) => (
+                <option key={ind.value} value={ind.value}>
+                  {ind.label}
+                </option>
+              ))}
+            </select>
+            <ChevronRight className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 rotate-90" />
+          </div>
+          {/* Industry description */}
+          <p className="mt-1.5 text-sm text-slate-500 flex items-center gap-2">
+            <span>{selectedIndustryInfo.icon}</span>
+            {selectedIndustryInfo.description}
+          </p>
+        </div>
+
+        {/* Your Name */}
+        <div>
+          <label className="block text-sm font-semibold text-slate-700 mb-1.5">
             Your Name
           </label>
           <div className="relative">
             <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
               type="text"
-              name="ownerName"
-              value={formData.ownerName}
-              onChange={handleChange}
+              value={formData.owner_name}
+              onChange={(e) => setFormData({ ...formData, owner_name: e.target.value })}
               placeholder="John Smith"
-              className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl font-medium transition-all focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
+              className="w-full pl-11 pr-4 py-3 border-2 border-slate-200 rounded-xl font-medium 
+                focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
             />
           </div>
         </div>
 
         {/* Email */}
         <div>
-          <label className="block text-sm font-bold text-slate-800 mb-2">
-            Email Address *
+          <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+            Email Address
           </label>
           <div className="relative">
             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
               type="email"
-              name="email"
               value={formData.email}
-              onChange={handleChange}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
               placeholder="john@smithcpa.com"
-              className={`
-                w-full pl-10 pr-4 py-3 border-2 rounded-xl font-medium transition-all
-                focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none
-                ${errors.email ? 'border-red-300' : 'border-slate-200'}
-              `}
+              className={`w-full pl-11 pr-4 py-3 border-2 rounded-xl font-medium transition-all
+                ${errors.email ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-emerald-500'}
+                focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+              required
             />
           </div>
-          {errors.email && (
-            <p className="mt-1.5 text-sm text-red-600 font-medium">{errors.email}</p>
-          )}
+          {errors.email && <p className="mt-1 text-sm text-red-600">{errors.email}</p>}
         </div>
 
         {/* Password */}
         <div>
-          <label className="block text-sm font-bold text-slate-800 mb-2">
-            Password *
+          <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+            Password
           </label>
           <div className="relative">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
               type="password"
-              name="password"
               value={formData.password}
-              onChange={handleChange}
+              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               placeholder="At least 8 characters"
-              className={`
-                w-full pl-10 pr-4 py-3 border-2 rounded-xl font-medium transition-all
-                focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none
-                ${errors.password ? 'border-red-300' : 'border-slate-200'}
-              `}
+              className={`w-full pl-11 pr-4 py-3 border-2 rounded-xl font-medium transition-all
+                ${errors.password ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-emerald-500'}
+                focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+              required
+              minLength={8}
             />
           </div>
-          {errors.password && (
-            <p className="mt-1.5 text-sm text-red-600 font-medium">{errors.password}</p>
-          )}
-        </div>
-
-        {/* Confirm Password */}
-        <div>
-          <label className="block text-sm font-bold text-slate-800 mb-2">
-            Confirm Password *
-          </label>
-          <div className="relative">
-            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-            <input
-              type="password"
-              name="confirmPassword"
-              value={formData.confirmPassword}
-              onChange={handleChange}
-              placeholder="Confirm your password"
-              className={`
-                w-full pl-10 pr-4 py-3 border-2 rounded-xl font-medium transition-all
-                focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none
-                ${errors.confirmPassword ? 'border-red-300' : 'border-slate-200'}
-              `}
-            />
-          </div>
-          {errors.confirmPassword && (
-            <p className="mt-1.5 text-sm text-red-600 font-medium">{errors.confirmPassword}</p>
-          )}
+          {errors.password && <p className="mt-1 text-sm text-red-600">{errors.password}</p>}
         </div>
 
         {/* Submit */}
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-emerald-600/25"
+          className="w-full py-3.5 bg-emerald-600 text-white font-bold rounded-xl
+            hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed
+            transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25"
         >
           {loading ? (
             <>
-              <Loader2 className="w-5 h-5 animate-spin" />
+              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               Creating Account...
             </>
           ) : (
-            'Create Account'
+            <>
+              Create Account
+              <ChevronRight className="w-5 h-5" />
+            </>
           )}
         </button>
 
-        <p className="text-center text-sm text-slate-500 font-medium">
+        <p className="text-center text-sm text-slate-500">
           Already have an account?{' '}
-          <a href="/login" className="text-emerald-600 hover:text-emerald-700 font-semibold hover:underline">
+          <a href="/login" className="text-emerald-600 font-semibold hover:underline">
             Sign in
           </a>
         </p>

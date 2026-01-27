@@ -25,6 +25,7 @@ import { safeFetchJson } from "@/lib/api";
 import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn, getClientColor, SKELETON, DESIGN_SYSTEM } from "@/lib/design-system";
 import { useSearchParams } from 'react-router-dom';
+import { useCategories } from '@/hooks/useCategories';
 
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -68,6 +69,8 @@ export default function DailyReview() {
   const [uncategorizedCount, setUncategorizedCount] = useState(0);
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const { categories: dynamicCategories, industryType } = useCategories();
+  
 
   const [editingBlock, setEditingBlock] = useState<{ blockId: number; currentCategory: string; currentClientId: number | null; } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -75,7 +78,6 @@ export default function DailyReview() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [deletingBlockId, setDeletingBlockId] = useState<number | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
   const [availableClients, setAvailableClients] = useState<ClientOption[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const [billableHours, setBillableHours] = useState(0);
@@ -109,19 +111,6 @@ export default function DailyReview() {
     return { blockId: null, title: activity, raw: activity };
   };
 
-  const DEFAULT_CATEGORIES = [
-    "Tax Preparation", "Tax Planning", "Tax Research", "Tax Compliance", "Idle",
-    "Accounting/Bookkeeping", "Financial Statement Prep", "Audit/Assurance", "Payroll Services",
-    "Advisory/Financial Planning", "Software Development", "Research/AI Assistance",
-    "Email/Communication", "Meetings", "Administration", "Documentation", "Review",
-  ];
-
-  const loadCategories = useCallback(async () => {
-    try {
-      const data = await safeFetchJson<{ id: number; name: string }[]>(`${API_BASE}/options/task-types/`);
-      setAvailableCategories(data?.length ? data.map(t => t.name) : DEFAULT_CATEGORIES);
-    } catch { setAvailableCategories(DEFAULT_CATEGORIES); }
-  }, []);
 
   const loadClients = useCallback(async () => {
     for (const url of [`${API_BASE}/options/clients/`, `${API_BASE}/clients/list`, `${API_BASE}/clients/list/`]) {
@@ -177,9 +166,14 @@ export default function DailyReview() {
   }, [loadTimeSummary, loadUncategorizedCount]);
 
   useEffect(() => {
-    const t = setTimeout(() => { loadTimeSummary(); loadUncategorizedCount(); loadCategories(); loadClients(); }, 200);
+    const t = setTimeout(() => { 
+      loadTimeSummary(); 
+      loadUncategorizedCount(); 
+      loadClients(); 
+      // Categories now come from useCategories hook automatically
+    }, 200);
     return () => clearTimeout(t);
-  }, [loadTimeSummary, loadUncategorizedCount, loadCategories, loadClients, runAIClassification]);
+  }, [loadTimeSummary, loadUncategorizedCount, loadClients]);
 
   // And update the interval useEffect to also run AI:
   useEffect(() => {
@@ -479,7 +473,7 @@ export default function DailyReview() {
                                                   {availableClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                                 </select>
                                                 <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className={DESIGN_SYSTEM.components.inputCompact}>
-                                                  {availableCategories.map(n => <option key={n} value={n}>{n}</option>)}
+                                                  {dynamicCategories.map(n => <option key={n} value={n}>{n}</option>)}
                                                 </select>
                                                 <button onClick={handleSaveCategory} disabled={isUpdating} className="p-1.5 bg-success text-success-foreground rounded-lg"><Check className="w-4 h-4" /></button>
                                                 <button onClick={handleCancelEdit} className="p-1.5 bg-muted rounded-lg"><X className="w-4 h-4" /></button>

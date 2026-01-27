@@ -7,6 +7,8 @@ from django.contrib.auth.models import Group
 import hashlib
 import secrets  # ✅ add this import
 
+from tracker.industry_categories import INDUSTRY_CHOICES
+
 # ===========================
 # ======  ORG MODELS  ======
 # ===========================
@@ -23,6 +25,14 @@ class Organization(models.Model):
     """
     name = models.CharField(max_length=200)  # "Smith & Associates CPA"
     slug = models.SlugField(unique=True)      # "smith-associates"
+
+        # ✅ ADD THIS FIELD
+    industry_type = models.CharField(
+        max_length=50,
+        choices=INDUSTRY_CHOICES,
+        default='general',
+        help_text='Industry type determines available categories'
+    )
     
     # Subscription/billing
     plan = models.CharField(max_length=20, choices=[
@@ -68,6 +78,16 @@ class Organization(models.Model):
     
     def __str__(self):
         return self.name
+
+    def get_categories(self):
+        '''Get category list for this org's industry type.'''
+        from tracker.industry_categories import get_categories_for_industry
+        return get_categories_for_industry(self.industry_type)
+    
+    def get_tool_detection(self):
+        '''Get tool detection patterns for this org's industry type.'''
+        from tracker.industry_categories import get_combined_tool_detection
+        return get_combined_tool_detection(self.industry_type)
     
     @property
     def default_margin(self):
@@ -151,6 +171,7 @@ class RawEvent(models.Model):
     
     # NEW: Store which client was selected when this event was captured
     current_client_id = models.IntegerField(null=True, blank=True, db_index=True)
+
 
     block = models.ForeignKey(
         'Block',

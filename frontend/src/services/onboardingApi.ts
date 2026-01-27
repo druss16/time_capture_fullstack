@@ -1,7 +1,7 @@
 // src/services/onboardingApi.ts
 /**
  * API service for self-service onboarding flow
- * UPDATED: Now includes industry-specific categories support
+ * COMPLETE FILE - Replace your entire onboardingApi.ts with this
  */
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -13,7 +13,10 @@ const getCSRFToken = (): string | null => {
   return match ? match[1] : null;
 };
 
-// Types
+// ============================================================================
+// TYPES
+// ============================================================================
+
 export interface User {
   id: number;
   email: string;
@@ -27,8 +30,8 @@ export interface Organization {
   slug: string;
   plan: string;
   trial_ends_at: string | null;
-  industry_type?: string;      // ✅ ADD
-  industry_name?: string;      // ✅ ADD (human-readable)
+  industry_type?: string;
+  industry_name?: string;
 }
 
 export interface SignupResponse {
@@ -140,7 +143,6 @@ export interface ApiError {
   error?: string;
 }
 
-// ✅ NEW: Industry types
 export interface IndustryOption {
   value: string;
   label: string;
@@ -156,7 +158,10 @@ export interface OrgCategoriesResponse {
   categories: string[];
 }
 
-// Helper to get auth headers
+// ============================================================================
+// HELPERS
+// ============================================================================
+
 const getAuthHeaders = (): HeadersInit => {
   const token = localStorage.getItem('auth_token');
   const csrfToken = getCSRFToken();
@@ -168,7 +173,6 @@ const getAuthHeaders = (): HeadersInit => {
   };
 };
 
-// Generic fetch wrapper with error handling
 const apiFetch = async <T>(endpoint: string, options: RequestInit = {}): Promise<T> => {
   const url = endpoint.startsWith('http') ? endpoint : `${API_BASE}${endpoint}`;
   
@@ -191,16 +195,22 @@ const apiFetch = async <T>(endpoint: string, options: RequestInit = {}): Promise
 };
 
 // ============================================================================
-// ✅ NEW: INDUSTRY OPTIONS (No auth required - for signup page)
+// INDUSTRY OPTIONS (No auth required - for signup page)
 // ============================================================================
 
 export const getIndustryOptions = async (): Promise<IndustryOptionsResponse> => {
-  const response = await fetch(`${API_BASE}/industries/`, {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  
-  if (!response.ok) {
+  try {
+    const response = await fetch(`${API_BASE}/industries/`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to load industries');
+    }
+    
+    return response.json();
+  } catch {
     // Return fallback options if API fails
     return {
       industries: [
@@ -212,12 +222,10 @@ export const getIndustryOptions = async (): Promise<IndustryOptionsResponse> => 
       ]
     };
   }
-  
-  return response.json();
 };
 
 // ============================================================================
-// ✅ NEW: GET ORG CATEGORIES (Requires auth)
+// ORG CATEGORIES (Requires auth)
 // ============================================================================
 
 export const getOrgCategories = async (): Promise<OrgCategoriesResponse> => {
@@ -225,7 +233,7 @@ export const getOrgCategories = async (): Promise<OrgCategoriesResponse> => {
 };
 
 // ============================================================================
-// STEP 1: SIGNUP - ✅ UPDATED with industry_type
+// STEP 1: SIGNUP
 // ============================================================================
 
 export interface SignupParams {
@@ -234,7 +242,7 @@ export interface SignupParams {
   password: string;
   ownerName?: string;
   timezone?: string;
-  industryType?: string;  // ✅ ADD
+  industryType?: string;
 }
 
 export const signup = async (params: SignupParams): Promise<SignupResponse> => {
@@ -246,7 +254,7 @@ export const signup = async (params: SignupParams): Promise<SignupResponse> => {
       password: params.password,
       owner_name: params.ownerName || '',
       timezone: params.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-      industry_type: params.industryType || 'general',  // ✅ ADD
+      industry_type: params.industryType || 'general',
     }),
   });
   
@@ -271,7 +279,6 @@ export const getOnboardingStatus = async (): Promise<OnboardingStatusResponse> =
 
 export const getIntegrations = async (): Promise<Integration[]> => {
   const response = await apiFetch<IntegrationListResponse | Integration[]>('/onboarding/integrations/');
-  // Handle both array and object response formats
   if (Array.isArray(response)) {
     return response;
   }
@@ -307,7 +314,6 @@ export const inviteTeam = async (invites: InviteInput[]): Promise<InviteResponse
   });
 };
 
-// Alias for inviteTeam that accepts simple email array
 export const inviteTeamMembers = async (emails: string[]): Promise<InviteResponse> => {
   const invites = emails.map(email => ({ email, role: 'member' as const }));
   return apiFetch<InviteResponse>('/onboarding/team/invite/', {
@@ -416,35 +422,13 @@ export const getDownloadInfo = async (): Promise<DownloadInfoResponse> => {
   return apiFetch<DownloadInfoResponse>('/onboarding/download/');
 };
 
-// Add these lines BEFORE the default export at the bottom
-
-export const getIndustryOptions = async (): Promise<{ industries: { value: string; label: string }[] }> => {
-  try {
-    return await apiFetch<{ industries: { value: string; label: string }[] }>('/industries/');
-  } catch {
-    // Fallback if API not ready
-    return {
-      industries: [
-        { value: 'cpa', label: 'CPA / Accounting Firm' },
-        { value: 'ai_consulting', label: 'AI / Technology Consulting' },
-        { value: 'marketing', label: 'Marketing / Creative Agency' },
-        { value: 'legal', label: 'Law Firm / Legal Services' },
-        { value: 'general', label: 'General Professional Services' },
-      ]
-    };
-  }
-};
-
 // ============================================================================
 // DEFAULT EXPORT
 // ============================================================================
 
 const onboardingApi = {
-  // ✅ NEW: Industry functions
   getIndustryOptions,
   getOrgCategories,
-  
-  // Existing functions
   signup,
   getOnboardingStatus,
   getIntegrations,
@@ -463,7 +447,5 @@ const onboardingApi = {
   completeOnboarding,
   getDownloadInfo,
 };
-
-
 
 export default onboardingApi;

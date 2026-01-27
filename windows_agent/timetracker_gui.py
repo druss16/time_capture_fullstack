@@ -10,6 +10,7 @@ Features:
 - AI client prompts
 - Today's time viewer
 - Clean menu without duplicates
+- Dark themed compact tray menu
 """
 
 import os
@@ -967,7 +968,7 @@ class TimeTrackerSystemTray:
         return img
         
     def _build_menu_items(self):
-        """Build system tray menu items - CLEAN VERSION"""
+        """Build system tray menu items"""
         
         def make_switch_handler(cid, cname):
             def handler(icon, item):
@@ -983,7 +984,6 @@ class TimeTrackerSystemTray:
             client_name = client["name"]
             is_current = client_id == self.state.current_client_id
             
-            # Simple prefix - just bullet for current, no medals
             prefix = "● " if is_current else ""
             
             client_items.append(
@@ -1006,7 +1006,6 @@ class TimeTrackerSystemTray:
         def on_quit(icon, item):
             self._on_quit()
         
-        # Clean menu - no duplicate header, shortcut shown as text
         return (
             Item("Search Clients...    Alt+Ctrl+T", on_search),
             Item("Switch Client", pystray.Menu(*client_items)),
@@ -1098,6 +1097,7 @@ class TimeTrackerSystemTray:
         # Set tooltip with current client
         tooltip = f"TimeTracker - {self.state.current_client_name}"
         
+        # Use native pystray menu (right-click to open)
         self.icon = pystray.Icon(
             "timetracker",
             self._create_image(),
@@ -1129,6 +1129,7 @@ class TimeTrackerSystemTray:
         else:
             # No widget, just wait for tray
             tray_thread.join()
+
 
 # ============================================================
 # Standalone show_client_picker function (for hotkey use)

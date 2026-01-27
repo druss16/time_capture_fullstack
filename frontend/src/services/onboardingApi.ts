@@ -416,6 +416,25 @@ export const getDownloadInfo = async (): Promise<DownloadInfoResponse> => {
   return apiFetch<DownloadInfoResponse>('/onboarding/download/');
 };
 
+// Add these lines BEFORE the default export at the bottom
+
+export const getIndustryOptions = async (): Promise<{ industries: { value: string; label: string }[] }> => {
+  try {
+    return await apiFetch<{ industries: { value: string; label: string }[] }>('/industries/');
+  } catch {
+    // Fallback if API not ready
+    return {
+      industries: [
+        { value: 'cpa', label: 'CPA / Accounting Firm' },
+        { value: 'ai_consulting', label: 'AI / Technology Consulting' },
+        { value: 'marketing', label: 'Marketing / Creative Agency' },
+        { value: 'legal', label: 'Law Firm / Legal Services' },
+        { value: 'general', label: 'General Professional Services' },
+      ]
+    };
+  }
+};
+
 // ============================================================================
 // DEFAULT EXPORT
 // ============================================================================
@@ -444,5 +463,7 @@ const onboardingApi = {
   completeOnboarding,
   getDownloadInfo,
 };
+
+
 
 export default onboardingApi;

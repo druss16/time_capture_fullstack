@@ -1451,7 +1451,8 @@ def raw_events(request):
                 hostname=hostname,
                 ctx=item.get("ctx", {}) or {},
                 device_id=device.id if device else None,
-                current_client_id=current_client_id,  # ← Store current client
+                current_client_id=item.get("current_client_id") or current_client_id,  # ← Prefer agent payload
+
             )
             
             created += 1

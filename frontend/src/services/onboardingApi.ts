@@ -1,6 +1,7 @@
 // src/services/onboardingApi.ts
 /**
  * API service for self-service onboarding flow
+ * UPDATED: Now includes industry-specific categories support
  */
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -26,6 +27,8 @@ export interface Organization {
   slug: string;
   plan: string;
   trial_ends_at: string | null;
+  industry_type?: string;      // ✅ ADD
+  industry_name?: string;      // ✅ ADD (human-readable)
 }
 
 export interface SignupResponse {
@@ -137,6 +140,22 @@ export interface ApiError {
   error?: string;
 }
 
+// ✅ NEW: Industry types
+export interface IndustryOption {
+  value: string;
+  label: string;
+}
+
+export interface IndustryOptionsResponse {
+  industries: IndustryOption[];
+}
+
+export interface OrgCategoriesResponse {
+  industry_type: string;
+  industry_name: string;
+  categories: string[];
+}
+
 // Helper to get auth headers
 const getAuthHeaders = (): HeadersInit => {
   const token = localStorage.getItem('auth_token');
@@ -172,7 +191,41 @@ const apiFetch = async <T>(endpoint: string, options: RequestInit = {}): Promise
 };
 
 // ============================================================================
-// STEP 1: SIGNUP
+// ✅ NEW: INDUSTRY OPTIONS (No auth required - for signup page)
+// ============================================================================
+
+export const getIndustryOptions = async (): Promise<IndustryOptionsResponse> => {
+  const response = await fetch(`${API_BASE}/industries/`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  
+  if (!response.ok) {
+    // Return fallback options if API fails
+    return {
+      industries: [
+        { value: 'cpa', label: 'CPA / Accounting Firm' },
+        { value: 'ai_consulting', label: 'AI / Technology Consulting' },
+        { value: 'marketing', label: 'Marketing / Creative Agency' },
+        { value: 'legal', label: 'Law Firm / Legal Services' },
+        { value: 'general', label: 'General Professional Services' },
+      ]
+    };
+  }
+  
+  return response.json();
+};
+
+// ============================================================================
+// ✅ NEW: GET ORG CATEGORIES (Requires auth)
+// ============================================================================
+
+export const getOrgCategories = async (): Promise<OrgCategoriesResponse> => {
+  return apiFetch<OrgCategoriesResponse>('/categories/');
+};
+
+// ============================================================================
+// STEP 1: SIGNUP - ✅ UPDATED with industry_type
 // ============================================================================
 
 export interface SignupParams {
@@ -181,6 +234,7 @@ export interface SignupParams {
   password: string;
   ownerName?: string;
   timezone?: string;
+  industryType?: string;  // ✅ ADD
 }
 
 export const signup = async (params: SignupParams): Promise<SignupResponse> => {
@@ -192,6 +246,7 @@ export const signup = async (params: SignupParams): Promise<SignupResponse> => {
       password: params.password,
       owner_name: params.ownerName || '',
       timezone: params.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      industry_type: params.industryType || 'general',  // ✅ ADD
     }),
   });
   
@@ -366,6 +421,11 @@ export const getDownloadInfo = async (): Promise<DownloadInfoResponse> => {
 // ============================================================================
 
 const onboardingApi = {
+  // ✅ NEW: Industry functions
+  getIndustryOptions,
+  getOrgCategories,
+  
+  // Existing functions
   signup,
   getOnboardingStatus,
   getIntegrations,

@@ -69,6 +69,16 @@ except ImportError:
     PUSH_NOTIF_AVAILABLE = False
     print("[WARN] notifications.py not found - push notifications disabled")
 
+# Fix Windows console encoding for Unicode characters
+import io
+if sys.platform == 'win32':
+    try:
+        if sys.stdout:
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        if sys.stderr:
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 # ---------------- Client Sync ----------------
 def get_current_client_from_backend(api_base, api_key):
@@ -184,10 +194,12 @@ def setup_logging():
         os.makedirs(LOG_DIR, exist_ok=True)
         
         # Main log - rotates at 5MB, keeps 3 backups
+        # Main log - rotates at 5MB, keeps 3 backups
         main_handler = RotatingFileHandler(
             LOG_FILE, 
             maxBytes=5*1024*1024,  # 5MB
-            backupCount=3
+            backupCount=3,
+            encoding='utf-8'
         )
         main_handler.setLevel(logging.INFO)
         main_handler.setFormatter(logging.Formatter(
@@ -196,10 +208,12 @@ def setup_logging():
         ))
         
         # Error log - separate file for crashes only
+        # Error log - separate file for crashes only
         error_handler = RotatingFileHandler(
             ERROR_LOG_FILE,
             maxBytes=2*1024*1024,  # 2MB
-            backupCount=5
+            backupCount=5,
+            encoding='utf-8'
         )
         error_handler.setLevel(logging.ERROR)
         error_handler.setFormatter(logging.Formatter(
@@ -1060,8 +1074,8 @@ def run_agent():
                         
                         show_client_picker(clients, current_id, on_select)
                     
-                    keyboard.add_hotkey('alt+shift+t', on_hotkey_pressed)
-                    log("[QUICK] Ready - Alt+Shift+T")
+                    keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed)
+                    log("[QUICK] Ready - Alt+Ctrl+T")
                     
                 except Exception as e:
                     log(f"[QUICK] Failed: {e}")
@@ -1086,6 +1100,19 @@ def run_agent():
     
     key = config.get("api_key") or API_KEY
     if not key:
+        # Launch pairing GUI if available
+        gui_script = os.path.join(os.path.dirname(__file__), "gui.py")
+        if os.path.exists(gui_script):
+            print("[AGENT] No API key configured - launching pairing GUI...")
+            try:
+                subprocess.Popen([sys.executable, gui_script])
+                print("[AGENT] Please pair your device in the GUI window, then restart the agent.")
+                remove_pid()
+                return
+            except Exception as e:
+                print(f"[AGENT] Failed to launch GUI: {e}")
+        
+        # Fallback to console pairing
         key = ensure_api_key_interactive(hostname)
         if not key:
             print("Exiting: no device key configured.")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-TimeTracker Configuration GUI - macOS Modern Version
+TimeTracker Configuration GUI - Cross-Platform Version
 
-Beautiful, modern UI using CustomTkinter (matching Windows design)
+Beautiful, modern UI using CustomTkinter for Windows and macOS
 """
 
 import os
@@ -12,6 +12,27 @@ import sys
 import webbrowser
 import platform
 import uuid
+
+# Platform detection
+IS_WINDOWS = platform.system() == "Windows"
+IS_MACOS = platform.system() == "Darwin"
+PLATFORM_NAME = "Windows" if IS_WINDOWS else "macOS" if IS_MACOS else "Linux"
+
+# Paths - MUST match main.py exactly!
+# Config is always in ~/.timetracker/ (same as main.py)
+CONFIG_DIR = os.path.expanduser("~/.timetracker")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+# Platform-specific paths for other files
+if IS_WINDOWS:
+    APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
+    LOG_DIR = os.path.join(APPDATA, "TimeTracker", "Logs")
+    PID_FILE = os.path.join(APPDATA, "TimeTracker", "agent.pid")
+    PLIST = None  # Not used on Windows
+else:
+    LOG_DIR = os.path.expanduser("~/Library/Logs/TimeTracker")
+    PID_FILE = os.path.expanduser("~/.timetracker/agent.pid")
+    PLIST = os.path.expanduser("~/Library/LaunchAgents/com.mavops.timetracker.plist")
 
 try:
     import customtkinter as ctk
@@ -25,16 +46,10 @@ except ImportError:
 import tkinter as tk
 from tkinter import messagebox
 
-CONFIG_DIR = os.path.expanduser("~/.timetracker")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-PLIST = os.path.expanduser("~/Library/LaunchAgents/com.mavops.timetracker.plist")
-PID_FILE = os.path.expanduser("~/.timetracker/agent.pid")
-LOG_DIR = os.path.expanduser("~/Library/Logs/TimeTracker")
-
 APP_VERSION = "1.0.0"
 GITHUB_REPO = "druss16/timetracker-releases"
 
-# Color scheme (matching Windows)
+# Color scheme
 COLORS = {
     "primary": "#3B82F6",      # Blue
     "primary_hover": "#2563EB",
@@ -87,7 +102,9 @@ def save_config(config):
 
 
 def launchctl(args):
-    """Run launchctl command"""
+    """Run launchctl command (macOS only)"""
+    if IS_WINDOWS:
+        return 1, "", "Not supported on Windows"
     try:
         out = subprocess.run(["/bin/launchctl"] + args, capture_output=True, text=True)
         return out.returncode, out.stdout, out.stderr
@@ -96,24 +113,93 @@ def launchctl(args):
 
 
 def is_agent_running():
-    """Check if agent is running via launchctl or PID file"""
-    # Check launchctl first
-    code, _, _ = launchctl(["print", f"gui/{os.getuid()}/com.mavops.timetracker"])
-    if code == 0:
-        return True
-    
-    # Fallback to PID file check
-    if os.path.exists(PID_FILE):
+    """Check if agent is running - cross-platform"""
+    if IS_WINDOWS:
+        # Windows: First check the PID file (most reliable)
+        pid_files_to_check = [
+            PID_FILE,  # %APPDATA%\TimeTracker\agent.pid
+            os.path.expanduser("~/.timetracker/agent.pid"),  # Alternative location
+        ]
+        
+        for pid_file in pid_files_to_check:
+            if os.path.exists(pid_file):
+                print(f"[GUI] Found PID file: {pid_file}")
+                try:
+                    with open(pid_file) as f:
+                        pid = int(f.read().strip())
+                    print(f"[GUI] PID from file: {pid}")
+                    
+                    # Verify the process is actually running using psutil
+                    try:
+                        import psutil
+                        proc = psutil.Process(pid)
+                        # Check if it's a python process (not something else that reused the PID)
+                        if proc.is_running() and 'python' in proc.name().lower():
+                            print(f"[GUI] Process {pid} is running (psutil)")
+                            return True
+                    except ImportError:
+                        # Fallback: use ctypes if psutil not available
+                        import ctypes
+                        kernel32 = ctypes.windll.kernel32
+                        SYNCHRONIZE = 0x00100000
+                        handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+                        if handle:
+                            kernel32.CloseHandle(handle)
+                            print(f"[GUI] Process {pid} is running (ctypes)")
+                            return True
+                    except Exception as e:
+                        print(f"[GUI] Error checking PID {pid}: {e}")
+                except (OSError, ValueError, Exception) as e:
+                    print(f"[GUI] Error reading PID file: {e}")
+        
+        # Fallback: scan all processes for main.py
+        print("[GUI] No valid PID file, scanning processes...")
         try:
-            with open(PID_FILE) as f:
-                pid = int(f.read().strip())
-            # Check if process exists
-            os.kill(pid, 0)
-            return True
-        except (OSError, ValueError):
-            pass
+            import psutil
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    name = (proc.info.get('name') or '').lower()
+                    if 'python' not in name:
+                        continue
+                    
+                    cmdline = proc.info.get('cmdline') or []
+                    cmdline_str = ' '.join(str(arg) for arg in cmdline).lower()
+                    
+                    # Look for main.py but exclude gui.py
+                    if 'main.py' in cmdline_str and 'gui.py' not in cmdline_str:
+                        print(f"[GUI] Found agent process: PID {proc.info['pid']}")
+                        return True
+                    # Also check for compiled exe
+                    if 'timetracker' in cmdline_str and 'gui' not in cmdline_str:
+                        print(f"[GUI] Found timetracker process: PID {proc.info['pid']}")
+                        return True
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+        except ImportError:
+            print("[WARN] psutil not installed - install with: pip install psutil")
+        
+        print("[GUI] Agent not detected")
+        return False
     
-    return False
+    else:
+        # macOS: Check launchctl first
+        code, _, _ = launchctl(["print", f"gui/{os.getuid()}/com.mavops.timetracker"])
+        if code == 0:
+            return True
+        
+        # Fallback to PID file check
+        if os.path.exists(PID_FILE):
+            try:
+                with open(PID_FILE) as f:
+                    pid = int(f.read().strip())
+                # Check if process exists
+                os.kill(pid, 0)
+                return True
+            except (OSError, ValueError):
+                pass
+        
+        return False
 
 
 class ModernConfigGUI:
@@ -166,10 +252,10 @@ class ModernConfigGUI:
         )
         version_label.pack(side="right", pady=10)
         
-        # macOS badge
+        # Platform badge
         os_label = ctk.CTkLabel(
             header_frame,
-            text="macOS",
+            text=PLATFORM_NAME,
             font=ctk.CTkFont(size=11),
             text_color=COLORS["text_muted"],
             fg_color=COLORS["bg_card"],
@@ -257,9 +343,9 @@ class ModernConfigGUI:
         # API URL (collapsed by default for simplicity)
         self.show_advanced = ctk.BooleanVar(value=False)
         
-        advanced_toggle = ctk.CTkButton(
+        self.advanced_toggle_btn = ctk.CTkButton(
             config_inner,
-            text="▼ Advanced Settings",
+            text="▶ Advanced Settings",
             command=self._toggle_advanced,
             fg_color="transparent",
             hover_color=COLORS["bg_card"],
@@ -267,12 +353,12 @@ class ModernConfigGUI:
             anchor="w",
             height=30
         )
-        advanced_toggle.pack(fill="x", pady=(10, 0))
+        self.advanced_toggle_btn.pack(fill="x", pady=(10, 0))
         
         self.advanced_frame = ctk.CTkFrame(config_inner, fg_color="transparent")
-        # Hidden by default
+        # Don't pack yet - hidden by default
         
-        # API URL
+        # API URL - create inside advanced_frame
         self._create_input_field(
             self.advanced_frame,
             "API URL",
@@ -382,12 +468,19 @@ class ModernConfigGUI:
             help_lbl.pack(fill="x", pady=(2, 0))
     
     def _toggle_advanced(self):
+        print(f"[GUI] Toggle advanced - current state: {self.show_advanced.get()}")
         if self.show_advanced.get():
+            # Currently shown, hide it
             self.advanced_frame.pack_forget()
             self.show_advanced.set(False)
+            self.advanced_toggle_btn.configure(text="▶ Advanced Settings")
+            print("[GUI] Advanced settings hidden")
         else:
+            # Currently hidden, show it
             self.advanced_frame.pack(fill="x", pady=(10, 0))
             self.show_advanced.set(True)
+            self.advanced_toggle_btn.configure(text="▼ Advanced Settings")
+            print("[GUI] Advanced settings shown")
     
     def _start_auto_refresh(self):
         """Auto-refresh status every 3 seconds"""
@@ -396,7 +489,10 @@ class ModernConfigGUI:
     
     def _update_status(self):
         """Update agent status display"""
-        if is_agent_running():
+        running = is_agent_running()
+        print(f"[GUI] Status check - agent running: {running}")
+        
+        if running:
             self.status_dot.configure(text_color=COLORS["success"])
             self.status_label.configure(text="Agent Running")
             self.start_btn.configure(state="disabled")
@@ -408,48 +504,131 @@ class ModernConfigGUI:
             self.stop_btn.configure(state="disabled")
     
     def _start_agent(self):
-        """Start the agent"""
+        """Start the agent - cross-platform"""
         try:
-            # Try launchctl first
-            if os.path.exists(PLIST):
-                code, _, stderr = launchctl(["load", "-w", PLIST])
-                if code == 0:
-                    self.root.after(1000, self._update_status)
+            if IS_WINDOWS:
+                agent_path = get_agent_script_path()
+                print(f"[GUI] Agent path: {agent_path}")
+                
+                if not agent_path:
+                    self._show_toast("Error", "Agent script (main.py) not found", "error")
+                    return
+                
+                if not os.path.exists(agent_path):
+                    self._show_toast("Error", f"Agent script not found at: {agent_path}", "error")
+                    return
+                
+                print(f"[GUI] Python executable: {sys.executable}")
+                print(f"[GUI] Starting agent...")
+                
+                # Method 1: Try using start command via shell
+                try:
+                    # This method is most reliable for detached processes on Windows
+                    cmd = f'start /b "" "{sys.executable}" "{agent_path}" start'
+                    print(f"[GUI] Running: {cmd}")
+                    subprocess.Popen(cmd, shell=True)
+                    
+                    self.root.after(2500, self._update_status)
                     self._show_toast("Success", "Agent started successfully!", "success")
                     return
+                except Exception as e:
+                    print(f"[GUI] Method 1 failed: {e}")
+                
+                # Method 2: Fallback - direct Popen
+                try:
+                    CREATE_NEW_PROCESS_GROUP = 0x00000200
+                    DETACHED_PROCESS = 0x00000008
+                    
+                    proc = subprocess.Popen(
+                        [sys.executable, agent_path, "start"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+                    )
+                    
+                    print(f"[GUI] Agent process started with PID: {proc.pid}")
+                    self.root.after(2500, self._update_status)
+                    self._show_toast("Success", "Agent started successfully!", "success")
+                except Exception as e:
+                    print(f"[GUI] Method 2 failed: {e}")
+                    self._show_toast("Error", f"Failed to start agent: {e}", "error")
             
-            # Fallback to direct script execution
-            agent_path = get_agent_script_path()
-            if agent_path:
-                subprocess.Popen(
-                    [sys.executable, agent_path, "start"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True
-                )
-                self.root.after(1000, self._update_status)
-                self._show_toast("Success", "Agent started successfully!", "success")
             else:
-                self._show_toast("Error", "Agent script not found", "error")
+                # macOS: Try launchctl first
+                if PLIST and os.path.exists(PLIST):
+                    code, _, stderr = launchctl(["load", "-w", PLIST])
+                    if code == 0:
+                        self.root.after(1000, self._update_status)
+                        self._show_toast("Success", "Agent started successfully!", "success")
+                        return
+                
+                # Fallback to direct script execution
+                agent_path = get_agent_script_path()
+                if agent_path:
+                    subprocess.Popen(
+                        [sys.executable, agent_path, "start"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+                    self.root.after(1000, self._update_status)
+                    self._show_toast("Success", "Agent started successfully!", "success")
+                else:
+                    self._show_toast("Error", "Agent script not found", "error")
         
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self._show_toast("Error", f"Failed to start agent: {e}", "error")
     
     def _stop_agent(self):
-        """Stop the agent"""
+        """Stop the agent - cross-platform"""
         try:
-            # Try launchctl first
-            if os.path.exists(PLIST):
-                launchctl(["unload", PLIST])
-            
-            # Also try to stop via PID
-            if os.path.exists(PID_FILE):
+            if IS_WINDOWS:
+                # Windows: Find and terminate process
                 try:
-                    with open(PID_FILE) as f:
-                        pid = int(f.read().strip())
-                    os.kill(pid, 15)  # SIGTERM
-                except Exception:
+                    import psutil
+                    for proc in psutil.process_iter(['name', 'cmdline', 'pid']):
+                        try:
+                            cmdline = proc.info.get('cmdline') or []
+                            for arg in cmdline:
+                                if arg and ('main.py' in arg or 'timetracker' in arg.lower()):
+                                    if 'gui.py' not in str(cmdline):
+                                        proc.terminate()
+                                        print(f"[GUI] Terminated process {proc.info['pid']}")
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except ImportError:
                     pass
+                
+                # Also try PID file
+                if os.path.exists(PID_FILE):
+                    try:
+                        with open(PID_FILE) as f:
+                            pid = int(f.read().strip())
+                        import signal
+                        os.kill(pid, signal.SIGTERM)
+                    except Exception:
+                        pass
+                    try:
+                        os.remove(PID_FILE)
+                    except Exception:
+                        pass
+            
+            else:
+                # macOS: Try launchctl first
+                if PLIST and os.path.exists(PLIST):
+                    launchctl(["unload", PLIST])
+                
+                # Also try to stop via PID
+                if os.path.exists(PID_FILE):
+                    try:
+                        with open(PID_FILE) as f:
+                            pid = int(f.read().strip())
+                        os.kill(pid, 15)  # SIGTERM
+                    except Exception:
+                        pass
             
             self.root.after(500, self._update_status)
             self._show_toast("Success", "Agent stopped successfully!", "success")
@@ -480,7 +659,7 @@ class ModernConfigGUI:
         payload = {
             'code': code.strip().upper(),
             'hostname': platform.node(),
-            'platform': 'macOS',
+            'platform': PLATFORM_NAME,
             'version': APP_VERSION,
             'device_id': device_id
         }
@@ -513,13 +692,30 @@ class ModernConfigGUI:
             api_key = getattr(self, 'api_key_var', ctk.StringVar()).get().strip()
             pair_code = self.pair_code_var.get().strip()
             
-            if pair_code and not api_key:
-                api_key, server_device_id = self._try_pair(api_base, pair_code)
-                if api_key:
+            print(f"[GUI] Save config - api_base: {api_base}")
+            print(f"[GUI] Save config - api_key exists: {bool(api_key)}")
+            print(f"[GUI] Save config - pair_code: {pair_code}")
+            
+            server_device_id = self.config.get("server_device_id")
+            
+            # If pairing code provided, stop running agent first so it picks up new config
+            if pair_code:
+                if is_agent_running():
+                    print("[GUI] Stopping running agent before re-pairing...")
+                    self._stop_agent_silent()
+                
+                print(f"[GUI] Attempting to pair with code: {pair_code}")
+                new_api_key, new_device_id = self._try_pair(api_base, pair_code)
+                if new_api_key:
+                    api_key = new_api_key
+                    server_device_id = new_device_id
                     if hasattr(self, 'api_key_var'):
                         self.api_key_var.set(api_key)
+                    # Clear the pairing code field after successful pairing
+                    self.pair_code_var.set("")
                     self._show_toast("Paired!", "Device paired successfully. Click Start Agent to begin.", "success")
                 else:
+                    # Pairing failed - error already shown in _try_pair
                     return
             
             config = {
@@ -527,12 +723,10 @@ class ModernConfigGUI:
                 "api_key": api_key,
             }
             
-            if pair_code and api_key:
-                try:
-                    config["server_device_id"] = server_device_id
-                except:
-                    pass
+            if server_device_id:
+                config["server_device_id"] = server_device_id
             
+            print(f"[GUI] Saving config: {config}")
             save_config(config)
             self.config = config
             
@@ -540,15 +734,69 @@ class ModernConfigGUI:
                 self._show_toast("Saved", "Configuration saved!", "success")
         
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self._show_toast("Error", f"Failed to save: {e}", "error")
     
+    def _stop_agent_silent(self):
+        """Stop the agent without showing toast (used during re-pair)"""
+        try:
+            if IS_WINDOWS:
+                try:
+                    import psutil
+                    for proc in psutil.process_iter(['name', 'cmdline', 'pid']):
+                        try:
+                            cmdline = proc.info.get('cmdline') or []
+                            for arg in cmdline:
+                                if arg and ('main.py' in arg or 'timetracker' in arg.lower()):
+                                    if 'gui.py' not in str(cmdline):
+                                        proc.terminate()
+                                        print(f"[GUI] Terminated agent process {proc.info['pid']}")
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except ImportError:
+                    pass
+                
+                # Also clean up PID files
+                for pid_file in [PID_FILE, os.path.expanduser("~/.timetracker/agent.pid")]:
+                    if os.path.exists(pid_file):
+                        try:
+                            os.remove(pid_file)
+                        except:
+                            pass
+            else:
+                # macOS
+                if PLIST and os.path.exists(PLIST):
+                    launchctl(["unload", PLIST])
+                
+                if os.path.exists(PID_FILE):
+                    try:
+                        with open(PID_FILE) as f:
+                            pid = int(f.read().strip())
+                        os.kill(pid, 15)
+                    except:
+                        pass
+            
+            # Wait a moment for process to stop
+            import time
+            time.sleep(1)
+            self._update_status()
+            
+        except Exception as e:
+            print(f"[GUI] Error stopping agent: {e}")
+    
     def _open_logs(self):
-        """Open logs folder"""
+        """Open logs folder - cross-platform"""
         if not os.path.exists(LOG_DIR):
             os.makedirs(LOG_DIR, exist_ok=True)
         
         try:
-            subprocess.run(["open", LOG_DIR])
+            if IS_WINDOWS:
+                os.startfile(LOG_DIR)
+            elif IS_MACOS:
+                subprocess.run(["open", LOG_DIR])
+            else:
+                subprocess.run(["xdg-open", LOG_DIR])
         except Exception as e:
             self._show_toast("Error", f"Failed to open logs: {e}", "error")
     
@@ -576,11 +824,17 @@ class ModernConfigGUI:
         )
         title.pack(anchor="w", pady=(0, 15))
         
+        # Platform-specific instructions
+        if IS_WINDOWS:
+            tray_text = "Look for the TT icon in your system tray"
+        else:
+            tray_text = "Look for the TT icon in your menu bar"
+        
         steps = [
             ("1️⃣", "Get your pairing code from the web app\n    Settings → Devices → Generate Code"),
             ("2️⃣", "Enter the code above and click Save & Pair"),
             ("3️⃣", "Click Start Agent to begin tracking"),
-            ("4️⃣", "Look for the TT icon in your menu bar"),
+            ("4️⃣", tray_text),
         ]
         
         for emoji, text in steps:
@@ -651,6 +905,8 @@ def main():
     else:
         # Fallback to original tkinter version
         print("CustomTkinter not installed. Run: pip install customtkinter CTkMessagebox")
+        if IS_WINDOWS:
+            print("Also install: pip install psutil")
         sys.exit(1)
 
 

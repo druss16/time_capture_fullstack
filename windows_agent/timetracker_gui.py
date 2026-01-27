@@ -46,6 +46,11 @@ try:
 except ImportError:
     TOAST_AVAILABLE = False
 
+try:
+    from floating_widget import FloatingClientWidget, create_floating_widget, WIDGET_AVAILABLE
+except ImportError:
+    WIDGET_AVAILABLE = False
+
 GUI_AVAILABLE = TRAY_AVAILABLE
 
 # Config paths
@@ -929,6 +934,7 @@ class TimeTrackerSystemTray:
         self.get_current_client_callback = None
         
         self.icon = None
+        self.floating_widget = None
         
         self._last_picker_time = 0
         self._picker_lock = threading.Lock()
@@ -992,16 +998,21 @@ class TimeTrackerSystemTray:
         
         def on_today(icon, item):
             threading.Timer(0.05, self._on_today_time).start()
+
+        def on_show_widget(icon, item):
+            if self.floating_widget:
+                threading.Thread(target=self.floating_widget.show, daemon=True).start()
         
         def on_quit(icon, item):
             self._on_quit()
         
         # Clean menu - no duplicate header, shortcut shown as text
         return (
-            Item("Search Clients...    Alt+Shift+T", on_search),
+            Item("Search Clients...    Alt+Ctrl+T", on_search),
             Item("Switch Client", pystray.Menu(*client_items)),
             Item("Today's Time...", on_today),
             pystray.Menu.SEPARATOR,
+            Item("Show Client Widget", on_show_widget),
             Item("Quit", on_quit),
         )
 
@@ -1047,11 +1058,19 @@ class TimeTrackerSystemTray:
             self.state.set_client(client_id, client_name)
             print(f"[GUI] Switched to client: {client_name}")
         
+        # Update tray icon tooltip to show current client
+        if self.icon:
+            self.icon.title = f"TimeTracker - {client_name}"
+        
         if self.set_current_client_callback:
             try:
                 self.set_current_client_callback(client_id if client_id else 0)
             except Exception as e:
                 print(f"[GUI] Failed to sync client: {e}")
+
+        # Update floating widget
+        if self.floating_widget:
+            self.floating_widget.update_client(client_id, client_name)
     
     def _on_today_time(self):
         """Show today's time window"""
@@ -1069,23 +1088,47 @@ class TimeTrackerSystemTray:
         self.client_mgr.clients = clients
         self.client_mgr.save()
         print(f"[GUI] Refreshed client list with {len(clients)} clients")
-    
+        
     def run(self):
-        """Start the system tray icon"""
+        """Start the system tray icon and floating widget"""
         if not TRAY_AVAILABLE:
             print("[GUI] System tray not available")
             return
         
+        # Set tooltip with current client
+        tooltip = f"TimeTracker - {self.state.current_client_name}"
+        
         self.icon = pystray.Icon(
             "timetracker",
             self._create_image(),
-            "TimeTracker",
+            tooltip,
             menu=pystray.Menu(self._build_menu_items)
         )
         
-        print("[GUI] System tray started")
-        self.icon.run()
-
+        # Run pystray in a BACKGROUND thread
+        def run_tray():
+            print("[GUI] System tray started")
+            self.icon.run()
+        
+        tray_thread = threading.Thread(target=run_tray, daemon=True)
+        tray_thread.start()
+        
+        # Run floating widget in MAIN thread (Tkinter requirement)
+        if WIDGET_AVAILABLE:
+            try:
+                self.floating_widget = create_floating_widget(self)
+                self.floating_widget.create()
+                print("[GUI] Floating widget started")
+                self.floating_widget.run()  # Blocks here - mainloop
+            except Exception as e:
+                print(f"[GUI] Floating widget error: {e}")
+                import traceback
+                traceback.print_exc()
+                # Keep running without widget
+                tray_thread.join()
+        else:
+            # No widget, just wait for tray
+            tray_thread.join()
 
 # ============================================================
 # Standalone show_client_picker function (for hotkey use)

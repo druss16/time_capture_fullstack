@@ -24,9 +24,9 @@ DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 
-; Output settings
+; Output settings - FIXED: matches workflow expectation
 OutputDir=Output
-OutputBaseFilename=TimeTracker-Windows-v{#MyAppVersion}
+OutputBaseFilename=TimeTracker-Windows-Setup
 
 ; Compression
 Compression=lzma

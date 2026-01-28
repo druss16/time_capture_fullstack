@@ -46,7 +46,10 @@ except ImportError:
 import tkinter as tk
 from tkinter import messagebox
 
-APP_VERSION = "1.0.0"
+try:
+    from version import APP_VERSION
+except ImportError:
+    APP_VERSION = "dev"
 GITHUB_REPO = "druss16/timetracker-releases"
 
 # Color scheme

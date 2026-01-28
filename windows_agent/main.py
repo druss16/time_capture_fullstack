@@ -135,7 +135,11 @@ CONTROL_URL = _get("control_url", None) or f"{API_BASE}/agent/control/"
 PAIR_CLAIM = _get("pair_claim_url", None) or f"{API_BASE}/agents/pair/claim/"
 
 API_KEY = _get("api_key", os.getenv("AGENT_API_KEY"))
-APP_VERSION = _get("app_version", os.getenv("AGENT_APP_VERSION")) or "1.0.0"
+try:
+    from version import APP_VERSION as _FILE_VERSION
+except ImportError:
+    _FILE_VERSION = "dev"
+APP_VERSION = _get("app_version", os.getenv("AGENT_APP_VERSION")) or _FILE_VERSION
 DEVICE_ID_FILE = _get("device_id_file", os.path.join(APPDATA, "TimeTracker", ".device_id"))
 
 POLL_SECONDS = int(_get("poll_seconds", 5))

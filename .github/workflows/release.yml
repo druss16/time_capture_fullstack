@@ -6,7 +6,6 @@ on:
       - 'v*'
 
 env:
-  # Set to 'true' when Azure Trusted Signing certificate is ready
   ENABLE_WINDOWS_SIGNING: 'false'
 
 jobs:
@@ -19,6 +18,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      
+      - name: Write version file
+        working-directory: mac_agent
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "# Auto-generated during build - DO NOT EDIT" > version.py
+          echo "APP_VERSION = \"$VERSION\"" >> version.py
+          cat version.py
       
       - name: Install dependencies
         working-directory: mac_agent
@@ -51,20 +58,16 @@ jobs:
           echo $MACOS_CERTIFICATE | base64 --decode > certificate.p12
           echo $MACOS_INSTALLER_CERTIFICATE | base64 --decode > installer.p12
           
-          # Create and configure keychain
           security create-keychain -p "$KEYCHAIN_PWD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
           security set-keychain-settings -t 3600 -u build.keychain
           
-          # Import certificates
           security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -T /usr/bin/productsign
           security import installer.p12 -k build.keychain -P "$MACOS_INSTALLER_CERTIFICATE_PWD" -T /usr/bin/codesign -T /usr/bin/productsign
           
-          # Allow codesign to access keychain
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
           
-          # Verify certificates are available
           echo "=== Available signing identities ==="
           security find-identity -v -p codesigning build.keychain
       
@@ -76,13 +79,10 @@ jobs:
           echo "Signing all internal binaries first..."
           find dist/TimeTracker.app -type f \( -name "*.so" -o -name "*.dylib" \) -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
           
-          # Sign Python framework if present
           find dist/TimeTracker.app -type f -name "Python*" -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
           
-          # Sign the main executable
           codesign --force --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app/Contents/MacOS/TimeTracker
           
-          # Sign the entire app bundle
           echo "Signing app bundle..."
           codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
           codesign --verify --verbose dist/TimeTracker.app
@@ -92,7 +92,6 @@ jobs:
           IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
         working-directory: mac_agent
         run: |
-          # Determine what to package
           if [ -d "dist/TimeTracker.app" ]; then
             echo "Packaging .app bundle..."
             pkgbuild --component dist/TimeTracker.app --identifier com.mavops.timetracker --version ${{ github.ref_name }} --install-location /Applications unsigned.pkg
@@ -116,7 +115,6 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         working-directory: mac_agent
         run: |
-          # Submit for notarization
           xcrun notarytool submit TimeTracker.pkg \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
@@ -124,14 +122,12 @@ jobs:
             --wait \
             --output-format json > notarization_result.json || true
           
-          # Get submission ID and check result
           SUBMISSION_ID=$(cat notarization_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
           STATUS=$(cat notarization_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
           
           echo "Submission ID: $SUBMISSION_ID"
           echo "Status: $STATUS"
           
-          # If failed, get the log
           if [ "$STATUS" != "Accepted" ]; then
             echo "=== NOTARIZATION LOG ==="
             xcrun notarytool log "$SUBMISSION_ID" \
@@ -141,7 +137,6 @@ jobs:
             exit 1
           fi
           
-          # Staple if successful
           xcrun stapler staple TimeTracker.pkg
       
       - name: Upload Mac artifact
@@ -166,16 +161,21 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
       
+      - name: Write version file
+        working-directory: windows_agent
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "# Auto-generated during build - DO NOT EDIT" > version.py
+          echo "APP_VERSION = \"$VERSION\"" >> version.py
+          cat version.py
+      
       - name: Build executables
         working-directory: windows_agent
         run: |
           python -m PyInstaller --onefile --windowed --name "TimeTracker" gui.py
           python -m PyInstaller --onefile --noconsole --name "TimeTrackerAgent" --hidden-import=timetracker_gui --add-data "timetracker_gui.py;." main.py
       
-      # ========================================
-      # AZURE TRUSTED SIGNING - Sign executables
-      # Disabled until certificate is ready
-      # ========================================
       - name: Sign Windows executables
         if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
         uses: azure/trusted-signing-action@v0.5.0
@@ -202,10 +202,6 @@ jobs:
           path: windows_agent/installer.iss
           options: /DMyAppVersion=${{ env.VERSION }}
       
-      # ========================================
-      # AZURE TRUSTED SIGNING - Sign installer
-      # Disabled until certificate is ready
-      # ========================================
       - name: Sign Windows installer
         if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
         uses: azure/trusted-signing-action@v0.5.0

@@ -68,11 +68,11 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
 
     try {
       const result = await onboardingSignup({
-        firm_name: formData.firm_name,
-        owner_name: formData.owner_name,
+        firmName: formData.firm_name,      // camelCase for the API function
+        ownerName: formData.owner_name,
         email: formData.email,
         password: formData.password,
-        industry_type: formData.industry_type,  // ✅ Pass industry
+        industryType: formData.industry_type,
       });
 
       if (result.ok) {

@@ -233,6 +233,9 @@ EXCLUDE_BUNDLES.add("com.apple.python3")
 
 _LAST_CLIENT_SUGGESTION = {}  # {client_id: timestamp} - prevent spam
 
+# Add this global near the top of your file (after imports)
+_DETECTION_STATS = {"system_events": 0, "nsworkspace": 0, "quartz": 0, "failed": 0}
+
 
 PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 
@@ -1084,56 +1087,224 @@ _OVERLAY_OWNERS = {
     "Adobe CEF Helper", "Adobe Desktop Service"
 }
 
+"""
+FRONTMOST DETECTION FIX for TimeTracker Mac Agent
+
+Problem: Quartz fallback was returning background windows instead of true frontmost.
+Solution: 
+  1. Reorder fallbacks (NSWorkspace before Quartz)
+  2. Add logging to track which detection method is used
+  3. Add validation to catch suspicious results
+
+Replace the relevant functions in main.py with these:
+"""
+
+# Add this global near the top of your file (after imports)
+_DETECTION_STATS = {"system_events": 0, "nsworkspace": 0, "quartz": 0, "failed": 0}
+
+
+def get_frontmost_via_system_events() -> Optional[Tuple[str, int]]:
+    """Most reliable method - uses System Events AppleScript."""
+    s = (
+        'tell application "System Events" to try\n'
+        'set p to first process whose frontmost is true\n'
+        'return (name of p as text) & "|" & (unix id of p as text)\n'
+        'on error\nreturn ""\nend try'
+    )
+    out = osa(s)
+    if "|" in out:
+        name, pid = out.split("|", 1)
+        try:
+            return name, int(pid)
+        except ValueError:
+            log(f"[DETECT] System Events returned invalid PID: {out}", "warning")
+            return None
+    if out:
+        log(f"[DETECT] System Events returned unexpected format: {out}", "warning")
+    return None
+
+
+def get_frontmost_via_nsworkspace() -> Optional[Tuple[str, int]]:
+    """Second most reliable - uses NSWorkspace."""
+    try:
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if not app:
+            return None
+        return (str(app.localizedName() or ""), int(app.processIdentifier()))
+    except Exception as e:
+        log(f"[DETECT] NSWorkspace error: {e}", "warning")
+        return None
+
+
 def get_frontmost_via_quartz() -> Optional[Tuple[str, int, Optional[str]]]:
+    """
+    UNRELIABLE for frontmost detection!
+    Only use as last resort. Returns topmost visible window, which may be background.
+    """
     try:
         opts = kCGWindowListOptionOnScreenOnly | kCGWindowListOptionOnScreenAboveWindow
         info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) or []
-        if not info: return None
+        if not info:
+            return None
+        
         for w in info:
             owner = w.get("kCGWindowOwnerName") or ""
-            if owner in _OVERLAY_OWNERS: continue
+            if owner in _OVERLAY_OWNERS:
+                continue
             layer = int(w.get("kCGWindowLayer") or 0)
-            if layer != 0: continue
+            if layer != 0:
+                continue
             alpha = float(w.get("kCGWindowAlpha") or 1.0)
-            if alpha <= 0.01: continue
+            if alpha <= 0.01:
+                continue
             pid = int(w.get("kCGWindowOwnerPID") or 0)
             title = w.get("kCGWindowName") or None
             return (str(owner), pid, title)
+        
+        # Fallback to first window if no good match
         top = info[0]
-        return (str(top.get("kCGWindowOwnerName") or ""), int(top.get("kCGWindowOwnerPID") or 0), top.get("kCGWindowName") or None)
-    except Exception:
+        return (
+            str(top.get("kCGWindowOwnerName") or ""),
+            int(top.get("kCGWindowOwnerPID") or 0),
+            top.get("kCGWindowName") or None
+        )
+    except Exception as e:
+        log(f"[DETECT] Quartz error: {e}", "warning")
         return None
 
-def get_frontmost_via_nsworkspace() -> Optional[Tuple[str, int]]:
-    try:
-        app = NSWorkspace.sharedWorkspace().frontmostApplication()
-        if not app: return None
-        return (str(app.localizedName() or ""), int(app.processIdentifier()))
-    except Exception:
-        return None
 
 def get_frontmost_app() -> Optional[Tuple[str, str, int, Optional[str]]]:
+    """
+    Get frontmost application with method logging.
+    Returns: (app_name, bundle_id, pid, window_title) or None
+    
+    Fallback order (most to least reliable):
+      1. System Events AppleScript
+      2. NSWorkspace
+      3. Quartz (UNRELIABLE - may return background windows!)
+    """
+    global _DETECTION_STATS
+    
+    # Method 1: System Events (most reliable)
     se = get_frontmost_via_system_events()
     if se:
         name, pid = se
         ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
         bid = str(ra.bundleIdentifier() or "") if ra else ""
+        _DETECTION_STATS["system_events"] += 1
+        if VERBOSE:
+            log(f"[DETECT] SystemEvents → {name} (pid={pid})")
         return (name, bid, pid, None)
 
-    q = get_frontmost_via_quartz()
-    if q:
-        name, pid, qtitle = q
-        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
-        bid = str(ra.bundleIdentifier() or "") if ra else ""
-        return (name, bid, pid, qtitle)
-
+    # Method 2: NSWorkspace (second most reliable)
     ws = get_frontmost_via_nsworkspace()
     if ws:
         name, pid = ws
         ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
         bid = str(ra.bundleIdentifier() or "") if ra else ""
+        _DETECTION_STATS["nsworkspace"] += 1
+        log(f"[DETECT] ⚠️ NSWorkspace fallback → {name} (pid={pid})")
         return (name, bid, pid, None)
 
+    # Method 3: Quartz (LAST RESORT - unreliable!)
+    q = get_frontmost_via_quartz()
+    if q:
+        name, pid, qtitle = q
+        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        _DETECTION_STATS["quartz"] += 1
+        log(f"[DETECT] ⚠️⚠️ QUARTZ fallback → {name} (pid={pid}, title={qtitle[:50] if qtitle else 'None'})")
+        log(f"[DETECT] WARNING: Quartz detection may have returned a BACKGROUND window!")
+        return (name, bid, pid, qtitle)
+
+    _DETECTION_STATS["failed"] += 1
+    log("[DETECT] ❌ All detection methods failed!")
+    return None
+
+
+# Optional: Add this function to periodically log detection stats
+def log_detection_stats():
+    """Call this periodically (e.g., every 5 minutes) to see detection method usage."""
+    total = sum(_DETECTION_STATS.values())
+    if total == 0:
+        return
+    
+    se_pct = (_DETECTION_STATS["system_events"] / total) * 100
+    ns_pct = (_DETECTION_STATS["nsworkspace"] / total) * 100
+    q_pct = (_DETECTION_STATS["quartz"] / total) * 100
+    fail_pct = (_DETECTION_STATS["failed"] / total) * 100
+    
+    log(f"[DETECT-STATS] Total={total} | SystemEvents={se_pct:.1f}% | NSWorkspace={ns_pct:.1f}% | Quartz={q_pct:.1f}% | Failed={fail_pct:.1f}%")
+    
+    # Alert if Quartz is being used too much (indicates System Events problems)
+    if q_pct > 5:
+        log(f"[DETECT-STATS] ⚠️ Quartz usage is high ({q_pct:.1f}%) - check System Events accessibility permissions!")
+
+
+# ============================================================================
+# ADDITIONAL FIX: Validate frontmost against NSWorkspace
+# ============================================================================
+
+def get_frontmost_app_validated() -> Optional[Tuple[str, str, int, Optional[str]]]:
+    """
+    Enhanced version that cross-validates detection methods.
+    Use this instead of get_frontmost_app() for extra safety.
+    """
+    global _DETECTION_STATS
+    
+    # Get result from primary method (System Events)
+    se = get_frontmost_via_system_events()
+    
+    # Always get NSWorkspace result for validation
+    ws = get_frontmost_via_nsworkspace()
+    
+    if se and ws:
+        se_name, se_pid = se
+        ws_name, ws_pid = ws
+        
+        # If they agree, we're good
+        if se_pid == ws_pid:
+            ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(se_pid)
+            bid = str(ra.bundleIdentifier() or "") if ra else ""
+            _DETECTION_STATS["system_events"] += 1
+            return (se_name, bid, se_pid, None)
+        
+        # They disagree! Log this and trust NSWorkspace (it's more direct)
+        log(f"[DETECT] ⚠️ MISMATCH: SystemEvents says {se_name}(pid={se_pid}) but NSWorkspace says {ws_name}(pid={ws_pid})")
+        log(f"[DETECT] Trusting NSWorkspace result")
+        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(ws_pid)
+        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        _DETECTION_STATS["nsworkspace"] += 1
+        return (ws_name, bid, ws_pid, None)
+    
+    # If System Events succeeded alone
+    if se:
+        name, pid = se
+        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        _DETECTION_STATS["system_events"] += 1
+        return (name, bid, pid, None)
+    
+    # If NSWorkspace succeeded alone  
+    if ws:
+        name, pid = ws
+        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        _DETECTION_STATS["nsworkspace"] += 1
+        log(f"[DETECT] ⚠️ NSWorkspace only → {name}")
+        return (name, bid, pid, None)
+    
+    # Last resort: Quartz (but warn heavily)
+    q = get_frontmost_via_quartz()
+    if q:
+        name, pid, qtitle = q
+        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        _DETECTION_STATS["quartz"] += 1
+        log(f"[DETECT] ⚠️⚠️ QUARTZ FALLBACK (unreliable!) → {name}")
+        return (name, bid, pid, qtitle)
+    
+    _DETECTION_STATS["failed"] += 1
     return None
 
 def _ax_ok(code: int) -> bool:
@@ -1949,9 +2120,13 @@ def fetch_today_time():
     try:
         with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read())
-            print(f"[GUI] Today's time data: {len(data)} entries")
+            print(f"[GUI] Today's time data: {len(data.get('clients', []))} clients, {data.get('global_hours', 0)} hrs")
+            
+            # API returns {"clients": [...], "global_hours": ..., ...}
+            if isinstance(data, dict):
+                return data  # Return the whole dict
             if isinstance(data, list):
-                return data
+                return data  # Legacy format
             return []
     except urllib.error.HTTPError as e:
         print(f"[GUI] HTTP {e.code} fetching today's time")
@@ -2132,10 +2307,6 @@ def run_agent():
                     gui_menu_bar.app.title = f"⏱ {client_name}" if client_name else "⏱ None"
                     log(f"[NOTIF] Updated menu title to: {client_name}")
                 
-                # Rebuild menu to update bullet indicator
-                if hasattr(gui_menu_bar, 'app') and hasattr(gui_menu_bar.app, '_rebuild_menu'):
-                    gui_menu_bar.app._rebuild_menu()
-                    log(f"[NOTIF] Rebuilt menu")
 
             # Update notification state
             if notif_manager:

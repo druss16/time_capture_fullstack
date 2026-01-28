@@ -161,9 +161,10 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
       setCurrentStep(serverStep);
       setHighestStepReached(serverStep);
     } catch (err) {
-      // If API fails but we have a token, start at step 2
-      setCurrentStep(isLoggedIn ? 2 : 1);
-      setHighestStepReached(isLoggedIn ? 2 : 1);
+      // If API fails, clear potentially stale token and start fresh at step 1
+      localStorage.removeItem('auth_token');
+      setCurrentStep(1);
+      setHighestStepReached(1);
     } finally {
       setLoading(false);
     }

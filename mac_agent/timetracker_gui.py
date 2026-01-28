@@ -584,13 +584,24 @@ def _run_today_time_process(data_json: str):
         "primary_muted": "#134E4A",
         "bg_base": "#1C1C1E",
         "bg_surface": "#2C2C2E",
-        "bg_hover": "#3A3A3C",
+        "bg_hover": "#3A3A3A",
         "border": "#38383A",
         "text_primary": "#FFFFFF",
         "text_tertiary": "#636366",
     }
     
-    data = json.loads(data_json) if data_json else []
+    raw_data = json.loads(data_json) if data_json else {}
+    
+    # Handle both formats: dict with "clients" key OR direct list
+    if isinstance(raw_data, dict):
+        clients_data = raw_data.get("clients", [])
+        total_hours = raw_data.get("global_hours", 0)
+    elif isinstance(raw_data, list):
+        clients_data = raw_data
+        total_hours = sum(e.get("hours", e.get("total_hours", 0)) for e in clients_data)
+    else:
+        clients_data = []
+        total_hours = 0
     
     ctk.set_appearance_mode("dark")
     root = ctk.CTk()
@@ -622,9 +633,6 @@ def _run_today_time_process(data_json: str):
                               text_color=colors["text_primary"])
     date_label.pack(side="left")
     
-    # Calculate total
-    total_hours = sum(e.get("hours", e.get("total_hours", 0)) for e in data) if data else 0
-    
     total_frame = ctk.CTkFrame(header, fg_color=colors["primary_muted"], corner_radius=8)
     total_frame.pack(side="right")
     
@@ -637,12 +645,12 @@ def _run_today_time_process(data_json: str):
     divider = ctk.CTkFrame(container, fg_color=colors["border"], height=1)
     divider.pack(fill="x", pady=(0, 16))
     
-    # Entries - use a frame with manual scrolling if needed
+    # Entries
     entries_frame = ctk.CTkScrollableFrame(container, fg_color="transparent", 
                                            corner_radius=0, border_width=0)
     entries_frame.pack(fill="both", expand=True, pady=(0, 16))
     
-    if not data:
+    if not clients_data:
         empty_frame = ctk.CTkFrame(entries_frame, fg_color="transparent")
         empty_frame.pack(fill="both", expand=True, pady=60)
         
@@ -654,9 +662,9 @@ def _run_today_time_process(data_json: str):
                                    text_color=colors["text_tertiary"])
         empty_label.pack(pady=(8, 0))
     else:
-        for entry in data:
-            client = entry.get("client", "Unknown")
-            hours = entry.get("hours", entry.get("total_hours", 0))
+        for entry in clients_data:
+            client = entry.get("client", entry.get("client_name", "Unknown"))
+            hours = entry.get("total_hours", entry.get("hours", 0))
             
             row = ctk.CTkFrame(entries_frame, fg_color=colors["bg_surface"], corner_radius=10)
             row.pack(fill="x", pady=3, padx=2)
@@ -669,7 +677,7 @@ def _run_today_time_process(data_json: str):
                                         text_color=colors["text_primary"])
             client_label.pack(side="left")
             
-            hours_label = ctk.CTkLabel(row_inner, text=f"{hours:.1f} hrs",
+            hours_label = ctk.CTkLabel(row_inner, text=f"{hours:.2f} hrs",
                                        font=ctk.CTkFont(family="SF Mono", size=14, weight="bold"),
                                        text_color=colors["primary"])
             hours_label.pack(side="right")
@@ -1227,6 +1235,8 @@ if RUMPS_AVAILABLE:
             super().__init__("⏱", quit_button=None)
             self.controller = controller
             self._client_callbacks = {}
+            self._start_keepalive()
+
             
             # Set initial title from state
             client_name = self.controller.state.current_client_name
@@ -1236,6 +1246,27 @@ if RUMPS_AVAILABLE:
                 self.title = "⏱ None"
             
             self._rebuild_menu()
+
+        def _start_keepalive(self):
+            """Periodic keepalive to prevent icon from disappearing"""
+            def tick(_):
+                try:
+                    # Force refresh the title
+                    current = self.title
+                    if not current or current == "":
+                        print(f"[GUI] ⚠️ Title was empty, restoring...")
+                        client_name = self.controller.state.current_client_name
+                        if client_name and client_name != "No Client":
+                            self.title = f"⏱ {client_name}"
+                        else:
+                            self.title = "⏱ None"
+
+                    self._rebuild_menu()
+                except Exception as e:
+                    print(f"[GUI] Keepalive error: {e}")
+            
+            # Run every 10 seconds (more aggressive)
+            rumps.Timer(tick, 10).start()
         
         def _rebuild_menu(self):
             self.menu.clear()

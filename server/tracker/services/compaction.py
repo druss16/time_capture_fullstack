@@ -480,12 +480,72 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
 
 
 def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
-    """Create a new block."""
-    is_idle = is_idle_activity(
-        app_name=block_data.get("app_name"),
-        bundle_id=block_data.get("bundle_id"),
-        window_title=block_data.get("window_title")
-    )
+    """Create a new block - checks work patterns BEFORE defaulting to idle."""
+    
+    # Extract context for pattern matching
+    app_name = (block_data.get("app_name") or "").lower()
+    bundle_id = (block_data.get("bundle_id") or "").lower()
+    window_title = (block_data.get("window_title") or "").lower()
+    url = (block_data.get("url") or "").lower()
+    file_path = (block_data.get("file_path") or "").lower()
+    
+    # =========================================================================
+    # ✅ FIX: Check work patterns FIRST before marking as idle
+    # This prevents Claude.ai, GitHub, etc. from being marked as idle
+    # =========================================================================
+    
+    # Domains that should NEVER be marked as idle (active work tools)
+    NEVER_IDLE_DOMAINS = {
+        'claude.ai', 'chat.openai.com', 'chatgpt.com',  # AI assistants
+        'github.com', 'gitlab.com', 'bitbucket.org',     # Code repos
+        'stackoverflow.com', 'docs.python.org',          # Research
+        'localhost', '127.0.0.1',                         # Local dev
+        'figma.com', 'canva.com',                         # Design tools
+        'notion.so', 'docs.google.com',                   # Docs
+        'slack.com', 'teams.microsoft.com',               # Communication
+        'zoom.us', 'meet.google.com',                     # Meetings
+        'qbo.intuit.com', 'quickbooks.intuit.com',        # Accounting
+        'cchaxcess.com', 'irs.gov',                       # Tax
+    }
+    
+    # Apps that should NEVER be marked as idle
+    NEVER_IDLE_APPS = {
+        'code', 'vscode', 'visual studio', 'sublime', 'sublime_text',
+        'pycharm', 'intellij', 'webstorm', 'xcode', 'android studio',
+        'terminal', 'iterm', 'iterm2', 'warp', 'hyper',
+        'figma', 'sketch', 'photoshop',
+        'zoom', 'teams', 'slack',
+    }
+    
+    # Check if this matches a work pattern
+    is_work_pattern = False
+    
+    # Check URL domains
+    for domain in NEVER_IDLE_DOMAINS:
+        if domain in url:
+            is_work_pattern = True
+            break
+    
+    # Check app names
+    if not is_work_pattern:
+        for app in NEVER_IDLE_APPS:
+            if app in app_name:
+                is_work_pattern = True
+                break
+    
+    # Only check idle detection if no work pattern matched
+    if is_work_pattern:
+        is_idle = False
+    else:
+        is_idle = is_idle_activity(
+            app_name=block_data.get("app_name"),
+            bundle_id=block_data.get("bundle_id"),
+            window_title=block_data.get("window_title")
+        )
+    
+    # =========================================================================
+    # Rest of function unchanged
+    # =========================================================================
     
     device_id = block_data.get("device_id", 0)
     source_events = block_data.get('source_events', [])
@@ -501,10 +561,9 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             total_seconds += duration
         minutes = int(total_seconds / 60)
     else:
-        minutes = 3  # fallback (was 5)
+        minutes = 3  # fallback
     
-    # ✅ FIX: Get client for ALL blocks (including idle)
-    # Idle time should show under the active client, but won't count as billable
+    # Get client for ALL blocks (including idle)
     client = None
     client_id = block_data.get("current_client_id")
     if client_id:
@@ -533,7 +592,7 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             app_name=block_data.get("app_name") or "Idle",
             bundle_id=block_data.get("bundle_id") or "__idle__",
             hints={},
-            client=client,  # ✅ FIX: Idle shows under active client (but not billable)
+            client=client,
             category_hours={"Idle": hours},
             is_categorized=True,
             categorized_by="system",
@@ -568,7 +627,6 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     RawEvent.objects.filter(id__in=event_ids).update(block=new_block)
     
     return new_block
-
 
 def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:
     """Quick compaction of recent events."""

@@ -53,6 +53,8 @@ from Quartz import (
     CGEventSourceSecondsSinceLastEventType,
     kCGEventSourceStateCombinedSessionState,
     kCGEventMouseMoved,
+    kCGEventKeyDown,
+    kCGEventScrollWheel,
 )
 
 from quick_switcher import QuickSwitcher, start_hotkey_listener, stop_hotkey_listener
@@ -1056,12 +1058,22 @@ def _post_nudge_decision_async(is_yes: bool, data: dict):
 
 # ------------- Mouse Idle --------------
 def mouse_idle_seconds() -> float:
-    """Returns seconds since the last mouse move."""
+    """Returns seconds since last user input (mouse, keyboard, OR scroll)."""
     try:
-        return float(CGEventSourceSecondsSinceLastEventType(
+        mouse_idle = CGEventSourceSecondsSinceLastEventType(
             kCGEventSourceStateCombinedSessionState,
             kCGEventMouseMoved
-        ))
+        )
+        keyboard_idle = CGEventSourceSecondsSinceLastEventType(
+            kCGEventSourceStateCombinedSessionState,
+            kCGEventKeyDown
+        )
+        scroll_idle = CGEventSourceSecondsSinceLastEventType(
+            kCGEventSourceStateCombinedSessionState,
+            kCGEventScrollWheel
+        )
+        # User is only idle if ALL inputs are idle
+        return min(float(mouse_idle), float(keyboard_idle), float(scroll_idle))
     except Exception:
         return 0.0
 

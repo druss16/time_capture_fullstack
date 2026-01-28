@@ -173,7 +173,7 @@ jobs:
       - name: Build executables
         working-directory: windows_agent
         run: |
-          python -m PyInstaller --onefile --windowed --name "TimeTracker" gui.py
+          python -m PyInstaller --onefile --windowed --name "TimeTracker" --hidden-import=customtkinter --collect-all=customtkinter --hidden-import=CTkMessagebox --collect-all=CTkMessagebox gui.py
           python -m PyInstaller --onefile --noconsole --name "TimeTrackerAgent" --hidden-import=timetracker_gui --add-data "timetracker_gui.py;." main.py
       
       - name: Sign Windows executables

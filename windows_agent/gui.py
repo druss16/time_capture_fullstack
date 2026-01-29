@@ -46,10 +46,12 @@ except ImportError:
 import tkinter as tk
 from tkinter import messagebox
 
+# Try to import version from auto-generated file
 try:
     from version import APP_VERSION
 except ImportError:
     APP_VERSION = "dev"
+
 GITHUB_REPO = "druss16/timetracker-releases"
 
 # Color scheme
@@ -213,8 +215,8 @@ class ModernConfigGUI:
         
         self.root = ctk.CTk()
         self.root.title("TimeTracker")
-        self.root.geometry("500x680")
-        self.root.resizable(False, False)
+        self.root.geometry("500x620")
+        self.root.resizable(False, True)  # Allow vertical resize
         
         # Center window
         self.root.update_idletasks()
@@ -232,17 +234,17 @@ class ModernConfigGUI:
     def _setup_ui(self):
         # Main container with padding
         main_frame = ctk.CTkFrame(self.root, fg_color="transparent")
-        main_frame.pack(fill="both", expand=True, padx=30, pady=20)
+        main_frame.pack(fill="both", expand=True, padx=24, pady=16)
         
         # ===== Header =====
         header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        header_frame.pack(fill="x", pady=(0, 20))
+        header_frame.pack(fill="x", pady=(0, 15))
         
         # Logo/Title
         title_label = ctk.CTkLabel(
             header_frame, 
             text="⏱ TimeTracker",
-            font=ctk.CTkFont(size=28, weight="bold")
+            font=ctk.CTkFont(size=24, weight="bold")
         )
         title_label.pack(side="left")
         
@@ -250,39 +252,39 @@ class ModernConfigGUI:
         version_label = ctk.CTkLabel(
             header_frame,
             text=f"v{APP_VERSION}",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color=COLORS["text_muted"]
         )
-        version_label.pack(side="right", pady=10)
+        version_label.pack(side="right", pady=8)
         
         # Platform badge
         os_label = ctk.CTkLabel(
             header_frame,
             text=PLATFORM_NAME,
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=10),
             text_color=COLORS["text_muted"],
             fg_color=COLORS["bg_card"],
             corner_radius=4,
-            padx=8,
+            padx=6,
             pady=2
         )
-        os_label.pack(side="right", padx=(0, 10), pady=10)
+        os_label.pack(side="right", padx=(0, 8), pady=8)
         
         # ===== Status Card =====
-        status_card = ctk.CTkFrame(main_frame, corner_radius=12)
-        status_card.pack(fill="x", pady=(0, 20))
+        status_card = ctk.CTkFrame(main_frame, corner_radius=10)
+        status_card.pack(fill="x", pady=(0, 15))
         
         status_inner = ctk.CTkFrame(status_card, fg_color="transparent")
-        status_inner.pack(fill="x", padx=20, pady=20)
+        status_inner.pack(fill="x", padx=16, pady=16)
         
         # Status indicator
         status_row = ctk.CTkFrame(status_inner, fg_color="transparent")
-        status_row.pack(fill="x", pady=(0, 15))
+        status_row.pack(fill="x", pady=(0, 12))
         
         self.status_dot = ctk.CTkLabel(
             status_row,
             text="●",
-            font=ctk.CTkFont(size=20),
+            font=ctk.CTkFont(size=16),
             text_color=COLORS["danger"]
         )
         self.status_dot.pack(side="left")
@@ -290,9 +292,9 @@ class ModernConfigGUI:
         self.status_label = ctk.CTkLabel(
             status_row,
             text="Agent Stopped",
-            font=ctk.CTkFont(size=16, weight="bold")
+            font=ctk.CTkFont(size=14, weight="bold")
         )
-        self.status_label.pack(side="left", padx=(8, 0))
+        self.status_label.pack(side="left", padx=(6, 0))
         
         # Control buttons
         btn_frame = ctk.CTkFrame(status_inner, fg_color="transparent")
@@ -304,8 +306,8 @@ class ModernConfigGUI:
             command=self._start_agent,
             fg_color=COLORS["success"],
             hover_color=COLORS["success_hover"],
-            height=40,
-            font=ctk.CTkFont(size=14, weight="bold")
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold")
         )
         self.start_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
         
@@ -315,24 +317,24 @@ class ModernConfigGUI:
             command=self._stop_agent,
             fg_color=COLORS["danger"],
             hover_color=COLORS["danger_hover"],
-            height=40,
-            font=ctk.CTkFont(size=14, weight="bold")
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold")
         )
         self.stop_btn.pack(side="left", expand=True, fill="x", padx=(5, 0))
         
         # ===== Configuration Card =====
-        config_card = ctk.CTkFrame(main_frame, corner_radius=12)
-        config_card.pack(fill="x", pady=(0, 20))
+        config_card = ctk.CTkFrame(main_frame, corner_radius=10)
+        config_card.pack(fill="x", pady=(0, 15))
         
         config_inner = ctk.CTkFrame(config_card, fg_color="transparent")
-        config_inner.pack(fill="x", padx=20, pady=20)
+        config_inner.pack(fill="x", padx=16, pady=16)
         
         config_title = ctk.CTkLabel(
             config_inner,
             text="Configuration",
-            font=ctk.CTkFont(size=16, weight="bold")
+            font=ctk.CTkFont(size=14, weight="bold")
         )
-        config_title.pack(anchor="w", pady=(0, 15))
+        config_title.pack(anchor="w", pady=(0, 12))
         
         # Pairing Code (most important for new users)
         self._create_input_field(
@@ -378,6 +380,27 @@ class ModernConfigGUI:
             help_text="Auto-populated after pairing"
         )
         
+        # Reset Device button
+        reset_btn = ctk.CTkButton(
+            self.advanced_frame,
+            text="🔄 Reset Device ID",
+            command=self._reset_device,
+            fg_color=COLORS["danger"],
+            hover_color=COLORS["danger_hover"],
+            height=32,
+            font=ctk.CTkFont(size=11)
+        )
+        reset_btn.pack(fill="x", pady=(12, 0))
+        
+        reset_help = ctk.CTkLabel(
+            self.advanced_frame,
+            text="Use if you see 'device belongs to another user' error",
+            font=ctk.CTkFont(size=10),
+            text_color=COLORS["text_muted"],
+            anchor="w"
+        )
+        reset_help.pack(fill="x", pady=(2, 0))
+        
         # Save button
         save_btn = ctk.CTkButton(
             config_inner,
@@ -385,10 +408,10 @@ class ModernConfigGUI:
             command=self._save_config,
             fg_color=COLORS["primary"],
             hover_color=COLORS["primary_hover"],
-            height=45,
-            font=ctk.CTkFont(size=15, weight="bold")
+            height=40,
+            font=ctk.CTkFont(size=13, weight="bold")
         )
-        save_btn.pack(fill="x", pady=(20, 0))
+        save_btn.pack(fill="x", pady=(15, 0))
         
         # ===== Quick Actions =====
         actions_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
@@ -400,10 +423,10 @@ class ModernConfigGUI:
             command=self._open_logs,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_dark"],
-            width=100,
-            height=35
+            width=80,
+            height=30
         )
-        logs_btn.pack(side="left", padx=(0, 10))
+        logs_btn.pack(side="left", padx=(0, 8))
         
         help_btn = ctk.CTkButton(
             actions_frame,
@@ -411,8 +434,8 @@ class ModernConfigGUI:
             command=self._show_help,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_dark"],
-            width=100,
-            height=35
+            width=80,
+            height=30
         )
         help_btn.pack(side="left")
         
@@ -420,7 +443,7 @@ class ModernConfigGUI:
         self.update_label = ctk.CTkLabel(
             actions_frame,
             text="🔄 Update available!",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color=COLORS["warning"],
             cursor="hand2"
         )
@@ -430,12 +453,12 @@ class ModernConfigGUI:
     def _create_input_field(self, parent, label, var_name, default="", placeholder="", help_text="", show=None):
         """Create a styled input field"""
         frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.pack(fill="x", pady=(0, 10))
+        frame.pack(fill="x", pady=(0, 8))
         
         lbl = ctk.CTkLabel(
             frame,
             text=label,
-            font=ctk.CTkFont(size=13),
+            font=ctk.CTkFont(size=11),
             anchor="w"
         )
         lbl.pack(fill="x")
@@ -455,16 +478,17 @@ class ModernConfigGUI:
             frame,
             textvariable=var,
             placeholder_text=placeholder,
-            height=40,
+            height=34,
+            font=ctk.CTkFont(size=11),
             show=show if show else ""
         )
-        entry.pack(fill="x", pady=(5, 0))
+        entry.pack(fill="x", pady=(4, 0))
         
         if help_text:
             help_lbl = ctk.CTkLabel(
                 frame,
                 text=help_text,
-                font=ctk.CTkFont(size=11),
+                font=ctk.CTkFont(size=10),
                 text_color=COLORS["text_muted"],
                 anchor="w"
             )
@@ -477,12 +501,14 @@ class ModernConfigGUI:
             self.advanced_frame.pack_forget()
             self.show_advanced.set(False)
             self.advanced_toggle_btn.configure(text="▶ Advanced Settings")
+            self.root.geometry("500x620")  # Shrink window
             print("[GUI] Advanced settings hidden")
         else:
             # Currently hidden, show it
-            self.advanced_frame.pack(fill="x", pady=(10, 0))
+            self.advanced_frame.pack(fill="x", pady=(8, 0))
             self.show_advanced.set(True)
             self.advanced_toggle_btn.configure(text="▼ Advanced Settings")
+            self.root.geometry("500x780")  # Expand window
             print("[GUI] Advanced settings shown")
     
     def _start_auto_refresh(self):
@@ -639,6 +665,92 @@ class ModernConfigGUI:
         except Exception as e:
             self._show_toast("Error", f"Failed to stop agent: {e}", "error")
     
+    def _stop_agent_silent(self):
+        """Stop the agent without showing toast (used during re-pair)"""
+        try:
+            if IS_WINDOWS:
+                try:
+                    import psutil
+                    for proc in psutil.process_iter(['name', 'cmdline', 'pid']):
+                        try:
+                            cmdline = proc.info.get('cmdline') or []
+                            for arg in cmdline:
+                                if arg and ('main.py' in arg or 'timetracker' in arg.lower()):
+                                    if 'gui.py' not in str(cmdline):
+                                        proc.terminate()
+                                        print(f"[GUI] Terminated agent process {proc.info['pid']}")
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except ImportError:
+                    pass
+                
+                # Also clean up PID files
+                for pid_file in [PID_FILE, os.path.expanduser("~/.timetracker/agent.pid")]:
+                    if os.path.exists(pid_file):
+                        try:
+                            os.remove(pid_file)
+                        except:
+                            pass
+            else:
+                # macOS
+                if PLIST and os.path.exists(PLIST):
+                    launchctl(["unload", PLIST])
+                
+                if os.path.exists(PID_FILE):
+                    try:
+                        with open(PID_FILE) as f:
+                            pid = int(f.read().strip())
+                        os.kill(pid, 15)
+                    except:
+                        pass
+            
+            # Wait a moment for process to stop
+            import time
+            time.sleep(1)
+            self._update_status()
+            
+        except Exception as e:
+            print(f"[GUI] Error stopping agent: {e}")
+    
+    def _reset_device(self):
+        """Reset device ID to allow fresh pairing"""
+        try:
+            from CTkMessagebox import CTkMessagebox
+            confirm = CTkMessagebox(
+                title="Reset Device?",
+                message="This will clear your device pairing and allow you to pair again.\n\nContinue?",
+                icon="warning",
+                option_1="Cancel",
+                option_2="Reset"
+            )
+            
+            if confirm.get() != "Reset":
+                return
+            
+            # Stop agent if running
+            if is_agent_running():
+                self._stop_agent_silent()
+            
+            # Delete device ID file
+            device_id_file = os.path.join(CONFIG_DIR, '.device_id')
+            if os.path.exists(device_id_file):
+                os.remove(device_id_file)
+            
+            # Clear config
+            self.config = {}
+            save_config(self.config)
+            
+            # Clear the UI fields
+            if hasattr(self, 'api_key_var'):
+                self.api_key_var.set("")
+            if hasattr(self, 'pair_code_var'):
+                self.pair_code_var.set("")
+            
+            self._show_toast("Reset Complete", "Device ID cleared. Enter a new pairing code.", "success")
+            
+        except Exception as e:
+            self._show_toast("Error", f"Failed to reset: {e}", "error")
+    
     def _try_pair(self, api_base, code):
         """Attempt to pair with the backend"""
         import urllib.request
@@ -680,9 +792,18 @@ class ModernConfigGUI:
             try:
                 error_data = json.loads(error_body)
                 error_msg = error_data.get('error', 'Unknown error')
+                
+                # Provide helpful message for common errors
+                if 'device_belongs_to_another_user' in error_msg:
+                    self._show_toast(
+                        "Device Already Paired", 
+                        "This device was previously paired. Go to Advanced Settings and click 'Reset Device ID', then try again.",
+                        "warning"
+                    )
+                else:
+                    self._show_toast("Pairing Failed", error_msg, "error")
             except:
-                error_msg = error_body
-            self._show_toast("Pairing Failed", error_msg, "error")
+                self._show_toast("Pairing Failed", error_body, "error")
             return None, None
         except Exception as e:
             self._show_toast("Connection Error", str(e), "error")
@@ -741,53 +862,6 @@ class ModernConfigGUI:
             traceback.print_exc()
             self._show_toast("Error", f"Failed to save: {e}", "error")
     
-    def _stop_agent_silent(self):
-        """Stop the agent without showing toast (used during re-pair)"""
-        try:
-            if IS_WINDOWS:
-                try:
-                    import psutil
-                    for proc in psutil.process_iter(['name', 'cmdline', 'pid']):
-                        try:
-                            cmdline = proc.info.get('cmdline') or []
-                            for arg in cmdline:
-                                if arg and ('main.py' in arg or 'timetracker' in arg.lower()):
-                                    if 'gui.py' not in str(cmdline):
-                                        proc.terminate()
-                                        print(f"[GUI] Terminated agent process {proc.info['pid']}")
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            pass
-                except ImportError:
-                    pass
-                
-                # Also clean up PID files
-                for pid_file in [PID_FILE, os.path.expanduser("~/.timetracker/agent.pid")]:
-                    if os.path.exists(pid_file):
-                        try:
-                            os.remove(pid_file)
-                        except:
-                            pass
-            else:
-                # macOS
-                if PLIST and os.path.exists(PLIST):
-                    launchctl(["unload", PLIST])
-                
-                if os.path.exists(PID_FILE):
-                    try:
-                        with open(PID_FILE) as f:
-                            pid = int(f.read().strip())
-                        os.kill(pid, 15)
-                    except:
-                        pass
-            
-            # Wait a moment for process to stop
-            import time
-            time.sleep(1)
-            self._update_status()
-            
-        except Exception as e:
-            print(f"[GUI] Error stopping agent: {e}")
-    
     def _open_logs(self):
         """Open logs folder - cross-platform"""
         if not os.path.exists(LOG_DIR):
@@ -807,25 +881,25 @@ class ModernConfigGUI:
         """Show help dialog"""
         help_window = ctk.CTkToplevel(self.root)
         help_window.title("Help")
-        help_window.geometry("450x400")
+        help_window.geometry("420x360")
         help_window.transient(self.root)
         help_window.grab_set()
         
         # Center
         help_window.update_idletasks()
-        x = self.root.winfo_x() + 25
+        x = self.root.winfo_x() + 40
         y = self.root.winfo_y() + 100
         help_window.geometry(f"+{x}+{y}")
         
         content = ctk.CTkFrame(help_window, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=20, pady=20)
+        content.pack(fill="both", expand=True, padx=16, pady=16)
         
         title = ctk.CTkLabel(
             content,
             text="Getting Started",
-            font=ctk.CTkFont(size=20, weight="bold")
+            font=ctk.CTkFont(size=16, weight="bold")
         )
-        title.pack(anchor="w", pady=(0, 15))
+        title.pack(anchor="w", pady=(0, 12))
         
         # Platform-specific instructions
         if IS_WINDOWS:
@@ -842,18 +916,18 @@ class ModernConfigGUI:
         
         for emoji, text in steps:
             step_frame = ctk.CTkFrame(content, fg_color="transparent")
-            step_frame.pack(fill="x", pady=5)
+            step_frame.pack(fill="x", pady=4)
             
             ctk.CTkLabel(
                 step_frame,
                 text=emoji,
-                font=ctk.CTkFont(size=16)
-            ).pack(side="left", padx=(0, 10))
+                font=ctk.CTkFont(size=14)
+            ).pack(side="left", padx=(0, 8))
             
             ctk.CTkLabel(
                 step_frame,
                 text=text,
-                font=ctk.CTkFont(size=13),
+                font=ctk.CTkFont(size=11),
                 justify="left",
                 anchor="w"
             ).pack(side="left", fill="x", expand=True)
@@ -862,15 +936,15 @@ class ModernConfigGUI:
             content,
             text="Got it!",
             command=help_window.destroy,
-            height=40
+            height=36
         )
-        close_btn.pack(fill="x", pady=(20, 0))
+        close_btn.pack(fill="x", pady=(16, 0))
     
     def _show_toast(self, title, message, type="info"):
         """Show a toast notification"""
         try:
             from CTkMessagebox import CTkMessagebox
-            icon = "check" if type == "success" else "cancel" if type == "error" else "info"
+            icon = "check" if type == "success" else "cancel" if type == "error" else "warning" if type == "warning" else "info"
             CTkMessagebox(title=title, message=message, icon=icon)
         except:
             messagebox.showinfo(title, message)

@@ -58,11 +58,15 @@ Name: "startupicon"; Description: "Start TimeTracker Agent when Windows starts";
 Name: "cleaninstall"; Description: "Fresh install (clear all saved settings and pairing data)"; GroupDescription: "Install Options:"; Flags: unchecked
 
 [InstallDelete]
+; Force clean install directory before copying files
 Type: filesandordirs; Name: "{app}"
 
 [Files]
+; Main GUI application (folder from onedir build)
 Source: "dist\TimeTracker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Background agent (folder from onedir build)
 Source: "dist\TimeTrackerAgent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Icon file
 Source: "timetracker.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -80,22 +84,36 @@ Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden wai
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 Type: filesandordirs; Name: "{userappdata}\TimeTracker"
+Type: filesandordirs; Name: "{userpf}\TimeTracker"
 Type: filesandordirs; Name: "{localappdata}\Programs\TimeTracker"
 
 [Code]
 procedure CleanupOldInstalls();
 var
   ResultCode: Integer;
+  Paths: array of String;
+  I: Integer;
 begin
+  // Kill any running TimeTracker processes
   Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(1500);
   
-  if DirExists(ExpandConstant('{localappdata}\TimeTracker')) then
-    DelTree(ExpandConstant('{localappdata}\TimeTracker'), True, True, True);
+  // List of all possible old install locations
+  SetArrayLength(Paths, 4);
+  Paths[0] := ExpandConstant('{localappdata}\TimeTracker');
+  Paths[1] := ExpandConstant('{localappdata}\Programs\TimeTracker');
+  Paths[2] := ExpandConstant('{userpf}\TimeTracker');
+  Paths[3] := ExpandConstant('{commonpf}\TimeTracker');
   
-  if DirExists(ExpandConstant('{localappdata}\Programs\TimeTracker')) then
-    DelTree(ExpandConstant('{localappdata}\Programs\TimeTracker'), True, True, True);
+  for I := 0 to GetArrayLength(Paths) - 1 do
+  begin
+    if DirExists(Paths[I]) then
+    begin
+      Log('Removing old install: ' + Paths[I]);
+      DelTree(Paths[I], True, True, True);
+    end;
+  end;
 end;
 
 procedure CleanupUserData();
@@ -106,20 +124,34 @@ begin
   UserProfile := GetEnv('USERPROFILE');
   AppData := ExpandConstant('{userappdata}');
   
+  // Clear config directory (~/.timetracker)
   if DirExists(UserProfile + '\.timetracker') then
+  begin
+    Log('Clearing user config: ' + UserProfile + '\.timetracker');
     DelTree(UserProfile + '\.timetracker', True, True, True);
+  end;
   
+  // Clear app data (%APPDATA%/TimeTracker)
   if DirExists(AppData + '\TimeTracker') then
+  begin
+    Log('Clearing app data: ' + AppData + '\TimeTracker');
     DelTree(AppData + '\TimeTracker', True, True, True);
+  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
+  
+  // Always clean up old installations
   CleanupOldInstalls();
   
+  // If "Fresh install" is checked, also clear user data
   if IsTaskSelected('cleaninstall') then
+  begin
+    Log('Fresh install selected - clearing user data');
     CleanupUserData();
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -128,6 +160,7 @@ var
 begin
   if CurStep = ssInstall then
   begin
+    // One more kill attempt right before install
     Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(500);
@@ -138,7 +171,10 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    // Ask user if they want to remove settings
     if MsgBox('Do you want to remove all TimeTracker settings and data?', mbConfirmation, MB_YESNO) = IDYES then
+    begin
       CleanupUserData();
+    end;
   end;
 end;

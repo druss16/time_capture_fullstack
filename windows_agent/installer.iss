@@ -178,23 +178,3 @@ begin
     end;
   end;
 end;
-```
-
-**Key changes:**
-
-1. **Checkbox during install**: "Fresh install (clear all saved settings and pairing data)" - users can check this if they have issues
-
-2. **Auto-removes old installs** from ALL possible locations:
-   - `%LOCALAPPDATA%\TimeTracker`
-   - `%LOCALAPPDATA%\Programs\TimeTracker`
-   - `%ProgramFiles%\TimeTracker`
-
-3. **On uninstall**: Asks user if they want to remove settings/data
-
-4. **Kills running processes** before installing
-
-Now users see this during install:
-```
-☐ Create a desktop icon
-☐ Start TimeTracker Agent when Windows starts
-☐ Fresh install (clear all saved settings and pairing data)  ← NEW!

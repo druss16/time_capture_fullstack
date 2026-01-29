@@ -1293,6 +1293,7 @@ def run_agent():
     log("[WATCHDOG] Started watchdog thread")
     
     # Run GUI if available
+    # Run GUI if available
     if gui_menu_bar and GUI_AVAILABLE:
         log("[GUI] Starting GUI event loop...")
         try:
@@ -1306,7 +1307,38 @@ def run_agent():
         except KeyboardInterrupt:
             log("[TRACKING] Interrupted")
     
+    # === CLEANUP ON EXIT ===
+    log("[AGENT] Shutting down...")
+    
+    # Stop sync thread
+    if sync:
+        try:
+            sync.stop()
+            log("[SYNC] Stopped")
+        except Exception as e:
+            log(f"[SYNC] Error stopping: {e}")
+    
+    # Stop notification worker
+    if notif_worker:
+        try:
+            notif_worker.stop()
+            log("[NOTIF] Stopped")
+        except Exception as e:
+            log(f"[NOTIF] Error stopping: {e}")
+    
+    # Stop hotkey listener
+    try:
+        stop_hotkey_listener()
+    except Exception:
+        pass
+    
+    # Remove PID file
+    remove_pid()
+    
     log("[AGENT] Shutdown complete")
+    
+    # Force exit to kill any remaining threads
+    os._exit(0)
 
 # ---------------- CLI ----------------
 def cmd_status():

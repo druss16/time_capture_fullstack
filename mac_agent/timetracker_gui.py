@@ -1037,192 +1037,385 @@ class ClientPickerWindow:
 # PAIRING WINDOW
 # ============================================================
 
-class PairingWindowModern:
-    """Professional device pairing window"""
+# ============================================================
+# PAIRING WINDOW - Complete replacement for timetracker_gui.py
+# ============================================================
+
+# In timetracker_gui.py - Replace the show_pairing_window function and add the subprocess runner
+
+def _run_pairing_process(result_queue):
+    """Run Pairing window in separate process to avoid tkinter/rumps conflict"""
+    import os
+    import threading
+    import customtkinter as ctk
     
-    def __init__(self, pair_callback: Callable):
-        self.pair_callback = pair_callback
-        self.api_key = None
-        self.success = False
-        
-        ctk.set_appearance_mode("dark")
-        self.root = ctk.CTk()
-        self.root.title("Link Device")
-        self.root.geometry("440x340")
-        self.root.resizable(False, False)
-        self.root.attributes('-topmost', True)
-        self.root.configure(fg_color=COLORS["bg_base"])
-        
-        # Center
-        self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - 220
-        y = (self.root.winfo_screenheight() // 2) - 170
-        self.root.geometry(f"+{x}+{y}")
-        
-        self._setup_ui()
+    # Colors - must redefine in subprocess
+    colors = {
+        "primary": "#14B8A6",
+        "primary_hover": "#0D9488",
+        "primary_muted": "#134E4A",
+        "success": "#14B8A6",
+        "success_hover": "#0D9488",
+        "success_muted": "#134E4A",
+        "danger": "#FF453A",
+        "danger_hover": "#E03D33",
+        "warning": "#FF9F0A",
+        "bg_base": "#0D0D0D",
+        "bg_elevated": "#1A1A1A",
+        "bg_surface": "#242424",
+        "bg_hover": "#2E2E2E",
+        "border": "#333333",
+        "text_primary": "#FFFFFF",
+        "text_secondary": "#A0A0A0",
+        "text_tertiary": "#6B6B6B",
+    }
     
-    def _setup_ui(self):
-        container = ctk.CTkFrame(self.root, fg_color="transparent")
-        container.pack(fill="both", expand=True, padx=24, pady=20)
+    result = {"api_key": None, "success": False}
+    
+    ctk.set_appearance_mode("dark")
+    root = ctk.CTk()
+    root.title("Link Device")
+    root.geometry("440x380")
+    root.resizable(False, False)
+    root.configure(fg_color=colors["bg_base"])
+    
+    # Center window
+    root.withdraw()
+    root.update_idletasks()
+    x = (root.winfo_screenwidth() // 2) - 220
+    y = (root.winfo_screenheight() // 2) - 190
+    root.geometry(f"+{x}+{y}")
+    root.deiconify()
+    root.lift()
+    root.focus_force()
+    root.attributes('-topmost', True)
+    
+    # Container
+    container = ctk.CTkFrame(root, fg_color="transparent")
+    container.pack(fill="both", expand=True, padx=24, pady=20)
+    
+    # Header
+    header = ctk.CTkFrame(container, fg_color="transparent")
+    header.pack(fill="x", pady=(0, 16))
+    
+    icon_frame = ctk.CTkFrame(header, fg_color=colors["primary_muted"],
+                              corner_radius=20, width=44, height=44)
+    icon_frame.pack(side="left")
+    icon_frame.pack_propagate(False)
+    
+    icon = ctk.CTkLabel(icon_frame, text="🔗", font=ctk.CTkFont(size=20))
+    icon.place(relx=0.5, rely=0.5, anchor="center")
+    
+    title = ctk.CTkLabel(header, text="Link This Device",
+                         font=ctk.CTkFont(family="SF Pro Display", size=22, weight="bold"),
+                         text_color=colors["text_primary"])
+    title.pack(side="left", padx=(12, 0))
+    
+    # Instructions
+    instructions = ctk.CTkLabel(
+        container,
+        text="Enter the pairing code from the TimeTracker web app.\nSettings → Devices → Add Device",
+        font=ctk.CTkFont(family="SF Pro Text", size=13),
+        text_color=colors["text_secondary"],
+        justify="left", anchor="w"
+    )
+    instructions.pack(fill="x", pady=(0, 20))
+    
+    # Code input
+    input_frame = ctk.CTkFrame(container, fg_color="transparent")
+    input_frame.pack(fill="x", pady=(0, 12))
+    
+    code_label = ctk.CTkLabel(input_frame, text="Pairing Code",
+                              font=ctk.CTkFont(family="SF Pro Text", size=13),
+                              text_color=colors["text_secondary"], anchor="w")
+    code_label.pack(fill="x")
+    
+    code_var = ctk.StringVar()
+    code_entry = ctk.CTkEntry(input_frame, textvariable=code_var,
+                              placeholder_text="e.g. ABC123", height=48,
+                              fg_color=colors["bg_surface"],
+                              border_color=colors["border"],
+                              border_width=1,
+                              corner_radius=10,
+                              font=ctk.CTkFont(family="SF Mono", size=18, weight="bold"),
+                              text_color=colors["text_primary"],
+                              placeholder_text_color=colors["text_tertiary"])
+    code_entry.pack(fill="x", pady=(6, 0))
+    
+    # Status label
+    status_label = ctk.CTkLabel(container, text="",
+                                font=ctk.CTkFont(family="SF Pro Text", size=13),
+                                anchor="w")
+    status_label.pack(fill="x", pady=(0, 8))
+    
+    # Reset container (for dynamic reset button)
+    reset_container = ctk.CTkFrame(container, fg_color="transparent")
+    reset_container.pack(fill="x", pady=(0, 8))
+    
+    # Buttons
+    btn_frame = ctk.CTkFrame(container, fg_color="transparent")
+    btn_frame.pack(fill="x")
+    
+    def do_cancel():
+        result["success"] = False
+        root.destroy()
+    
+    def reset_device_and_retry():
+        """Reset device ID and let user try again."""
+        device_id_file = os.path.expanduser("~/.mavops_device_id")
+        if os.path.exists(device_id_file):
+            try:
+                os.remove(device_id_file)
+                print("[GUI] Device ID reset successfully")
+            except Exception as e:
+                status_label.configure(text=f"Failed to reset: {e}",
+                                      text_color=colors["danger"])
+                return
         
-        # Header
-        header = ctk.CTkFrame(container, fg_color="transparent")
-        header.pack(fill="x", pady=(0, 16))
+        config_file = os.path.expanduser("~/.timetracker/config.json")
+        if os.path.exists(config_file):
+            try:
+                os.remove(config_file)
+            except:
+                pass
         
-        # Link icon
-        icon_frame = ctk.CTkFrame(header, fg_color=COLORS["primary_muted"],
-                                  corner_radius=20, width=44, height=44)
-        icon_frame.pack(side="left")
+        status_label.configure(text="Device reset! Enter your pairing code again.",
+                              text_color=colors["success"])
+        
+        for widget in reset_container.winfo_children():
+            widget.destroy()
+        
+        code_var.set("")
+        code_entry.focus_set()
+    
+    def show_success(res):
+        """Show success screen"""
+        for widget in root.winfo_children():
+            widget.destroy()
+        
+        success_container = ctk.CTkFrame(root, fg_color="transparent")
+        success_container.pack(fill="both", expand=True, padx=24, pady=20)
+        
+        icon_frame = ctk.CTkFrame(success_container, fg_color=colors["success_muted"],
+                                  corner_radius=40, width=80, height=80)
+        icon_frame.pack(pady=(40, 20))
         icon_frame.pack_propagate(False)
         
-        icon = ctk.CTkLabel(icon_frame, text="🔗", font=ctk.CTkFont(size=20))
+        icon = ctk.CTkLabel(icon_frame, text="✓",
+                           font=ctk.CTkFont(size=40, weight="bold"),
+                           text_color=colors["success"])
         icon.place(relx=0.5, rely=0.5, anchor="center")
         
-        title = ctk.CTkLabel(header, text="Link This Device",
-                             font=ctk.CTkFont(family="SF Pro Display", size=22, weight="bold"),
-                             text_color=COLORS["text_primary"])
-        title.pack(side="left", padx=(12, 0))
+        title = ctk.CTkLabel(success_container, text="Device Paired!",
+                            font=ctk.CTkFont(family="SF Pro Display", size=24, weight="bold"),
+                            text_color=colors["text_primary"])
+        title.pack(pady=(0, 8))
         
-        # Instructions
-        instructions = ctk.CTkLabel(
-            container,
-            text="Enter the pairing code from the TimeTracker web app.\nSettings → Devices → Add Device",
-            font=ctk.CTkFont(family="SF Pro Text", size=13),
-            text_color=COLORS["text_secondary"],
-            justify="left", anchor="w"
-        )
-        instructions.pack(fill="x", pady=(0, 20))
+        username = res.get("username", "")
+        org = res.get("org_name", "")
+        info = f"Signed in as {username}"
+        if org:
+            info += f" • {org}"
         
-        # Code input
-        input_frame = ctk.CTkFrame(container, fg_color="transparent")
-        input_frame.pack(fill="x", pady=(0, 12))
+        info_label = ctk.CTkLabel(success_container, text=info,
+                                 font=ctk.CTkFont(family="SF Pro Text", size=14),
+                                 text_color=colors["text_secondary"])
+        info_label.pack(pady=(0, 24))
         
-        code_label = ctk.CTkLabel(input_frame, text="Pairing Code",
-                                  font=ctk.CTkFont(family="SF Pro Text", size=13),
-                                  text_color=COLORS["text_secondary"], anchor="w")
-        code_label.pack(fill="x")
+        instruction = ctk.CTkLabel(success_container,
+                                   text="Look for the ⏱ icon in your menu bar\nat the top of your screen.",
+                                   font=ctk.CTkFont(family="SF Pro Text", size=14),
+                                   text_color=colors["text_secondary"],
+                                   justify="center")
+        instruction.pack(pady=(0, 24))
         
-        self.code_var = ctk.StringVar()
-        self.code_entry = StyledEntry(input_frame, textvariable=self.code_var,
-                                      placeholder_text="e.g. ABC123", height=48)
-        self.code_entry.configure(font=ctk.CTkFont(family="SF Mono", size=18, weight="bold"))
-        self.code_entry.pack(fill="x", pady=(6, 0))
-        self.code_entry.bind("<Return>", lambda e: self._on_pair())
+        def do_continue():
+            result["success"] = True
+            result["api_key"] = res.get("api_key")
+            root.destroy()
         
-        # Status
-        self.status_label = ctk.CTkLabel(container, text="",
-                                         font=ctk.CTkFont(family="SF Pro Text", size=13),
-                                         anchor="w")
-        self.status_label.pack(fill="x", pady=(0, 16))
-        
-        # Buttons
-        btn_frame = ctk.CTkFrame(container, fg_color="transparent")
-        btn_frame.pack(fill="x")
-        
-        self.pair_btn = StyledButton(btn_frame, text="Pair Device", variant="primary",
-                                     command=self._on_pair, height=46)
-        self.pair_btn.pack(side="left", expand=True, fill="x", padx=(0, 6))
-        
-        cancel_btn = StyledButton(btn_frame, text="Cancel", variant="ghost",
-                                  command=self._on_cancel, height=46)
-        cancel_btn.pack(side="left", expand=True, fill="x", padx=(6, 0))
-        
-        # Continue button (hidden)
-        self.continue_btn = StyledButton(container, text="Continue", variant="success",
-                                         command=self._on_continue, height=46)
+        start_btn = ctk.CTkButton(success_container, text="Start TimeTracker",
+                                  command=do_continue,
+                                  fg_color=colors["success"],
+                                  hover_color=colors["success_hover"],
+                                  height=46, corner_radius=8,
+                                  font=ctk.CTkFont(family="SF Pro Text", size=14, weight="bold"))
+        start_btn.pack(fill="x")
     
-    def _on_pair(self):
-        code = self.code_var.get().strip().upper()
-        if not code:
-            self.status_label.configure(text="Please enter a pairing code",
-                                        text_color=COLORS["warning"])
-            return
+    def handle_result(res):
+        pair_btn.configure(state="normal")
         
-        self.status_label.configure(text="Pairing...", text_color=COLORS["text_secondary"])
-        self.pair_btn.configure(state="disabled")
-        self.root.update()
+        if res and res.get("api_key"):
+            show_success(res)
         
-        def do_pair():
-            try:
-                result = self.pair_callback(code) if self.pair_callback else None
-                self.root.after(0, lambda: self._handle_result(result))
-            except Exception as e:
-                self.root.after(0, lambda: self._handle_result({"error": str(e)}))
-        
-        threading.Thread(target=do_pair, daemon=True).start()
-    
-    def _handle_result(self, result):
-        self.pair_btn.configure(state="normal")
-        
-        if result and result.get("api_key"):
-            self.success = True
-            self.api_key = result.get("api_key")
+        elif res and res.get("error") == "device_belongs_to_another_user":
+            status_label.configure(
+                text="This device was previously paired to another account.",
+                text_color=colors["warning"]
+            )
             
-            # Clear existing UI
-            for widget in self.root.winfo_children():
+            for widget in reset_container.winfo_children():
                 widget.destroy()
             
-            # Show success screen
-            container = ctk.CTkFrame(self.root, fg_color="transparent")
-            container.pack(fill="both", expand=True, padx=24, pady=20)
-            
-            # Success icon
-            icon_frame = ctk.CTkFrame(container, fg_color=COLORS["success_muted"],
-                                      corner_radius=40, width=80, height=80)
-            icon_frame.pack(pady=(40, 20))
-            icon_frame.pack_propagate(False)
-            
-            icon = ctk.CTkLabel(icon_frame, text="✓", 
-                               font=ctk.CTkFont(size=40, weight="bold"),
-                               text_color=COLORS["success"])
-            icon.place(relx=0.5, rely=0.5, anchor="center")
-            
-            # Title
-            title = ctk.CTkLabel(container, text="Device Paired!",
-                                font=ctk.CTkFont(family="SF Pro Display", size=24, weight="bold"),
-                                text_color=COLORS["text_primary"])
-            title.pack(pady=(0, 8))
-            
-            # User info
-            username = result.get("username", "")
-            org = result.get("org_name", "")
-            info = f"Signed in as {username}"
-            if org:
-                info += f" • {org}"
-            
-            info_label = ctk.CTkLabel(container, text=info,
-                                     font=ctk.CTkFont(family="SF Pro Text", size=14),
-                                     text_color=COLORS["text_secondary"])
-            info_label.pack(pady=(0, 24))
-            
-            # Instructions
-            instruction = ctk.CTkLabel(container, 
-                                       text="Look for the ⏱ icon in your menu bar\nat the top of your screen.",
-                                       font=ctk.CTkFont(family="SF Pro Text", size=14),
-                                       text_color=COLORS["text_secondary"],
-                                       justify="center")
-            instruction.pack(pady=(0, 24))
-            
-            # Start button
-            start_btn = StyledButton(container, text="Start TimeTracker", variant="success",
-                                    command=self._on_continue, height=46)
-            start_btn.pack(fill="x")
+            reset_btn = ctk.CTkButton(
+                reset_container,
+                text="Reset Device & Try Again",
+                command=reset_device_and_retry,
+                fg_color=colors["danger"],
+                hover_color=colors["danger_hover"],
+                height=40, corner_radius=8,
+                font=ctk.CTkFont(family="SF Pro Text", size=14, weight="bold")
+            )
+            reset_btn.pack(fill="x")
+        
         else:
-            error = result.get("error", "Pairing failed") if result else "Pairing failed"
-            self.status_label.configure(text=error, text_color=COLORS["danger"])
+            error = res.get("error", "Pairing failed") if res else "Pairing failed"
+            status_label.configure(text=error, text_color=colors["danger"])
     
-    def _on_cancel(self):
-        self.success = False
-        self.root.destroy()
+    def do_pair():
+        import platform
+        import urllib.request
+        import urllib.error
+        
+        code = code_var.get().strip().upper()
+        if not code:
+            status_label.configure(text="Please enter a pairing code",
+                                  text_color=colors["warning"])
+            return
+        
+        status_label.configure(text="Pairing...", text_color=colors["text_secondary"])
+        pair_btn.configure(state="disabled")
+        
+        for widget in reset_container.winfo_children():
+            widget.destroy()
+        
+        root.update()
+        
+        def do_pair_request():
+            try:
+                # Read device ID
+                device_id_file = os.path.expanduser("~/.mavops_device_id")
+                if os.path.exists(device_id_file):
+                    with open(device_id_file, 'r') as f:
+                        device_id = f.read().strip()
+                else:
+                    import uuid
+                    device_id = str(uuid.uuid4())
+                    os.makedirs(os.path.dirname(device_id_file), exist_ok=True)
+                    with open(device_id_file, 'w') as f:
+                        f.write(device_id)
+                
+                hostname = platform.node()
+                
+                # Make request
+                api_base = os.environ.get("TIMETRACKER_API_BASE", "https://timetracker-api-k375.onrender.com")
+                url = f"{api_base}/agents/pair/claim/"
+                
+                data = json.dumps({
+                    "code": code,
+                    "hostname": hostname,
+                    "device_id": device_id,
+                }).encode('utf-8')
+                
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    res = json.loads(resp.read().decode('utf-8'))
+                    
+                    if res.get("api_key"):
+                        # Save config
+                        cfg_dir = os.path.expanduser("~/.timetracker")
+                        cfg_file = os.path.join(cfg_dir, "config.json")
+                        os.makedirs(cfg_dir, exist_ok=True)
+                        
+                        cfg = {}
+                        if os.path.exists(cfg_file):
+                            try:
+                                with open(cfg_file, 'r') as f:
+                                    cfg = json.load(f)
+                            except:
+                                pass
+                        
+                        cfg["api_key"] = res["api_key"]
+                        with open(cfg_file, 'w') as f:
+                            json.dump(cfg, f, indent=2)
+                    
+                    root.after(0, lambda: handle_result(res))
+                    
+            except urllib.error.HTTPError as e:
+                try:
+                    err_body = json.loads(e.read().decode('utf-8'))
+                    root.after(0, lambda body=err_body: handle_result(body))
+                except:
+                    err_msg = f"HTTP {e.code}"
+                    root.after(0, lambda msg=err_msg: handle_result({"error": msg}))
+            except Exception as e:
+                err_msg = str(e)
+                root.after(0, lambda msg=err_msg: handle_result({"error": msg}))
+        
+        threading.Thread(target=do_pair_request, daemon=True).start()
     
-    def _on_continue(self):
-        self.root.destroy()
+    pair_btn = ctk.CTkButton(btn_frame, text="Pair Device", command=do_pair,
+                             fg_color=colors["primary"],
+                             hover_color=colors["primary_hover"],
+                             height=46, corner_radius=8,
+                             font=ctk.CTkFont(family="SF Pro Text", size=14, weight="bold"))
+    pair_btn.pack(side="left", expand=True, fill="x", padx=(0, 6))
     
-    def run_modal(self) -> Optional[str]:
-        self.root.mainloop()
-        return self.api_key if self.success else None
+    cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", command=do_cancel,
+                               fg_color="transparent",
+                               hover_color=colors["bg_hover"],
+                               border_width=1,
+                               border_color=colors["border"],
+                               height=46, corner_radius=8,
+                               font=ctk.CTkFont(family="SF Pro Text", size=14, weight="bold"))
+    cancel_btn.pack(side="left", expand=True, fill="x", padx=(6, 0))
+    
+    code_entry.bind("<Return>", lambda e: do_pair())
+    code_entry.focus_set()
+    
+    root.mainloop()
+    
+    # Send result back to parent process
+    result_queue.put((result["success"], result["api_key"]))
 
 
+def show_pairing_window(pair_callback: Callable = None) -> Optional[str]:
+    """
+    Show pairing window in subprocess to avoid tkinter/rumps conflict.
+    
+    Note: pair_callback is ignored - the subprocess handles pairing directly.
+    """
+    import multiprocessing
+    
+    result_queue = multiprocessing.Queue()
+    
+    p = multiprocessing.Process(
+        target=_run_pairing_process,
+        args=(result_queue,)
+    )
+    p.start()
+    p.join(timeout=300)  # 5 min timeout
+    
+    if p.is_alive():
+        p.terminate()
+        print("[GUI] Pairing window timed out")
+        return None
+    
+    try:
+        success, api_key = result_queue.get(timeout=2)
+        if success and api_key:
+            print("✅ Device paired; key saved.")
+            return api_key
+    except Exception as e:
+        print(f"[GUI] Pairing result error: {e}")
+    
+    return None
 # ============================================================
 # MENU BAR APP (rumps)
 # ============================================================
@@ -1483,15 +1676,6 @@ class TimeTrackerSystemTray:
 # ============================================================
 # PUBLIC API
 # ============================================================
-
-def show_pairing_window(pair_callback: Callable) -> Optional[str]:
-    """Show pairing window, return api_key on success"""
-    if not MODERN_UI:
-        print("[GUI] CustomTkinter not available")
-        return None
-    
-    window = PairingWindowModern(pair_callback)
-    return window.run_modal()
 
 
 def run_gui_app(on_client_confirmed: Callable,

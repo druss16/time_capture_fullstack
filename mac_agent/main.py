@@ -1632,6 +1632,10 @@ def ensure_api_key_interactive(hostname: str):
         print("\n🔗 Opening pairing window...")
         key = show_pairing_window(_gui_pair_callback)
         if key:
+            import time
+            import gc
+            gc.collect()
+            time.sleep(0.5)
             API_KEY = key
             return key
         # User cancelled - fall through to terminal if available

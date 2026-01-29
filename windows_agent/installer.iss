@@ -24,7 +24,7 @@ DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 
-; Output settings - FIXED: matches workflow expectation
+; Output settings
 OutputDir=Output
 OutputBaseFilename=TimeTracker-Windows-Setup
 
@@ -61,10 +61,10 @@ Name: "startupicon"; Description: "Start TimeTracker Agent when Windows starts";
 Type: filesandordirs; Name: "{app}"
 
 [Files]
-; Main GUI application
-Source: "dist\TimeTracker.exe"; DestDir: "{app}"; Flags: ignoreversion
-; Background agent
-Source: "dist\TimeTrackerAgent.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Main GUI application (onedir folder)
+Source: "dist\TimeTracker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Background agent (onedir folder)
+Source: "dist\TimeTrackerAgent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Icon file
 Source: "timetracker.ico"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -106,11 +106,9 @@ begin
     if not DelTree(AppDir, True, True, True) then
     begin
       Log('DelTree failed, trying rename...');
-      // If delete fails, try to rename it out of the way
       if not RenameFile(AppDir, AppDir + '_old_' + GetDateTimeString('yyyymmdd_hhnnss', #0, #0)) then
       begin
         Log('Rename also failed');
-        // Don't fail here - let the installer try anyway
       end;
     end;
   end;
@@ -130,7 +128,6 @@ var
 begin
   if CurStep = ssInstall then
   begin
-    // One more kill attempt right before install
     Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(500);

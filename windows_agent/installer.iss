@@ -19,7 +19,7 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 
-; Use localappdata explicitly instead of autopf
+; Install to localappdata
 DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
@@ -55,15 +55,16 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "startupicon"; Description: "Start TimeTracker Agent when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked
+Name: "cleaninstall"; Description: "Fresh install (clear all saved settings and pairing data)"; GroupDescription: "Install Options:"; Flags: unchecked
 
 [InstallDelete]
 ; Force clean install directory before copying files
 Type: filesandordirs; Name: "{app}"
 
 [Files]
-; Main GUI application (onedir folder)
+; Main GUI application (folder from onedir build)
 Source: "dist\TimeTracker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Background agent (onedir folder)
+; Background agent (folder from onedir build)
 Source: "dist\TimeTrackerAgent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Icon file
 Source: "timetracker.ico"; DestDir: "{app}"; Flags: ignoreversion
@@ -82,43 +83,74 @@ Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden wai
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
+Type: filesandordirs; Name: "{userappdata}\TimeTracker"
+Type: filesandordirs; Name: "{userpf}\TimeTracker"
+Type: filesandordirs; Name: "{localappdata}\Programs\TimeTracker"
 
 [Code]
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+procedure CleanupOldInstalls();
 var
   ResultCode: Integer;
-  AppDir: String;
+  Paths: array of String;
+  I: Integer;
 begin
-  Result := '';
-  
   // Kill any running TimeTracker processes
   Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(1500);
   
-  // Give Windows time to release handles
-  Sleep(2000);
+  // List of all possible old install locations
+  SetArrayLength(Paths, 4);
+  Paths[0] := ExpandConstant('{localappdata}\TimeTracker');
+  Paths[1] := ExpandConstant('{localappdata}\Programs\TimeTracker');
+  Paths[2] := ExpandConstant('{userpf}\TimeTracker');
+  Paths[3] := ExpandConstant('{commonpf}\TimeTracker');
   
-  // Try to clean up old install directory
-  AppDir := ExpandConstant('{localappdata}\TimeTracker');
-  if DirExists(AppDir) then
+  for I := 0 to GetArrayLength(Paths) - 1 do
   begin
-    Log('Found existing install at: ' + AppDir);
-    if not DelTree(AppDir, True, True, True) then
+    if DirExists(Paths[I]) then
     begin
-      Log('DelTree failed, trying rename...');
-      if not RenameFile(AppDir, AppDir + '_old_' + GetDateTimeString('yyyymmdd_hhnnss', #0, #0)) then
-      begin
-        Log('Rename also failed');
-      end;
+      Log('Removing old install: ' + Paths[I]);
+      DelTree(Paths[I], True, True, True);
     end;
   end;
+end;
+
+procedure CleanupUserData();
+var
+  UserProfile: String;
+  AppData: String;
+begin
+  UserProfile := GetEnv('USERPROFILE');
+  AppData := ExpandConstant('{userappdata}');
   
-  // Also check old Programs location
-  AppDir := ExpandConstant('{localappdata}\Programs\TimeTracker');
-  if DirExists(AppDir) then
+  // Clear config directory (~/.timetracker)
+  if DirExists(UserProfile + '\.timetracker') then
   begin
-    Log('Found old install at: ' + AppDir);
-    DelTree(AppDir, True, True, True);
+    Log('Clearing user config: ' + UserProfile + '\.timetracker');
+    DelTree(UserProfile + '\.timetracker', True, True, True);
+  end;
+  
+  // Clear app data (%APPDATA%/TimeTracker)
+  if DirExists(AppData + '\TimeTracker') then
+  begin
+    Log('Clearing app data: ' + AppData + '\TimeTracker');
+    DelTree(AppData + '\TimeTracker', True, True, True);
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  
+  // Always clean up old installations
+  CleanupOldInstalls();
+  
+  // If "Fresh install" is checked, also clear user data
+  if IsTaskSelected('cleaninstall') then
+  begin
+    Log('Fresh install selected - clearing user data');
+    CleanupUserData();
   end;
 end;
 
@@ -128,8 +160,41 @@ var
 begin
   if CurStep = ssInstall then
   begin
+    // One more kill attempt right before install
     Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(500);
   end;
 end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    // Ask user if they want to remove settings
+    if MsgBox('Do you want to remove all TimeTracker settings and data?', mbConfirmation, MB_YESNO) = IDYES then
+    begin
+      CleanupUserData();
+    end;
+  end;
+end;
+```
+
+**Key changes:**
+
+1. **Checkbox during install**: "Fresh install (clear all saved settings and pairing data)" - users can check this if they have issues
+
+2. **Auto-removes old installs** from ALL possible locations:
+   - `%LOCALAPPDATA%\TimeTracker`
+   - `%LOCALAPPDATA%\Programs\TimeTracker`
+   - `%ProgramFiles%\TimeTracker`
+
+3. **On uninstall**: Asks user if they want to remove settings/data
+
+4. **Kills running processes** before installing
+
+Now users see this during install:
+```
+☐ Create a desktop icon
+☐ Start TimeTracker Agent when Windows starts
+☐ Fresh install (clear all saved settings and pairing data)  ← NEW!

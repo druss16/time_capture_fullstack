@@ -1309,7 +1309,7 @@ def _run_pairing_process(result_queue):
                 
                 # Make request
                 api_base = os.environ.get("TIMETRACKER_API_BASE", "https://timetracker-api-k375.onrender.com")
-                url = f"{api_base}/agents/pair/claim/"
+                url = f"{api_base}/api/agents/pair/claim/"
                 
                 data = json.dumps({
                     "code": code,

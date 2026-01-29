@@ -136,46 +136,28 @@ def is_idle_activity(app_name=None, bundle_id=None, window_title=None, url=None)
 # ============================================================================
 # HELPER: Get Current Client for User/Device
 # ============================================================================
-def get_current_client_for_user(user, device_id: Optional[str] = None):
-    """
-    Get the currently selected client for this user/device.
+def get_current_client_for_user(user, device_id=None):
+    """Get current client, but clear if stale (> 8 hours old)."""
+    from django.utils import timezone
+    from datetime import timedelta
     
-    Args:
-        user: User instance or username string
-        device_id: Optional device ID (0 = all devices)
+    # Get the current client record
+    current = UserCurrentClient.objects.filter(user=user).first()
     
-    Returns:
-        Client instance or None
-    """
-    from django.contrib.auth.models import User
+    if not current or not current.client:
+        return None
     
-    # Normalize user to User instance
-    if isinstance(user, str):
-        try:
-            user = User.objects.get(username=user)
-        except User.DoesNotExist:
+    # ✅ FIX: If set more than 8 hours ago, consider it stale
+    STALE_HOURS = 8
+    if current.updated_at:
+        age = timezone.now() - current.updated_at
+        if age > timedelta(hours=STALE_HOURS):
+            # Clear stale client
+            current.client = None
+            current.save()
             return None
     
-    if not user:
-        return None
-    
-    # Try device-specific first, then fall back to device_id=0 (all devices)
-    try:
-        if device_id:
-            current = CurrentClient.objects.select_related('client').get(
-                user=user,
-                device_id=device_id
-            )
-            return current.client
-        else:
-            # Try device_id=0 (all devices)
-            current = CurrentClient.objects.select_related('client').get(
-                user=user,
-                device_id=0
-            )
-            return current.client
-    except CurrentClient.DoesNotExist:
-        return None
+    return current.client
 
 
 # --- basic client resolver ---

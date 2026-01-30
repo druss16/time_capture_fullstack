@@ -253,12 +253,12 @@ def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org
 
 def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) -> int:
     """
-    Main compaction logic - FIXED to prevent duplicates.
+    Main compaction logic - FIXED to prevent duplicates and separate by client.
     
     KEY CHANGES:
-    1. Merge into ANY existing block (categorized or not) for same app+session
-    2. Use .update() instead of .save() to bypass Block protection
-    3. Update client_id when merging new events with different client
+    1. Group by app AND client (not just app)
+    2. Don't merge blocks with different clients
+    3. Use .update() instead of .save() to bypass Block protection
     """
     if isinstance(user, str):
         try:
@@ -336,17 +336,19 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if current_session:
         sessions.append(current_session)
     
-    # Group by app within each session
+    # ✅ FIX: Group by app AND client within each session
     blocks_to_create = []
     for session in sessions:
-        by_app: Dict[str, List] = {}
+        by_app_client: Dict[str, List] = {}
         for ev in session:
             app = _app_key(ev)
-            if app not in by_app:
-                by_app[app] = []
-            by_app[app].append(ev)
+            client_id = ev.get('current_client_id') or 0
+            key = f"{app}|{client_id}"  # Group by app AND client
+            if key not in by_app_client:
+                by_app_client[key] = []
+            by_app_client[key].append(ev)
         
-        for app, app_events in by_app.items():
+        for key, app_events in by_app_client.items():
             if not app_events:
                 continue
             
@@ -365,12 +367,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             urls = [e['url'] for e in app_events if e['url']]
             paths = [e['file_path'] for e in app_events if e['file_path']]
             
-            # ✅ Get the MOST RECENT client_id from events (last event wins)
-            latest_client_id = None
-            for ev in reversed(app_events):
-                if ev.get('current_client_id'):
-                    latest_client_id = ev['current_client_id']
-                    break
+            # Get the client_id (all events in this group have same client)
+            client_id = app_events[0].get('current_client_id')
             
             blocks_to_create.append({
                 'start': block_start,
@@ -382,7 +380,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 'file_path': paths[0] if paths else "",
                 'hostname': app_events[0]['hostname'],
                 'device_id': app_events[0]['device_id'],
-                'current_client_id': latest_client_id,  # ✅ Use most recent
+                'current_client_id': client_id,
                 'source_events': [e['event'] for e in app_events],
             })
     
@@ -392,13 +390,15 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         day=day,
     ).order_by('start'))
     
-    # Build lookup by app
-    existing_by_app = {}
+    # ✅ FIX: Build lookup by app AND client
+    existing_by_app_client = {}
     for b in existing_blocks:
         app = _app_key(b)
-        if app not in existing_by_app:
-            existing_by_app[app] = []
-        existing_by_app[app].append(b)
+        client_id = b.client_id or 0
+        key = f"{app}|{client_id}"
+        if key not in existing_by_app_client:
+            existing_by_app_client[key] = []
+        existing_by_app_client[key].append(b)
     
     created_count = 0
     merged_count = 0
@@ -409,17 +409,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             app = _app_key(block_data)
             new_start = block_data['start']
             new_end = block_data['end']
+            new_client_id = block_data.get('current_client_id') or 0
+            key = f"{app}|{new_client_id}"
             
-            # Find an existing block to merge into
+            # Find an existing block to merge into (same app AND same client)
             merge_target = None
             
-            for existing in existing_by_app.get(app, []):
-                # ✅ Don't merge if clients differ
-                existing_client = existing.client_id
-                new_client = block_data.get('current_client_id')
-                if existing_client and new_client and existing_client != new_client:
-                    continue  # Skip - different client, create new block instead
-                
+            for existing in existing_by_app_client.get(key, []):
                 gap_to_existing = (new_start - existing.end).total_seconds() if existing.end else float('inf')
                 gap_from_existing = (existing.start - new_end).total_seconds() if existing.start else float('inf')
                 
@@ -433,9 +429,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                         break
             
             if merge_target:
-                # =========================================================
-                # ✅ FIX #2: Use .update() to bypass Block.save() protection
-                # =========================================================
                 try:
                     locked = Block.objects.select_for_update().get(id=merge_target.id)
                     
@@ -457,18 +450,12 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                         'minutes': updated_minutes,
                     }
                     
-                    # ✅ FIX #3: Update client_id if new events have a different client
-                    new_client_id = block_data.get('current_client_id')
-                    if new_client_id and new_client_id != locked.client_id:
-                        update_fields['client_id'] = new_client_id
-                        logger.info(f"[COMPACT] Updated block {locked.id} client: {locked.client_id} → {new_client_id}")
-                    
                     # If categorized, update category_hours
                     if locked.is_categorized and locked.category_hours:
                         category = list(locked.category_hours.keys())[0]
                         update_fields['category_hours'] = {category: round(updated_minutes / 60.0, 2)}
                     
-                    # ✅ Use .update() to bypass Block.save() protection
+                    # Use .update() to bypass Block.save() protection
                     Block.objects.filter(id=locked.id).update(**update_fields)
                     
                     merged_count += 1
@@ -485,9 +472,10 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 if not new_block.is_categorized:
                     blocks_to_categorize.append(new_block)
                 
-                if app not in existing_by_app:
-                    existing_by_app[app] = []
-                existing_by_app[app].append(new_block)
+                # Add to lookup for future merges in this run
+                if key not in existing_by_app_client:
+                    existing_by_app_client[key] = []
+                existing_by_app_client[key].append(new_block)
     
     # Auto-categorize new blocks
     auto_cat_count = 0

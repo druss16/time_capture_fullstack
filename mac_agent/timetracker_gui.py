@@ -1342,6 +1342,8 @@ def _run_pairing_process(result_queue):
                                 pass
                         
                         cfg["api_key"] = res["api_key"]
+                        cfg["api_base"] = "https://timetracker-api-k375.onrender.com/api"  # ADD THIS
+                        cfg["verbose"] = cfg.get("verbose", True)  # ADD THIS - preserve or default True
                         with open(cfg_file, 'w') as f:
                             json.dump(cfg, f, indent=2)
                     

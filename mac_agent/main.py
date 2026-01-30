@@ -1578,6 +1578,8 @@ def _claim_pair(code: str, hostname: str) -> dict:
         key = data.get("api_key")
         if key:
             config["api_key"] = key
+            config["api_base"] = config.get("api_base") or "https://timetracker-api-k375.onrender.com/api"  # ADD
+            config["verbose"] = config.get("verbose", True)  # ADD
             if "pair_code" in config: 
                 del config["pair_code"]
             save_config(config)
@@ -2191,7 +2193,7 @@ def run_agent():
 
     start_context_bus(CONTEXT_PORT)
 
-    log("=== Mac Activity Agent starting… (Ctrl+C to stop) ===")
+    print("=== Mac Activity Agent starting… (Ctrl+C to stop) ===", flush=True)
     if os.path.exists(CONFIG_FILE): 
         log(f"CONFIG={CONFIG_FILE} (loaded)")
     else: 
@@ -2408,32 +2410,69 @@ def run_agent():
             
             # === QUICK SWITCHER (Option+Shift+T) ===
             # === QUICK SWITCHER (Ctrl+Option+T) ===
+            # === QUICK SWITCHER (Ctrl+Option+T) ===
             try:
                 from pynput import keyboard
                 
-                def on_hotkey_activate():
-                    """Called when Ctrl+Option+T is pressed"""
-                    log("[QUICK] Ctrl+Option+T pressed!")
-                    if gui_menu_bar and gui_menu_bar.app:
-                        # Run picker in thread to avoid blocking
-                        def show_picker():
-                            gui_menu_bar.app._on_search(None)
-                        threading.Thread(target=show_picker, daemon=True).start()
+                # Track pressed modifier keys
+                _pressed_keys = set()
+                _hotkey_listener = None
                 
-                # Register global hotkey
-                hotkey_listener = keyboard.GlobalHotKeys({
-                    '<ctrl>+<alt>+t': on_hotkey_activate
-                })
-                hotkey_listener.start()
+                def on_key_press(key):
+                    """Track key presses for hotkey detection"""
+                    try:
+                        # Track modifiers
+                        if key == keyboard.Key.ctrl or key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+                            _pressed_keys.add('ctrl')
+                        elif key == keyboard.Key.alt or key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
+                            _pressed_keys.add('alt')
+                        elif hasattr(key, 'char') and key.char and key.char.lower() == 't':
+                            # Check if Ctrl+Alt+T is pressed
+                            if 'ctrl' in _pressed_keys and 'alt' in _pressed_keys:
+                                log("[QUICK] Ctrl+Option+T pressed!")
+                                if gui_menu_bar and gui_menu_bar.app:
+                                    def show_picker():
+                                        try:
+                                            gui_menu_bar.app._on_search(None)
+                                        except Exception as e:
+                                            log(f"[QUICK] Error showing picker: {e}")
+                                    threading.Thread(target=show_picker, daemon=True).start()
+                    except Exception as e:
+                        # Silently ignore errors to prevent crashes
+                        pass
+                
+                def on_key_release(key):
+                    """Track key releases"""
+                    try:
+                        if key == keyboard.Key.ctrl or key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+                            _pressed_keys.discard('ctrl')
+                        elif key == keyboard.Key.alt or key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
+                            _pressed_keys.discard('alt')
+                    except Exception:
+                        pass
+                
+                # Use Listener instead of GlobalHotKeys (more reliable on macOS)
+                _hotkey_listener = keyboard.Listener(
+                    on_press=on_key_press,
+                    on_release=on_key_release,
+                    suppress=False  # Don't block other apps from seeing keys
+                )
+                _hotkey_listener.start()
                 log("[QUICK] ✅ Ready - Ctrl+Option+T (⌃⌥T)")
                 
             except ImportError:
                 log("[QUICK] pynput not installed - hotkey disabled (pip install pynput)")
             except Exception as e:
                 log(f"[QUICK] Failed to setup hotkey: {e}")
+                import traceback
+                traceback.print_exc()
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
+
+    log("=== DEBUG: GUI init complete, continuing... ===")  # ADD THIS LINE
+    
+    # Restore client state from backend
 
     # Restore client state from backend
     api_key = config.get("api_key") or API_KEY
@@ -2491,7 +2530,7 @@ def run_agent():
     # === TRACKING LOOP FUNCTION ===
     def tracking_loop():
         """Main tracking loop - monitors frontmost app and records dwell time"""
-        log("[TRACKING] Initializing...")
+        print("[TRACKING] Initializing...")
         
         try:
             conn = ensure_db()
@@ -2684,9 +2723,10 @@ def run_agent():
             remove_pid()
 
     # === START TRACKING THREAD ===
+    print("=== DEBUG: About to start tracking thread ===")  # ADD THIS LINE
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
     tracking_thread.start()
-    log("[TRACKING] Started tracking thread")
+    print("[TRACKING] Started tracking thread")
 
     # === WATCHDOG: Restart tracking if it dies ===
     def watchdog():
@@ -2721,11 +2761,10 @@ def run_agent():
 
     # === ADD CLEANUP HERE ===
     # Cleanup hotkey monitor
-    if _hotkey_monitor:
+    if '_hotkey_listener' in dir() and _hotkey_listener:
         try:
-            from AppKit import NSEvent
-            NSEvent.removeMonitor_(_hotkey_monitor)
-            log("[QUICK] Hotkey monitor removed")
+            _hotkey_listener.stop()
+            log("[QUICK] Hotkey listener stopped")
         except:
             pass
     

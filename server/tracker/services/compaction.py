@@ -258,6 +258,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     KEY CHANGES:
     1. Merge into ANY existing block (categorized or not) for same app+session
     2. Use .update() instead of .save() to bypass Block protection
+    3. Update client_id when merging new events with different client
     """
     if isinstance(user, str):
         try:
@@ -364,6 +365,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             urls = [e['url'] for e in app_events if e['url']]
             paths = [e['file_path'] for e in app_events if e['file_path']]
             
+            # ✅ Get the MOST RECENT client_id from events (last event wins)
+            latest_client_id = None
+            for ev in reversed(app_events):
+                if ev.get('current_client_id'):
+                    latest_client_id = ev['current_client_id']
+                    break
+            
             blocks_to_create.append({
                 'start': block_start,
                 'end': block_end,
@@ -374,7 +382,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 'file_path': paths[0] if paths else "",
                 'hostname': app_events[0]['hostname'],
                 'device_id': app_events[0]['device_id'],
-                'current_client_id': app_events[0]['current_client_id'],
+                'current_client_id': latest_client_id,  # ✅ Use most recent
                 'source_events': [e['event'] for e in app_events],
             })
     
@@ -442,6 +450,12 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                         'end': updated_end,
                         'minutes': updated_minutes,
                     }
+                    
+                    # ✅ FIX #3: Update client_id if new events have a different client
+                    new_client_id = block_data.get('current_client_id')
+                    if new_client_id and new_client_id != locked.client_id:
+                        update_fields['client_id'] = new_client_id
+                        logger.info(f"[COMPACT] Updated block {locked.id} client: {locked.client_id} → {new_client_id}")
                     
                     # If categorized, update category_hours
                     if locked.is_categorized and locked.category_hours:

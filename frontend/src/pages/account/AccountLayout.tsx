@@ -1,12 +1,12 @@
 // src/pages/account/AccountLayout.tsx
 /**
  * Shared layout for account settings pages
- * Shows sidebar navigation for: Account, Billing (owner), Password
+ * Shows sidebar navigation for: Profile, Download, Password, Billing (owner)
  */
 
 import React from 'react';
-import { NavLink, Outlet, Navigate } from 'react-router-dom';
-import { User, CreditCard, KeyRound, ArrowLeft } from 'lucide-react';
+import { NavLink, Outlet } from 'react-router-dom';
+import { User, CreditCard, KeyRound, ArrowLeft, Download } from 'lucide-react';
 
 interface AccountLayoutProps {
   role: 'owner' | 'admin' | 'manager' | 'member';
@@ -15,6 +15,7 @@ interface AccountLayoutProps {
 export default function AccountLayout({ role }: AccountLayoutProps) {
   const navItems = [
     { path: '/account', label: 'Profile', icon: User, exact: true },
+    { path: '/account/download', label: 'Download Agent', icon: Download },
     { path: '/account/password', label: 'Change Password', icon: KeyRound },
     // Billing only for owners
     ...(role === 'owner' ? [{ path: '/account/billing', label: 'Subscription & Billing', icon: CreditCard }] : []),

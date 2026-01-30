@@ -2206,10 +2206,8 @@ def on_client_switch_from_menu(client_id: int, client_name: str):
 def run_agent():
     """Main agent function with GUI integration."""
     global API_KEY
-    global sync  # ← ADD THIS LINE!
-    global notif_manager  # ← Declare global FIRST
-
-
+    global sync
+    global notif_manager
 
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -2217,6 +2215,22 @@ def run_agent():
         pass
 
     start_context_bus(CONTEXT_PORT)
+
+    # === CHECK FOR VERSION UPGRADE ===
+    cached_version = config.get("last_app_version")
+    if cached_version and cached_version != APP_VERSION:
+        log(f"[UPGRADE] Version changed {cached_version} → {APP_VERSION}")
+        sync_cache = os.path.expanduser("~/.timetracker/sync_cache.json")
+        if os.path.exists(sync_cache):
+            try:
+                os.remove(sync_cache)
+                log("[UPGRADE] Cleared sync cache - will fetch fresh data")
+            except Exception as e:
+                log(f"[UPGRADE] Failed to clear sync cache: {e}")
+    
+    # Save current version
+    config["last_app_version"] = APP_VERSION
+    save_config(config)
 
     print("=== Mac Activity Agent starting… (Ctrl+C to stop) ===", flush=True)
     if os.path.exists(CONFIG_FILE): 

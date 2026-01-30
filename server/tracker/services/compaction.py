@@ -414,6 +414,12 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             merge_target = None
             
             for existing in existing_by_app.get(app, []):
+                # ✅ Don't merge if clients differ
+                existing_client = existing.client_id
+                new_client = block_data.get('current_client_id')
+                if existing_client and new_client and existing_client != new_client:
+                    continue  # Skip - different client, create new block instead
+                
                 gap_to_existing = (new_start - existing.end).total_seconds() if existing.end else float('inf')
                 gap_from_existing = (existing.start - new_end).total_seconds() if existing.start else float('inf')
                 

@@ -342,29 +342,31 @@ def apply_current_client_to_recent_blocks(
     device_id: Optional[str] = None
 ) -> int:
     """
-    Retroactively assign current client to recent unassigned blocks.
+    Retroactively assign current client to recent unassigned blocks AND raw events.
     Called when user switches clients to catch recent activity.
-    
-    Args:
-        user: User instance
-        client: Client to assign
-        minutes_back: How far back to look (default 15 minutes)
-        device_id: Optional device filter
-    
-    Returns:
-        Number of blocks updated
     """
     from datetime import timedelta
     cutoff = timezone.now() - timedelta(minutes=minutes_back)
     
-    qs = Block.objects.filter(
+    # ✅ FIX 1: Update RawEvents that haven't been compacted yet
+    raw_qs = RawEvent.objects.filter(
+        user=user,
+        ts_utc__gte=cutoff,
+        current_client_id__isnull=True
+    )
+    raw_count = raw_qs.update(current_client_id=client.id)
+    
+    # ✅ FIX 2: Update Blocks (remove device_id filter - it's unreliable)
+    block_qs = Block.objects.filter(
         user=user,
         start__gte=cutoff,
-        client__isnull=True  # Only unassigned blocks
+        client__isnull=True
     )
     
-    if device_id:
-        qs = qs.filter(device_id=device_id)
+    # Don't assign client to idle blocks
+    block_qs = block_qs.exclude(bundle_id='__idle__')
+    block_qs = block_qs.exclude(app_name__iexact='idle')
     
-    count = qs.update(client=client)
-    return count
+    block_count = block_qs.update(client=client)
+    
+    return raw_count + block_count

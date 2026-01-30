@@ -1559,6 +1559,30 @@ def get_os_username() -> str:
 # ---------------- Pairing ----------------
 _pair_lock = threading.Lock()
 
+def clear_client_caches():
+    """Clear cached client data when re-pairing or on fresh install."""
+    cache_locations = [
+        os.path.expanduser("~/.timetracker/clients.json"),
+        os.path.expanduser("~/.timetracker/sync_cache.json"),
+        os.path.expanduser("~/.timetracker/client_usage.json"),
+        os.path.expanduser("~/.timetracker/gui_state.json"),
+    ]
+    
+    for path in cache_locations:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                log(f"[CACHE] Cleared: {path}")
+            except Exception as e:
+                log(f"[CACHE] Failed to clear {path}: {e}")
+    for path in cache_locations:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                log(f"[CACHE] Cleared: {path}")
+            except Exception as e:
+                log(f"[CACHE] Failed to clear {path}: {e}")
+
 def _claim_pair(code: str, hostname: str) -> dict:
     """
     Claim a pairing code and return result dict.
@@ -1577,6 +1601,7 @@ def _claim_pair(code: str, hostname: str) -> dict:
         data = json.loads(raw or b"{}")
         key = data.get("api_key")
         if key:
+            clear_client_caches()
             config["api_key"] = key
             config["api_base"] = config.get("api_base") or "https://timetracker-api-k375.onrender.com/api"  # ADD
             config["verbose"] = config.get("verbose", True)  # ADD

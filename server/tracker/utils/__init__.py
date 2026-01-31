@@ -9,7 +9,6 @@ from .monitoring import capture_exception        # noqa: F401
 from .blocks import (                            # noqa: F401
     resolve_client_from_known,
     infer_task_for_block,
-    compact_rawevents_into_blocks,
 )
 
 # Optional: If your blocks module exposes _compact_safe, re-export it
@@ -34,7 +33,6 @@ __all__ = [
     "capture_exception",
     "resolve_client_from_known",
     "infer_task_for_block",
-    "compact_rawevents_into_blocks",
     "_client_ip",
 ]
 

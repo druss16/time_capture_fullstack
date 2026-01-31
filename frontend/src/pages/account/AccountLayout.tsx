@@ -15,7 +15,6 @@ interface AccountLayoutProps {
 export default function AccountLayout({ role }: AccountLayoutProps) {
   const navItems = [
     { path: '/account', label: 'Profile', icon: User, exact: true },
-    { path: '/account/download', label: 'Download Agent', icon: Download },
     { path: '/account/password', label: 'Change Password', icon: KeyRound },
     // Billing only for owners
     ...(role === 'owner' ? [{ path: '/account/billing', label: 'Subscription & Billing', icon: CreditCard }] : []),

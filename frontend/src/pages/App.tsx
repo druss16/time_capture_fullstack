@@ -24,6 +24,8 @@ import AccountLayout from '@/pages/account/AccountLayout';
 import ProfilePage from '@/pages/account/ProfilePage';
 import PasswordPage from '@/pages/account/PasswordPage';
 import BillingSettingsPage from '@/pages/account/BillingSettingsPage';
+import DownloadPage from '@/pages/account/DownloadPage';  // ← Add this
+
 
 // --------- Lazy pages (code-splitting) ---------
 const DailyReview = lazy(() => import("./DailyReview"));
@@ -35,6 +37,7 @@ const Login = lazy(() => import("./Login"));
 const NotFound = lazy(() => import("./NotFound"));
 const TimeReview = lazy(() => import("./TimeReview"));
 const BillingPage = lazy(() => import("./BillingPage"));
+
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
@@ -356,6 +359,9 @@ export default function App() {
                 >
                   {/* /account - Profile page */}
                   <Route index element={<ProfilePage />} />
+
+                  {/* /account/download - Download desktop agent */}
+                  <Route path="download" element={<DownloadPage />} />  {/* ← Add this */}
 
                   {/* /account/password - Change password */}
                   <Route path="password" element={<PasswordPage />} />

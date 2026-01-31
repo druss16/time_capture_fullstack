@@ -16,7 +16,8 @@ import {
   LogOut, 
   ChevronDown,
   Settings,
-  Building2
+  Download,  // ← Add this
+  Building2,
 } from 'lucide-react';
 
 interface UserMenuProps {

@@ -17,7 +17,8 @@ import {
   User,
   CreditCard,
   KeyRound,
-  Building2
+  Building2,
+  Download
 } from 'lucide-react';
 import { safeFetchJson, API_BASE } from "@/lib/api";
 import { cn, getRoleColor } from "@/lib/design-system";
@@ -210,48 +211,37 @@ export default function Navigation() {
                       )}
                     </div>
 
-                    {/* Menu Items */}
-                    <div className="py-2">
-                      {/* Account Settings */}
+                  {/* Menu Items */}
+                  <div className="py-2">
+                    {/* My Account - Links to account page with all tabs */}
+                    <button
+                      onClick={() => handleNavigation('/account')}
+                      className="w-full px-4 py-2.5 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
+                    >
+                      <User className="w-4 h-4 text-slate-400" />
+                      <span className="text-sm font-medium text-slate-700">My Account</span>
+                    </button>
+
+                    {/* Org Settings - Admin/Owner */}
+                    {canAccessSettings && (
                       <button
-                        onClick={() => handleNavigation('/account')}
+                        onClick={() => handleNavigation('/settings')}
                         className="w-full px-4 py-2.5 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
                       >
-                        <User className="w-4 h-4 text-slate-400" />
-                        <span className="text-sm font-medium text-slate-700">Account Settings</span>
+                        <Building2 className="w-4 h-4 text-slate-400" />
+                        <span className="text-sm font-medium text-slate-700">Organization Settings</span>
                       </button>
+                    )}
+                  </div>
 
-                      {/* Subscription & Billing - Owner Only */}
-                      {isOwner && (
-                        <button
-                          onClick={() => handleNavigation('/account/billing')}
-                          className="w-full px-4 py-2.5 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
-                        >
-                          <CreditCard className="w-4 h-4 text-slate-400" />
-                          <span className="text-sm font-medium text-slate-700">Subscription & Billing</span>
-                        </button>
-                      )}
-
-                      {/* Change Password */}
-                      <button
-                        onClick={() => handleNavigation('/account/password')}
-                        className="w-full px-4 py-2.5 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
-                      >
-                        <KeyRound className="w-4 h-4 text-slate-400" />
-                        <span className="text-sm font-medium text-slate-700">Change Password</span>
-                      </button>
-
-                      {/* Org Settings - Admin/Owner */}
-                      {canAccessSettings && (
-                        <button
-                          onClick={() => handleNavigation('/settings')}
-                          className="w-full px-4 py-2.5 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
-                        >
-                          <Building2 className="w-4 h-4 text-slate-400" />
-                          <span className="text-sm font-medium text-slate-700">Organization Settings</span>
-                        </button>
-                      )}
-                    </div>
+                  {/* Download Agent - ADD THIS */}
+                  <button
+                    onClick={() => handleNavigation('/account/download')}
+                    className="w-full px-4 py-2.5 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
+                  >
+                    <Download className="w-4 h-4 text-slate-400" />
+                    <span className="text-sm font-medium text-slate-700">Download Agent</span>
+                  </button>
 
                     {/* Logout */}
                     <div className="border-t border-slate-100 pt-2">

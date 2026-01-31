@@ -125,9 +125,7 @@ from tracker.serializers import RawEventSerializer
 from tracker.auth import AgentKeyAuthentication
 from tracker.utils import (
     _client_ip,
-    get_org_or_default,
     infer_task_for_block,
-    resolve_agent_user,
     resolve_client_from_known,
 )
 from tracker.throttles import (

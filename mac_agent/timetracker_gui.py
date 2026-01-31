@@ -1505,30 +1505,28 @@ def show_pairing_window(pair_callback: Callable = None) -> Optional[str]:
     )
     p.start()
     p.join(timeout=300)  # 5 min timeout
-
-    if p.is_alive():
-            p.terminate()
-            print("[GUI] Client picker timed out")
-            return
-        
-        # Force menu bar to stay visible after subprocess closes
-        try:
-            from AppKit import NSApp
-            import time
-            time.sleep(0.1)
-            NSApp.unhide_(None)
-            NSApp.activateIgnoringOtherApps_(True)
-            print("[GUI] Menu bar reactivated after picker")
-        except Exception as e:
-            print(f"[GUI] Reactivate failed: {e}")
-        
-        # Get result
     
+    if p.is_alive():
+        p.terminate()
+        print("[GUI] Pairing window timed out")
+        return None
+    
+    # Force menu bar to stay visible after subprocess closes
+    try:
+        from AppKit import NSApp
+        import time
+        time.sleep(0.1)
+        NSApp.unhide_(None)
+        NSApp.activateIgnoringOtherApps_(True)
+        print("[GUI] Menu bar reactivated after pairing")
+    except Exception as e:
+        print(f"[GUI] Reactivate failed: {e}")
+    
+    # Get result
     try:
         success, api_key, username, org_name = result_queue.get(timeout=2)
         if success and api_key:
             print(f"✅ Device paired as {username}; key saved.")
-            # Store username in GUI state for menu display
             state = GUIState()
             state.set_user(username, org_name)
             return api_key
@@ -1536,7 +1534,6 @@ def show_pairing_window(pair_callback: Callable = None) -> Optional[str]:
         print(f"[GUI] Pairing result error: {e}")
     
     return None
-
 
 # ============================================================
 # MENU BAR APP (rumps) - WITH USERNAME AND RE-PAIR

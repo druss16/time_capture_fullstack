@@ -23,9 +23,15 @@ jobs:
         working-directory: mac_agent
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          
+          # Create version.py for any imports
           echo "# Auto-generated during build - DO NOT EDIT" > version.py
           echo "APP_VERSION = \"$VERSION\"" >> version.py
           cat version.py
+          
+          # Update version directly in timetracker_gui.py
+          sed -i '' "s/APP_VERSION = \"dev\"/APP_VERSION = \"$VERSION\"/" timetracker_gui.py
+          grep "APP_VERSION" timetracker_gui.py | head -1
       
       - name: Install dependencies
         working-directory: mac_agent
@@ -36,6 +42,7 @@ jobs:
         working-directory: mac_agent
         run: |
           pyinstaller --onedir --windowed --name "TimeTracker" \
+            --add-data "version.py:." \
             --hidden-import=customtkinter \
             --collect-all=customtkinter \
             --hidden-import=Quartz \
@@ -120,11 +127,26 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           
+          # Create postinstall script to launch app after install
+          mkdir -p scripts
+          cat > scripts/postinstall << 'EOF'
+#!/bin/bash
+# Launch TimeTracker after install for the logged-in user
+LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
+if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ]; then
+    sleep 1
+    sudo -u "$LOGGED_IN_USER" open /Applications/TimeTracker.app &
+fi
+exit 0
+EOF
+          chmod +x scripts/postinstall
+          
           echo "Packaging .app bundle..."
           pkgbuild --component dist/TimeTracker.app \
             --identifier com.mavops.timetracker \
             --version "$VERSION" \
             --install-location /Applications \
+            --scripts scripts \
             unsigned.pkg
           
           productsign --sign "$IDENTITY" unsigned.pkg TimeTracker.pkg

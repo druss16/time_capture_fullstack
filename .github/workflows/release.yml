@@ -19,15 +19,10 @@ jobs:
         with:
           python-version: '3.11'
       
-      - name: Extract version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Building version: $VERSION"
-      
       - name: Write version file
         working-directory: mac_agent
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           echo "# Auto-generated during build - DO NOT EDIT" > version.py
           echo "APP_VERSION = \"$VERSION\"" >> version.py
           cat version.py
@@ -41,7 +36,6 @@ jobs:
         working-directory: mac_agent
         run: |
           pyinstaller --onedir --windowed --name "TimeTracker" \
-            --osx-bundle-identifier "com.mavops.timetracker" \
             --hidden-import=customtkinter \
             --collect-all=customtkinter \
             --hidden-import=Quartz \
@@ -52,38 +46,23 @@ jobs:
             --hidden-import=pynput.keyboard \
             --hidden-import=pynput.keyboard._darwin \
             main.py
-      
-      # ============================================================
-      # SET VERSION IN INFO.PLIST (for Get Info display)
-      # ============================================================
+
       - name: Update Info.plist with version
         working-directory: mac_agent
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           INFO_PLIST="dist/TimeTracker.app/Contents/Info.plist"
           
-          # Set version strings (shows in Finder "Get Info")
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$INFO_PLIST"
+          # Add if missing, Set if exists (Add first, fallback to Set)
+          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$INFO_PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$INFO_PLIST"
           
-          # Set other metadata
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName TimeTracker" "$INFO_PLIST" || true
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName TimeTracker" "$INFO_PLIST" || true
-          /usr/libexec/PlistBuddy -c "Set :NSHumanReadableCopyright © 2024-2025 MavOps. Version $VERSION" "$INFO_PLIST" || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$INFO_PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$INFO_PLIST"
           
-          # Menu bar app (no dock icon)
-          /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string © 2024-2025 MavOps" "$INFO_PLIST" 2>/dev/null || true
           
-          # Minimum macOS version
-          /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 10.15.0" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 10.15.0" "$INFO_PLIST"
-          
-          # Accessibility/Automation descriptions (required for notarization)
-          /usr/libexec/PlistBuddy -c "Add :NSAppleEventsUsageDescription string 'TimeTracker needs automation access to read window titles for time tracking.'" "$INFO_PLIST" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :NSAccessibilityUsageDescription string 'TimeTracker needs accessibility access to track which applications you use.'" "$INFO_PLIST" 2>/dev/null || true
-          
-          echo "=== Updated Info.plist ==="
-          /usr/libexec/PlistBuddy -c "Print" "$INFO_PLIST" | head -30
+          echo "Version set to: $VERSION"
       
       - name: Import signing certificates
         env:
@@ -125,151 +104,63 @@ jobs:
           codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
           codesign --verify --verbose dist/TimeTracker.app
       
-      # ============================================================
-      # CREATE PKG INSTALLER
-      # ============================================================
       - name: Create signed pkg installer
         env:
           IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
         working-directory: mac_agent
         run: |
-          echo "Packaging .app bundle into PKG..."
-          pkgbuild --component dist/TimeTracker.app \
-            --identifier com.mavops.timetracker \
-            --version "$VERSION" \
-            --install-location /Applications \
-            unsigned.pkg
+          if [ -d "dist/TimeTracker.app" ]; then
+            echo "Packaging .app bundle..."
+            pkgbuild --component dist/TimeTracker.app --identifier com.mavops.timetracker --version ${{ github.ref_name }} --install-location /Applications unsigned.pkg
+          else
+            echo "Packaging standalone binary..."
+            mkdir -p dist/pkg-root
+            cp dist/TimeTracker dist/pkg-root/
+            pkgbuild --root dist/pkg-root --identifier com.mavops.timetracker --version ${{ github.ref_name }} --install-location /usr/local/bin unsigned.pkg
+          fi
           
           productsign --sign "$IDENTITY" unsigned.pkg TimeTracker.pkg
           rm unsigned.pkg
           
-          echo "=== PKG created ==="
+          echo "=== Package created ==="
           ls -la TimeTracker.pkg
       
-      # ============================================================
-      # CREATE DMG WITH APPLICATIONS SYMLINK (drag to install)
-      # ============================================================
-      - name: Create DMG installer
-        env:
-          IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        working-directory: mac_agent
-        run: |
-          echo "Creating DMG with Applications symlink..."
-          
-          # Create temp folder for DMG contents
-          mkdir -p dmg_temp
-          
-          # Copy signed .app
-          cp -R dist/TimeTracker.app dmg_temp/
-          
-          # Create Applications symlink (enables drag-to-install!)
-          ln -s /Applications dmg_temp/Applications
-          
-          # Create DMG
-          hdiutil create -volname "TimeTracker $VERSION" \
-            -srcfolder dmg_temp \
-            -ov -format UDZO \
-            "TimeTracker-$VERSION.dmg"
-          
-          # Sign DMG
-          codesign --force --sign "$IDENTITY" "TimeTracker-$VERSION.dmg"
-          
-          # Cleanup
-          rm -rf dmg_temp
-          
-          echo "=== DMG created ==="
-          ls -la "TimeTracker-$VERSION.dmg"
-      
-      # ============================================================
-      # NOTARIZE BOTH PKG AND DMG
-      # ============================================================
-      - name: Notarize PKG
+      - name: Notarize pkg
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         working-directory: mac_agent
         run: |
-          echo "Notarizing PKG..."
           xcrun notarytool submit TimeTracker.pkg \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --wait \
-            --output-format json > pkg_notarization.json || true
+            --output-format json > notarization_result.json || true
           
-          PKG_STATUS=$(cat pkg_notarization.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-          echo "PKG Status: $PKG_STATUS"
+          SUBMISSION_ID=$(cat notarization_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
+          STATUS=$(cat notarization_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
           
-          if [ "$PKG_STATUS" != "Accepted" ]; then
-            SUBMISSION_ID=$(cat pkg_notarization.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
-            echo "=== PKG NOTARIZATION LOG ==="
+          echo "Submission ID: $SUBMISSION_ID"
+          echo "Status: $STATUS"
+          
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "=== NOTARIZATION LOG ==="
             xcrun notarytool log "$SUBMISSION_ID" \
               --apple-id "$APPLE_ID" \
               --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_PASSWORD" || true
+              --password "$APPLE_APP_PASSWORD"
             exit 1
           fi
           
           xcrun stapler staple TimeTracker.pkg
-          echo "✓ PKG notarized and stapled"
       
-      - name: Notarize DMG
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        working-directory: mac_agent
-        run: |
-          echo "Notarizing DMG..."
-          xcrun notarytool submit "TimeTracker-$VERSION.dmg" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait \
-            --output-format json > dmg_notarization.json || true
-          
-          DMG_STATUS=$(cat dmg_notarization.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-          echo "DMG Status: $DMG_STATUS"
-          
-          if [ "$DMG_STATUS" != "Accepted" ]; then
-            SUBMISSION_ID=$(cat dmg_notarization.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
-            echo "=== DMG NOTARIZATION LOG ==="
-            xcrun notarytool log "$SUBMISSION_ID" \
-              --apple-id "$APPLE_ID" \
-              --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_PASSWORD" || true
-            exit 1
-          fi
-          
-          xcrun stapler staple "TimeTracker-$VERSION.dmg"
-          echo "✓ DMG notarized and stapled"
-      
-      - name: Verify builds
-        working-directory: mac_agent
-        run: |
-          echo "=== Verifying PKG ==="
-          spctl --assess -v --type install TimeTracker.pkg
-          
-          echo ""
-          echo "=== Verifying DMG ==="
-          spctl --assess -v --type open "TimeTracker-$VERSION.dmg" || true
-          
-          echo ""
-          echo "=== Version in app bundle ==="
-          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/TimeTracker.app/Contents/Info.plist
-      
-      - name: Upload Mac PKG artifact
+      - name: Upload Mac artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mac-pkg-installer
+          name: mac-installer
           path: mac_agent/TimeTracker.pkg
-      
-      - name: Upload Mac DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-dmg-installer
-          path: mac_agent/TimeTracker-*.dmg
 
   build-windows:
     runs-on: windows-latest
@@ -299,8 +190,18 @@ jobs:
       - name: Build executables
         working-directory: windows_agent
         run: |
-          python -m PyInstaller --onedir --windowed --name "TimeTracker" --hidden-import=customtkinter --collect-all=customtkinter --hidden-import=CTkMessagebox --collect-all=CTkMessagebox gui.py
+          python -m PyInstaller --onedir --windowed --name "TimeTracker" --collect-all customtkinter --collect-all CTkMessagebox --hidden-import=customtkinter --hidden-import=CTkMessagebox gui.py
           python -m PyInstaller --onedir --noconsole --name "TimeTrackerAgent" --hidden-import=timetracker_gui --add-data "timetracker_gui.py;." main.py
+      
+      - name: List dist contents
+        working-directory: windows_agent
+        run: |
+          echo "=== dist folder contents ==="
+          dir dist
+          echo "=== dist/TimeTracker contents ==="
+          dir dist\TimeTracker
+          echo "=== dist/TimeTrackerAgent contents ==="
+          dir dist\TimeTrackerAgent
       
       - name: Sign Windows executables
         if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
@@ -354,19 +255,10 @@ jobs:
     needs: [build-mac, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Extract version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
-      
-      - name: Download Mac PKG artifact
+      - name: Download Mac artifact
         uses: actions/download-artifact@v4
         with:
-          name: mac-pkg-installer
-          path: ./mac
-      
-      - name: Download Mac DMG artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: mac-dmg-installer
+          name: mac-installer
           path: ./mac
       
       - name: Download Windows artifact
@@ -375,39 +267,13 @@ jobs:
           name: windows-installer
           path: ./windows
       
-      - name: List artifacts
-        run: |
-          echo "=== Mac installers ==="
-          ls -la ./mac/
-          echo ""
-          echo "=== Windows installers ==="
-          ls -la ./windows/
-      
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           repository: druss16/timetracker-releases
           files: |
             ./mac/TimeTracker.pkg
-            ./mac/TimeTracker-*.dmg
             ./windows/TimeTracker-Windows-Setup.exe
           tag_name: ${{ github.ref_name }}
           token: ${{ secrets.RELEASES_PAT }}
           make_latest: true
-          body: |
-            ## TimeTracker ${{ github.ref_name }}
-            
-            ### Downloads
-            
-            **Mac (choose one):**
-            - `TimeTracker-${{ env.VERSION }}.dmg` - Drag to Applications to install (recommended)
-            - `TimeTracker.pkg` - Double-click to install automatically
-            
-            **Windows:**
-            - `TimeTracker-Windows-Setup.exe` - Run installer
-            
-            ### What's New
-            - Version displays in Finder "Get Info"
-            - DMG installer with drag-to-Applications
-            - Re-link Device option in menu bar
-            - Username displayed in menu bar dropdown

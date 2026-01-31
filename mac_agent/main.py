@@ -2536,6 +2536,42 @@ def run_agent():
         except Exception as e:
             log(f"[CLIENT] Failed to restore client state: {e}")
 
+    # === STARTUP: Prompt for client if none selected ===
+    def prompt_client_on_startup():
+        """Show client picker on startup if no client is selected"""
+        import time
+        time.sleep(2)  # Wait for GUI to fully initialize
+        
+        api_key = config.get("api_key") or API_KEY
+        if not api_key or not API_BASE:
+            return
+        
+        try:
+            current = get_current_client_from_backend(API_BASE, api_key)
+            
+            if not current or not current.get("client_id"):
+                log("[STARTUP] No client selected - showing client picker")
+                
+                # Show the client picker
+                if gui_menu_bar and hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
+                    def show_picker():
+                        time.sleep(0.5)  # Small delay for UI
+                        try:
+                            gui_menu_bar.app._on_search(None)
+                        except Exception as e:
+                            log(f"[STARTUP] Failed to show picker: {e}")
+                    
+                    threading.Thread(target=show_picker, daemon=True).start()
+            else:
+                log(f"[STARTUP] Client already set: {current.get('client_name')}")
+                
+        except Exception as e:
+            log(f"[STARTUP] Error checking client: {e}")
+
+    # Start the startup prompt in background
+    if gui_menu_bar:
+        threading.Thread(target=prompt_client_on_startup, daemon=True).start()
+
     # Notifications setup
     # Notifications setup (OLD system - skip if new system is active)
     if not notif_manager:

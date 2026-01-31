@@ -510,6 +510,7 @@ def _run_ai_prompt_process(client_id: int, client_name: str, confidence: float,
     x = (root.winfo_screenwidth() // 2) - 220
     y = (root.winfo_screenheight() // 2) - 150
     root.geometry(f"+{x}+{y}")
+    root.attributes('-topmost', True)
     root.deiconify()
     root.lift()
     root.focus_force()
@@ -704,6 +705,7 @@ def _run_today_time_process(data_json: str):
     x = (root.winfo_screenwidth() // 2) - 240
     y = (root.winfo_screenheight() // 2) - 250
     root.geometry(f"+{x}+{y}")
+    root.attributes('-topmost', True)
     root.deiconify()
     root.lift()
     root.focus_force()
@@ -820,6 +822,9 @@ def _run_client_picker_process(clients_json: str, usage_json: str, result_queue)
     root.geometry("380x520")
     root.minsize(320, 400)
     root.configure(fg_color=colors["bg_window"])
+    
+    # Make window float on top without stealing app focus
+    root.attributes('-topmost', True)
     
     # Center window
     root.withdraw()
@@ -1167,10 +1172,10 @@ def _run_pairing_process(result_queue):
     x = (root.winfo_screenwidth() // 2) - 220
     y = (root.winfo_screenheight() // 2) - 190
     root.geometry(f"+{x}+{y}")
+    root.attributes('-topmost', True)
     root.deiconify()
     root.lift()
     root.focus_force()
-    root.attributes('-topmost', True)
     
     # Container
     container = ctk.CTkFrame(root, fg_color="transparent")
@@ -1666,6 +1671,11 @@ if RUMPS_AVAILABLE:
             def show_picker():
                 picker = ClientPickerWindow(self.controller.client_mgr, self._switch_client)
                 picker.show()
+                # Force menu bar icon to stay visible after picker closes
+                try:
+                    self._rebuild_menu()
+                except Exception:
+                    pass
             
             threading.Thread(target=show_picker, daemon=True).start()
         

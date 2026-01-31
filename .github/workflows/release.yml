@@ -53,13 +53,20 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           INFO_PLIST="dist/TimeTracker.app/Contents/Info.plist"
           
+          echo "Setting version to: $VERSION"
+          
+          # Add if missing, Set if exists
           /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$INFO_PLIST"
           
           /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$INFO_PLIST"
           
-          echo "Version set to: $VERSION"
+          /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string © 2024-2025 MavOps" "$INFO_PLIST" 2>/dev/null || true
+          
+          echo "=== Info.plist version info ==="
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST"
       
       - name: Import signing certificates
         env:
@@ -106,15 +113,14 @@ jobs:
           IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
         working-directory: mac_agent
         run: |
-          if [ -d "dist/TimeTracker.app" ]; then
-            echo "Packaging .app bundle..."
-            pkgbuild --component dist/TimeTracker.app --identifier com.mavops.timetracker --version ${{ github.ref_name }} --install-location /Applications unsigned.pkg
-          else
-            echo "Packaging standalone binary..."
-            mkdir -p dist/pkg-root
-            cp dist/TimeTracker dist/pkg-root/
-            pkgbuild --root dist/pkg-root --identifier com.mavops.timetracker --version ${{ github.ref_name }} --install-location /usr/local/bin unsigned.pkg
-          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          
+          echo "Packaging .app bundle..."
+          pkgbuild --component dist/TimeTracker.app \
+            --identifier com.mavops.timetracker \
+            --version "$VERSION" \
+            --install-location /Applications \
+            unsigned.pkg
           
           productsign --sign "$IDENTITY" unsigned.pkg TimeTracker.pkg
           rm unsigned.pkg

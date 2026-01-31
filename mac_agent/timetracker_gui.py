@@ -76,11 +76,8 @@ CLIENT_USAGE_FILE = os.path.expanduser("~/.timetracker/client_usage.json")
 # ============================================================
 # VERSION - Keep in sync with TimeTracker.spec
 # ============================================================
-# Version is set by build process in version.py
-try:
-    from version import APP_VERSION
-except ImportError:
-    APP_VERSION = "dev"
+# Version - updated by build process, shows "dev" for local development
+APP_VERSION = "dev"
 
 # ============================================================
 # PROFESSIONAL COLOR SCHEME
@@ -1716,7 +1713,7 @@ if RUMPS_AVAILABLE:
             window.show_and_refresh()
         
         def _on_relink_device(self, _):
-            """Show re-pairing dialog"""
+            """Show re-pairing dialog and restart app after success"""
             def do_relink():
                 # Clear existing pairing AND all cached data
                 self.controller.state.clear_pairing()
@@ -1728,25 +1725,45 @@ if RUMPS_AVAILABLE:
                 api_key = show_pairing_window()
                 
                 if api_key:
-                    # Reload state to get new username
-                    self.controller.state.load()
+                    print(f"[GUI] Re-paired successfully, restarting app...")
                     
-                    # Fetch fresh clients for new account
-                    if self.controller.fetch_clients_callback:
-                        try:
-                            self.controller.client_mgr.load(self.controller.fetch_clients_callback)
-                            print(f"[GUI] Loaded {len(self.controller.client_mgr.clients)} clients for new user")
-                        except Exception as e:
-                            print(f"[GUI] Failed to refresh clients after re-pair: {e}")
-                    
-                    # Update menu to show new user and clients
-                    self._rebuild_menu()
-                    print(f"[GUI] Re-paired as {self.controller.state.username}")
+                    # Restart the app to fully reinitialize with new credentials
+                    self._restart_app()
                 else:
                     print("[GUI] Re-pairing cancelled")
-                    # Restore old state if cancelled? Or leave blank?
-            
+        
             threading.Thread(target=do_relink, daemon=True).start()
+        
+        def _restart_app(self):
+            """Restart the application to apply new pairing"""
+            import subprocess
+            import sys
+            import time
+            
+            # Small delay to let pairing window close
+            time.sleep(0.5)
+            
+            if getattr(sys, 'frozen', False):
+                # Running as compiled .app bundle
+                # Find the .app bundle path
+                app_path = sys.executable
+                bundle_path = app_path
+                while bundle_path and not bundle_path.endswith('.app'):
+                    bundle_path = os.path.dirname(bundle_path)
+                
+                if bundle_path.endswith('.app'):
+                    print(f"[GUI] Relaunching {bundle_path}")
+                    subprocess.Popen(['open', '-n', bundle_path])
+                else:
+                    # Fallback: try /Applications
+                    subprocess.Popen(['open', '-n', '/Applications/TimeTracker.app'])
+            else:
+                # Running from python main.py (dev mode)
+                print("[GUI] Dev mode: please restart manually")
+                # Could do: subprocess.Popen([sys.executable] + sys.argv)
+            
+            # Quit current instance
+            rumps.quit_application()
 
 
 # ============================================================

@@ -64,9 +64,14 @@ jobs:
           
           /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string © 2024-2025 MavOps" "$INFO_PLIST" 2>/dev/null || true
           
+          # CRITICAL: LSUIElement makes it a menu bar app (no Dock icon, always visible)
+          /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$INFO_PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$INFO_PLIST"
+          
           echo "=== Info.plist version info ==="
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Print :LSUIElement" "$INFO_PLIST"
       
       - name: Import signing certificates
         env:

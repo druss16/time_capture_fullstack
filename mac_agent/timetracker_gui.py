@@ -190,6 +190,15 @@ class ClientManager:
         self.clients: List[Dict] = []
         self.load()
     
+    def clear(self):
+        """Clear all client data (for re-pairing)"""
+        self.clients = []
+        try:
+            if os.path.exists(CLIENTS_FILE):
+                os.remove(CLIENTS_FILE)
+        except Exception:
+            pass
+    
     def load(self, fetch_callback=None):
         if fetch_callback:
             try:
@@ -312,7 +321,7 @@ class GUIState:
             print(f"[GUI] Failed to save username to config: {e}")
     
     def clear_pairing(self):
-        """Clear all pairing data for re-linking"""
+        """Clear ALL user data for re-linking to new account"""
         self.username = None
         self.org_name = None
         self.current_client_id = None
@@ -331,6 +340,22 @@ class GUIState:
                     json.dump(cfg, f, indent=2)
         except Exception:
             pass
+        
+        # Clear cached clients (old user's clients!)
+        try:
+            if os.path.exists(CLIENTS_FILE):
+                os.remove(CLIENTS_FILE)
+                print("[GUI] Cleared old clients cache")
+        except Exception as e:
+            print(f"[GUI] Failed to clear clients cache: {e}")
+        
+        # Clear client usage history
+        try:
+            if os.path.exists(CLIENT_USAGE_FILE):
+                os.remove(CLIENT_USAGE_FILE)
+                print("[GUI] Cleared client usage history")
+        except Exception as e:
+            print(f"[GUI] Failed to clear usage history: {e}")
 
 
 # ============================================================
@@ -1689,8 +1714,11 @@ if RUMPS_AVAILABLE:
         def _on_relink_device(self, _):
             """Show re-pairing dialog"""
             def do_relink():
-                # Clear existing pairing
+                # Clear existing pairing AND all cached data
                 self.controller.state.clear_pairing()
+                
+                # Clear in-memory client list too!
+                self.controller.client_mgr.clear()
                 
                 # Show pairing window
                 api_key = show_pairing_window()
@@ -1699,18 +1727,20 @@ if RUMPS_AVAILABLE:
                     # Reload state to get new username
                     self.controller.state.load()
                     
-                    # Refresh clients for new account
+                    # Fetch fresh clients for new account
                     if self.controller.fetch_clients_callback:
                         try:
                             self.controller.client_mgr.load(self.controller.fetch_clients_callback)
+                            print(f"[GUI] Loaded {len(self.controller.client_mgr.clients)} clients for new user")
                         except Exception as e:
                             print(f"[GUI] Failed to refresh clients after re-pair: {e}")
                     
-                    # Update menu
+                    # Update menu to show new user and clients
                     self._rebuild_menu()
                     print(f"[GUI] Re-paired as {self.controller.state.username}")
                 else:
                     print("[GUI] Re-pairing cancelled")
+                    # Restore old state if cancelled? Or leave blank?
             
             threading.Thread(target=do_relink, daemon=True).start()
 

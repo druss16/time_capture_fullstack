@@ -1905,13 +1905,6 @@ def get_seasonal_context() -> str:
         "- Regular correspondence and admin\n"
     )
 
-
-# tracker/views.py - COMPLETE REPLACEMENT
-
-from tracker.services.pattern_learning import PatternLearningService
-
-# tracker/views.py - COMPLETE UPDATED VERSION
-
 from tracker.services.pattern_learning import PatternLearningService
 
 @api_view(["GET"])
@@ -1981,6 +1974,8 @@ def ai_suggestions_today(request):
     # No AI call needed - these blocks are permanent
     # =========================================================
     if not blocks_needing_ai:
+        from tracker.utils.display_names import format_block_for_display
+        
         out = []
         for b in already_categorized:
             out.append({
@@ -1998,6 +1993,14 @@ def ai_suggestions_today(request):
                     "source": "existing",
                     "auto_saved": False,
                 },
+                # ✅ Display-friendly version for UI
+                "display": format_block_for_display({
+                    'app_name': getattr(b, 'app_name', ''),
+                    'window_title': getattr(b, 'window_title', ''),
+                    'url': getattr(b, 'url', ''),
+                    'minutes': b.minutes,
+                    'category': list((b.category_hours or {}).keys())[0] if b.category_hours else None,
+                }),
                 "current_client": getattr(b.client, "name", None),
                 "current_project": getattr(b.project, "name", None),
             })
@@ -2074,6 +2077,8 @@ def ai_suggestions_today(request):
         })
 
     if noai:
+        from tracker.utils.display_names import format_block_for_display
+        
         out = []
         for b in blocks[:len(trimmed)]:
             out.append({
@@ -2090,6 +2095,14 @@ def ai_suggestions_today(request):
                     "reasoning": "NOAI mode",
                     "source": "noai",
                 },
+                # ✅ Display-friendly version for UI
+                "display": format_block_for_display({
+                    'app_name': getattr(b, 'app_name', ''),
+                    'window_title': getattr(b, 'window_title', ''),
+                    'url': getattr(b, 'url', ''),
+                    'minutes': b.minutes,
+                    'category': None,
+                }),
                 "current_client": getattr(b.client, "name", None),
                 "current_project": getattr(b.project, "name", None),
             })
@@ -2132,69 +2145,21 @@ def ai_suggestions_today(request):
 
     client = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
 
-    # System message with all context
-    system_msg = (
-        "You are an expert time-tracking classifier for a CPA firm. "
-        "Your goal is to accurately categorize every billable minute into the correct client and category. "
-        "\n\n"
-        "=== AVAILABLE CATEGORIES (use these EXACT names) ===\n"
-        "CORE TAX SERVICES:\n"
-        "- Tax Preparation: Preparing returns (1040, 1120, 1065, 990, etc.)\n"
-        "- Tax Planning: Projections, estimated taxes, strategy\n"
-        "- Tax Research: IRC research, regulations, rulings\n"
-        "- Tax Compliance: Extensions, payments, responses to IRS notices\n"
-        "\n"
-        "ACCOUNTING SERVICES:\n"
-        "- Accounting/Bookkeeping: GL work, reconciliations, JEs\n"
-        "- Financial Statement Prep: Compilations, reviews\n"
-        "- Audit/Assurance: Audit procedures, testing, workpapers\n"
-        "- Payroll Services: Payroll processing, tax filings\n"
-        "\n"
-        "ADVISORY SERVICES:\n"
-        "- Advisory/Financial Planning: Wealth management, retirement planning\n"
-        "- Valuation/Advisory: Business valuations, M&A support\n"
-        "- Forensic/Fraud Investigation: Fraud exams, litigation support\n"
-        "\n"
-        "COMPLIANCE & REGULATORY:\n"
-        "- SEC/Regulatory Compliance: 10-K, 10-Q, EDGAR filings\n"
-        "- Employee Benefits/ERISA: Form 5500, plan audits\n"
-        "\n"
-        "SPECIALIZED INDUSTRY:\n"
-        "- Real Estate/Property: Rental properties, cost segregation\n"
-        "- Nonprofit/Form 990: Exempt org returns and compliance\n"
-        "- Healthcare/Medical Practice: Medical practice accounting\n"
-        "- Construction/Contractors: Job costing, WIP schedules\n"
-        "\n"
-        "ADMINISTRATIVE:\n"
-        "- Email/Communication: Client correspondence, internal emails\n"
-        "- Meetings: Video calls, client meetings, team meetings\n"
-        "- Administration: Practice management, billing, CPE\n"
-        "- Document Management: Filing, organizing, e-signatures\n"
-        "- Review: Reviewing work, QC, partner review\n"
-        "\n\n"
-        "=== CRITICAL CLASSIFICATION RULES ===\n"
-        "1. **Be Specific**: Use the most specific category that applies\n"
-        "2. **Confidence Scoring**: >= 0.90 obvious tools, >= 0.80 clear patterns, >= 0.70 reasonable inference\n"
-        "3. **Use Learned Patterns**: Weight learned_patterns highly if present\n"
-        "4. **Client Identification**: Check window titles, URLs, file paths for client names\n"
-        "5. **Time Allocation**: Split time proportionally if multiple activities\n"
-        "6. **CPA Tool Detection**: UltraTax/Drake/Lacerte → Tax Prep, QuickBooks/Xero → Bookkeeping, etc.\n"
-        "\n\n"
-        "=== RESPONSE FORMAT ===\n"
-        "Return ONLY a JSON array with one object per block:\n"
-        "{\n"
-        "  \"client\": \"Acme Corp\" | null,\n"
-        "  \"project\": \"2024 Tax Return\" | null,\n"
-        "  \"categories\": {\"Tax Preparation\": 1.5},\n"
-        "  \"confidence\": 0.92,\n"
-        "  \"needs_review\": false,\n"
-        "  \"reasoning\": \"UltraTax detected with Form 1040 in title\"\n"
-        "}\n"
-        "\n\n"
-        "=== ORGANIZATION CONTEXT ===\n" + org_context +
-        "\n\n" + seasonal_context +
-        "\n\n" + pattern_context
-    )
+    # =========================================================
+    # ✅ DYNAMIC: Use industry-specific prompt instead of hardcoded CPA
+    # =========================================================
+    from tracker.industry_categories import build_ai_prompt_for_industry
+    
+    # Get org's industry type (defaults to 'cpa' for backwards compatibility)
+    industry_type = getattr(org, 'industry_type', 'cpa') or 'cpa'
+    
+    # Build industry-specific prompt (CPA, Marketing, AI Consulting, Legal, etc.)
+    system_msg = build_ai_prompt_for_industry(industry_type)
+    
+    # Add org-specific context
+    system_msg += "\n\n=== ORGANIZATION CONTEXT ===\n" + org_context
+    system_msg += "\n\n" + seasonal_context
+    system_msg += "\n\n" + pattern_context
 
     last_text = None
     ai_suggestions = []
@@ -2220,6 +2185,8 @@ def ai_suggestions_today(request):
             return suggestions_today(request)
         
         # Return fallback response
+        from tracker.utils.display_names import format_block_for_display
+        
         out = []
         for b in blocks[:len(trimmed)]:
             out.append({
@@ -2236,6 +2203,14 @@ def ai_suggestions_today(request):
                     "reasoning": f"AI fallback: {str(e)[:120]}",
                     "source": "fallback",
                 },
+                # ✅ Display-friendly version for UI
+                "display": format_block_for_display({
+                    'app_name': getattr(b, 'app_name', ''),
+                    'window_title': getattr(b, 'window_title', ''),
+                    'url': getattr(b, 'url', ''),
+                    'minutes': b.minutes,
+                    'category': None,
+                }),
                 "current_client": getattr(b.client, "name", None),
                 "current_project": getattr(b.project, "name", None),
             })
@@ -2246,6 +2221,8 @@ def ai_suggestions_today(request):
     # CRITICAL: Only save if is_categorized=False
     # Once saved, the block is LOCKED forever
     # =========================================================
+    from tracker.utils.display_names import format_block_for_display
+    
     out = []
     N = min(len(blocks), len(ai_suggestions))
     saved_count = 0
@@ -2340,6 +2317,14 @@ def ai_suggestions_today(request):
                     "source": "ai_with_context",
                     "auto_saved": auto_saved,
                 },
+                # ✅ Display-friendly version for UI
+                "display": format_block_for_display({
+                    'app_name': getattr(b, 'app_name', ''),
+                    'window_title': getattr(b, 'window_title', ''),
+                    'url': getattr(b, 'url', ''),
+                    'minutes': b.minutes,
+                    'category': list(categories.keys())[0] if categories else None,
+                }),
                 "current_client": getattr(b.client, "name", None),
                 "current_project": getattr(b.project, "name", None),
             })
@@ -2364,6 +2349,14 @@ def ai_suggestions_today(request):
                 "source": "existing",
                 "auto_saved": False,
             },
+            # ✅ Display-friendly version for UI
+            "display": format_block_for_display({
+                'app_name': getattr(b, 'app_name', ''),
+                'window_title': getattr(b, 'window_title', ''),
+                'url': getattr(b, 'url', ''),
+                'minutes': b.minutes,
+                'category': list((b.category_hours or {}).keys())[0] if b.category_hours else None,
+            }),
             "current_client": getattr(b.client, "name", None),
             "current_project": getattr(b.project, "name", None),
         })

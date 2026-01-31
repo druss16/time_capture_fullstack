@@ -67,71 +67,24 @@ def _calculate_minutes_from_events(events_qs) -> int:
 # =============================================================================
 # AUTO-CATEGORIZATION PATTERNS
 # =============================================================================
-
-PATTERNS = {
-    'Meetings': {
-        'apps': ['zoom', 'teams', 'meet', 'webex', 'slack huddle', 'discord', 'skype'],
-        'domains': ['zoom.us', 'meet.google.com', 'teams.microsoft.com'],
-        'keywords': ['meeting', 'call with', 'video call', 'conference'],
-        'confidence': 0.92,
-    },
-    'Software Development': {
-        'apps': ['code', 'vscode', 'visual studio', 'sublime', 'sublime_text', 'atom', 
-                 'intellij', 'pycharm', 'webstorm', 'xcode', 'android studio',
-                 'terminal', 'iterm', 'iterm2', 'hyper', 'warp'],
-        'domains': ['github.com', 'gitlab.com', 'bitbucket.org', 'localhost', '127.0.0.1',
-                   'portal.azure.com', 'dev.azure.com', 'console.neon.tech', 
-                   'dashboard.render.com', 'vercel.com'],
-        'keywords': [':3000', ':8000', ':5173', ':5000', ':7123', 'docker', 'npm', 
-                    'yarn', 'pip', 'git ', 'python manage.py', '.py -', '.js -', 
-                    '.tsx -', '.jsx -', 'views.py', 'models.py'],
-        'confidence': 0.90,
-    },
-    'Research/AI Assistance': {
-        'apps': [],
-        'domains': ['claude.ai', 'chat.openai.com', 'chatgpt.com', 'stackoverflow.com',
-                   'docs.python.org', 'docs.djangoproject.com', 'developer.mozilla.org'],
-        'keywords': ['stack overflow', 'api docs'],
-        'confidence': 0.88,
-    },
-    'Email/Communication': {
-        'apps': ['mail', 'outlook', 'thunderbird'],
-        'domains': ['mail.google.com', 'outlook.office', 'slack.com'],
-        'keywords': ['inbox', 'compose'],
-        'confidence': 0.90,
-    },
-    'Tax Preparation': {
-        'apps': ['ultratax', 'lacerte', 'proseries', 'drake'],
-        'domains': ['cchaxcess.com', 'irs.gov'],
-        'keywords': ['ultratax', 'lacerte', '1040', '1120', '1065', 'form 990'],
-        'confidence': 0.93,
-    },
-    'Accounting/Bookkeeping': {
-        'apps': ['quickbooks', 'xero'],
-        'domains': ['qbo.intuit.com', 'quickbooks.intuit.com', 'xero.com'],
-        'keywords': ['quickbooks', 'xero', 'reconciliation'],
-        'confidence': 0.92,
-    },
-    'Administration': {
-        'apps': ['word', 'excel', 'powerpoint'],
-        'domains': ['docs.google.com', 'drive.google.com', 'dropbox.com', 'notion.so'],
-        'keywords': ['.docx', '.xlsx', '.pdf'],
-        'confidence': 0.75,
-    },
-    'Design/Creative': {
-        'apps': ['figma', 'sketch', 'photoshop', 'canva'],
-        'domains': ['figma.com', 'canva.com'],
-        'keywords': [],
-        'confidence': 0.88,
-    },
-}
-
-
 def auto_categorize_block(block: Block) -> bool:
-    """Auto-categorize using pattern matching. Returns True if categorized."""
+    """
+    Auto-categorize using industry-specific pattern matching.
+    Returns True if categorized.
+    """
     if block.is_categorized:
         return False
     
+    # ✅ NEW: Get industry-specific patterns instead of hardcoded generic ones
+    org = getattr(block, 'org', None)
+    industry_type = 'general'
+    if org:
+        industry_type = getattr(org, 'industry_type', 'general') or 'general'
+    
+    from tracker.industry_categories import get_combined_tool_detection
+    TOOL_PATTERNS = get_combined_tool_detection(industry_type)
+    
+    # Extract block context
     title = (block.window_title or block.title or "").lower()
     url = (block.url or "").lower()
     app_name = (block.app_name or "").lower()
@@ -146,19 +99,28 @@ def auto_categorize_block(block: Block) -> bool:
     best_match = None
     best_confidence = 0.0
     
-    for category, patterns in PATTERNS.items():
+    # ✅ NEW: Use industry-specific tool detection patterns
+    for tool_name, patterns in TOOL_PATTERNS.items():
         confidence = 0.0
         
-        if any(app in app_name for app in patterns.get('apps', [])):
-            confidence = max(confidence, patterns['confidence'])
-        if any(domain in url for domain in patterns.get('domains', [])):
-            confidence = max(confidence, patterns['confidence'])
-        if any(kw in combined for kw in patterns.get('keywords', [])):
-            confidence = max(confidence, patterns['confidence'] - 0.05)
+        # Check keywords
+        for keyword in patterns.get('keywords', []):
+            if keyword.lower() in combined:
+                confidence = max(confidence, patterns.get('confidence', 0.85))
+                break
+        
+        # Check domains
+        for domain in patterns.get('domains', []):
+            if domain.lower() in url:
+                confidence = max(confidence, patterns.get('confidence', 0.85))
+                break
         
         if confidence > best_confidence:
             best_confidence = confidence
-            best_match = {'category': category, 'confidence': confidence}
+            best_match = {
+                'category': patterns.get('category', 'Uncategorized'),
+                'confidence': confidence
+            }
     
     if best_match and best_match['confidence'] >= AUTO_CATEGORIZE_THRESHOLD:
         try:
@@ -176,6 +138,7 @@ def auto_categorize_block(block: Block) -> bool:
             return True
         except Exception as e:
             logger.error(f"[AUTO-CAT] Failed: {e}")
+    
     return False
 
 
@@ -351,7 +314,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         for key, app_events in by_app_client.items():
             if not app_events:
                 continue
-            
+             
             starts = [e['start'] for e in app_events]
             block_start = min(starts)
             block_end = max(starts) + timedelta(minutes=app_events[-1]['duration_minutes'])

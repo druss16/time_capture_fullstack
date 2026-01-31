@@ -9,6 +9,7 @@ Features:
 - Searchable client picker with usage-based ranking
 - AI client prompts with confidence indicators
 - Today's time viewer with detailed breakdown
+- Username display and re-pairing support
 """
 
 import os
@@ -67,9 +68,15 @@ if not RUMPS_AVAILABLE:
 GUI_AVAILABLE = RUMPS_AVAILABLE or APPKIT_AVAILABLE
 
 # Config paths
+CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
 CLIENTS_FILE = os.path.expanduser("~/.timetracker/clients.json")
 GUI_STATE_FILE = os.path.expanduser("~/.timetracker/gui_state.json")
 CLIENT_USAGE_FILE = os.path.expanduser("~/.timetracker/client_usage.json")
+
+# ============================================================
+# VERSION - Keep in sync with TimeTracker.spec
+# ============================================================
+APP_VERSION = "1.2.0"
 
 # ============================================================
 # PROFESSIONAL COLOR SCHEME
@@ -232,14 +239,16 @@ class ClientManager:
 
 
 # ------------------------------------------------------------
-# GUI State
+# GUI State (with username support)
 # ------------------------------------------------------------
 class GUIState:
-    """Manages GUI state"""
+    """Manages GUI state including user info"""
     
     def __init__(self):
         self.current_client_id: Optional[int] = None
         self.current_client_name: str = "No Client"
+        self.username: Optional[str] = None
+        self.org_name: Optional[str] = None
         self.load()
     
     def load(self):
@@ -249,6 +258,18 @@ class GUIState:
                     data = json.load(f)
                     self.current_client_id = data.get("current_client_id")
                     self.current_client_name = data.get("current_client_name", "No Client")
+                    self.username = data.get("username")
+                    self.org_name = data.get("org_name")
+            except Exception:
+                pass
+        
+        # Also try to load username from config if not in state
+        if not self.username and os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    cfg = json.load(f)
+                    self.username = cfg.get("username")
+                    self.org_name = cfg.get("org_name")
             except Exception:
                 pass
     
@@ -259,6 +280,8 @@ class GUIState:
                 json.dump({
                     "current_client_id": self.current_client_id,
                     "current_client_name": self.current_client_name,
+                    "username": self.username,
+                    "org_name": self.org_name,
                 }, f, indent=2)
         except Exception as e:
             print(f"[GUI] Failed to save state: {e}")
@@ -267,6 +290,47 @@ class GUIState:
         self.current_client_id = client_id
         self.current_client_name = client_name
         self.save()
+    
+    def set_user(self, username: str, org_name: str = None):
+        """Store the paired user info"""
+        self.username = username
+        self.org_name = org_name
+        self.save()
+        
+        # Also save to config file for persistence
+        try:
+            cfg = {}
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    cfg = json.load(f)
+            cfg["username"] = username
+            if org_name:
+                cfg["org_name"] = org_name
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(cfg, f, indent=2)
+        except Exception as e:
+            print(f"[GUI] Failed to save username to config: {e}")
+    
+    def clear_pairing(self):
+        """Clear all pairing data for re-linking"""
+        self.username = None
+        self.org_name = None
+        self.current_client_id = None
+        self.current_client_name = "No Client"
+        self.save()
+        
+        # Clear config file API key
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    cfg = json.load(f)
+                cfg.pop("api_key", None)
+                cfg.pop("username", None)
+                cfg.pop("org_name", None)
+                with open(CONFIG_FILE, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -569,8 +633,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
 # ============================================================
 # MULTIPROCESSING HELPERS FOR DIALOG WINDOWS
 # ============================================================
-# macOS requires Tkinter to run on main thread, but rumps already
-# owns the main thread. Solution: spawn dialogs in separate processes.
 
 def _run_today_time_process(data_json: str):
     """Run Today's Time window in separate process"""
@@ -1034,14 +1096,8 @@ class ClientPickerWindow:
 
 
 # ============================================================
-# PAIRING WINDOW
+# PAIRING WINDOW - with username capture
 # ============================================================
-
-# ============================================================
-# PAIRING WINDOW - Complete replacement for timetracker_gui.py
-# ============================================================
-
-# In timetracker_gui.py - Replace the show_pairing_window function and add the subprocess runner
 
 def _run_pairing_process(result_queue):
     """Run Pairing window in separate process to avoid tkinter/rumps conflict"""
@@ -1070,7 +1126,7 @@ def _run_pairing_process(result_queue):
         "text_tertiary": "#6B6B6B",
     }
     
-    result = {"api_key": None, "success": False}
+    result = {"api_key": None, "username": None, "org_name": None, "success": False}
     
     ctk.set_appearance_mode("dark")
     root = ctk.CTk()
@@ -1232,6 +1288,8 @@ def _run_pairing_process(result_queue):
         def do_continue():
             result["success"] = True
             result["api_key"] = res.get("api_key")
+            result["username"] = res.get("username")
+            result["org_name"] = res.get("org_name")
             root.destroy()
         
         start_btn = ctk.CTkButton(success_container, text="Start TimeTracker",
@@ -1328,7 +1386,7 @@ def _run_pairing_process(result_queue):
                     res = json.loads(resp.read().decode('utf-8'))
                     
                     if res.get("api_key"):
-                        # Save config
+                        # Save config with username
                         cfg_dir = os.path.expanduser("~/.timetracker")
                         cfg_file = os.path.join(cfg_dir, "config.json")
                         os.makedirs(cfg_dir, exist_ok=True)
@@ -1342,8 +1400,11 @@ def _run_pairing_process(result_queue):
                                 pass
                         
                         cfg["api_key"] = res["api_key"]
-                        cfg["api_base"] = "https://timetracker-api-k375.onrender.com/api"  # ADD THIS
-                        cfg["verbose"] = cfg.get("verbose", True)  # ADD THIS - preserve or default True
+                        cfg["api_base"] = "https://timetracker-api-k375.onrender.com/api"
+                        cfg["verbose"] = cfg.get("verbose", True)
+                        cfg["username"] = res.get("username", "")
+                        cfg["org_name"] = res.get("org_name", "")
+                        
                         with open(cfg_file, 'w') as f:
                             json.dump(cfg, f, indent=2)
                     
@@ -1383,15 +1444,14 @@ def _run_pairing_process(result_queue):
     
     root.mainloop()
     
-    # Send result back to parent process
-    result_queue.put((result["success"], result["api_key"]))
+    # Send result back to parent process (including username!)
+    result_queue.put((result["success"], result["api_key"], result["username"], result["org_name"]))
 
 
 def show_pairing_window(pair_callback: Callable = None) -> Optional[str]:
     """
     Show pairing window in subprocess to avoid tkinter/rumps conflict.
-    
-    Note: pair_callback is ignored - the subprocess handles pairing directly.
+    Returns api_key on success, None otherwise.
     """
     import multiprocessing
     
@@ -1410,28 +1470,32 @@ def show_pairing_window(pair_callback: Callable = None) -> Optional[str]:
         return None
     
     try:
-        success, api_key = result_queue.get(timeout=2)
+        success, api_key, username, org_name = result_queue.get(timeout=2)
         if success and api_key:
-            print("✅ Device paired; key saved.")
+            print(f"✅ Device paired as {username}; key saved.")
+            # Store username in GUI state for menu display
+            state = GUIState()
+            state.set_user(username, org_name)
             return api_key
     except Exception as e:
         print(f"[GUI] Pairing result error: {e}")
     
     return None
+
+
 # ============================================================
-# MENU BAR APP (rumps)
+# MENU BAR APP (rumps) - WITH USERNAME AND RE-PAIR
 # ============================================================
 
 if RUMPS_AVAILABLE:
     class TimeTrackerMenuBarApp(rumps.App):
-        """Professional menu bar app"""
+        """Professional menu bar app with username display and re-pair option"""
         
         def __init__(self, controller):
             super().__init__("⏱", quit_button=None)
             self.controller = controller
             self._client_callbacks = {}
             self._start_keepalive()
-
             
             # Set initial title from state
             client_name = self.controller.state.current_client_name
@@ -1466,6 +1530,25 @@ if RUMPS_AVAILABLE:
         def _rebuild_menu(self):
             self.menu.clear()
             self._client_callbacks.clear()
+            
+            # ============================================================
+            # USER INFO SECTION (if paired)
+            # ============================================================
+            username = self.controller.state.username
+            org_name = self.controller.state.org_name
+            
+            if username:
+                user_display = f"👤 {username}"
+                if org_name:
+                    user_display = f"👤 {username} • {org_name}"
+                user_item = rumps.MenuItem(user_display)
+                user_item.set_callback(None)  # Non-clickable
+                self.menu.add(user_item)
+                self.menu.add(None)  # Separator
+            
+            # ============================================================
+            # CLIENT CONTROLS
+            # ============================================================
             
             # Search clients
             search_item = rumps.MenuItem("Search Clients...    ⌃⌥T")
@@ -1510,6 +1593,10 @@ if RUMPS_AVAILABLE:
             self.menu.add(switch_menu)
             self.menu.add(None)
             
+            # ============================================================
+            # TIME & INFO
+            # ============================================================
+            
             # Today's time
             today_item = rumps.MenuItem("Today's Time...")
             today_item.set_callback(self._on_today_time)
@@ -1517,8 +1604,26 @@ if RUMPS_AVAILABLE:
             
             self.menu.add(None)
             
-            # Quit
-            quit_item = rumps.MenuItem("Quit")
+            # ============================================================
+            # DEVICE MANAGEMENT
+            # ============================================================
+            
+            # Re-link device option
+            relink_item = rumps.MenuItem("Re-link Device...")
+            relink_item.set_callback(self._on_relink_device)
+            self.menu.add(relink_item)
+            
+            # Version info
+            version_item = rumps.MenuItem(f"Version {APP_VERSION}")
+            version_item.set_callback(None)
+            self.menu.add(version_item)
+            
+            self.menu.add(None)
+            
+            # ============================================================
+            # QUIT
+            # ============================================================
+            quit_item = rumps.MenuItem("Quit TimeTracker")
             quit_item.set_callback(rumps.quit_application)
             self.menu.add(quit_item)
         
@@ -1557,11 +1662,11 @@ if RUMPS_AVAILABLE:
             
             if client_id == 0:
                 self.controller.state.set_client(None, "No Client")
-                self.title = "⏱ None"  # ADD THIS
+                self.title = "⏱ None"
                 print(f"[GUI] Client cleared")
             else:
                 self.controller.state.set_client(client_id, client_name)
-                self.title = f"⏱ {client_name}"  # ADD THIS
+                self.title = f"⏱ {client_name}"
                 print(f"[GUI] Switched to: {client_name}")
             
             if self.controller.set_current_client_callback:
@@ -1580,6 +1685,34 @@ if RUMPS_AVAILABLE:
         def _show_today_time(self):
             window = TodayTimeWindowModern(self.controller.get_today_time_callback)
             window.show_and_refresh()
+        
+        def _on_relink_device(self, _):
+            """Show re-pairing dialog"""
+            def do_relink():
+                # Clear existing pairing
+                self.controller.state.clear_pairing()
+                
+                # Show pairing window
+                api_key = show_pairing_window()
+                
+                if api_key:
+                    # Reload state to get new username
+                    self.controller.state.load()
+                    
+                    # Refresh clients for new account
+                    if self.controller.fetch_clients_callback:
+                        try:
+                            self.controller.client_mgr.load(self.controller.fetch_clients_callback)
+                        except Exception as e:
+                            print(f"[GUI] Failed to refresh clients after re-pair: {e}")
+                    
+                    # Update menu
+                    self._rebuild_menu()
+                    print(f"[GUI] Re-paired as {self.controller.state.username}")
+                else:
+                    print("[GUI] Re-pairing cancelled")
+            
+            threading.Thread(target=do_relink, daemon=True).start()
 
 
 # ============================================================
@@ -1662,8 +1795,6 @@ class TimeTrackerSystemTray:
     def refresh_client_menu(self, clients):
         self.client_mgr.clients = clients
         self.client_mgr.save()
-        # DON'T call _rebuild_menu from background thread - it corrupts rumps menu state
-        # The menu will be built correctly when the app runs
         print(f"[GUI] Updated client cache ({len(clients)} clients)")
     
     def run(self):

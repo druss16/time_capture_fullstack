@@ -2537,11 +2537,26 @@ def run_agent():
             log(f"[CLIENT] Failed to restore client state: {e}")
 
     # === STARTUP: Prompt for client if none selected ===
+    # === STARTUP: Prompt for client if none selected ===
+    _startup_prompt_done = False  # Flag to run only once
+
     def prompt_client_on_startup():
         """Show client picker on startup if no client is selected"""
+        global _startup_prompt_done
+        if _startup_prompt_done:
+            return
+        _startup_prompt_done = True
+        
         import time
         time.sleep(2)  # Wait for GUI to fully initialize
         
+        # Check LOCAL state first (faster, already loaded)
+        if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+            if gui_menu_bar.state.current_client_id:
+                log(f"[STARTUP] Client already set locally: {gui_menu_bar.state.current_client_name}")
+                return
+        
+        # Fallback: check backend
         api_key = config.get("api_key") or API_KEY
         if not api_key or not API_BASE:
             return
@@ -2552,10 +2567,9 @@ def run_agent():
             if not current or not current.get("client_id"):
                 log("[STARTUP] No client selected - showing client picker")
                 
-                # Show the client picker
                 if gui_menu_bar and hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
                     def show_picker():
-                        time.sleep(0.5)  # Small delay for UI
+                        time.sleep(0.5)
                         try:
                             gui_menu_bar.app._on_search(None)
                         except Exception as e:

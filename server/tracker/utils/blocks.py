@@ -142,7 +142,7 @@ def get_current_client_for_user(user, device_id=None):
     from datetime import timedelta
     
     # Get the current client record
-    current = UserCurrentClient.objects.filter(user=user).first()
+    current = CurrentClient.objects.filter(user=user).first()
     
     if not current or not current.client:
         return None

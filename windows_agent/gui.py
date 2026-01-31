@@ -69,14 +69,21 @@ COLORS = {
     "text_muted": "#9CA3AF",   # Muted text
 }
 
-
 def get_agent_script_path():
-    """Get path to main.py agent script"""
+    """Get path to agent - either main.py (dev) or TimeTrackerAgent.exe (packaged)"""
     if getattr(sys, 'frozen', False):
+        # Running as packaged exe
         base_dir = os.path.dirname(sys.executable)
+        
+        # Look for TimeTrackerAgent.exe first (packaged)
+        agent_exe = os.path.join(base_dir, "TimeTrackerAgent.exe")
+        if os.path.exists(agent_exe):
+            return agent_exe
     else:
+        # Running as script
         base_dir = os.path.dirname(__file__)
     
+    # Look for main.py (development)
     agent_py = os.path.join(base_dir, "main.py")
     if os.path.exists(agent_py):
         return agent_py
@@ -532,27 +539,47 @@ class ModernConfigGUI:
             self.start_btn.configure(state="normal")
             self.stop_btn.configure(state="disabled")
     
-    def _start_agent(self):
-        """Start the agent - cross-platform"""
-        try:
-            if IS_WINDOWS:
-                agent_path = get_agent_script_path()
-                print(f"[GUI] Agent path: {agent_path}")
-                
-                if not agent_path:
-                    self._show_toast("Error", "Agent script (main.py) not found", "error")
-                    return
-                
-                if not os.path.exists(agent_path):
-                    self._show_toast("Error", f"Agent script not found at: {agent_path}", "error")
-                    return
-                
-                print(f"[GUI] Python executable: {sys.executable}")
-                print(f"[GUI] Starting agent...")
-                
-                # Method 1: Try using start command via shell
+def _start_agent(self):
+    """Start the agent - cross-platform"""
+    try:
+        if IS_WINDOWS:
+            agent_path = get_agent_script_path()
+            print(f"[GUI] Agent path: {agent_path}")
+            
+            if not agent_path:
+                self._show_toast("Error", "Agent not found", "error")
+                return
+            
+            if not os.path.exists(agent_path):
+                self._show_toast("Error", f"Agent not found at: {agent_path}", "error")
+                return
+            
+            print(f"[GUI] Starting agent: {agent_path}")
+            
+            # Check if it's an exe or py file
+            if agent_path.endswith('.exe'):
+                # Run exe directly
                 try:
-                    # This method is most reliable for detached processes on Windows
+                    CREATE_NEW_PROCESS_GROUP = 0x00000200
+                    DETACHED_PROCESS = 0x00000008
+                    
+                    proc = subprocess.Popen(
+                        [agent_path, "start"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+                    )
+                    print(f"[GUI] Agent started with PID: {proc.pid}")
+                    self.root.after(2500, self._update_status)
+                    self._show_toast("Success", "Agent started successfully!", "success")
+                    return
+                except Exception as e:
+                    print(f"[GUI] Failed to start exe: {e}")
+                    self._show_toast("Error", f"Failed to start agent: {e}", "error")
+            else:
+                # Run Python script
+                try:
                     cmd = f'start /b "" "{sys.executable}" "{agent_path}" start'
                     print(f"[GUI] Running: {cmd}")
                     subprocess.Popen(cmd, shell=True)
@@ -561,7 +588,8 @@ class ModernConfigGUI:
                     self._show_toast("Success", "Agent started successfully!", "success")
                     return
                 except Exception as e:
-                    print(f"[GUI] Method 1 failed: {e}")
+                    print(f"[GUI] Failed to start script: {e}")
+                    self._show_toast("Error", f"Failed to start agent: {e}", "error")
                 
                 # Method 2: Fallback - direct Popen
                 try:

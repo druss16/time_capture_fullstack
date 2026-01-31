@@ -2542,7 +2542,7 @@ def run_agent():
 
     def prompt_client_on_startup():
         """Show client picker on startup if no client is selected"""
-        global _startup_prompt_done
+        nonlocal _startup_prompt_done
         if _startup_prompt_done:
             return
         _startup_prompt_done = True

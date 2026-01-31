@@ -1671,13 +1671,34 @@ if RUMPS_AVAILABLE:
             def show_picker():
                 picker = ClientPickerWindow(self.controller.client_mgr, self._switch_client)
                 picker.show()
+                
                 # Force menu bar icon to stay visible after picker closes
                 try:
+                    import time
+                    time.sleep(0.2)
                     self._rebuild_menu()
-                except Exception:
-                    pass
+                    self._ensure_menubar_visible()
+                except Exception as e:
+                    print(f"[GUI] Error after picker close: {e}")
             
             threading.Thread(target=show_picker, daemon=True).start()
+        
+        def _ensure_menubar_visible(self):
+            """Ensure the menu bar app stays visible after subprocess windows close"""
+            try:
+                from AppKit import NSApp, NSApplication
+                import time
+                time.sleep(0.1)
+                
+                # Unhide the app if it got hidden
+                NSApp.unhide_(None)
+                
+                # Reset activation policy to accessory (menu bar only)
+                NSApp.setActivationPolicy_(1)  # NSApplicationActivationPolicyAccessory
+                
+                print("[GUI] Menu bar reactivated")
+            except Exception as e:
+                print(f"[GUI] Reactivate error: {e}")
         
         def _show_client_picker(self):
             if self.controller.fetch_clients_callback:
@@ -1688,6 +1709,11 @@ if RUMPS_AVAILABLE:
             
             picker = ClientPickerWindow(self.controller.client_mgr, self._switch_client)
             picker.show()
+            # Keep menu bar visible after window closes
+            try:
+                self._ensure_menubar_visible()
+            except Exception:
+                pass
         
         def _on_clear_client(self, _):
             self._switch_client(0, "No Client")
@@ -1721,6 +1747,11 @@ if RUMPS_AVAILABLE:
         def _show_today_time(self):
             window = TodayTimeWindowModern(self.controller.get_today_time_callback)
             window.show_and_refresh()
+            # Keep menu bar visible after window closes
+            try:
+                self._ensure_menubar_visible()
+            except Exception:
+                pass
         
         def _on_relink_device(self, _):
             """Show re-pairing dialog and restart app after success"""

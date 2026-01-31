@@ -6,8 +6,6 @@ Cleaned up version - removed references to non-existent modules.
 """
 
 from .monitoring import capture_exception        # noqa: F401
-from .agent import resolve_agent_user            # noqa: F401
-from .org import get_org_or_default              # noqa: F401
 from .blocks import (                            # noqa: F401
     resolve_client_from_known,
     infer_task_for_block,
@@ -34,8 +32,6 @@ except ImportError:
 
 __all__ = [
     "capture_exception",
-    "resolve_agent_user",
-    "get_org_or_default",
     "resolve_client_from_known",
     "infer_task_for_block",
     "compact_rawevents_into_blocks",

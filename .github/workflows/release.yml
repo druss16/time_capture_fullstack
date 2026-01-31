@@ -53,14 +53,11 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           INFO_PLIST="dist/TimeTracker.app/Contents/Info.plist"
           
-          # Add if missing, Set if exists (Add first, fallback to Set)
           /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$INFO_PLIST"
           
           /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$INFO_PLIST"
-          
-          /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string © 2024-2025 MavOps" "$INFO_PLIST" 2>/dev/null || true
           
           echo "Version set to: $VERSION"
       

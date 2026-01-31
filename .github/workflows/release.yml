@@ -37,12 +37,20 @@ jobs:
         working-directory: mac_agent
         run: |
           pip install pyinstaller rumps pyobjc-framework-Cocoa pyobjc-framework-Quartz pyobjc-framework-UserNotifications requests customtkinter certifi pynput
-      
+
       - name: Build Mac app
         working-directory: mac_agent
         run: |
           pyinstaller --onedir --windowed --name "TimeTracker" \
             --add-data "version.py:." \
+            --add-data "timetracker_gui.py:." \
+            --add-data "notifications.py:." \
+            --add-data "agent_sync_integration.py:." \
+            --add-data "quick_switcher.py:." \
+            --hidden-import=timetracker_gui \
+            --hidden-import=notifications \
+            --hidden-import=agent_sync_integration \
+            --hidden-import=quick_switcher \
             --hidden-import=customtkinter \
             --collect-all=customtkinter \
             --hidden-import=Quartz \

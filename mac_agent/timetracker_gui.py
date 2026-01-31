@@ -76,7 +76,11 @@ CLIENT_USAGE_FILE = os.path.expanduser("~/.timetracker/client_usage.json")
 # ============================================================
 # VERSION - Keep in sync with TimeTracker.spec
 # ============================================================
-APP_VERSION = "1.2.0"
+# Version is set by build process in version.py
+try:
+    from version import APP_VERSION
+except ImportError:
+    APP_VERSION = "dev"
 
 # ============================================================
 # PROFESSIONAL COLOR SCHEME

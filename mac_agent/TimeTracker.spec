@@ -1,12 +1,25 @@
-# -*- mode: python ; coding: utf-8 -*-
-
-
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=[
+        ('notifications.py', '.'),
+        ('timetracker_gui.py', '.'),
+        ('agent_sync_integration.py', '.'),
+        ('quick_switcher.py', '.'),
+    ],
+    hiddenimports=[
+        'UserNotifications',
+        'Foundation',
+        'objc',
+        'AppKit',
+        'Quartz',
+        'rumps',
+        'certifi',
+        'pynput',
+        'pynput.keyboard',
+        'pynput.keyboard._darwin',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -15,7 +28,6 @@ a = Analysis(
     optimize=0,
 )
 pyz = PYZ(a.pure)
-
 exe = EXE(
     pyz,
     a.scripts,
@@ -48,5 +60,5 @@ app = BUNDLE(
     coll,
     name='TimeTracker.app',
     icon=None,
-    bundle_identifier=None,
+    bundle_identifier='com.mavops.timetracker',
 )

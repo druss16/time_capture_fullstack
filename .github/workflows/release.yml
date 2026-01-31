@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         working-directory: mac_agent
         run: |
-          pip install pyinstaller rumps pyobjc-framework-Cocoa pyobjc-framework-Quartz requests customtkinter certifi pynput
+          pip install pyinstaller rumps pyobjc-framework-Cocoa pyobjc-framework-Quartz pyobjc-framework-UserNotifications requests customtkinter certifi pynput
       
       - name: Build Mac app
         working-directory: mac_agent
@@ -52,6 +52,11 @@ jobs:
             --hidden-import=pynput \
             --hidden-import=pynput.keyboard \
             --hidden-import=pynput.keyboard._darwin \
+            --hidden-import=UserNotifications \
+            --hidden-import=objc \
+            --hidden-import=Foundation \
+            --hidden-import=AppKit \
+            --hidden-import=rumps \
             main.py
 
       - name: Update Info.plist with version

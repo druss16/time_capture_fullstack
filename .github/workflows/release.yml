@@ -129,17 +129,16 @@ jobs:
           
           # Create postinstall script to launch app after install
           mkdir -p scripts
-          cat > scripts/postinstall << 'EOF'
-#!/bin/bash
-# Launch TimeTracker after install for the logged-in user
-LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
-if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ]; then
-    sleep 1
-    sudo -u "$LOGGED_IN_USER" open /Applications/TimeTracker.app &
-fi
-exit 0
-EOF
+          echo '#!/bin/bash' > scripts/postinstall
+          echo '# Launch TimeTracker after install for the logged-in user' >> scripts/postinstall
+          echo 'LOGGED_IN_USER=$(stat -f "%Su" /dev/console)' >> scripts/postinstall
+          echo 'if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ]; then' >> scripts/postinstall
+          echo '    sleep 1' >> scripts/postinstall
+          echo '    sudo -u "$LOGGED_IN_USER" open /Applications/TimeTracker.app &' >> scripts/postinstall
+          echo 'fi' >> scripts/postinstall
+          echo 'exit 0' >> scripts/postinstall
           chmod +x scripts/postinstall
+          cat scripts/postinstall
           
           echo "Packaging .app bundle..."
           pkgbuild --component dist/TimeTracker.app \

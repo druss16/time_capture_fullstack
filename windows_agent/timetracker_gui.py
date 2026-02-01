@@ -1042,13 +1042,19 @@ class TimeTrackerSystemTray:
     
     def _on_repair_device(self):
         """Handle repair device request"""
+        print("[GUI] Repair device menu clicked")
         if MODERN_UI:
             self._show_repair_dialog()
         elif self.repair_callback:
+            print("[GUI] Calling repair callback directly (no modern UI)")
             self.repair_callback()
+        else:
+            print("[GUI] No repair callback set!")
     
     def _show_repair_dialog(self):
         """Show confirmation dialog for device repair"""
+        print("[GUI] Showing repair dialog...")
+        
         ctk.set_appearance_mode("dark")
         root = ctk.CTk()
         root.title("Repair Device")
@@ -1097,13 +1103,29 @@ class TimeTrackerSystemTray:
         btn_frame = ctk.CTkFrame(content, fg_color="transparent")
         btn_frame.pack(fill="x")
         
+        # Store callback reference before dialog
+        repair_callback = self.repair_callback
+        
         def on_cancel():
+            print("[GUI] Repair cancelled by user")
             root.destroy()
         
         def on_repair():
+            print("[GUI] User confirmed repair")
             root.destroy()
-            if self.repair_callback:
-                self.repair_callback()
+            root.update()  # Ensure window is fully closed
+            
+            if repair_callback:
+                print("[GUI] Executing repair callback...")
+                try:
+                    repair_callback()
+                    print("[GUI] Repair callback completed")
+                except Exception as e:
+                    print(f"[GUI] Repair callback error: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print("[GUI] ERROR: No repair callback was set!")
         
         cancel_btn = ctk.CTkButton(
             btn_frame,
@@ -1127,7 +1149,9 @@ class TimeTrackerSystemTray:
         repair_btn.pack(side="right", expand=True, fill="x", padx=(5, 0))
         
         root.bind("<Escape>", lambda e: root.destroy())
+        print("[GUI] Repair dialog ready, starting mainloop")
         root.mainloop()
+        print("[GUI] Repair dialog closed")
 
     def _show_client_picker(self):
         """Show searchable client picker with ROBUST FOCUS"""
@@ -1225,30 +1249,54 @@ class TimeTrackerSystemTray:
             menu=pystray.Menu(self._build_menu_items)
         )
         
-        # Run pystray in a BACKGROUND thread
-        def run_tray():
-            print("[GUI] System tray started")
-            self.icon.run()
-        
-        tray_thread = threading.Thread(target=run_tray, daemon=True)
-        tray_thread.start()
-        
-        # Run floating widget in MAIN thread (Tkinter requirement)
+        # Try floating widget first (runs in its own mainloop)
+        widget_created = False
         if WIDGET_AVAILABLE:
             try:
                 self.floating_widget = create_floating_widget(self)
-                self.floating_widget.create()
-                print("[GUI] Floating widget started")
-                self.floating_widget.run()  # Blocks here - mainloop
+                if self.floating_widget:
+                    result = self.floating_widget.create()
+                    # Check if widget was actually created (has a root window)
+                    if result is not None and self.floating_widget.root is not None:
+                        print("[GUI] Floating widget created successfully")
+                        widget_created = True
+                    else:
+                        print("[GUI] Floating widget not visible (user closed it previously)")
+                        widget_created = False
+            except Exception as e:
+                print(f"[GUI] Floating widget creation error: {e}")
+                import traceback
+                traceback.print_exc()
+                widget_created = False
+        
+        if widget_created:
+            # Run tray in background, widget in foreground (has mainloop)
+            def run_tray():
+                print("[GUI] System tray started (background)")
+                self.icon.run()
+            
+            tray_thread = threading.Thread(target=run_tray, daemon=True)
+            tray_thread.start()
+            
+            try:
+                print("[GUI] Starting floating widget mainloop...")
+                self.floating_widget.run()  # Blocks here
+                print("[GUI] Floating widget mainloop ended")
             except Exception as e:
                 print(f"[GUI] Floating widget error: {e}")
                 import traceback
                 traceback.print_exc()
-                # Keep running without widget
-                tray_thread.join()
-        else:
-            # No widget, just wait for tray
+            
+            # If widget mainloop ended, keep tray running
+            print("[GUI] Widget closed, keeping tray running...")
             tray_thread.join()
+        
+        else:
+            # No widget - run tray in FOREGROUND (blocking)
+            print("[GUI] Running system tray in foreground (no widget)")
+            print("[GUI] System tray started - right-click tray icon for menu")
+            self.icon.run()  # This blocks!
+            print("[GUI] System tray stopped")
 
 
 # ============================================================

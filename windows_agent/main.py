@@ -905,35 +905,98 @@ def repair_device():
     """Reset device pairing - called from GUI"""
     global API_KEY, config
     
-    log("[REPAIR] Starting device repair...")
+    print("[REPAIR] Starting device repair...")  # Always print, not just when verbose
     
-    # Clear device ID file
-    device_id_file = os.path.join(os.path.expanduser("~/.timetracker"), '.device_id')
-    if os.path.exists(device_id_file):
-        try:
+    try:
+        # Clear device ID file
+        device_id_file = os.path.expanduser("~/.timetracker/.device_id")
+        if os.path.exists(device_id_file):
             os.remove(device_id_file)
-            log("[REPAIR] Removed device ID file")
-        except Exception as e:
-            log(f"[REPAIR] Failed to remove device ID: {e}")
-    
-    # Clear config
-    if "api_key" in config:
-        del config["api_key"]
-    if "server_device_id" in config:
-        del config["server_device_id"]
-    save_config(config)
-    API_KEY = None
-    
-    log("[REPAIR] Device reset complete - restart agent to re-pair")
-    
-    # Launch pairing GUI
-    gui_script = os.path.join(os.path.dirname(__file__), "gui.py")
-    if os.path.exists(gui_script):
+            print(f"[REPAIR] Removed device ID file: {device_id_file}")
+        else:
+            print(f"[REPAIR] No device ID file found at: {device_id_file}")
+        
+        # Also check Windows AppData location
+        appdata_device_id = os.path.join(APPDATA, "TimeTracker", ".device_id")
+        if os.path.exists(appdata_device_id):
+            os.remove(appdata_device_id)
+            print(f"[REPAIR] Removed AppData device ID: {appdata_device_id}")
+        
+        # Clear config
+        if "api_key" in config:
+            del config["api_key"]
+            print("[REPAIR] Cleared api_key from config")
+        if "server_device_id" in config:
+            del config["server_device_id"]
+            print("[REPAIR] Cleared server_device_id from config")
+        
+        save_config(config)
+        API_KEY = None
+        
+        print("[REPAIR] Device reset complete!")
+        
+        # Find and launch pairing GUI
+        # Try multiple locations
+        possible_paths = [
+            os.path.join(os.path.dirname(__file__), "gui.py"),
+            os.path.join(os.path.dirname(sys.executable), "gui.py"),
+            os.path.join(os.getcwd(), "gui.py"),
+        ]
+        
+        # If running as frozen exe, look for gui.exe too
+        if getattr(sys, 'frozen', False):
+            possible_paths.extend([
+                os.path.join(os.path.dirname(sys.executable), "TimeTrackerGUI.exe"),
+                os.path.join(os.path.dirname(sys.executable), "gui.exe"),
+            ])
+        
+        gui_launched = False
+        for gui_path in possible_paths:
+            print(f"[REPAIR] Checking for GUI at: {gui_path}")
+            if os.path.exists(gui_path):
+                print(f"[REPAIR] Found GUI, launching: {gui_path}")
+                if gui_path.endswith('.exe'):
+                    subprocess.Popen([gui_path])
+                else:
+                    subprocess.Popen([sys.executable, gui_path])
+                gui_launched = True
+                print("[REPAIR] ✅ Pairing GUI launched!")
+                break
+        
+        if not gui_launched:
+            print("[REPAIR] ⚠️ Could not find GUI to launch")
+            print("[REPAIR] Please restart the agent manually to re-pair")
+        
+        # Show success message using tkinter
         try:
-            subprocess.Popen([sys.executable, gui_script])
-            log("[REPAIR] Launched pairing GUI")
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()  # Hide main window
+            messagebox.showinfo(
+                "Device Reset", 
+                "Device has been reset successfully!\n\n"
+                "Please enter a new pairing code in the GUI window."
+            )
+            root.destroy()
         except Exception as e:
-            log(f"[REPAIR] Failed to launch GUI: {e}")
+            print(f"[REPAIR] Could not show dialog: {e}")
+            
+    except Exception as e:
+        print(f"[REPAIR] ❌ Error during repair: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Show error message
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Repair Failed", f"Error during device repair:\n\n{e}")
+            root.destroy()
+        except:
+            pass
 
 
 # ---------------- Main Agent ----------------

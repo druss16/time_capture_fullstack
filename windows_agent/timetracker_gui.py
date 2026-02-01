@@ -11,6 +11,8 @@ Features:
 - Today's time viewer
 - Clean menu without duplicates
 - Dark themed compact tray menu
+- User name display in menu
+- Repair device option
 """
 
 import os
@@ -933,9 +935,11 @@ class TimeTrackerSystemTray:
         self.fetch_clients_callback = None
         self.set_current_client_callback = None
         self.get_current_client_callback = None
+        self.repair_callback = None  # NEW: Repair device callback
         
         self.icon = None
         self.floating_widget = None
+        self.user_name = None  # NEW: Store user's display name
         
         self._last_picker_time = 0
         self._picker_lock = threading.Lock()
@@ -1003,17 +1007,127 @@ class TimeTrackerSystemTray:
             if self.floating_widget:
                 threading.Thread(target=self.floating_widget.show, daemon=True).start()
         
+        def on_repair(icon, item):
+            threading.Timer(0.05, self._on_repair_device).start()
+        
         def on_quit(icon, item):
             self._on_quit()
         
-        return (
+        # Build menu with user name header if available
+        menu_items = []
+        
+        # User name header (like Mac version)
+        if self.user_name:
+            menu_items.append(Item(f"👤 {self.user_name}", None, enabled=False))
+            menu_items.append(pystray.Menu.SEPARATOR)
+        
+        # Current client status
+        current_client = self.state.current_client_name or "No Client"
+        menu_items.append(Item(f"⏱ {current_client}", None, enabled=False))
+        menu_items.append(pystray.Menu.SEPARATOR)
+        
+        # Main actions
+        menu_items.extend([
             Item("Search Clients...    Alt+Ctrl+T", on_search),
             Item("Switch Client", pystray.Menu(*client_items)),
             Item("Today's Time...", on_today),
             pystray.Menu.SEPARATOR,
             Item("Show Client Widget", on_show_widget),
+            pystray.Menu.SEPARATOR,
+            Item("🔧 Repair Device...", on_repair),
             Item("Quit", on_quit),
+        ])
+        
+        return tuple(menu_items)
+    
+    def _on_repair_device(self):
+        """Handle repair device request"""
+        if MODERN_UI:
+            self._show_repair_dialog()
+        elif self.repair_callback:
+            self.repair_callback()
+    
+    def _show_repair_dialog(self):
+        """Show confirmation dialog for device repair"""
+        ctk.set_appearance_mode("dark")
+        root = ctk.CTk()
+        root.title("Repair Device")
+        root.geometry("400x220")
+        root.resizable(False, False)
+        root.attributes('-topmost', True)
+        
+        root.update_idletasks()
+        x = (root.winfo_screenwidth() // 2) - 200
+        y = (root.winfo_screenheight() // 2) - 110
+        root.geometry(f"+{x}+{y}")
+        
+        content = ctk.CTkFrame(root, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=25, pady=20)
+        
+        # Warning icon and title
+        header = ctk.CTkFrame(content, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 15))
+        
+        icon_label = ctk.CTkLabel(
+            header,
+            text="⚠️",
+            font=ctk.CTkFont(size=32)
         )
+        icon_label.pack(side="left")
+        
+        title = ctk.CTkLabel(
+            header,
+            text="Repair Device?",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w"
+        )
+        title.pack(side="left", padx=(15, 0))
+        
+        # Description
+        desc = ctk.CTkLabel(
+            content,
+            text="This will reset your device pairing.\nYou'll need to re-enter a pairing code from the web app.",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"],
+            justify="left"
+        )
+        desc.pack(fill="x", pady=(0, 20))
+        
+        # Buttons
+        btn_frame = ctk.CTkFrame(content, fg_color="transparent")
+        btn_frame.pack(fill="x")
+        
+        def on_cancel():
+            root.destroy()
+        
+        def on_repair():
+            root.destroy()
+            if self.repair_callback:
+                self.repair_callback()
+        
+        cancel_btn = ctk.CTkButton(
+            btn_frame,
+            text="Cancel",
+            command=on_cancel,
+            fg_color=COLORS["bg_card"],
+            hover_color=COLORS["bg_dark"],
+            height=40
+        )
+        cancel_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
+        
+        repair_btn = ctk.CTkButton(
+            btn_frame,
+            text="Repair Device",
+            command=on_repair,
+            fg_color=COLORS["danger"],
+            hover_color=COLORS["danger_hover"],
+            height=40,
+            font=ctk.CTkFont(weight="bold")
+        )
+        repair_btn.pack(side="right", expand=True, fill="x", padx=(5, 0))
+        
+        root.bind("<Escape>", lambda e: root.destroy())
+        root.mainloop()
 
     def _show_client_picker(self):
         """Show searchable client picker with ROBUST FOCUS"""
@@ -1059,7 +1173,10 @@ class TimeTrackerSystemTray:
         
         # Update tray icon tooltip to show current client
         if self.icon:
-            self.icon.title = f"TimeTracker - {client_name}"
+            tooltip = f"TimeTracker - {client_name}"
+            if self.user_name:
+                tooltip = f"TimeTracker ({self.user_name}) - {client_name}"
+            self.icon.title = tooltip
         
         if self.set_current_client_callback:
             try:
@@ -1094,8 +1211,11 @@ class TimeTrackerSystemTray:
             print("[GUI] System tray not available")
             return
         
-        # Set tooltip with current client
-        tooltip = f"TimeTracker - {self.state.current_client_name}"
+        # Set tooltip with current client and user name
+        if self.user_name:
+            tooltip = f"TimeTracker ({self.user_name}) - {self.state.current_client_name}"
+        else:
+            tooltip = f"TimeTracker - {self.state.current_client_name}"
         
         # Use native pystray menu (right-click to open)
         self.icon = pystray.Icon(
@@ -1185,6 +1305,7 @@ def run_gui_app(on_client_confirmed: Callable,
     tray.fetch_clients_callback = fetch_clients
     tray.set_current_client_callback = set_current_client
     tray.get_current_client_callback = get_current_client
+    tray.repair_callback = repair_callback  # NEW: Set repair callback
     
     if fetch_clients:
         try:
@@ -1224,6 +1345,10 @@ if __name__ == "__main__":
             {"client": "Beta Industries", "hours": 2.0},
         ]
     
-    tray = run_gui_app(test_confirmed, test_rejected, test_today)
+    def test_repair():
+        print("Repair device called!")
+    
+    tray = run_gui_app(test_confirmed, test_rejected, test_today, repair_callback=test_repair)
     if tray:
+        tray.user_name = "Test User"  # Set test user name
         tray.run()

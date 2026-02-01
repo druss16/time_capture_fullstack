@@ -13,11 +13,15 @@ requests>=2.31.0
 pystray>=0.19.4
 pillow>=10.0.0
 
-# Windows notifications
-win10toast>=0.9
+# Modern UI
+customtkinter>=5.2.0
+CTkMessagebox>=2.5
+
+# Windows notifications with ACTION BUTTONS (replaces win10toast)
+windows-toasts>=1.1.0
+
+# Global hotkeys (Alt+Ctrl+T)
+keyboard>=0.13.5
 
 # Optional: Build standalone executable
 # pyinstaller>=6.0.0
-
-customtkinter>=5.2.0
-CTkMessagebox>=2.5

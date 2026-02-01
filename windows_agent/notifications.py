@@ -42,9 +42,9 @@ try:
         ToastInputSelectionBox,
     )
     NOTIF_AVAILABLE = True
-    print("[NOTIF] windows-toasts available")
-except ImportError:
-    print("[NOTIF] Windows toast notifications not available")
+    print("[NOTIF] windows-toasts library loaded successfully")
+except ImportError as e:
+    print(f"[NOTIF] Windows toast notifications not available: {e}")
     print("[NOTIF] Install with: pip install windows-toasts")
 
 
@@ -192,17 +192,18 @@ class ClientNotificationManager:
     def setup(self) -> bool:
         """Initialize the Windows toast notifier"""
         if not NOTIF_AVAILABLE:
-            print("[NOTIF] Windows notifications not available")
+            print("[NOTIF] Windows notifications not available - windows-toasts not installed")
             return False
         
         try:
             # Use InteractableWindowsToaster for button support
+            # App name appears in Windows notification settings
             self.toaster = InteractableWindowsToaster("TimeTracker")
             self.ready = True
-            print("[NOTIF] Windows toast notifier ready")
+            print("[NOTIF] ✅ Windows toast notifier initialized successfully")
             return True
         except Exception as e:
-            print(f"[NOTIF] Setup error: {e}")
+            print(f"[NOTIF] ❌ Setup error: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -223,16 +224,23 @@ class ClientNotificationManager:
     
     def _can_send_notification(self, notif_type: NotificationType) -> bool:
         """Check if we can send a notification (throttling, quiet hours, etc.)"""
-        if not self.config.enabled or not self.ready:
+        if not self.config.enabled:
+            print(f"[NOTIF] Notifications disabled in config")
+            return False
+        
+        if not self.ready:
+            print(f"[NOTIF] Toaster not ready")
             return False
         
         if self._is_quiet_hours():
+            print(f"[NOTIF] In quiet hours, skipping notification")
             return False
         
         now = time.time()
         elapsed = now - self.state.last_notification_time
         
         if elapsed < self.config.min_seconds_between_notifications:
+            print(f"[NOTIF] Throttled - only {elapsed:.0f}s since last notification")
             return False
         
         return True
@@ -241,25 +249,34 @@ class ClientNotificationManager:
         """Create callback for when notification or button is clicked"""
         def on_activated(event_args: ToastActivatedEventArgs):
             data = _PENDING_NOTIFICATIONS.get(notif_id, {})
-            action = event_args.arguments or ACTION_CONFIRM
             
-            print(f"[NOTIF] Activated: action={action}, notif_id={notif_id}")
+            # Get the action from arguments (button click) or default to confirm
+            action = ACTION_CONFIRM
+            if hasattr(event_args, 'arguments') and event_args.arguments:
+                action = event_args.arguments
             
-            if action == ACTION_CONFIRM:
-                if self.on_confirm_client and data.get("client_id"):
-                    self.on_confirm_client(
-                        data.get("client_id"),
-                        data.get("client_name")
-                    )
-            elif action == ACTION_SWITCH:
-                if self.on_switch_requested:
-                    self.on_switch_requested()
-            elif action == ACTION_SNOOZE:
-                client_id = data.get("client_id")
-                if client_id:
-                    self.state.snooze_client(client_id, 30)
-                    if self.on_snooze:
-                        self.on_snooze(client_id, 30)
+            print(f"[NOTIF] Toast activated: action={action}, notif_id={notif_id}")
+            
+            try:
+                if action == ACTION_CONFIRM:
+                    if self.on_confirm_client and data.get("client_id"):
+                        self.on_confirm_client(
+                            data.get("client_id"),
+                            data.get("client_name")
+                        )
+                elif action == ACTION_SWITCH:
+                    if self.on_switch_requested:
+                        self.on_switch_requested()
+                elif action == ACTION_SNOOZE:
+                    client_id = data.get("client_id")
+                    if client_id:
+                        self.state.snooze_client(client_id, 30)
+                        if self.on_snooze:
+                            self.on_snooze(client_id, 30)
+            except Exception as e:
+                print(f"[NOTIF] Callback error: {e}")
+                import traceback
+                traceback.print_exc()
             
             # Clean up
             _PENDING_NOTIFICATIONS.pop(notif_id, None)
@@ -269,10 +286,18 @@ class ClientNotificationManager:
     def _create_dismissed_callback(self, notif_id: str):
         """Create callback for when notification is dismissed"""
         def on_dismissed(event_args):
-            print(f"[NOTIF] Dismissed: notif_id={notif_id}")
+            print(f"[NOTIF] Toast dismissed: notif_id={notif_id}")
             _PENDING_NOTIFICATIONS.pop(notif_id, None)
         
         return on_dismissed
+    
+    def _create_failed_callback(self, notif_id: str):
+        """Create callback for when notification fails"""
+        def on_failed(event_args):
+            print(f"[NOTIF] Toast failed: notif_id={notif_id}")
+            _PENDING_NOTIFICATIONS.pop(notif_id, None)
+        
+        return on_failed
     
     def _send_notification(
         self,
@@ -296,6 +321,7 @@ class ClientNotificationManager:
             return False
         
         if not self.toaster:
+            print("[NOTIF] No toaster available")
             return False
         
         try:
@@ -308,28 +334,33 @@ class ClientNotificationManager:
                 **(data or {})
             }
             
-            # Create toast
+            # Create toast with title and body
             toast = Toast([title, body])
+            
+            # Set callbacks
             toast.on_activated = self._create_activated_callback(notif_id)
             toast.on_dismissed = self._create_dismissed_callback(notif_id)
+            toast.on_failed = self._create_failed_callback(notif_id)
             
-            # Add action buttons
+            # Add action buttons if provided
             if buttons:
                 for label, action_id in buttons:
-                    toast.AddAction(ToastButton(label, action_id))
+                    btn = ToastButton(label, action_id)
+                    toast.AddAction(btn)
             
             # Show the toast
+            print(f"[NOTIF] Showing toast: {title}")
             self.toaster.show_toast(toast)
             
             with self._lock:
                 self.state.last_notification_time = time.time()
                 self.state.last_notification_type = notif_type
             
-            print(f"[NOTIF] Sent {notif_type.value}: {title}")
+            print(f"[NOTIF] ✅ Sent {notif_type.value}: {title}")
             return True
             
         except Exception as e:
-            print(f"[NOTIF] Send error: {e}")
+            print(f"[NOTIF] ❌ Send error: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -730,6 +761,8 @@ class NotificationWorker:
                 
             except Exception as e:
                 print(f"[NOTIF] Worker error: {e}")
+                import traceback
+                traceback.print_exc()
             
             self._stop.wait(timeout=self.poll_interval)
 
@@ -765,6 +798,7 @@ def create_notification_system(
         print("[NOTIF] ✅ Windows notification system ready")
     else:
         print("[NOTIF] ⚠️ Windows notification system setup failed")
+        print("[NOTIF] To enable notifications, run: pip install windows-toasts")
     
     return manager
 

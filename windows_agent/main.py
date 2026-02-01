@@ -35,8 +35,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Tuple, List
 from urllib.parse import urlparse
 
-from quick_switcher import QuickSwitcher, start_hotkey_listener, stop_hotkey_listener
-
 
 # Windows-specific imports
 try:
@@ -52,9 +50,10 @@ except ImportError:
 
 # GUI imports (optional)
 try:
-    from timetracker_gui import run_gui_app, GUI_AVAILABLE
+    from timetracker_gui import run_gui_app, GUI_AVAILABLE, show_client_picker
 except ImportError:
     GUI_AVAILABLE = False
+    show_client_picker = None
 
 # Push notifications for client reminders
 try:
@@ -63,8 +62,9 @@ try:
         NotificationConfig,
         NotificationWorker,
         create_notification_system,
+        NOTIF_AVAILABLE,
     )
-    PUSH_NOTIF_AVAILABLE = True
+    PUSH_NOTIF_AVAILABLE = NOTIF_AVAILABLE
 except ImportError:
     PUSH_NOTIF_AVAILABLE = False
     print("[WARN] notifications.py not found - push notifications disabled")
@@ -186,6 +186,7 @@ NOTIF_NO_CLIENT_MINUTES = int(_get("notif_no_client_minutes", os.getenv("AGENT_N
 sync = None
 notif_manager = None
 notif_worker = None
+gui_menu_bar = None  # Global reference
 
 # ---------------- Logging Setup ----------------
 LOG_DIR = os.path.join(APPDATA, "TimeTracker", "Logs")
@@ -197,7 +198,6 @@ def setup_logging():
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
         
-        # Main log - rotates at 5MB, keeps 3 backups
         # Main log - rotates at 5MB, keeps 3 backups
         main_handler = RotatingFileHandler(
             LOG_FILE, 
@@ -211,7 +211,6 @@ def setup_logging():
             datefmt='%Y-%m-%d %H:%M:%S'
         ))
         
-        # Error log - separate file for crashes only
         # Error log - separate file for crashes only
         error_handler = RotatingFileHandler(
             ERROR_LOG_FILE,
@@ -654,9 +653,10 @@ def http_get_json(url: str, headers: dict, timeout=6) -> dict:
 
 # ---------------- Handshake & Control ----------------
 SERVER_USER_ID = None
+SERVER_USER_NAME = None  # Store user's display name
 
 def hello(server_url: str, user: str, host: str, device_id: str):
-    global SERVER_USER_ID
+    global SERVER_USER_ID, SERVER_USER_NAME
     headers = api_headers(user, host)
     payload = {
         "hostname": host,
@@ -668,7 +668,8 @@ def hello(server_url: str, user: str, host: str, device_id: str):
         raw = http_post_json(server_url, payload, headers)
         data = json.loads(raw or b"{}")
         SERVER_USER_ID = data.get("user_id")
-        log(f"[HELLO] Registered with server: user_id={SERVER_USER_ID}")
+        SERVER_USER_NAME = data.get("user_name") or data.get("username") or data.get("display_name")
+        log(f"[HELLO] Registered with server: user_id={SERVER_USER_ID}, name={SERVER_USER_NAME}")
         return True
     except Exception as e:
         log(f"[HELLO] failed: {e}")
@@ -899,10 +900,46 @@ def read_pid():
     except Exception:
         return None
 
+# ---------------- Repair Device ----------------
+def repair_device():
+    """Reset device pairing - called from GUI"""
+    global API_KEY, config
+    
+    log("[REPAIR] Starting device repair...")
+    
+    # Clear device ID file
+    device_id_file = os.path.join(os.path.expanduser("~/.timetracker"), '.device_id')
+    if os.path.exists(device_id_file):
+        try:
+            os.remove(device_id_file)
+            log("[REPAIR] Removed device ID file")
+        except Exception as e:
+            log(f"[REPAIR] Failed to remove device ID: {e}")
+    
+    # Clear config
+    if "api_key" in config:
+        del config["api_key"]
+    if "server_device_id" in config:
+        del config["server_device_id"]
+    save_config(config)
+    API_KEY = None
+    
+    log("[REPAIR] Device reset complete - restart agent to re-pair")
+    
+    # Launch pairing GUI
+    gui_script = os.path.join(os.path.dirname(__file__), "gui.py")
+    if os.path.exists(gui_script):
+        try:
+            subprocess.Popen([sys.executable, gui_script])
+            log("[REPAIR] Launched pairing GUI")
+        except Exception as e:
+            log(f"[REPAIR] Failed to launch GUI: {e}")
+
+
 # ---------------- Main Agent ----------------
 def run_agent():
     """Main agent function with GUI integration"""
-    global API_KEY, notif_manager, notif_worker, sync
+    global API_KEY, notif_manager, notif_worker, sync, gui_menu_bar, SERVER_USER_NAME
     
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -939,7 +976,6 @@ def run_agent():
 
     # === PUSH NOTIFICATION SYSTEM ===
     notif_worker = None
-    gui_menu_bar = None
     
     if PUSH_NOTIF_AVAILABLE and NOTIF_ENABLED:
         log("[NOTIF] Initializing push notification system...")
@@ -1026,7 +1062,6 @@ def run_agent():
             log("[NOTIF] Push notifications disabled by config")
     
     # === GUI INITIALIZATION ===
-    quick_switcher = None
     if GUI_AVAILABLE:
         try:
             api_key = config.get("api_key") or API_KEY
@@ -1039,6 +1074,7 @@ def run_agent():
                 fetch_clients=lambda: fetch_clients_from_backend(api_base, api_key),
                 set_current_client=lambda cid: set_current_client_backend(api_base, api_key, cid),
                 get_current_client=lambda: get_current_client_from_backend(api_base, api_key),
+                repair_callback=repair_device,
                 sync=sync,
             )
             log("[GUI] System tray initialized")
@@ -1049,11 +1085,10 @@ def run_agent():
                     gui_menu_bar.refresh_client_menu(sync.clients)
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
             
-            # === QUICK SWITCHER (Alt+Shift+T) ===
-            if gui_menu_bar:
+            # === QUICK SWITCHER (Alt+Ctrl+T) - FIXED ===
+            if gui_menu_bar and show_client_picker:
                 try:
                     import keyboard
-                    from client_picker import show_client_picker
                     
                     _hotkey_last = [0]
                     
@@ -1062,13 +1097,18 @@ def run_agent():
                         if now - _hotkey_last[0] < 1000:
                             return
                         _hotkey_last[0] = now
-                        log("[HOTKEY] Alt+Shift+T pressed!")
+                        log("[HOTKEY] Alt+Ctrl+T pressed!")
                         
-                        keyboard.release('alt')
-                        keyboard.release('shift')
-                        keyboard.release('t')
+                        # Release hotkeys
+                        try:
+                            keyboard.release('alt')
+                            keyboard.release('ctrl')
+                            keyboard.release('t')
+                        except:
+                            pass
                         time.sleep(0.1)
                         
+                        # Get clients and current state
                         clients = gui_menu_bar.client_mgr.get_all()
                         current_id = gui_menu_bar.state.current_client_id
                         
@@ -1076,13 +1116,18 @@ def run_agent():
                             if cid is not None or cname == "No Client":
                                 gui_menu_bar._switch_client(cid or 0, cname)
                         
+                        # Show picker using the GUI module's function
                         show_client_picker(clients, current_id, on_select)
                     
                     keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed)
                     log("[QUICK] Ready - Alt+Ctrl+T")
                     
+                except ImportError:
+                    log("[QUICK] keyboard module not installed - pip install keyboard")
                 except Exception as e:
-                    log(f"[QUICK] Failed: {e}")
+                    log(f"[QUICK] Failed to setup hotkey: {e}")
+                    import traceback
+                    traceback.print_exc()
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
@@ -1131,6 +1176,11 @@ def run_agent():
             print("Exiting: hello failed.")
             remove_pid()
             return
+    
+    # Pass user name to GUI
+    if gui_menu_bar and SERVER_USER_NAME:
+        gui_menu_bar.user_name = SERVER_USER_NAME
+        log(f"[GUI] Set user name: {SERVER_USER_NAME}")
     
     if gui_menu_bar:
         api_key = config.get("api_key") or API_KEY
@@ -1293,7 +1343,6 @@ def run_agent():
     log("[WATCHDOG] Started watchdog thread")
     
     # Run GUI if available
-    # Run GUI if available
     if gui_menu_bar and GUI_AVAILABLE:
         log("[GUI] Starting GUI event loop...")
         try:
@@ -1328,7 +1377,8 @@ def run_agent():
     
     # Stop hotkey listener
     try:
-        stop_hotkey_listener()
+        import keyboard
+        keyboard.unhook_all()
     except Exception:
         pass
     

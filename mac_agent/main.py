@@ -2216,6 +2216,24 @@ def run_agent():
 
     start_context_bus(CONTEXT_PORT)
 
+    # Setup sleep/wake handler to prevent morning stalls
+    try:
+        from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification
+        
+        def on_wake(notification):
+            print("[WAKE] System woke from sleep - resetting connections")
+            
+        nc = NSWorkspace.sharedWorkspace().notificationCenter()
+        nc.addObserverForName_object_queue_usingBlock_(
+            NSWorkspaceDidWakeNotification,
+            None,
+            None,
+            on_wake
+        )
+        print("[SLEEP] Sleep/wake handler registered")
+    except Exception as e:
+        print(f"[SLEEP] Could not register wake handler: {e}")
+        
     # === CHECK FOR VERSION UPGRADE ===
     cached_version = config.get("last_app_version")
     if cached_version and cached_version != APP_VERSION:

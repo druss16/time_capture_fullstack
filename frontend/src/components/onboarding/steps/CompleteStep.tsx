@@ -82,8 +82,8 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       {/* Success Header */}
       <div className="text-center mb-8">
-        <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 relative">
-          <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+        <div className="w-20 h-20 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-4 relative">
+          <CheckCircle2 className="w-10 h-10 text-teal-600" />
           <Sparkles className="w-6 h-6 text-amber-500 absolute -top-1 -right-1" />
         </div>
         <h2 className="text-2xl font-bold text-slate-900">You're All Set! 🎉</h2>
@@ -103,7 +103,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
             className={`
               p-4 border-2 rounded-xl transition-all text-left group
               ${platform === 'macos' 
-                ? 'border-emerald-500 bg-emerald-50' 
+                ? 'border-teal-500 bg-teal-50' 
                 : 'border-slate-200 hover:border-slate-300'}
             `}
           >
@@ -116,7 +116,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
                 <p className="text-xs text-slate-500 font-medium">Intel & Apple Silicon</p>
               </div>
             </div>
-            <div className="flex items-center gap-1 text-emerald-600 font-semibold text-sm group-hover:underline">
+            <div className="flex items-center gap-1 text-teal-600 font-semibold text-sm group-hover:underline">
               <Download className="w-4 h-4" />
               Download .pkg
             </div>
@@ -129,7 +129,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
             className={`
               p-4 border-2 rounded-xl transition-all text-left group
               ${platform === 'windows' && windowsAvailable
-                ? 'border-emerald-500 bg-emerald-50' 
+                ? 'border-teal-500 bg-teal-50' 
                 : 'border-slate-200 hover:border-slate-300'}
               ${!windowsAvailable ? 'opacity-60 cursor-not-allowed' : ''}
             `}
@@ -143,7 +143,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
                 <p className="text-xs text-slate-500 font-medium">Windows 10+</p>
               </div>
             </div>
-            <div className="flex items-center gap-1 text-emerald-600 font-semibold text-sm group-hover:underline">
+            <div className="flex items-center gap-1 text-teal-600 font-semibold text-sm group-hover:underline">
               <Download className="w-4 h-4" />
               {windowsAvailable ? 'Download .exe' : 'Coming Soon'}
             </div>
@@ -167,7 +167,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
               className="p-2.5 border-2 border-slate-200 rounded-lg hover:bg-slate-100 transition-all"
             >
               {copied ? (
-                <Check className="w-5 h-5 text-emerald-600" />
+                <Check className="w-5 h-5 text-teal-600" />
               ) : (
                 <Copy className="w-5 h-5 text-slate-500" />
               )}
@@ -187,8 +187,8 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
             { num: 4, text: 'Review and categorize your time in the dashboard' },
           ].map((step) => (
             <div key={step.num} className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center flex-shrink-0">
-                <span className="text-sm font-bold text-emerald-700">{step.num}</span>
+              <div className="w-8 h-8 bg-teal-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <span className="text-sm font-bold text-teal-700">{step.num}</span>
               </div>
               <p className="text-slate-700 font-medium">{step.text}</p>
             </div>
@@ -199,7 +199,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
       {/* CTA */}
       <button
         onClick={onComplete}
-        className="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25"
+        className="w-full py-4 px-6 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/25"
       >
         Go to Dashboard
         <ArrowRight className="w-5 h-5" />
@@ -212,7 +212,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
           href="https://timetracker.mavops.ai/help" 
           target="_blank" 
           rel="noopener noreferrer"
-          className="text-emerald-600 hover:text-emerald-700 font-semibold hover:underline inline-flex items-center gap-1"
+          className="text-teal-600 hover:text-teal-700 font-semibold hover:underline inline-flex items-center gap-1"
         >
           View documentation
           <ExternalLink className="w-3 h-3" />

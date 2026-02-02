@@ -13,6 +13,7 @@ interface PricingTier {
   id: 'professional' | 'executive';
   name: string;
   price: number;
+  priceId: string;
   description: string;
   icon: React.ReactNode;
   emoji: string;
@@ -100,7 +101,7 @@ export default function PricingStep({
           plan: selectedTier,
           interval: 'monthly',
           quantity: seats,
-          success_url: `${window.location.origin}/onboarding?step=complete&session_id={CHECKOUT_SESSION_ID}`,
+          success_url: `${window.location.origin}/onboarding?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${window.location.origin}/onboarding?step=pricing`,
         }),
       });
@@ -122,8 +123,8 @@ export default function PricingStep({
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       {/* Header */}
       <div className="text-center mb-8">
-        <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <Crown className="w-8 h-8 text-primary" />
+        <div className="w-16 h-16 bg-teal-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <Crown className="w-8 h-8 text-teal-600" />
         </div>
         <h2 className="text-2xl font-bold text-slate-900">Choose Your Plan</h2>
         <p className="text-slate-600 mt-2 font-medium">
@@ -140,14 +141,14 @@ export default function PricingStep({
             className={`
               relative cursor-pointer rounded-2xl border-2 p-6 transition-all
               ${selectedTier === tier.id 
-                ? 'border-primary bg-primary/5 shadow-lg shadow-primary/10' 
+                ? 'border-teal-500 bg-teal-50 shadow-lg shadow-teal-500/10' 
                 : 'border-slate-200 hover:border-slate-300 hover:shadow-md'}
             `}
           >
             {/* Popular Badge */}
             {tier.popular && (
               <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                <span className="bg-primary text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">
+                <span className="bg-teal-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">
                   MOST POPULAR
                 </span>
               </div>
@@ -156,7 +157,7 @@ export default function PricingStep({
             {/* Selection Indicator */}
             <div className={`
               absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all
-              ${selectedTier === tier.id ? 'border-primary bg-primary' : 'border-slate-300'}
+              ${selectedTier === tier.id ? 'border-teal-500 bg-teal-500' : 'border-slate-300'}
             `}>
               {selectedTier === tier.id && <Check className="w-4 h-4 text-white" />}
             </div>
@@ -166,7 +167,7 @@ export default function PricingStep({
               <div className={`
                 w-12 h-12 rounded-xl flex items-center justify-center
                 ${tier.id === 'executive' 
-                  ? 'bg-primary text-white' 
+                  ? 'bg-teal-500 text-white' 
                   : 'bg-amber-100 text-amber-600'}
               `}>
                 {tier.icon}
@@ -192,9 +193,7 @@ export default function PricingStep({
             <ul className="space-y-3">
               {tier.features.map((feature, idx) => (
                 <li key={idx} className="flex items-start gap-2">
-                  <Check className={`w-5 h-5 mt-0.5 flex-shrink-0 ${
-                    tier.id === 'executive' ? 'text-primary' : 'text-emerald-500'
-                  }`} />
+                  <Check className="w-5 h-5 mt-0.5 flex-shrink-0 text-teal-500" />
                   <span className="text-sm text-slate-700 font-medium">{feature}</span>
                 </li>
               ))}
@@ -243,7 +242,7 @@ export default function PricingStep({
           </div>
           <div className="text-right">
             <p className="text-xs text-slate-500 font-medium">Annual pricing available</p>
-            <p className="text-sm text-primary font-bold">Save 20% with yearly billing</p>
+            <p className="text-sm text-teal-600 font-bold">Save 20% with yearly billing</p>
           </div>
         </div>
       </div>
@@ -252,7 +251,7 @@ export default function PricingStep({
       <button
         onClick={handleSubscribe}
         disabled={loading}
-        className="w-full py-4 px-6 bg-primary hover:opacity-90 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/25 disabled:opacity-50"
+        className="w-full py-4 px-6 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/25 disabled:opacity-50"
       >
         {loading ? (
           <Loader2 className="w-5 h-5 animate-spin" />

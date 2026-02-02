@@ -9,7 +9,7 @@ import {
   Organization 
 } from '../../../services/onboardingApi';
 import { 
-  Link2, 
+  Users, 
   CheckCircle, 
   Check,
   Loader2, 
@@ -18,11 +18,9 @@ import {
   FileSpreadsheet,
   AlertCircle,
   X,
-  Calendar,
-  FileText,
-  Mail,
   Clock,
-  Users
+  Download,
+  Table
 } from 'lucide-react';
 
 interface IntegrationStepProps {
@@ -34,43 +32,32 @@ interface IntegrationStepProps {
 interface CSVClient {
   client: string;
   code?: string;
-  project?: string;
 }
 
-const AVAILABLE_INTEGRATIONS = [
+// Coming soon integrations
+const COMING_SOON_INTEGRATIONS = [
   {
-    id: 'karbon',
-    name: 'Karbon',
-    description: 'Sync clients and projects from Karbon',
-    icon: <FileText className="w-6 h-6" />,
-    color: 'bg-purple-100 text-purple-600',
-    available: true,
+    id: 'quickbooks',
+    name: 'QuickBooks',
+    description: 'Import clients from QuickBooks Online',
+    logo: '📗',
+    color: 'bg-green-100',
   },
   {
-    id: 'outlook',
-    name: 'Outlook Calendar',
-    description: 'Import calendar events for time tracking',
-    icon: <Calendar className="w-6 h-6" />,
-    color: 'bg-blue-100 text-blue-600',
-    available: true,
+    id: 'xero',
+    name: 'Xero',
+    description: 'Import clients from Xero',
+    logo: '📘',
+    color: 'bg-blue-100',
   },
-  {
-    id: 'google',
-    name: 'Google Calendar',
-    description: 'Import calendar events for time tracking',
-    icon: <Calendar className="w-6 h-6" />,
-    color: 'bg-red-100 text-red-600',
-    available: true,
-  },
-  {
-    id: 'gmail',
-    name: 'Gmail',
-    description: 'Track time spent on email',
-    icon: <Mail className="w-6 h-6" />,
-    color: 'bg-red-100 text-red-600',
-    available: false,
-    comingSoon: true,
-  },
+];
+
+// Example CSV data for preview
+const EXAMPLE_CSV_DATA = [
+  { client: 'Acme Corporation', code: 'ACME' },
+  { client: 'Smith Family Trust', code: 'SMITH-T' },
+  { client: 'Johnson & Partners', code: 'JOHN-P' },
+  { client: 'Green Energy LLC', code: 'GREEN' },
 ];
 
 export default function IntegrationStep({ organization, onComplete, onSkip }: IntegrationStepProps) {
@@ -78,12 +65,11 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
   
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
-  const [connecting, setConnecting] = useState<string | null>(null);
   const [hasClients, setHasClients] = useState(false);
   const [clientCount, setClientCount] = useState(0);
   
   // CSV Import state
-  const [showCSVImport, setShowCSVImport] = useState(false);
+  const [showExample, setShowExample] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvPreview, setCsvPreview] = useState<CSVClient[]>([]);
   const [importing, setImporting] = useState(false);
@@ -108,19 +94,10 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
       }
     } catch (err) {
       console.error('Failed to load integrations:', err);
-      // Use static integrations list as fallback
       setIntegrations([]);
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleConnect = async (integrationId: string) => {
-    setConnecting(integrationId);
-    
-    // Redirect to OAuth flow
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
-    window.location.href = `${baseUrl}/integrations/${integrationId}/connect/?next=/onboarding`;
   };
 
   const handleSkip = async () => {
@@ -158,7 +135,6 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
         h === 'client' || h === 'name' || h === 'client name' || h === 'client_name' || h === 'company'
       );
       const codeIdx = headers.findIndex(h => h === 'code' || h === 'client code' || h === 'client_code');
-      const projectIdx = headers.findIndex(h => h === 'project' || h === 'default project' || h === 'default_project');
       
       if (clientIdx === -1) {
         setImportError('CSV must have a "client" or "name" column');
@@ -173,7 +149,6 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
           clients.push({
             client: values[clientIdx],
             code: codeIdx !== -1 ? values[codeIdx] : undefined,
-            project: projectIdx !== -1 ? values[projectIdx] : undefined,
           });
         }
       }
@@ -223,14 +198,31 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
     }
   };
 
-  const connectedIntegrations = integrations.filter(i => i.connected);
-  const canContinue = hasClients || connectedIntegrations.length > 0 || importSuccess;
+  const handleDownloadTemplate = () => {
+    const csvContent = `client,code
+Acme Corporation,ACME
+Smith Family Trust,SMITH-T
+Johnson & Partners,JOHN-P
+Green Energy LLC,GREEN`;
+    
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'client-import-template.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  };
+
+  const canContinue = hasClients || importSuccess;
 
   if (loading) {
     return (
       <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
         <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+          <Loader2 className="w-8 h-8 animate-spin text-teal-500" />
         </div>
       </div>
     );
@@ -239,124 +231,104 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
   return (
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       <div className="text-center mb-8">
-        <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <Link2 className="w-8 h-8 text-emerald-600" />
+        <div className="w-16 h-16 bg-teal-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <Users className="w-8 h-8 text-teal-600" />
         </div>
         <h2 className="text-2xl font-bold text-slate-900">Import Your Clients</h2>
         <p className="text-slate-600 mt-2 font-medium">
-          Connect your practice management or import from a spreadsheet
+          Upload a CSV file with your client list to get started
         </p>
       </div>
 
-      {/* Integration Options */}
-      <div className="space-y-3 mb-6">
-        {AVAILABLE_INTEGRATIONS.map((integration) => {
-          const isConnected = connectedIntegrations.some(i => i.id === integration.id || i.provider === integration.id);
-          const isConnecting = connecting === integration.id;
-          
-          return (
-            <div
-              key={integration.id}
-              className={`
-                p-4 border-2 rounded-xl transition-all
-                ${isConnected ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'}
-                ${integration.comingSoon ? 'opacity-60' : ''}
-              `}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${integration.color}`}>
-                    {integration.icon}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-slate-900">{integration.name}</h3>
-                      {integration.comingSoon && (
-                        <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-semibold">
-                          Coming Soon
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm text-slate-500 font-medium">{integration.description}</p>
+      {/* CSV Import Section - Primary */}
+      <div className="mb-6">
+        {!csvFile && !importSuccess && (
+          <>
+            {/* Upload Area */}
+            <div className="border-2 border-dashed border-teal-300 bg-teal-50 rounded-xl p-6 mb-4">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                onChange={handleFileSelect}
+                className="hidden"
+                id="csv-upload"
+              />
+              <label
+                htmlFor="csv-upload"
+                className="cursor-pointer flex flex-col items-center gap-3"
+              >
+                <div className="w-14 h-14 bg-teal-100 rounded-xl flex items-center justify-center">
+                  <Upload className="w-7 h-7 text-teal-600" />
+                </div>
+                <div className="text-center">
+                  <p className="font-bold text-slate-900">Click to upload CSV</p>
+                  <p className="text-sm text-slate-600 mt-1 font-medium">
+                    or drag and drop your file here
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            {/* Template Download & Example Toggle */}
+            <div className="flex items-center justify-center gap-4 mb-4">
+              <button
+                onClick={handleDownloadTemplate}
+                className="flex items-center gap-2 text-teal-600 hover:text-teal-700 font-semibold text-sm transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                Download Template
+              </button>
+              <span className="text-slate-300">|</span>
+              <button
+                onClick={() => setShowExample(!showExample)}
+                className="flex items-center gap-2 text-teal-600 hover:text-teal-700 font-semibold text-sm transition-colors"
+              >
+                <Table className="w-4 h-4" />
+                {showExample ? 'Hide Example' : 'View Example Format'}
+              </button>
+            </div>
+
+            {/* Example Format */}
+            {showExample && (
+              <div className="border-2 border-slate-200 rounded-xl overflow-hidden mb-4">
+                <div className="bg-slate-50 px-4 py-3 border-b-2 border-slate-200">
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet className="w-5 h-5 text-slate-500" />
+                    <span className="font-bold text-slate-700">Example CSV Format</span>
                   </div>
                 </div>
-
-                {isConnected ? (
-                  <div className="flex items-center gap-2 text-emerald-600">
-                    <Check className="w-5 h-5" />
-                    <span className="font-bold">Connected</span>
-                  </div>
-                ) : integration.available && !integration.comingSoon ? (
-                  <button
-                    onClick={() => handleConnect(integration.id)}
-                    disabled={isConnecting}
-                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-emerald-600/25"
-                  >
-                    {isConnecting ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      'Connect'
-                    )}
-                  </button>
-                ) : null}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-100">
+                      <tr>
+                        <th className="text-left px-4 py-2.5 font-bold text-slate-700 border-b-2 border-slate-200">
+                          client <span className="text-red-500">*</span>
+                        </th>
+                        <th className="text-left px-4 py-2.5 font-bold text-slate-700 border-b-2 border-slate-200">
+                          code <span className="text-slate-400 font-normal">(optional)</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {EXAMPLE_CSV_DATA.map((row, idx) => (
+                        <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                          <td className="px-4 py-2.5 text-slate-900 font-medium">{row.client}</td>
+                          <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{row.code}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="px-4 py-3 bg-amber-50 border-t-2 border-amber-200">
+                  <p className="text-sm text-amber-800 font-medium">
+                    <strong>Note:</strong> The "client" column is required. Column headers are flexible — 
+                    we also accept "name", "company", "client_name", etc.
+                  </p>
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* CSV Import Section */}
-      <div className="mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <div className="flex-1 h-px bg-slate-200"></div>
-          <span className="text-sm text-slate-500 font-semibold px-3">OR IMPORT FROM SPREADSHEET</span>
-          <div className="flex-1 h-px bg-slate-200"></div>
-        </div>
-
-        {!showCSVImport && !csvFile && !importSuccess && (
-          <button
-            onClick={() => setShowCSVImport(true)}
-            className="w-full p-5 border-2 border-dashed border-slate-300 hover:border-emerald-400 text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-all flex items-center justify-center gap-3"
-          >
-            <FileSpreadsheet className="w-6 h-6" />
-            <span className="font-bold">Import Clients from CSV</span>
-          </button>
-        )}
-
-        {showCSVImport && !csvFile && (
-          <div className="border-2 border-dashed border-emerald-300 bg-emerald-50 rounded-xl p-6">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv"
-              onChange={handleFileSelect}
-              className="hidden"
-              id="csv-upload"
-            />
-            <label
-              htmlFor="csv-upload"
-              className="cursor-pointer flex flex-col items-center gap-3"
-            >
-              <div className="w-14 h-14 bg-emerald-100 rounded-xl flex items-center justify-center">
-                <Upload className="w-7 h-7 text-emerald-600" />
-              </div>
-              <div className="text-center">
-                <p className="font-bold text-slate-900">Click to upload CSV</p>
-                <p className="text-sm text-slate-600 mt-1 font-medium">
-                  Required column: <code className="bg-emerald-100 px-1.5 py-0.5 rounded text-xs">client</code> or <code className="bg-emerald-100 px-1.5 py-0.5 rounded text-xs">name</code>
-                </p>
-                <p className="text-xs text-slate-500 mt-1">
-                  Optional: code, project
-                </p>
-              </div>
-            </label>
-            <button
-              onClick={() => setShowCSVImport(false)}
-              className="mt-4 text-sm text-slate-500 hover:text-slate-700 w-full text-center font-medium"
-            >
-              Cancel
-            </button>
-          </div>
+            )}
+          </>
         )}
 
         {/* CSV Preview */}
@@ -364,7 +336,7 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
           <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
             <div className="bg-slate-50 px-4 py-3 flex items-center justify-between border-b-2 border-slate-200">
               <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
+                <FileSpreadsheet className="w-5 h-5 text-teal-600" />
                 <span className="font-bold text-slate-900">{csvFile.name}</span>
                 <span className="text-sm text-slate-500 font-medium">
                   ({csvPreview.length}+ clients)
@@ -385,15 +357,13 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
                   <tr>
                     <th className="text-left px-4 py-2 font-bold text-slate-700">Client Name</th>
                     <th className="text-left px-4 py-2 font-bold text-slate-700">Code</th>
-                    <th className="text-left px-4 py-2 font-bold text-slate-700">Project</th>
                   </tr>
                 </thead>
                 <tbody>
                   {csvPreview.map((client, idx) => (
                     <tr key={idx} className="border-t border-slate-100">
                       <td className="px-4 py-2 text-slate-900 font-medium">{client.client}</td>
-                      <td className="px-4 py-2 text-slate-500">{client.code || '-'}</td>
-                      <td className="px-4 py-2 text-slate-500">{client.project || '-'}</td>
+                      <td className="px-4 py-2 text-slate-500 font-mono text-xs">{client.code || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -418,7 +388,7 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
               <button
                 onClick={handleImportCSV}
                 disabled={importing}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-emerald-600/25"
+                className="px-4 py-2 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-teal-500/25"
               >
                 {importing ? (
                   <>
@@ -428,7 +398,7 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
                 ) : (
                   <>
                     <Upload className="w-4 h-4" />
-                    Import Clients
+                    Import {csvPreview.length}+ Clients
                   </>
                 )}
               </button>
@@ -438,74 +408,111 @@ export default function IntegrationStep({ organization, onComplete, onSkip }: In
 
         {/* Import Success */}
         {importSuccess && (
-          <div className="border-2 border-emerald-200 bg-emerald-50 rounded-xl p-4 flex items-center gap-3">
-            <CheckCircle className="w-6 h-6 text-emerald-600" />
+          <div className="border-2 border-teal-200 bg-teal-50 rounded-xl p-4 flex items-center gap-3">
+            <CheckCircle className="w-6 h-6 text-teal-600" />
             <div>
-              <p className="font-bold text-emerald-800">
+              <p className="font-bold text-teal-800">
                 Successfully imported {importedCount} client{importedCount !== 1 ? 's' : ''}!
               </p>
-              <p className="text-sm text-emerald-600 font-medium">Continuing to next step...</p>
+              <p className="text-sm text-teal-600 font-medium">Continuing to next step...</p>
             </div>
           </div>
         )}
       </div>
 
+      {/* Coming Soon Integrations */}
+      {!csvFile && !importSuccess && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="flex-1 h-px bg-slate-200"></div>
+            <span className="text-sm text-slate-400 font-semibold px-3">COMING SOON</span>
+            <div className="flex-1 h-px bg-slate-200"></div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {COMING_SOON_INTEGRATIONS.map((integration) => (
+              <div
+                key={integration.id}
+                className="p-4 border-2 border-slate-200 rounded-xl opacity-50 cursor-not-allowed"
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 ${integration.color} rounded-xl flex items-center justify-center text-xl`}>
+                    {integration.logo}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-slate-700">{integration.name}</h3>
+                    </div>
+                    <p className="text-xs text-slate-400 font-medium">{integration.description}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Already Has Clients Notice */}
-      {hasClients && !importSuccess && (
-        <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
-          <div className="flex items-center gap-2 text-emerald-700">
+      {hasClients && !importSuccess && !csvFile && (
+        <div className="mb-6 p-4 bg-teal-50 border-2 border-teal-200 rounded-xl">
+          <div className="flex items-center gap-2 text-teal-700">
             <CheckCircle className="w-5 h-5" />
             <span className="font-bold">
               {clientCount} client{clientCount !== 1 ? 's' : ''} already in system
             </span>
           </div>
-          <p className="text-sm text-emerald-600 mt-1 font-medium">
+          <p className="text-sm text-teal-600 mt-1 font-medium">
             You can continue or add more clients.
           </p>
         </div>
       )}
 
       {/* Info Box */}
-      <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
-        <div className="flex items-start gap-3">
-          <Clock className="w-5 h-5 text-slate-400 mt-0.5" />
-          <div>
-            <p className="text-sm text-slate-600 font-medium">
-              <strong className="text-slate-800">Don't have a client list?</strong> No problem! You can add clients manually later from Settings, or skip this step entirely.
-            </p>
+      {!csvFile && !importSuccess && (
+        <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
+          <div className="flex items-start gap-3">
+            <Clock className="w-5 h-5 text-slate-400 mt-0.5" />
+            <div>
+              <p className="text-sm text-slate-600 font-medium">
+                <strong className="text-slate-800">Don't have a client list ready?</strong> No problem! 
+                You can add clients manually later from Settings, or skip this step entirely.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Action Buttons */}
-      <div className="flex gap-3">
-        {canContinue && !csvFile ? (
-          <button
-            onClick={onComplete}
-            className="flex-1 py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25"
-          >
-            Continue
-            <ArrowRight className="w-5 h-5" />
-          </button>
-        ) : !csvFile && !importSuccess ? (
-          <button
-            onClick={handleSkip}
-            className="flex-1 py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25"
-          >
-            Continue Without Clients
-            <ArrowRight className="w-5 h-5" />
-          </button>
-        ) : null}
-        
-        {canContinue && !csvFile && (
-          <button
-            onClick={handleSkip}
-            className="px-6 py-3.5 border-2 border-slate-200 hover:border-slate-300 text-slate-700 font-bold rounded-xl transition-all hover:bg-slate-50"
-          >
-            Skip
-          </button>
-        )}
-      </div>
+      {!csvFile && !importSuccess && (
+        <div className="flex gap-3">
+          {canContinue ? (
+            <button
+              onClick={onComplete}
+              className="flex-1 py-3.5 px-4 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/25"
+            >
+              Continue
+              <ArrowRight className="w-5 h-5" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSkip}
+              className="flex-1 py-3.5 px-4 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/25"
+            >
+              Continue Without Clients
+              <ArrowRight className="w-5 h-5" />
+            </button>
+          )}
+          
+          {canContinue && (
+            <button
+              onClick={handleSkip}
+              className="px-6 py-3.5 border-2 border-slate-200 hover:border-slate-300 text-slate-700 font-bold rounded-xl transition-all hover:bg-slate-50"
+            >
+              Skip
+            </button>
+          )}
+        </div>
+      )}
 
       <p className="text-center text-sm text-slate-500 mt-4 font-medium">
         You can always add more clients later from Settings

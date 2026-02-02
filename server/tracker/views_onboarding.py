@@ -418,44 +418,228 @@ def _create_and_invite_user(org, email, role, name, invited_by):
         invited_by=invited_by,
     )
     
-    install_token = OrgInstallToken.objects.filter(org=org, is_active=True).first()
-    
     app_url = getattr(settings, 'APP_URL', 'https://timetracker.mavops.ai')
-    agent_download_url = f"{app_url}/download?token={install_token.token}" if install_token else f"{app_url}/download"
+    help_url = f"{app_url}/help"
     
-    email_body = f"""
-Hi {first_name or 'there'}!
+    # Direct download URLs
+    mac_download_url = 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker.pkg'
+    windows_download_url = 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker-Windows-Setup.exe'
+    
+    # Get inviter name for personalization
+    inviter_name = invited_by.get_full_name() or invited_by.email if invited_by else None
+    
+    # Plain text version (fallback)
+    plain_text_body = f"""
+Welcome to TimeTracker!
 
-You've been invited to join {org.name} on TimeTracker.
+{f"{inviter_name} has invited" if inviter_name else "You've been invited"} you to join {org.name} on TimeTracker — automatic time tracking for professional services.
 
-GET STARTED:
+GET STARTED IN 2 MINUTES
+━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. Download the Desktop App:
-   {agent_download_url}
-   
-2. Sign in with these credentials:
+1. DOWNLOAD THE APP
+
+   Mac (Intel & Apple Silicon):
+   {mac_download_url}
+
+   Windows 10+:
+   {windows_download_url}
+
+2. SIGN IN WITH THESE CREDENTIALS
+
    Email: {email}
    Password: {temp_password}
-   
-3. That's it! The app runs in the background and tracks your time automatically.
 
-Need help? Visit {app_url}/help
+3. YOU'RE DONE!
 
-- The TimeTracker Team
+   The app runs quietly in the background and captures your billable time automatically.
+
+WHAT HAPPENS NEXT?
+━━━━━━━━━━━━━━━━━━
+• Your time is automatically categorized by client and task
+• Review and submit your timesheet each week  
+• No more forgetting to log hours!
+
+Questions? Visit {help_url} or reply to this email.
+
+— The TimeTracker Team
 """
 
+    # HTML version
+    html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to TimeTracker</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+                    
+                    <!-- Header -->
+                    <tr>
+                        <td style="background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); padding: 40px 40px 30px 40px; text-align: center;">
+                            <div style="width: 60px; height: 60px; background-color: rgba(255,255,255,0.2); border-radius: 16px; margin: 0 auto 20px auto; line-height: 60px;">
+                                <span style="font-size: 28px;">⏱️</span>
+                            </div>
+                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Welcome to TimeTracker!</h1>
+                            <p style="margin: 12px 0 0 0; color: rgba(255,255,255,0.9); font-size: 16px;">
+                                {f"{inviter_name} has invited you to join" if inviter_name else "You've been invited to join"}
+                            </p>
+                            <p style="margin: 4px 0 0 0; color: #ffffff; font-size: 20px; font-weight: 600;">{org.name}</p>
+                        </td>
+                    </tr>
+                    
+                    <!-- Body -->
+                    <tr>
+                        <td style="padding: 40px;">
+                            
+                            <!-- Intro -->
+                            <p style="margin: 0 0 30px 0; color: #475569; font-size: 16px; line-height: 1.6;">
+                                TimeTracker automatically captures your billable time so you never forget to log hours again. Get started in just 2 minutes.
+                            </p>
+                            
+                            <!-- Step 1 -->
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 24px;">
+                                <tr>
+                                    <td width="44" valign="top">
+                                        <div style="width: 36px; height: 36px; background-color: #ccfbf1; border-radius: 50%; text-align: center; line-height: 36px; color: #0d9488; font-weight: 700; font-size: 16px;">1</div>
+                                    </td>
+                                    <td valign="top" style="padding-left: 12px;">
+                                        <h3 style="margin: 0 0 12px 0; color: #1e293b; font-size: 16px; font-weight: 600;">Download the Desktop App</h3>
+                                        <table role="presentation" cellspacing="0" cellpadding="0">
+                                            <tr>
+                                                <td style="padding-right: 12px; padding-bottom: 8px;">
+                                                    <a href="{mac_download_url}" style="display: inline-block; background-color: #1e293b; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; font-size: 14px;">🍎 Download for Mac</a>
+                                                </td>
+                                                <td style="padding-bottom: 8px;">
+                                                    <a href="{windows_download_url}" style="display: inline-block; background-color: #0078d4; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; font-size: 14px;">⊞ Download for Windows</a>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <!-- Step 2 -->
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 24px;">
+                                <tr>
+                                    <td width="44" valign="top">
+                                        <div style="width: 36px; height: 36px; background-color: #ccfbf1; border-radius: 50%; text-align: center; line-height: 36px; color: #0d9488; font-weight: 700; font-size: 16px;">2</div>
+                                    </td>
+                                    <td valign="top" style="padding-left: 12px;">
+                                        <h3 style="margin: 0 0 12px 0; color: #1e293b; font-size: 16px; font-weight: 600;">Sign in with these credentials</h3>
+                                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+                                            <tr>
+                                                <td style="padding: 16px;">
+                                                    <p style="margin: 0 0 8px 0; color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Email</p>
+                                                    <p style="margin: 0 0 16px 0; color: #1e293b; font-size: 15px; font-weight: 500; font-family: monospace;">{email}</p>
+                                                    <p style="margin: 0 0 8px 0; color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Temporary Password</p>
+                                                    <p style="margin: 0; color: #1e293b; font-size: 15px; font-weight: 500; font-family: monospace;">{temp_password}</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <!-- Step 3 -->
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 32px;">
+                                <tr>
+                                    <td width="44" valign="top">
+                                        <div style="width: 36px; height: 36px; background-color: #ccfbf1; border-radius: 50%; text-align: center; line-height: 36px; color: #0d9488; font-weight: 700; font-size: 16px;">3</div>
+                                    </td>
+                                    <td valign="top" style="padding-left: 12px;">
+                                        <h3 style="margin: 0 0 8px 0; color: #1e293b; font-size: 16px; font-weight: 600;">You're done! 🎉</h3>
+                                        <p style="margin: 0; color: #475569; font-size: 14px; line-height: 1.5;">The app runs quietly in the background and captures your billable time automatically. No timers to start or stop.</p>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <!-- Divider -->
+                            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+                            
+                            <!-- What's Next -->
+                            <h3 style="margin: 0 0 16px 0; color: #1e293b; font-size: 16px; font-weight: 600;">What happens next?</h3>
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                                <tr>
+                                    <td style="padding: 8px 0; color: #475569; font-size: 14px;">
+                                        <span style="color: #14b8a6; margin-right: 8px;">✓</span> Your time is automatically categorized by client and task
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 8px 0; color: #475569; font-size: 14px;">
+                                        <span style="color: #14b8a6; margin-right: 8px;">✓</span> Review and submit your timesheet each week
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 8px 0; color: #475569; font-size: 14px;">
+                                        <span style="color: #14b8a6; margin-right: 8px;">✓</span> No more forgetting to log hours!
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #f8fafc; padding: 24px 40px; border-top: 1px solid #e2e8f0;">
+                            <p style="margin: 0; color: #64748b; font-size: 14px; text-align: center;">
+                                Questions? <a href="{help_url}" style="color: #14b8a6; text-decoration: none; font-weight: 500;">Visit our Help Center</a> or reply to this email.
+                            </p>
+                        </td>
+                    </tr>
+                    
+                </table>
+                
+                <!-- Sub-footer -->
+                <p style="margin: 24px 0 0 0; color: #94a3b8; font-size: 12px; text-align: center;">
+                    © 2026 TimeTracker by MavOps · <a href="{app_url}" style="color: #94a3b8;">timetracker.mavops.ai</a>
+                </p>
+                
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+
+    # Send email with both HTML and plain text
     email_sent = False
     try:
-        send_mail(
-            subject=f"You're invited to {org.name} on TimeTracker",
-            message=email_body,
-            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@mavops.ai'),
-            recipient_list=[email],
-            fail_silently=False,
+        from django.core.mail import EmailMultiAlternatives
+        
+        subject = f"You've been invited to join {org.name} on TimeTracker"
+        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@mavops.ai')
+        
+        msg = EmailMultiAlternatives(
+            subject=subject,
+            body=plain_text_body,
+            from_email=from_email,
+            to=[email],
         )
+        msg.attach_alternative(html_body, "text/html")
+        msg.send()
         email_sent = True
+        
     except Exception:
-        pass
+        # Fallback to simple send_mail if EmailMultiAlternatives fails
+        try:
+            send_mail(
+                subject=f"You've been invited to join {org.name} on TimeTracker",
+                message=plain_text_body,
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@mavops.ai'),
+                recipient_list=[email],
+                fail_silently=False,
+            )
+            email_sent = True
+        except Exception:
+            pass
     
     return {
         'email': email,

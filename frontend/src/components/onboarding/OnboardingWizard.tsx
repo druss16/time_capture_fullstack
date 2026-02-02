@@ -1,7 +1,8 @@
 // src/components/onboarding/OnboardingWizard.tsx
 /**
- * Self-Service Onboarding Wizard - Green Theme
+ * Self-Service Onboarding Wizard - Teal Theme (matching login page)
  * With clickable step navigation and back button
+ * 5-step flow: Account → Clients → Team → Plan → Download
  */
 
 import React, { useState, useEffect } from 'react';
@@ -13,7 +14,6 @@ import SignupStep from './steps/SignupStep';
 import IntegrationStep from './steps/IntegrationStep';
 import TeamInviteStep from './steps/TeamInviteStep';
 import PricingStep from './steps/PricingStep';
-import BillingRatesStep from './steps/BillingRatesStep';
 import CompleteStep from './steps/CompleteStep';
 
 // Icons
@@ -22,7 +22,6 @@ import {
   Link2, 
   Users, 
   CreditCard,
-  DollarSign, 
   Download,
   Check,
   ChevronRight,
@@ -40,11 +39,10 @@ interface Step {
 
 const STEPS: Step[] = [
   { id: 1, name: 'Create Account', icon: UserPlus, key: 'account_created' },
-  { id: 2, name: 'Connect Integration', icon: Link2, key: 'integration_connected' },
+  { id: 2, name: 'Import Clients', icon: Link2, key: 'integration_connected' },
   { id: 3, name: 'Invite Team', icon: Users, key: 'team_invited' },
   { id: 4, name: 'Choose Plan', icon: CreditCard, key: 'plan_selected' },
-  { id: 5, name: 'Set Rates', icon: DollarSign, key: 'rates_configured' },
-  { id: 6, name: 'Start Tracking', icon: Download, key: 'agent_installed' },
+  { id: 5, name: 'Start Tracking', icon: Download, key: 'agent_installed' },
 ];
 
 // Map URL step params to step numbers
@@ -53,8 +51,7 @@ const STEP_PARAM_MAP: Record<string, number> = {
   'integration': 2,
   'team': 3,
   'pricing': 4,
-  'rates': 5,
-  'complete': 6,
+  'complete': 5,
 };
 
 interface OnboardingWizardProps {
@@ -80,8 +77,8 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
     
     // If returning from Stripe checkout with session_id = success
     if (sessionId) {
-      setCurrentStep(6);
-      setHighestStepReached(6);
+      setCurrentStep(5);
+      setHighestStepReached(5);
       setLoading(false);
       
       if (isLoggedIn) {
@@ -175,7 +172,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
       setOrganization(data.organization);
     }
     
-    if (stepNum < 6) {
+    if (stepNum < 5) {
       const nextStep = stepNum + 1;
       setCurrentStep(nextStep);
       setHighestStepReached(Math.max(highestStepReached, nextStep));
@@ -185,7 +182,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
   };
 
   const handleSkip = (stepNum: number) => {
-    if (stepNum < 6) {
+    if (stepNum < 5) {
       const nextStep = stepNum + 1;
       setCurrentStep(nextStep);
       setHighestStepReached(Math.max(highestStepReached, nextStep));
@@ -225,7 +222,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600" />
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-teal-500" />
       </div>
     );
   }
@@ -236,7 +233,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
       <header className="bg-white border-b border-slate-200 shadow-sm">
         <div className="max-w-5xl mx-auto px-4 py-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-600/25">
+            <div className="w-10 h-10 bg-teal-500 rounded-xl flex items-center justify-center shadow-lg shadow-teal-500/25">
               <Clock className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -268,18 +265,18 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
                       disabled={!isClickable}
                       className={`
                         flex items-center gap-2 px-3 py-2 rounded-xl transition-all
-                        ${isCurrent ? 'bg-emerald-50 text-emerald-700' : ''}
-                        ${isComplete && !isCurrent ? 'text-emerald-600' : ''}
+                        ${isCurrent ? 'bg-teal-50 text-teal-700' : ''}
+                        ${isComplete && !isCurrent ? 'text-teal-600' : ''}
                         ${!isComplete && !isCurrent ? 'text-slate-400' : ''}
-                        ${isClickable && !isCurrent ? 'cursor-pointer hover:bg-slate-100 hover:text-emerald-600' : ''}
+                        ${isClickable && !isCurrent ? 'cursor-pointer hover:bg-slate-100 hover:text-teal-600' : ''}
                         ${!isClickable ? 'cursor-not-allowed opacity-60' : ''}
                       `}
                       title={isClickable ? `Go to ${step.name}` : (step.id === 1 && isLoggedIn ? 'Account already created' : 'Complete previous steps first')}
                     >
                       <div className={`
                         w-8 h-8 rounded-full flex items-center justify-center transition-all
-                        ${isComplete ? 'bg-emerald-100 text-emerald-600' : ''}
-                        ${isCurrent ? 'bg-emerald-100 text-emerald-600 ring-2 ring-emerald-600 ring-offset-2' : ''}
+                        ${isComplete ? 'bg-teal-100 text-teal-600' : ''}
+                        ${isCurrent ? 'bg-teal-100 text-teal-600 ring-2 ring-teal-500 ring-offset-2' : ''}
                         ${!isComplete && !isCurrent ? 'bg-slate-100 text-slate-400' : ''}
                       `}>
                         {isComplete ? (
@@ -311,7 +308,7 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
           <button
             type="button"
             onClick={handleBack}
-            className="mb-4 flex items-center gap-2 text-slate-600 hover:text-emerald-600 font-medium transition-colors group"
+            className="mb-4 flex items-center gap-2 text-slate-600 hover:text-teal-600 font-medium transition-colors group"
           >
             <ChevronLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
             Back to {STEPS[currentStep - 2]?.name}
@@ -348,17 +345,9 @@ export function OnboardingWizard({ initialStep = 1 }: OnboardingWizardProps) {
         )}
         
         {currentStep === 5 && (
-          <BillingRatesStep 
-            organization={organization}
-            onComplete={() => handleStepComplete(5)} 
-            onSkip={() => handleSkip(5)}
-          />
-        )}
-        
-        {currentStep === 6 && (
           <CompleteStep 
             organization={organization}
-            onComplete={() => handleStepComplete(6)} 
+            onComplete={() => handleStepComplete(5)} 
           />
         )}
       </main>

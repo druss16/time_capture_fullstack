@@ -76,8 +76,8 @@ export default function BillingRatesStep({ organization, onComplete, onSkip }: B
   return (
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
       <div className="text-center mb-8">
-        <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <DollarSign className="w-8 h-8 text-emerald-600" />
+        <div className="w-16 h-16 bg-teal-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <DollarSign className="w-8 h-8 text-teal-600" />
         </div>
         <h2 className="text-2xl font-bold text-slate-900">Set Default Rates</h2>
         <p className="text-slate-600 mt-2 font-medium">
@@ -93,9 +93,9 @@ export default function BillingRatesStep({ organization, onComplete, onSkip }: B
       )}
 
       {success && (
-        <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-start gap-3">
-          <CheckCircle2 className="w-5 h-5 text-emerald-500 mt-0.5" />
-          <p className="text-emerald-700 font-medium">Rates saved successfully!</p>
+        <div className="mb-6 p-4 bg-teal-50 border-2 border-teal-200 rounded-xl flex items-start gap-3">
+          <CheckCircle2 className="w-5 h-5 text-teal-500 mt-0.5" />
+          <p className="text-teal-700 font-medium">Rates saved successfully!</p>
         </div>
       )}
 
@@ -114,7 +114,7 @@ export default function BillingRatesStep({ organization, onComplete, onSkip }: B
               min="0"
               value={billingRate}
               onChange={(e) => setBillingRate(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl font-semibold text-lg transition-all focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
+              className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl font-semibold text-lg transition-all focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-none"
             />
           </div>
           <p className="mt-1.5 text-sm text-slate-500 font-medium">
@@ -135,7 +135,7 @@ export default function BillingRatesStep({ organization, onComplete, onSkip }: B
               min="0"
               value={costRate}
               onChange={(e) => setCostRate(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl font-semibold text-lg transition-all focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
+              className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl font-semibold text-lg transition-all focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-none"
             />
           </div>
           <p className="mt-1.5 text-sm text-slate-500 font-medium">
@@ -145,20 +145,20 @@ export default function BillingRatesStep({ organization, onComplete, onSkip }: B
       </div>
 
       {/* Margin Preview */}
-      <div className="mb-8 p-5 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
+      <div className="mb-8 p-5 bg-teal-50 border-2 border-teal-200 rounded-xl">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-bold text-emerald-800">Profit Margin Preview</span>
-          <span className="text-2xl font-extrabold text-emerald-700">
+          <span className="text-sm font-bold text-teal-800">Profit Margin Preview</span>
+          <span className="text-2xl font-extrabold text-teal-700">
             ${margin.toFixed(2)}/hr ({marginPercent}%)
           </span>
         </div>
-        <div className="w-full bg-emerald-200 rounded-full h-3">
+        <div className="w-full bg-teal-200 rounded-full h-3">
           <div 
-            className="bg-emerald-600 h-3 rounded-full transition-all"
+            className="bg-teal-600 h-3 rounded-full transition-all"
             style={{ width: `${Math.min(Math.max(Number(marginPercent), 0), 100)}%` }}
           />
         </div>
-        <p className="mt-3 text-sm text-emerald-700 font-medium">
+        <p className="mt-3 text-sm text-teal-700 font-medium">
           For every hour billed, your firm earns ${margin.toFixed(2)} in profit
         </p>
       </div>
@@ -180,7 +180,7 @@ export default function BillingRatesStep({ organization, onComplete, onSkip }: B
         <button
           onClick={handleSave}
           disabled={loading}
-          className="flex-1 py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-emerald-600/25"
+          className="flex-1 py-3.5 px-4 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-teal-500/25"
         >
           {loading ? (
             <>

@@ -94,9 +94,9 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
   return (
     <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
       {/* Header */}
-      <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 px-6 py-8 text-white">
+      <div className="bg-gradient-to-r from-teal-500 to-teal-600 px-6 py-8 text-white">
         <h2 className="text-2xl font-bold mb-2">Create Your Account</h2>
-        <p className="text-emerald-100">Set up your firm in under a minute</p>
+        <p className="text-teal-100">Set up your firm in under a minute</p>
       </div>
 
       {/* Form */}
@@ -120,8 +120,8 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
               onChange={(e) => setFormData({ ...formData, firm_name: e.target.value })}
               placeholder="Smith & Associates CPA"
               className={`w-full pl-11 pr-4 py-3 border-2 rounded-xl font-medium transition-all
-                ${errors.firm_name ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-emerald-500'}
-                focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                ${errors.firm_name ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-teal-500'}
+                focus:outline-none focus:ring-2 focus:ring-teal-500/20`}
               required
             />
           </div>
@@ -140,8 +140,8 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
               onChange={(e) => setFormData({ ...formData, industry_type: e.target.value })}
               disabled={loadingIndustries}
               className={`w-full pl-11 pr-4 py-3 border-2 rounded-xl font-medium transition-all appearance-none
-                border-slate-200 focus:border-emerald-500
-                focus:outline-none focus:ring-2 focus:ring-emerald-500/20
+                border-slate-200 focus:border-teal-500
+                focus:outline-none focus:ring-2 focus:ring-teal-500/20
                 ${loadingIndustries ? 'opacity-50' : ''}`}
             >
               {industries.map((ind) => (
@@ -172,7 +172,7 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
               onChange={(e) => setFormData({ ...formData, owner_name: e.target.value })}
               placeholder="John Smith"
               className="w-full pl-11 pr-4 py-3 border-2 border-slate-200 rounded-xl font-medium 
-                focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
+                focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
             />
           </div>
         </div>
@@ -190,8 +190,8 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
               placeholder="john@smithcpa.com"
               className={`w-full pl-11 pr-4 py-3 border-2 rounded-xl font-medium transition-all
-                ${errors.email ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-emerald-500'}
-                focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                ${errors.email ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-teal-500'}
+                focus:outline-none focus:ring-2 focus:ring-teal-500/20`}
               required
             />
           </div>
@@ -211,8 +211,8 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               placeholder="At least 8 characters"
               className={`w-full pl-11 pr-4 py-3 border-2 rounded-xl font-medium transition-all
-                ${errors.password ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-emerald-500'}
-                focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                ${errors.password ? 'border-red-300 focus:border-red-500' : 'border-slate-200 focus:border-teal-500'}
+                focus:outline-none focus:ring-2 focus:ring-teal-500/20`}
               required
               minLength={8}
             />
@@ -224,9 +224,9 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3.5 bg-emerald-600 text-white font-bold rounded-xl
-            hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed
-            transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25"
+          className="w-full py-3.5 bg-teal-500 text-white font-bold rounded-xl
+            hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed
+            transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/25"
         >
           {loading ? (
             <>
@@ -243,7 +243,7 @@ export default function SignupStep({ onComplete }: SignupStepProps) {
 
         <p className="text-center text-sm text-slate-500">
           Already have an account?{' '}
-          <a href="/login" className="text-emerald-600 font-semibold hover:underline">
+          <a href="/login" className="text-teal-600 font-semibold hover:underline">
             Sign in
           </a>
         </p>

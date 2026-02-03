@@ -1248,6 +1248,21 @@ def _run_pairing_process(result_queue):
     )
     code_entry.pack(fill="x", pady=(6, 0))
 
+    # ------------------------------------------------------------
+    # Pair button DIRECTLY under entry ✅
+    # ------------------------------------------------------------
+
+    # Pair button DIRECTLY under entry
+    pair_btn = ctk.CTkButton(
+        container,
+        text="Pair Device",
+        fg_color=colors["primary"],
+        hover_color=colors["primary_hover"],
+        height=46, corner_radius=8,
+        font=ctk.CTkFont(family="SF Pro Text", size=14, weight="bold")
+    )
+    pair_btn.pack(fill="x", pady=(20, 6))
+
     # Status label
     status_label = ctk.CTkLabel(
         container, text="",
@@ -1259,19 +1274,6 @@ def _run_pairing_process(result_queue):
     # Reset container (for dynamic reset button)
     reset_container = ctk.CTkFrame(container, fg_color="transparent")
     reset_container.pack(fill="x", pady=0)
-
-    # ------------------------------------------------------------
-    # Pair button DIRECTLY under entry ✅
-    # ------------------------------------------------------------
-    pair_btn = ctk.CTkButton(
-        container,
-        text="Pair Device",
-        fg_color=colors["primary"],
-        hover_color=colors["primary_hover"],
-        height=46, corner_radius=8,
-        font=ctk.CTkFont(family="SF Pro Text", size=14, weight="bold")
-    )
-    pair_btn.pack(fill="x", pady=(0, 6))
 
     # Optional: cancel below pair button (keeps layout clean)
     def do_cancel():

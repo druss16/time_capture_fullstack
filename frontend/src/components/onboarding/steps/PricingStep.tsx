@@ -12,8 +12,10 @@ interface PricingStepProps {
 interface PricingTier {
   id: 'professional' | 'executive';
   name: string;
-  price: number;
-  priceId: string;
+  monthlyPrice: number;
+  yearlyPrice: number;
+  monthlyPriceId: string;
+  yearlyPriceId: string;
   description: string;
   icon: React.ReactNode;
   emoji: string;
@@ -26,8 +28,10 @@ const PRICING_TIERS: PricingTier[] = [
   {
     id: 'professional',
     name: 'Professional',
-    price: 29.99,
-    priceId: 'price_1SnryXKdcg3wPfHV3FymP9kw',
+    monthlyPrice: 29.99,
+    yearlyPrice: 23.99, // ~20% discount
+    monthlyPriceId: 'price_1SnryXKdcg3wPfHV3FymP9kw',
+    yearlyPriceId: 'price_professional_yearly', // TODO: Replace with actual Stripe price ID
     description: 'Essential time tracking for growing firms',
     icon: <Star className="w-6 h-6" />,
     emoji: '⭐',
@@ -51,8 +55,10 @@ const PRICING_TIERS: PricingTier[] = [
   {
     id: 'executive',
     name: 'Executive',
-    price: 49.99,
-    priceId: 'price_1SnrzDKdcg3wPfHVydp72wac',
+    monthlyPrice: 49.99,
+    yearlyPrice: 39.99, // ~20% discount
+    monthlyPriceId: 'price_1SnrzDKdcg3wPfHVydp72wac',
+    yearlyPriceId: 'price_executive_yearly', // TODO: Replace with actual Stripe price ID
     description: 'Full suite with profitability insights',
     icon: <Crown className="w-6 h-6" />,
     emoji: '💎',
@@ -80,11 +86,19 @@ export default function PricingStep({
   userCount = 1 
 }: PricingStepProps) {
   const [selectedTier, setSelectedTier] = useState<'professional' | 'executive'>('executive');
+  const [billingInterval, setBillingInterval] = useState<'monthly' | 'yearly'>('monthly');
   const [loading, setLoading] = useState(false);
   const [seats, setSeats] = useState(userCount);
 
   const selectedPlan = PRICING_TIERS.find(t => t.id === selectedTier)!;
-  const monthlyTotal = selectedPlan.price * seats;
+  const isYearly = billingInterval === 'yearly';
+  const pricePerUser = isYearly ? selectedPlan.yearlyPrice : selectedPlan.monthlyPrice;
+  const monthlyTotal = pricePerUser * seats;
+  const yearlyTotal = monthlyTotal * 12;
+  
+  // Calculate savings
+  const monthlyCostIfMonthly = selectedPlan.monthlyPrice * seats * 12;
+  const yearlySavings = monthlyCostIfMonthly - yearlyTotal;
 
   const handleSubscribe = async () => {
     setLoading(true);
@@ -99,7 +113,7 @@ export default function PricingStep({
         },
         body: JSON.stringify({
           plan: selectedTier,
-          interval: 'monthly',
+          interval: billingInterval,
           quantity: seats,
           success_url: `${window.location.origin}/onboarding?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${window.location.origin}/onboarding?step=pricing`,
@@ -132,80 +146,118 @@ export default function PricingStep({
         </p>
       </div>
 
+      {/* Billing Interval Toggle */}
+      <div className="flex justify-center mb-8">
+        <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
+          <button
+            onClick={() => setBillingInterval('monthly')}
+            className={`px-5 py-2.5 rounded-lg font-semibold text-sm transition-all
+              ${billingInterval === 'monthly' 
+                ? 'bg-white text-slate-900 shadow-sm' 
+                : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Monthly
+          </button>
+          <button
+            onClick={() => setBillingInterval('yearly')}
+            className={`px-5 py-2.5 rounded-lg font-semibold text-sm transition-all flex items-center gap-2
+              ${billingInterval === 'yearly' 
+                ? 'bg-white text-slate-900 shadow-sm' 
+                : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Yearly
+            <span className="bg-teal-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+              Save 20%
+            </span>
+          </button>
+        </div>
+      </div>
+
       {/* Pricing Cards */}
       <div className="grid md:grid-cols-2 gap-6 mb-8">
-        {PRICING_TIERS.map((tier) => (
-          <div
-            key={tier.id}
-            onClick={() => setSelectedTier(tier.id)}
-            className={`
-              relative cursor-pointer rounded-2xl border-2 p-6 transition-all
-              ${selectedTier === tier.id 
-                ? 'border-teal-500 bg-teal-50 shadow-lg shadow-teal-500/10' 
-                : 'border-slate-200 hover:border-slate-300 hover:shadow-md'}
-            `}
-          >
-            {/* Popular Badge */}
-            {tier.popular && (
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                <span className="bg-teal-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">
-                  MOST POPULAR
-                </span>
-              </div>
-            )}
+        {PRICING_TIERS.map((tier) => {
+          const displayPrice = isYearly ? tier.yearlyPrice : tier.monthlyPrice;
+          
+          return (
+            <div
+              key={tier.id}
+              onClick={() => setSelectedTier(tier.id)}
+              className={`
+                relative cursor-pointer rounded-2xl border-2 p-6 transition-all
+                ${selectedTier === tier.id 
+                  ? 'border-teal-500 bg-teal-50 shadow-lg shadow-teal-500/10' 
+                  : 'border-slate-200 hover:border-slate-300 hover:shadow-md'}
+              `}
+            >
+              {/* Popular Badge */}
+              {tier.popular && (
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                  <span className="bg-teal-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">
+                    MOST POPULAR
+                  </span>
+                </div>
+              )}
 
-            {/* Selection Indicator */}
-            <div className={`
-              absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all
-              ${selectedTier === tier.id ? 'border-teal-500 bg-teal-500' : 'border-slate-300'}
-            `}>
-              {selectedTier === tier.id && <Check className="w-4 h-4 text-white" />}
-            </div>
-
-            {/* Tier Header */}
-            <div className="flex items-center gap-3 mb-4">
+              {/* Selection Indicator */}
               <div className={`
-                w-12 h-12 rounded-xl flex items-center justify-center
-                ${tier.id === 'executive' 
-                  ? 'bg-teal-500 text-white' 
-                  : 'bg-amber-100 text-amber-600'}
+                absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all
+                ${selectedTier === tier.id ? 'border-teal-500 bg-teal-500' : 'border-slate-300'}
               `}>
-                {tier.icon}
+                {selectedTier === tier.id && <Check className="w-4 h-4 text-white" />}
               </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">
-                  {tier.emoji} {tier.name}
-                </h3>
-                <p className="text-sm text-slate-500 font-medium">{tier.description}</p>
-              </div>
-            </div>
 
-            {/* Price */}
-            <div className="mb-6">
-              <div className="flex items-baseline gap-1">
-                <span className="text-4xl font-extrabold text-slate-900">${tier.price}</span>
-                <span className="text-slate-500 font-medium">/user/month</span>
+              {/* Tier Header */}
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`
+                  w-12 h-12 rounded-xl flex items-center justify-center
+                  ${tier.id === 'executive' 
+                    ? 'bg-teal-500 text-white' 
+                    : 'bg-amber-100 text-amber-600'}
+                `}>
+                  {tier.icon}
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    {tier.emoji} {tier.name}
+                  </h3>
+                  <p className="text-sm text-slate-500 font-medium">{tier.description}</p>
+                </div>
               </div>
-              <p className="text-sm text-slate-500 mt-1 font-medium">Billed monthly</p>
-            </div>
 
-            {/* Features */}
-            <ul className="space-y-3">
-              {tier.features.map((feature, idx) => (
-                <li key={idx} className="flex items-start gap-2">
-                  <Check className="w-5 h-5 mt-0.5 flex-shrink-0 text-teal-500" />
-                  <span className="text-sm text-slate-700 font-medium">{feature}</span>
-                </li>
-              ))}
-              {tier.notIncluded?.map((feature, idx) => (
-                <li key={`not-${idx}`} className="flex items-start gap-2 opacity-50">
-                  <span className="w-5 h-5 mt-0.5 flex-shrink-0 text-center text-slate-400">—</span>
-                  <span className="text-sm text-slate-500 line-through font-medium">{feature}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
+              {/* Price */}
+              <div className="mb-6">
+                <div className="flex items-baseline gap-1">
+                  <span className="text-4xl font-extrabold text-slate-900">${displayPrice}</span>
+                  <span className="text-slate-500 font-medium">/user/month</span>
+                </div>
+                {isYearly ? (
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-sm text-slate-400 line-through">${tier.monthlyPrice}/mo</span>
+                    <span className="text-sm text-teal-600 font-semibold">Billed annually</span>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500 mt-1 font-medium">Billed monthly</p>
+                )}
+              </div>
+
+              {/* Features */}
+              <ul className="space-y-3">
+                {tier.features.map((feature, idx) => (
+                  <li key={idx} className="flex items-start gap-2">
+                    <Check className="w-5 h-5 mt-0.5 flex-shrink-0 text-teal-500" />
+                    <span className="text-sm text-slate-700 font-medium">{feature}</span>
+                  </li>
+                ))}
+                {tier.notIncluded?.map((feature, idx) => (
+                  <li key={`not-${idx}`} className="flex items-start gap-2 opacity-50">
+                    <span className="w-5 h-5 mt-0.5 flex-shrink-0 text-center text-slate-400">—</span>
+                    <span className="text-sm text-slate-500 line-through font-medium">{feature}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
       </div>
 
       {/* Seat Selection */}
@@ -235,14 +287,36 @@ export default function PricingStep({
         {/* Summary */}
         <div className="flex items-center justify-between pt-4 border-t-2 border-slate-200">
           <div>
-            <p className="text-sm text-slate-500 font-medium">Monthly total</p>
-            <p className="text-2xl font-extrabold text-slate-900">
-              ${monthlyTotal.toFixed(2)}<span className="text-sm font-medium text-slate-500">/month</span>
-            </p>
+            {isYearly ? (
+              <>
+                <p className="text-sm text-slate-500 font-medium">Annual total</p>
+                <p className="text-2xl font-extrabold text-slate-900">
+                  ${yearlyTotal.toFixed(2)}<span className="text-sm font-medium text-slate-500">/year</span>
+                </p>
+                <p className="text-sm text-slate-500 font-medium mt-0.5">
+                  (${monthlyTotal.toFixed(2)}/month)
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-slate-500 font-medium">Monthly total</p>
+                <p className="text-2xl font-extrabold text-slate-900">
+                  ${monthlyTotal.toFixed(2)}<span className="text-sm font-medium text-slate-500">/month</span>
+                </p>
+              </>
+            )}
           </div>
           <div className="text-right">
-            <p className="text-xs text-slate-500 font-medium">Annual pricing available</p>
-            <p className="text-sm text-teal-600 font-bold">Save 20% with yearly billing</p>
+            {isYearly ? (
+              <div className="bg-teal-100 text-teal-700 px-3 py-2 rounded-lg">
+                <p className="text-sm font-bold">You save ${yearlySavings.toFixed(2)}/year</p>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-slate-500 font-medium">Switch to yearly</p>
+                <p className="text-sm text-teal-600 font-bold">Save 20% annually</p>
+              </>
+            )}
           </div>
         </div>
       </div>

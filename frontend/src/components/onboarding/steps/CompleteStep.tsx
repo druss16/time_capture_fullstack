@@ -10,7 +10,9 @@ import {
   Check,
   ArrowRight,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  Smartphone,
+  RefreshCw
 } from 'lucide-react';
 import { Organization } from '../../../services/onboardingApi';
 
@@ -24,10 +26,19 @@ const DOWNLOAD_URLS = {
   windows: 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker-Windows-Setup.exe',
 };
 
+const RAW = (import.meta.env.VITE_API_BASE_URL || "http://localhost:7123").replace(/\/+$/, "");
+const API_BASE = RAW.endsWith("/api") ? RAW : `${RAW}/api`;
+
 export default function CompleteStep({ organization, onComplete }: CompleteStepProps) {
   const [copied, setCopied] = useState(false);
   const [platform, setPlatform] = useState<'macos' | 'windows'>('macos');
-  const [installToken, setInstallToken] = useState<string | null>(null);
+  
+  // Pairing code state
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<Date | null>(null);
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // Detect platform
@@ -35,48 +46,68 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
     if (userAgent.includes('win')) {
       setPlatform('windows');
     }
-    
-    // Load install token
-    loadInstallToken();
   }, []);
 
-  const loadInstallToken = async () => {
+  // Countdown timer for pairing code
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!expiresAt) {
+        setTimeLeft(0);
+        return;
+      }
+      setTimeLeft(Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000)));
+    }, 500);
+    return () => clearInterval(timer);
+  }, [expiresAt]);
+
+  const generatePairingCode = async () => {
+    setError(null);
+    setLoading(true);
     try {
       const token = localStorage.getItem('auth_token');
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
-      const response = await fetch(`${baseUrl}/settings/install-token/`, {
+      const response = await fetch(`${API_BASE}/agents/pair/issue/`, {
+        method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ ttl_seconds: 600 }),
       });
-      const data = await response.json();
-      if (data.token) {
-        setInstallToken(data.token);
+      
+      if (!response.ok) {
+        throw new Error('Failed to generate pairing code');
       }
-    } catch (err) {
-      console.error('Failed to load install token:', err);
+      
+      const data = await response.json();
+      if (!data?.code) {
+        throw new Error('Failed to issue code');
+      }
+      
+      setPairingCode(data.code);
+      setExpiresAt(new Date(data.expires_at));
+    } catch (err: any) {
+      setError(err.message || 'Error generating pairing code');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleCopyToken = () => {
-    if (installToken) {
-      navigator.clipboard.writeText(installToken);
+  const handleCopyCode = () => {
+    if (pairingCode) {
+      navigator.clipboard.writeText(pairingCode);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
   };
 
+  const isExpired = !!expiresAt && Date.now() > expiresAt.getTime();
+
   const handleDownload = (os: 'macos' | 'windows') => {
     const url = DOWNLOAD_URLS[os];
     if (url) {
       window.open(url, '_blank');
-    } else {
-      alert('Windows installer coming soon!');
     }
   };
-
-  // Check if Windows is available
-  const windowsAvailable = !!DOWNLOAD_URLS.windows;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
@@ -125,13 +156,11 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
           {/* Windows */}
           <button
             onClick={() => handleDownload('windows')}
-            disabled={!windowsAvailable}
             className={`
               p-4 border-2 rounded-xl transition-all text-left group
-              ${platform === 'windows' && windowsAvailable
+              ${platform === 'windows'
                 ? 'border-teal-500 bg-teal-50' 
                 : 'border-slate-200 hover:border-slate-300'}
-              ${!windowsAvailable ? 'opacity-60 cursor-not-allowed' : ''}
             `}
           >
             <div className="flex items-center gap-3 mb-2">
@@ -145,36 +174,85 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
             </div>
             <div className="flex items-center gap-1 text-teal-600 font-semibold text-sm group-hover:underline">
               <Download className="w-4 h-4" />
-              {windowsAvailable ? 'Download .exe' : 'Coming Soon'}
+              Download .exe
             </div>
           </button>
         </div>
       </div>
 
-      {/* Install Token */}
-      {installToken && (
-        <div className="mb-8 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
-          <h4 className="font-bold text-slate-900 mb-2">Organization Install Token</h4>
-          <p className="text-sm text-slate-600 font-medium mb-3">
-            Use this token during installation to connect your device
-          </p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 bg-white border-2 border-slate-200 rounded-lg px-3 py-2 font-mono text-sm text-slate-700 truncate">
-              {installToken}
-            </code>
-            <button
-              onClick={handleCopyToken}
-              className="p-2.5 border-2 border-slate-200 rounded-lg hover:bg-slate-100 transition-all"
-            >
-              {copied ? (
-                <Check className="w-5 h-5 text-teal-600" />
-              ) : (
-                <Copy className="w-5 h-5 text-slate-500" />
-              )}
-            </button>
-          </div>
+      {/* Pairing Code Section */}
+      <div className="mb-8 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
+        <div className="flex items-center gap-2 mb-2">
+          <Smartphone className="w-5 h-5 text-teal-600" />
+          <h4 className="font-bold text-slate-900">Pairing Code</h4>
         </div>
-      )}
+        <p className="text-sm text-slate-600 font-medium mb-3">
+          Enter this code in the desktop app to pair your device
+        </p>
+        
+        {error && (
+          <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm font-medium">
+            {error}
+          </div>
+        )}
+        
+        {pairingCode && !isExpired ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-white border-2 border-slate-200 rounded-lg px-3 py-2.5 font-mono text-2xl text-slate-800 tracking-widest text-center font-bold">
+                {pairingCode}
+              </code>
+              <button
+                onClick={handleCopyCode}
+                className="p-2.5 border-2 border-slate-200 rounded-lg hover:bg-slate-100 transition-all"
+                title="Copy to clipboard"
+              >
+                {copied ? (
+                  <Check className="w-5 h-5 text-teal-600" />
+                ) : (
+                  <Copy className="w-5 h-5 text-slate-500" />
+                )}
+              </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-slate-500 font-medium">
+                Expires in <span className="font-bold text-slate-700">{timeLeft}s</span>
+              </span>
+              <button
+                onClick={generatePairingCode}
+                disabled={loading}
+                className="text-sm text-teal-600 hover:text-teal-700 font-semibold flex items-center gap-1"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                Regenerate
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={generatePairingCode}
+            disabled={loading}
+            className="w-full py-2.5 px-4 bg-teal-500 hover:bg-teal-600 text-white font-semibold rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {loading ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Generating...
+              </>
+            ) : isExpired ? (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                Code Expired - Generate New
+              </>
+            ) : (
+              <>
+                <Smartphone className="w-4 h-4" />
+                Generate Pairing Code
+              </>
+            )}
+          </button>
+        )}
+      </div>
 
       {/* Quick Start Steps */}
       <div className="mb-8">
@@ -182,7 +260,7 @@ export default function CompleteStep({ organization, onComplete }: CompleteStepP
         <div className="space-y-3">
           {[
             { num: 1, text: 'Download and install the desktop app' },
-            { num: 2, text: 'Sign in with your email and password' },
+            { num: 2, text: 'Generate a pairing code and enter it in the app' },
             { num: 3, text: 'The app runs in the background and tracks automatically' },
             { num: 4, text: 'Review and categorize your time in the dashboard' },
           ].map((step) => (

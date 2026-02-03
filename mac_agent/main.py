@@ -40,6 +40,16 @@ import getpass
 from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 
+# CRITICAL: Set activation policy BEFORE any GUI imports
+if sys.platform == 'darwin' and not _is_multiprocessing_child:
+    try:
+        from AppKit import NSApplication, NSApp
+        NSApplication.sharedApplication()
+        NSApp.setActivationPolicy_(1)  # Accessory - menu bar only, no dock
+        print("[INIT] Set macOS activation policy to Accessory")
+    except Exception as e:
+        print(f"[INIT] Could not set activation policy: {e}")
+
 from urllib.parse import urlparse
 from timetracker_gui import run_gui_app, show_pairing_window, GUI_AVAILABLE
 import urllib.request

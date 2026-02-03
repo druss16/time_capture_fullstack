@@ -1545,6 +1545,16 @@ if RUMPS_AVAILABLE:
         
         def __init__(self, controller):
             super().__init__("⏱", quit_button=None)
+            
+            # CRITICAL: Set activation policy to Accessory (menu bar only, no dock icon)
+            try:
+                from AppKit import NSApp, NSApplication
+                NSApplication.sharedApplication()
+                NSApp.setActivationPolicy_(1)  # NSApplicationActivationPolicyAccessory
+                print("[GUI] Set activation policy to Accessory")
+            except Exception as e:
+                print(f"[GUI] Failed to set activation policy: {e}")
+            
             self.controller = controller
             self._client_callbacks = {}
             self._start_keepalive()
@@ -1552,7 +1562,7 @@ if RUMPS_AVAILABLE:
             # Set initial title from state
             client_name = self.controller.state.current_client_name
             if client_name and client_name != "No Client":
-                self.title = f"⏱ {client_name}"
+                display = client_name[:12] if len(client_name) > 12 else client_name; self.title = f"⏱ {display}"
             else:
                 self.title = "⏱ None"
             
@@ -1562,22 +1572,28 @@ if RUMPS_AVAILABLE:
             """Periodic keepalive to prevent icon from disappearing"""
             def tick(_):
                 try:
-                    # Force refresh the title
+                    # FORCE menu bar to stay visible
+                    try:
+                        from AppKit import NSApp
+                        NSApp.unhide_(None)
+                        NSApp.setActivationPolicy_(1)  # Accessory
+                    except Exception as e:
+                        print(f"[GUI] AppKit keepalive error: {e}")
+                    
+                    # Force refresh the title if empty
                     current = self.title
                     if not current or current == "":
                         print(f"[GUI] ⚠️ Title was empty, restoring...")
                         client_name = self.controller.state.current_client_name
                         if client_name and client_name != "No Client":
-                            self.title = f"⏱ {client_name}"
+                            display = client_name[:12] if len(client_name) > 12 else client_name; self.title = f"⏱ {display}"
                         else:
                             self.title = "⏱ None"
-
-                    self._rebuild_menu()
                 except Exception as e:
                     print(f"[GUI] Keepalive error: {e}")
             
-            # Run every 10 seconds (more aggressive)
-            rumps.Timer(tick, 10).start()
+            # Run every 2 seconds (aggressive)
+            rumps.Timer(tick, 2).start()
         
         def _rebuild_menu(self):
             self.menu.clear()
@@ -1749,7 +1765,7 @@ if RUMPS_AVAILABLE:
                 print(f"[GUI] Client cleared")
             else:
                 self.controller.state.set_client(client_id, client_name)
-                self.title = f"⏱ {client_name}"
+                display = client_name[:12] if len(client_name) > 12 else client_name; self.title = f"⏱ {display}"
                 print(f"[GUI] Switched to: {client_name}")
             
             if self.controller.set_current_client_callback:

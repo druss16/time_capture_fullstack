@@ -212,8 +212,11 @@ urlpatterns = [
     
     # Realization Report
     path('billing/realization/', views_billing.realization_report, name='realization_report'),
-    
 
+    # Client Budgets
+    path('billing/budgets/', views_billing.client_budgets_list),
+    path('billing/budgets/<int:budget_id>/', views_billing.client_budgets_detail),
+        
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
 

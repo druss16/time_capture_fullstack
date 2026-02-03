@@ -30,7 +30,6 @@ import stripe
 import csv
 import io
 from rest_framework.parsers import MultiPartParser, FormParser
-from .models import Invoice  # After you add Invoice to models.py
 
 stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", None) or ""
 
@@ -2877,3 +2876,135 @@ def quickbooks_import_invoices(request):
             'errors': len(errors),
         }
     })
+
+
+# ============================================================================
+# CLIENT BUDGETS CRUD
+# ============================================================================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def client_budgets_list(request):
+    """GET: List all client budgets / POST: Create new budget"""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    if request.method == 'GET':
+        budgets = ClientBudget.objects.filter(org=org).select_related('client')
+        
+        client_id = request.GET.get('client_id')
+        if client_id:
+            budgets = budgets.filter(client_id=client_id)
+        
+        start_date = request.GET.get('start_date')
+        end_date = request.GET.get('end_date')
+        if start_date and end_date:
+            budgets = budgets.filter(period_start__lte=end_date, period_end__gte=start_date)
+        
+        data = [{
+            'id': b.id,
+            'client_id': b.client_id,
+            'client_name': b.client.name,
+            'client_code': b.client.code or '',
+            'period_start': b.period_start.isoformat(),
+            'period_end': b.period_end.isoformat(),
+            'budget_hours': float(b.budget_hours),
+            'budget_amount': float(b.budget_amount) if b.budget_amount else None,
+            'description': b.description,
+        } for b in budgets.order_by('-period_start')]
+        
+        return Response({'budgets': data, 'total': len(data)})
+    
+    elif request.method == 'POST':
+        client_id = request.data.get('client_id')
+        period_start = request.data.get('period_start')
+        period_end = request.data.get('period_end')
+        budget_hours = request.data.get('budget_hours')
+        
+        if not all([client_id, period_start, period_end, budget_hours]):
+            return Response({'error': 'client_id, period_start, period_end, budget_hours required'}, status=400)
+        
+        try:
+            client = Client.objects.get(id=client_id, org=org)
+        except Client.DoesNotExist:
+            return Response({'error': 'Client not found'}, status=404)
+        
+        budget = ClientBudget.objects.create(
+            org=org,
+            client=client,
+            period_start=period_start,
+            period_end=period_end,
+            budget_hours=Decimal(str(budget_hours)),
+            budget_amount=Decimal(str(request.data['budget_amount'])) if request.data.get('budget_amount') else None,
+            description=request.data.get('description', ''),
+        )
+        
+        return Response({
+            'id': budget.id,
+            'client_id': budget.client_id,
+            'client_name': client.name,
+            'period_start': budget.period_start.isoformat(),
+            'period_end': budget.period_end.isoformat(),
+            'budget_hours': float(budget.budget_hours),
+            'budget_amount': float(budget.budget_amount) if budget.budget_amount else None,
+            'description': budget.description,
+        }, status=201)
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def client_budgets_detail(request, budget_id):
+    """Get, update, or delete a specific client budget."""
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    try:
+        budget = ClientBudget.objects.select_related('client').get(id=budget_id, org=org)
+    except ClientBudget.DoesNotExist:
+        return Response({'error': 'Budget not found'}, status=404)
+    
+    if request.method == 'GET':
+        return Response({
+            'id': budget.id,
+            'client_id': budget.client_id,
+            'client_name': budget.client.name,
+            'client_code': budget.client.code or '',
+            'period_start': budget.period_start.isoformat(),
+            'period_end': budget.period_end.isoformat(),
+            'budget_hours': float(budget.budget_hours),
+            'budget_amount': float(budget.budget_amount) if budget.budget_amount else None,
+            'description': budget.description,
+        })
+    
+    elif request.method in ['PUT', 'PATCH']:
+        if 'period_start' in request.data:
+            budget.period_start = request.data['period_start']
+        if 'period_end' in request.data:
+            budget.period_end = request.data['period_end']
+        if 'budget_hours' in request.data:
+            budget.budget_hours = Decimal(str(request.data['budget_hours']))
+        if 'budget_amount' in request.data:
+            budget.budget_amount = Decimal(str(request.data['budget_amount'])) if request.data['budget_amount'] else None
+        if 'description' in request.data:
+            budget.description = request.data['description']
+        
+        budget.save()
+        
+        return Response({
+            'id': budget.id,
+            'client_id': budget.client_id,
+            'client_name': budget.client.name,
+            'period_start': budget.period_start.isoformat(),
+            'period_end': budget.period_end.isoformat(),
+            'budget_hours': float(budget.budget_hours),
+            'budget_amount': float(budget.budget_amount) if budget.budget_amount else None,
+            'description': budget.description,
+        })
+    
+    elif request.method == 'DELETE':
+        budget.delete()
+        return Response({'success': True, 'deleted': budget_id})

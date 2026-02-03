@@ -1254,11 +1254,11 @@ def _run_pairing_process(result_queue):
         font=ctk.CTkFont(family="SF Pro Text", size=13),
         anchor="w"
     )
-    status_label.pack(fill="x", pady=(4, 2))
+    status_label.pack(fill="x", pady=0)
 
     # Reset container (for dynamic reset button)
     reset_container = ctk.CTkFrame(container, fg_color="transparent")
-    reset_container.pack(fill="x", pady=(0, 2))
+    reset_container.pack(fill="x", pady=0)
 
     # ------------------------------------------------------------
     # Pair button DIRECTLY under entry ✅

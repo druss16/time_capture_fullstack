@@ -1,13 +1,13 @@
 // src/pages/Devices.tsx
 /**
  * Devices.tsx - My Devices page
- * Updated to match design system
+ * Updated to match design system with teal colors
  */
 
 import PairDeviceCard from "@/components/PairDeviceCard";
 import { useEffect, useState } from "react";
 import { safeFetchJson, API_BASE } from '@/lib/api';
-import { Monitor, RefreshCw, Laptop, AlertCircle } from 'lucide-react';
+import { Monitor, RefreshCw, Laptop, AlertCircle, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
 type Device = {
@@ -61,7 +61,7 @@ export default function Devices() {
     const date = new Date(lastSeen);
     const now = new Date();
     const diffHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
-    if (diffHours < 1) return 'bg-emerald-500';
+    if (diffHours < 1) return 'bg-teal-500';
     if (diffHours < 24) return 'bg-amber-500';
     return 'bg-slate-400';
   };
@@ -71,12 +71,12 @@ export default function Devices() {
       <div className="max-w-4xl mx-auto p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-teal-600 flex items-center justify-center shadow-lg shadow-teal-600/25">
+          <div className="w-12 h-12 rounded-xl bg-teal-500 flex items-center justify-center shadow-lg shadow-teal-500/25">
             <Monitor className="w-6 h-6 text-white" />
           </div>
           <div>
             <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">My Devices</h1>
-            <p className="text-slate-600 font-medium">Manage and link your Time Capture desktop apps</p>
+            <p className="text-slate-600 font-medium">Manage and link your TimeTracker desktop apps</p>
           </div>
         </div>
 
@@ -103,7 +103,7 @@ export default function Devices() {
           <div className="p-6">
             {loading && devices.length === 0 && (
               <div className="flex items-center justify-center py-8">
-                <RefreshCw className="w-6 h-6 text-teal-600 animate-spin" />
+                <RefreshCw className="w-6 h-6 text-teal-500 animate-spin" />
               </div>
             )}
 
@@ -116,10 +116,10 @@ export default function Devices() {
 
             {!loading && !error && devices.length === 0 && (
               <div className="text-center py-12">
-                <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4">
-                  <Laptop className="w-8 h-8 text-slate-400" />
+                <div className="w-16 h-16 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4">
+                  <Laptop className="w-8 h-8 text-teal-500" />
                 </div>
-                <p className="text-slate-700 font-bold">No devices linked yet</p>
+                <p className="text-slate-900 font-bold">No devices linked yet</p>
                 <p className="text-sm text-slate-500 font-medium mt-1">
                   Use the pairing code above to connect your first device
                 </p>
@@ -146,7 +146,7 @@ export default function Devices() {
                             <div className={cn('w-3 h-3 rounded-full', d.is_active ? getStatusColor(d.last_seen_at) : 'bg-slate-300')} />
                             <span className={cn(
                               'text-xs px-2 py-1 rounded-full font-bold',
-                              d.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                              d.is_active ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-500'
                             )}>
                               {d.is_active ? 'Active' : 'Inactive'}
                             </span>
@@ -170,7 +170,7 @@ export default function Devices() {
         {/* Status Legend */}
         {devices.length > 0 && (
           <div className="flex items-center gap-6 text-sm text-slate-600 font-medium">
-            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-500" />Active now</div>
+            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-teal-500" />Active now</div>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500" />Active today</div>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-slate-400" />Inactive</div>
           </div>

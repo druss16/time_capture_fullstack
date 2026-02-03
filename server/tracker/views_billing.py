@@ -12,7 +12,7 @@ from decimal import Decimal
 from .models import (
     BillingRate, Timesheet, Block, BlockAuditLog, 
     Client, TaskType, Organization, OrganizationMembership,
-    EmployeeCostRate, Invitation  # ← ADD THIS
+    EmployeeCostRate, Invitation, Invoice, ClientBudget  # ← ADD THIS
 )
 from .serializers_billing import (
     BillingRateSerializer, TimesheetSummarySerializer, TimesheetDetailSerializer,
@@ -26,6 +26,11 @@ from functools import wraps  # Add this import
 
 from django.conf import settings
 import stripe
+
+import csv
+import io
+from rest_framework.parsers import MultiPartParser, FormParser
+from .models import Invoice  # After you add Invoice to models.py
 
 stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", None) or ""
 
@@ -2263,4 +2268,612 @@ def get_seat_usage(request):
         'seats_available': max(0, org.seat_count - current_members - pending_invites),
         'can_invite': (current_members + pending_invites) < org.seat_count,
         'plan': org.plan,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+@require_professional_plan
+def import_invoices_csv(request):
+    """
+    Import invoices from CSV file.
+    Expected columns: client_code, invoice_number, invoice_date, amount, hours_billed
+    """
+    from .models import Invoice, Client  # Import here to avoid circular imports
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    csv_file = request.FILES.get('file')
+    if not csv_file:
+        return Response({'error': 'No file uploaded'}, status=400)
+    
+    if not csv_file.name.endswith('.csv'):
+        return Response({'error': 'File must be a CSV'}, status=400)
+    
+    try:
+        decoded_file = csv_file.read().decode('utf-8')
+        reader = csv.DictReader(io.StringIO(decoded_file))
+        
+        # Normalize headers
+        if reader.fieldnames:
+            reader.fieldnames = [h.lower().strip().replace(' ', '_') for h in reader.fieldnames]
+        
+        # Validate required columns
+        required_cols = {'client_code', 'invoice_number', 'invoice_date', 'amount'}
+        if not required_cols.issubset(set(reader.fieldnames or [])):
+            missing = required_cols - set(reader.fieldnames or [])
+            return Response({
+                'error': f'Missing required columns: {", ".join(missing)}',
+                'found_columns': reader.fieldnames,
+                'required_columns': list(required_cols),
+            }, status=400)
+        
+        # Build client lookup by code
+        clients_by_code = {
+            c.code.upper(): c for c in Client.objects.filter(org=org, code__isnull=False)
+            if c.code
+        }
+        
+        imported = []
+        skipped = []
+        errors = []
+        
+        from django.db import transaction
+        with transaction.atomic():
+            for row_num, row in enumerate(reader, start=2):
+                try:
+                    client_code = row.get('client_code', '').strip().upper()
+                    invoice_number = row.get('invoice_number', '').strip()
+                    invoice_date_str = row.get('invoice_date', '').strip()
+                    amount_str = row.get('amount', '').strip()
+                    hours_str = row.get('hours_billed', '').strip()
+                    
+                    if not all([client_code, invoice_number, invoice_date_str, amount_str]):
+                        errors.append({'row': row_num, 'error': 'Missing required field', 'data': row})
+                        continue
+                    
+                    # Parse date
+                    invoice_date = None
+                    for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y']:
+                        try:
+                            from datetime import datetime
+                            invoice_date = datetime.strptime(invoice_date_str, fmt).date()
+                            break
+                        except ValueError:
+                            continue
+                    
+                    if not invoice_date:
+                        errors.append({'row': row_num, 'error': f'Invalid date: {invoice_date_str}', 'data': row})
+                        continue
+                    
+                    # Parse amount
+                    try:
+                        amount_clean = amount_str.replace('$', '').replace(',', '').strip()
+                        amount = Decimal(amount_clean)
+                    except:
+                        errors.append({'row': row_num, 'error': f'Invalid amount: {amount_str}', 'data': row})
+                        continue
+                    
+                    # Parse hours (optional)
+                    hours_billed = None
+                    if hours_str:
+                        try:
+                            hours_billed = Decimal(hours_str.replace(',', '').strip())
+                        except:
+                            pass
+                    
+                    # Check for duplicate
+                    if Invoice.objects.filter(org=org, invoice_number=invoice_number).exists():
+                        skipped.append({'row': row_num, 'invoice_number': invoice_number, 'reason': 'Duplicate'})
+                        continue
+                    
+                    # Match client
+                    client = clients_by_code.get(client_code)
+                    
+                    # Create invoice
+                    invoice = Invoice.objects.create(
+                        org=org,
+                        client=client,
+                        invoice_number=invoice_number,
+                        invoice_date=invoice_date,
+                        amount=amount,
+                        hours_billed=hours_billed,
+                        client_code=client_code,
+                        source='csv',
+                        created_by=request.user,
+                    )
+                    
+                    imported.append({
+                        'row': row_num,
+                        'invoice_number': invoice_number,
+                        'client_code': client_code,
+                        'client_matched': client is not None,
+                        'client_name': client.name if client else None,
+                        'amount': float(amount),
+                        'hours_billed': float(hours_billed) if hours_billed else None,
+                    })
+                    
+                except Exception as e:
+                    errors.append({'row': row_num, 'error': str(e), 'data': row})
+        
+        unmatched = sum(1 for inv in imported if not inv['client_matched'])
+        
+        return Response({
+            'success': True,
+            'summary': {
+                'imported': len(imported),
+                'skipped': len(skipped),
+                'errors': len(errors),
+                'unmatched_clients': unmatched,
+            },
+            'imported': imported,
+            'skipped': skipped,
+            'errors': errors[:20],
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Failed to process CSV: {str(e)}'}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def list_invoices(request):
+    """List invoices with optional filtering."""
+    from .models import Invoice
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    client_id = request.GET.get('client_id')
+    
+    invoices = Invoice.objects.filter(org=org).select_related('client')
+    
+    if start_date:
+        invoices = invoices.filter(invoice_date__gte=start_date)
+    if end_date:
+        invoices = invoices.filter(invoice_date__lte=end_date)
+    if client_id:
+        invoices = invoices.filter(client_id=client_id)
+    
+    data = [{
+        'id': inv.id,
+        'invoice_number': inv.invoice_number,
+        'invoice_date': inv.invoice_date.isoformat(),
+        'amount': float(inv.amount),
+        'hours_billed': float(inv.hours_billed) if inv.hours_billed else None,
+        'client_id': inv.client_id,
+        'client_name': inv.client.name if inv.client else inv.client_code,
+        'client_code': inv.client_code,
+        'source': inv.source,
+        'matched': inv.client is not None,
+    } for inv in invoices.order_by('-invoice_date')[:500]]
+    
+    return Response({
+        'invoices': data,
+        'total': invoices.count(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def match_invoice_client(request):
+    """Manually match an unmatched invoice to a client."""
+    from .models import Invoice
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    invoice_id = request.data.get('invoice_id')
+    client_id = request.data.get('client_id')
+    
+    if not invoice_id or not client_id:
+        return Response({'error': 'invoice_id and client_id required'}, status=400)
+    
+    try:
+        invoice = Invoice.objects.get(id=invoice_id, org=org)
+        client = Client.objects.get(id=client_id, org=org)
+        
+        invoice.client = client
+        invoice.save(update_fields=['client'])
+        
+        return Response({
+            'success': True,
+            'invoice_number': invoice.invoice_number,
+            'client_name': client.name,
+        })
+    except Invoice.DoesNotExist:
+        return Response({'error': 'Invoice not found'}, status=404)
+    except Client.DoesNotExist:
+        return Response({'error': 'Client not found'}, status=404)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def delete_invoice(request, invoice_id):
+    """Delete an invoice."""
+    from .models import Invoice
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    try:
+        invoice = Invoice.objects.get(id=invoice_id, org=org)
+        inv_number = invoice.invoice_number
+        invoice.delete()
+        return Response({'success': True, 'deleted': inv_number})
+    except Invoice.DoesNotExist:
+        return Response({'error': 'Invoice not found'}, status=404)
+
+
+# ============================================================================
+# REALIZATION REPORT
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def realization_report(request):
+    """
+    Calculate realization: Billed (Budget) vs Worked (Actual)
+    
+    Realization = Billed Hours / Worked Hours × 100
+    
+    - >100% = Efficient (worked fewer hours than billed)
+    - 100% = Break even
+    - <100% = Over budget (worked more hours than billed)
+    """
+    from .models import Invoice
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    
+    if not start_date or not end_date:
+        return Response({'error': 'start_date and end_date required'}, status=400)
+    
+    # Get invoiced totals by client
+    invoiced = Invoice.objects.filter(
+        org=org,
+        invoice_date__gte=start_date,
+        invoice_date__lte=end_date,
+        client__isnull=False,
+    ).values('client_id', 'client__name', 'client__code').annotate(
+        billed_hours=Coalesce(Sum('hours_billed'), Decimal('0'), output_field=DecimalField()),
+        billed_amount=Coalesce(Sum('amount'), Decimal('0'), output_field=DecimalField()),
+    )
+    
+    invoiced_by_client = {
+        row['client_id']: {
+            'client_id': row['client_id'],
+            'client_name': row['client__name'],
+            'client_code': row['client__code'] or '',
+            'billed_hours': float(row['billed_hours']),
+            'billed_amount': float(row['billed_amount']),
+        }
+        for row in invoiced
+    }
+    
+    # Get worked hours by client (billable time blocks)
+    # Using Block model with 'day' field based on your existing code
+    worked = Block.objects.filter(
+        org=org,
+        day__gte=start_date,
+        day__lte=end_date,
+        client__isnull=False,
+        is_billable=True,
+    ).values('client_id', 'client__name', 'client__code').annotate(
+        worked_minutes=Coalesce(Sum('minutes'), 0),
+    )
+    
+    worked_by_client = {
+        row['client_id']: {
+            'client_id': row['client_id'],
+            'client_name': row['client__name'],
+            'client_code': row['client__code'] or '',
+            'worked_hours': float(row['worked_minutes'] or 0) / 60,
+        }
+        for row in worked
+    }
+    
+    # Merge data
+    all_client_ids = set(invoiced_by_client.keys()) | set(worked_by_client.keys())
+    
+    clients = []
+    totals = {
+        'billed_hours': 0,
+        'billed_amount': 0,
+        'worked_hours': 0,
+    }
+    
+    for client_id in all_client_ids:
+        inv_data = invoiced_by_client.get(client_id, {})
+        work_data = worked_by_client.get(client_id, {})
+        
+        billed_hours = inv_data.get('billed_hours', 0)
+        billed_amount = inv_data.get('billed_amount', 0)
+        worked_hours = work_data.get('worked_hours', 0)
+        
+        # Calculate realization
+        if worked_hours > 0 and billed_hours > 0:
+            realization = (billed_hours / worked_hours) * 100
+        elif worked_hours == 0 and billed_hours > 0:
+            realization = 100
+        elif worked_hours > 0 and billed_hours == 0:
+            realization = 0
+        else:
+            realization = None
+        
+        variance_hours = billed_hours - worked_hours if billed_hours and worked_hours else None
+        
+        client_name = inv_data.get('client_name') or work_data.get('client_name', 'Unknown')
+        client_code = inv_data.get('client_code') or work_data.get('client_code', '')
+        
+        # Status
+        if realization is None:
+            status = 'no_data'
+        elif realization >= 125:
+            status = 'excellent'
+        elif realization >= 100:
+            status = 'good'
+        elif realization >= 85:
+            status = 'warning'
+        else:
+            status = 'critical'
+        
+        clients.append({
+            'client_id': client_id,
+            'client_name': client_name,
+            'client_code': client_code,
+            'billed_hours': round(billed_hours, 2),
+            'billed_amount': round(billed_amount, 2),
+            'worked_hours': round(worked_hours, 2),
+            'variance_hours': round(variance_hours, 2) if variance_hours is not None else None,
+            'realization': round(realization, 1) if realization is not None else None,
+            'status': status,
+        })
+        
+        totals['billed_hours'] += billed_hours
+        totals['billed_amount'] += billed_amount
+        totals['worked_hours'] += worked_hours
+    
+    # Sort by realization (lowest first)
+    clients.sort(key=lambda x: (x['realization'] or 0, x['client_name']))
+    
+    # Total realization
+    if totals['worked_hours'] > 0 and totals['billed_hours'] > 0:
+        totals['realization'] = round((totals['billed_hours'] / totals['worked_hours']) * 100, 1)
+    else:
+        totals['realization'] = None
+    
+    totals['variance_hours'] = round(totals['billed_hours'] - totals['worked_hours'], 2)
+    
+    if totals['realization'] is None:
+        totals['status'] = 'no_data'
+    elif totals['realization'] >= 125:
+        totals['status'] = 'excellent'
+    elif totals['realization'] >= 100:
+        totals['status'] = 'good'
+    elif totals['realization'] >= 85:
+        totals['status'] = 'warning'
+    else:
+        totals['status'] = 'critical'
+    
+    return Response({
+        'period_start': start_date,
+        'period_end': end_date,
+        'clients': clients,
+        'totals': totals,
+    })
+
+
+# ============================================================================
+# QuickBooks Invoice Sync (if connected)
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def quickbooks_invoices(request):
+    """Fetch invoices from QuickBooks for preview."""
+    from .models import Integration, Invoice
+    from .views_integrations import refresh_quickbooks_token, QB_API_BASE
+    import requests
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    try:
+        integration = Integration.objects.get(organization=org, provider='quickbooks', is_connected=True)
+    except Integration.DoesNotExist:
+        return Response({'error': 'Not connected to QuickBooks'}, status=400)
+    
+    if not refresh_quickbooks_token(integration):
+        return Response({'error': 'Token refresh failed. Please reconnect.'}, status=401)
+    
+    start_date = request.GET.get('start_date', '2024-01-01')
+    end_date = request.GET.get('end_date')
+    
+    conditions = [f"TxnDate >= '{start_date}'"]
+    if end_date:
+        conditions.append(f"TxnDate <= '{end_date}'")
+    
+    query = f"SELECT * FROM Invoice WHERE {' AND '.join(conditions)} ORDERBY TxnDate DESC MAXRESULTS 500"
+    
+    api_url = f"{QB_API_BASE}/v3/company/{integration.realm_id}/query"
+    
+    try:
+        response = requests.get(
+            api_url,
+            params={'query': query},
+            headers={
+                'Authorization': f'Bearer {integration.access_token}',
+                'Accept': 'application/json',
+            },
+            timeout=30
+        )
+    except requests.RequestException as e:
+        return Response({'error': f'Failed to connect: {e}'}, status=500)
+    
+    if response.status_code != 200:
+        return Response({'error': 'Failed to fetch invoices'}, status=500)
+    
+    data = response.json()
+    qb_invoices = data.get('QueryResponse', {}).get('Invoice', [])
+    
+    existing_ids = set(
+        Invoice.objects.filter(org=org, source='quickbooks', external_id__isnull=False)
+        .values_list('external_id', flat=True)
+    )
+    
+    clients_by_qb_id = {
+        c.quickbooks_id: c for c in Client.objects.filter(org=org, quickbooks_id__isnull=False)
+    }
+    
+    invoices = []
+    for inv in qb_invoices:
+        qb_customer_id = str(inv.get('CustomerRef', {}).get('value', ''))
+        client = clients_by_qb_id.get(qb_customer_id)
+        
+        # Extract hours from line items
+        hours = 0
+        for line in inv.get('Line', []):
+            if line.get('DetailType') == 'SalesItemLineDetail':
+                qty = line.get('SalesItemLineDetail', {}).get('Qty', 0)
+                if 0.25 <= qty <= 500:
+                    hours += qty
+        
+        invoices.append({
+            'id': inv['Id'],
+            'doc_number': inv.get('DocNumber', ''),
+            'date': inv.get('TxnDate', ''),
+            'customer_name': inv.get('CustomerRef', {}).get('name', 'Unknown'),
+            'customer_id': qb_customer_id,
+            'amount': float(inv.get('TotalAmt', 0)),
+            'hours': hours if hours > 0 else None,
+            'status': 'Paid' if inv.get('Balance', 0) == 0 else 'Open',
+            'already_imported': inv['Id'] in existing_ids,
+            'client_matched': client is not None,
+            'client_name': client.name if client else None,
+        })
+    
+    return Response({
+        'invoices': invoices,
+        'total': len(invoices),
+        'already_imported': sum(1 for i in invoices if i['already_imported']),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def quickbooks_import_invoices(request):
+    """Import selected invoices from QuickBooks."""
+    from .models import Integration, Invoice
+    from .views_integrations import refresh_quickbooks_token, QB_API_BASE
+    import requests
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    try:
+        integration = Integration.objects.get(organization=org, provider='quickbooks', is_connected=True)
+    except Integration.DoesNotExist:
+        return Response({'error': 'Not connected to QuickBooks'}, status=400)
+    
+    invoice_ids = request.data.get('invoice_ids', [])
+    if not invoice_ids:
+        return Response({'error': 'No invoices selected'}, status=400)
+    
+    if not refresh_quickbooks_token(integration):
+        return Response({'error': 'Token refresh failed'}, status=401)
+    
+    clients_by_qb_id = {
+        c.quickbooks_id: c for c in Client.objects.filter(org=org, quickbooks_id__isnull=False)
+    }
+    
+    imported = []
+    skipped = []
+    errors = []
+    
+    for inv_id in invoice_ids:
+        api_url = f"{QB_API_BASE}/v3/company/{integration.realm_id}/invoice/{inv_id}"
+        
+        try:
+            response = requests.get(
+                api_url,
+                headers={
+                    'Authorization': f'Bearer {integration.access_token}',
+                    'Accept': 'application/json',
+                },
+                timeout=30
+            )
+            
+            if response.status_code != 200:
+                errors.append({'id': inv_id, 'error': 'Failed to fetch'})
+                continue
+            
+            inv = response.json().get('Invoice', {})
+            
+            if Invoice.objects.filter(org=org, external_id=inv_id, source='quickbooks').exists():
+                skipped.append({'id': inv_id, 'reason': 'Already imported'})
+                continue
+            
+            qb_customer_id = str(inv.get('CustomerRef', {}).get('value', ''))
+            client = clients_by_qb_id.get(qb_customer_id)
+            
+            hours = 0
+            for line in inv.get('Line', []):
+                if line.get('DetailType') == 'SalesItemLineDetail':
+                    qty = line.get('SalesItemLineDetail', {}).get('Qty', 0)
+                    if 0.25 <= qty <= 500:
+                        hours += qty
+            
+            invoice = Invoice.objects.create(
+                org=org,
+                client=client,
+                invoice_number=inv.get('DocNumber', f"QB-{inv_id}"),
+                invoice_date=inv.get('TxnDate'),
+                amount=Decimal(str(inv.get('TotalAmt', 0))),
+                hours_billed=Decimal(str(hours)) if hours > 0 else None,
+                client_code=client.code if client else '',
+                client_name=inv.get('CustomerRef', {}).get('name', ''),
+                source='quickbooks',
+                external_id=inv_id,
+                created_by=request.user,
+            )
+            
+            imported.append({
+                'id': invoice.id,
+                'invoice_number': invoice.invoice_number,
+                'amount': float(invoice.amount),
+            })
+            
+        except Exception as e:
+            errors.append({'id': inv_id, 'error': str(e)})
+    
+    return Response({
+        'imported': imported,
+        'skipped': skipped,
+        'errors': errors,
+        'summary': {
+            'imported': len(imported),
+            'skipped': len(skipped),
+            'errors': len(errors),
+        }
     })

@@ -204,6 +204,16 @@ urlpatterns = [
     # History
     path('billing/timesheet-history/', views_billing.timesheet_history),  # NEW
 
+    path('billing/invoices/import-csv/', views_billing.import_invoices_csv, name='import_invoices_csv'),
+    
+    # Invoice Management
+    path('billing/invoices/', views_billing.list_invoices, name='list_invoices'),
+    path('billing/invoices/match/', views_billing.match_invoice_client, name='match_invoice_client'),
+    
+    # Realization Report
+    path('billing/realization/', views_billing.realization_report, name='realization_report'),
+    
+
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
 
@@ -217,6 +227,8 @@ urlpatterns = [
     path('integrations/quickbooks/disconnect/', views_integrations.quickbooks_disconnect, name='quickbooks-disconnect'),
     path('integrations/quickbooks/customers/', views_integrations.quickbooks_customers, name='quickbooks-customers'),
     path('integrations/quickbooks/import/', views_integrations.quickbooks_import, name='quickbooks-import'),
+    path('integrations/quickbooks/invoices/', views_billing.quickbooks_invoices, name='qb_invoices'),
+    path('integrations/quickbooks/invoices/import/', views_billing.quickbooks_import_invoices, name='qb_import_invoices'),
     
     # Xero
     path('integrations/xero/connect/', views_integrations.xero_connect, name='xero-connect'),

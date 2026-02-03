@@ -625,6 +625,114 @@ class ClientRequest(models.Model):
     class Meta:
         ordering = ['-created_at']
 
+
+
+# tracker/models_billing.py
+# Add these to your existing models.py or as a separate file
+
+from django.db import models
+from django.conf import settings
+
+
+class Invoice(models.Model):
+    """
+    Tracks invoiced amounts per client for realization calculations.
+    Can be imported from CSV, QuickBooks, or Xero.
+    """
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='invoices'
+    )
+    client = models.ForeignKey(
+        'Client',
+        on_delete=models.CASCADE,
+        related_name='invoices',
+        null=True,
+        blank=True
+    )
+    
+    # Invoice details
+    invoice_number = models.CharField(max_length=100)
+    invoice_date = models.DateField()
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    hours_billed = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    
+    # For matching before client is linked
+    client_code = models.CharField(max_length=50, blank=True)
+    client_name = models.CharField(max_length=255, blank=True)
+    
+    # Source tracking
+    SOURCE_CHOICES = [
+        ('csv', 'CSV Import'),
+        ('quickbooks', 'QuickBooks'),
+        ('xero', 'Xero'),
+        ('manual', 'Manual Entry'),
+    ]
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='manual')
+    external_id = models.CharField(max_length=100, blank=True)  # QBO/Xero invoice ID
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_invoices'
+    )
+    
+    class Meta:
+        ordering = ['-invoice_date', '-created_at']
+        unique_together = [
+            ['org', 'invoice_number'],  # Prevent duplicate invoice numbers per org
+        ]
+        indexes = [
+            models.Index(fields=['org', 'invoice_date']),
+            models.Index(fields=['org', 'client']),
+            models.Index(fields=['client_code']),
+        ]
+    
+    def __str__(self):
+        return f"{self.invoice_number} - {self.client_name or self.client_code} - ${self.amount}"
+
+
+class ClientBudget(models.Model):
+    """
+    Optional: Track budget/retainer hours per client per period.
+    Useful for firms with fixed-fee or retainer arrangements.
+    """
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='client_budgets'
+    )
+    client = models.ForeignKey(
+        'Client',
+        on_delete=models.CASCADE,
+        related_name='budgets'
+    )
+    
+    # Budget period
+    period_start = models.DateField()
+    period_end = models.DateField()
+    
+    # Budget amounts
+    budget_hours = models.DecimalField(max_digits=8, decimal_places=2)
+    budget_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    
+    # Notes
+    description = models.CharField(max_length=255, blank=True)  # e.g., "Q1 2026 Tax Prep"
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-period_start']
+    
+    def __str__(self):
+        return f"{self.client.name} - {self.period_start} to {self.period_end} - {self.budget_hours}h"
+
 # tracker/models.py - Add Integration model
 
 class Integration(models.Model):

@@ -1173,7 +1173,7 @@ def _run_pairing_process(result_queue):
     ctk.set_appearance_mode("dark")
     root = ctk.CTk()
     root.title("Link Device")
-    root.geometry("440x520")  # slightly taller since button moved up
+    root.geometry("440x380")  # slightly taller since button moved up
     root.resizable(False, False)
     root.configure(fg_color=colors["bg_base"])
 

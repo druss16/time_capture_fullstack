@@ -2263,6 +2263,11 @@ def get_seat_usage(request):
     })
 
 
+# ============================================================================
+# REPLACE import_invoices_csv in views_billing.py with this version
+# Fixes: UTF-8 BOM handling from Excel exports
+# ============================================================================
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
@@ -2271,8 +2276,13 @@ def import_invoices_csv(request):
     """
     Import invoices from CSV file.
     Expected columns: client_code, invoice_number, invoice_date, amount, hours_billed
+    
+    Handles:
+    - UTF-8 BOM (from Excel exports)
+    - Various date formats
+    - Flexible column naming
     """
-    from .models import Invoice, Client  # Import here to avoid circular imports
+    from .models import Invoice, Client
     
     org = get_user_org(request.user)
     if not org:
@@ -2286,24 +2296,59 @@ def import_invoices_csv(request):
         return Response({'error': 'File must be a CSV'}, status=400)
     
     try:
-        decoded_file = csv_file.read().decode('utf-8')
+        # Read raw bytes
+        raw_content = csv_file.read()
+        
+        # Decode with BOM handling - utf-8-sig strips BOM automatically
+        try:
+            decoded_file = raw_content.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            # Fallback to latin-1 which accepts any byte
+            decoded_file = raw_content.decode('latin-1')
+        
         reader = csv.DictReader(io.StringIO(decoded_file))
         
-        # Normalize headers
+        # Normalize headers (strip whitespace, lowercase, replace spaces with underscores)
         if reader.fieldnames:
-            reader.fieldnames = [h.lower().strip().replace(' ', '_') for h in reader.fieldnames]
+            # Also strip any remaining BOM or invisible characters
+            reader.fieldnames = [
+                h.lower().strip().replace(' ', '_').replace('\ufeff', '') 
+                for h in reader.fieldnames
+            ]
+        
+        # Flexible column matching
+        fieldnames_set = set(reader.fieldnames or [])
+        
+        # Map expected columns to possible variations
+        column_aliases = {
+            'client_code': ['client_code', 'clientcode', 'client', 'code', 'customer_code', 'customercode'],
+            'invoice_number': ['invoice_number', 'invoicenumber', 'invoice_no', 'invoiceno', 'invoice', 'inv_number', 'inv_no', 'number'],
+            'invoice_date': ['invoice_date', 'invoicedate', 'date', 'inv_date', 'invdate'],
+            'amount': ['amount', 'total', 'invoice_amount', 'invoiceamount', 'total_amount', 'totalamount', 'value'],
+            'hours_billed': ['hours_billed', 'hoursbilled', 'hours', 'billed_hours', 'billedhours', 'qty', 'quantity'],
+        }
+        
+        # Find actual column names
+        column_map = {}
+        for standard_name, aliases in column_aliases.items():
+            for alias in aliases:
+                if alias in fieldnames_set:
+                    column_map[standard_name] = alias
+                    break
         
         # Validate required columns
-        required_cols = {'client_code', 'invoice_number', 'invoice_date', 'amount'}
-        if not required_cols.issubset(set(reader.fieldnames or [])):
-            missing = required_cols - set(reader.fieldnames or [])
+        required = ['client_code', 'invoice_number', 'invoice_date', 'amount']
+        missing = [col for col in required if col not in column_map]
+        
+        if missing:
             return Response({
                 'error': f'Missing required columns: {", ".join(missing)}',
-                'found_columns': reader.fieldnames,
-                'required_columns': list(required_cols),
+                'found_columns': list(reader.fieldnames or []),
+                'required_columns': required,
+                'hint': 'Make sure your CSV has columns for: client_code, invoice_number, invoice_date, amount'
             }, status=400)
         
-        # Build client lookup by code
+        # Build client lookup by code (case-insensitive)
         clients_by_code = {
             c.code.upper(): c for c in Client.objects.filter(org=org, code__isnull=False)
             if c.code
@@ -2317,19 +2362,31 @@ def import_invoices_csv(request):
         with transaction.atomic():
             for row_num, row in enumerate(reader, start=2):
                 try:
-                    client_code = row.get('client_code', '').strip().upper()
-                    invoice_number = row.get('invoice_number', '').strip()
-                    invoice_date_str = row.get('invoice_date', '').strip()
-                    amount_str = row.get('amount', '').strip()
-                    hours_str = row.get('hours_billed', '').strip()
+                    # Get values using mapped column names
+                    client_code = (row.get(column_map['client_code']) or '').strip().upper()
+                    invoice_number = (row.get(column_map['invoice_number']) or '').strip()
+                    invoice_date_str = (row.get(column_map['invoice_date']) or '').strip()
+                    amount_str = (row.get(column_map['amount']) or '').strip()
+                    hours_str = (row.get(column_map.get('hours_billed', '')) or '').strip() if 'hours_billed' in column_map else ''
                     
                     if not all([client_code, invoice_number, invoice_date_str, amount_str]):
-                        errors.append({'row': row_num, 'error': 'Missing required field', 'data': row})
+                        errors.append({'row': row_num, 'error': 'Missing required field', 'data': dict(row)})
                         continue
                     
-                    # Parse date
+                    # Parse date - try multiple formats
                     invoice_date = None
-                    for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y']:
+                    date_formats = [
+                        '%Y-%m-%d',      # 2026-02-01
+                        '%m/%d/%Y',      # 02/01/2026
+                        '%m-%d-%Y',      # 02-01-2026
+                        '%d/%m/%Y',      # 01/02/2026
+                        '%d-%m-%Y',      # 01-02-2026
+                        '%Y/%m/%d',      # 2026/02/01
+                        '%m/%d/%y',      # 02/01/26
+                        '%d/%m/%y',      # 01/02/26
+                    ]
+                    
+                    for fmt in date_formats:
                         try:
                             from datetime import datetime
                             invoice_date = datetime.strptime(invoice_date_str, fmt).date()
@@ -2338,15 +2395,15 @@ def import_invoices_csv(request):
                             continue
                     
                     if not invoice_date:
-                        errors.append({'row': row_num, 'error': f'Invalid date: {invoice_date_str}', 'data': row})
+                        errors.append({'row': row_num, 'error': f'Invalid date format: {invoice_date_str}', 'data': dict(row)})
                         continue
                     
-                    # Parse amount
+                    # Parse amount - handle currency symbols and commas
                     try:
-                        amount_clean = amount_str.replace('$', '').replace(',', '').strip()
+                        amount_clean = amount_str.replace('$', '').replace(',', '').replace('£', '').replace('€', '').strip()
                         amount = Decimal(amount_clean)
                     except:
-                        errors.append({'row': row_num, 'error': f'Invalid amount: {amount_str}', 'data': row})
+                        errors.append({'row': row_num, 'error': f'Invalid amount: {amount_str}', 'data': dict(row)})
                         continue
                     
                     # Parse hours (optional)
@@ -2355,14 +2412,14 @@ def import_invoices_csv(request):
                         try:
                             hours_billed = Decimal(hours_str.replace(',', '').strip())
                         except:
-                            pass
+                            pass  # Hours are optional, don't fail on parse error
                     
-                    # Check for duplicate
+                    # Check for duplicate invoice number
                     if Invoice.objects.filter(org=org, invoice_number=invoice_number).exists():
-                        skipped.append({'row': row_num, 'invoice_number': invoice_number, 'reason': 'Duplicate'})
+                        skipped.append({'row': row_num, 'invoice_number': invoice_number, 'reason': 'Duplicate invoice number'})
                         continue
                     
-                    # Match client
+                    # Match client by code
                     client = clients_by_code.get(client_code)
                     
                     # Create invoice
@@ -2389,7 +2446,7 @@ def import_invoices_csv(request):
                     })
                     
                 except Exception as e:
-                    errors.append({'row': row_num, 'error': str(e), 'data': row})
+                    errors.append({'row': row_num, 'error': str(e), 'data': dict(row)})
         
         unmatched = sum(1 for inv in imported if not inv['client_matched'])
         
@@ -2401,13 +2458,17 @@ def import_invoices_csv(request):
                 'errors': len(errors),
                 'unmatched_clients': unmatched,
             },
-            'imported': imported,
-            'skipped': skipped,
+            'imported': imported[:50],  # Limit response size
+            'skipped': skipped[:20],
             'errors': errors[:20],
         })
         
     except Exception as e:
-        return Response({'error': f'Failed to process CSV: {str(e)}'}, status=500)
+        import traceback
+        return Response({
+            'error': f'Failed to process CSV: {str(e)}',
+            'detail': traceback.format_exc()[:500]
+        }, status=500)
 
 
 @api_view(['GET'])

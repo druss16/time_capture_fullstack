@@ -1,17 +1,15 @@
 // src/components/ClientProfitability.tsx
 // Realization Dashboard: Budget (Billed) vs Actual (Worked)
+// With QuickBooks/Xero Integration
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { safeFetchJson, API_BASE } from '@/lib/api';
+import { safeFetchJson, safeUploadFile, API_BASE } from '@/lib/api';
 import {
   TrendingUp,
   TrendingDown,
   Clock,
   DollarSign,
-  Users,
   Calendar,
-  ChevronDown,
-  ChevronUp,
   RefreshCw,
   Upload,
   AlertCircle,
@@ -20,6 +18,12 @@ import {
   FileSpreadsheet,
   Link2,
   X,
+  Download,
+  ExternalLink,
+  Check,
+  Square,
+  CheckSquare,
+  Loader2,
 } from 'lucide-react';
 
 // ===============================
@@ -64,9 +68,30 @@ interface Invoice {
   matched: boolean;
 }
 
+interface QBInvoice {
+  id: string;
+  doc_number: string;
+  date: string;
+  customer_name: string;
+  customer_id: string;
+  amount: number;
+  hours: number | null;
+  status: string;
+  already_imported: boolean;
+  client_matched: boolean;
+  client_name: string | null;
+}
+
 interface DateRange {
   start: string;
   end: string;
+}
+
+interface Integration {
+  id: number;
+  provider: string;
+  is_connected: boolean;
+  company_name?: string;
 }
 
 // ===============================
@@ -135,22 +160,55 @@ const getStatusLabel = (status: string): string => {
 };
 
 // ===============================
-// CSV UPLOAD MODAL
+// IMPORT MODAL (CSV + QuickBooks + Xero)
 // ===============================
 
-interface UploadModalProps {
+interface ImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  dateRange: DateRange;
 }
 
-const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuccess }) => {
+type ImportSource = 'csv' | 'quickbooks' | 'xero';
+
+const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, dateRange }) => {
+  const [source, setSource] = useState<ImportSource>('csv');
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  
+  // QuickBooks state
+  const [qbConnected, setQbConnected] = useState(false);
+  const [qbCompanyName, setQbCompanyName] = useState<string | null>(null);
+  const [qbInvoices, setQbInvoices] = useState<QBInvoice[]>([]);
+  const [qbLoading, setQbLoading] = useState(false);
+  const [selectedQbInvoices, setSelectedQbInvoices] = useState<Set<string>>(new Set());
+  
+  // Check integration status on mount
+  useEffect(() => {
+    if (isOpen) {
+      checkIntegrations();
+    }
+  }, [isOpen]);
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const checkIntegrations = async () => {
+    try {
+      const data = await safeFetchJson<{ integrations: Integration[] }>(
+        `${API_BASE}/integrations/`
+      );
+      const qb = data.integrations?.find(i => i.provider === 'quickbooks');
+      if (qb?.is_connected) {
+        setQbConnected(true);
+        setQbCompanyName(qb.company_name || 'QuickBooks');
+      }
+    } catch (err) {
+      console.error('Failed to check integrations:', err);
+    }
+  };
+
+  const handleCSVUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -158,47 +216,139 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuccess })
     setError(null);
     setResult(null);
 
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const res = await fetch(`${API_BASE}/billing/invoices/import-csv/`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData,
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || 'Upload failed');
-      } else {
-        setResult(data);
-        if (data.summary.imported > 0) {
-          onSuccess();
+      const data = await safeUploadFile<any>(
+        `${API_BASE}/billing/invoices/import-csv/`,
+        file,
+        'file'
+      );
+      
+      setResult(data);
+      if (data.summary?.imported > 0) {
+        onSuccess();
+      }
+    } catch (err: any) {
+      let errorMessage = 'Upload failed';
+      if (err.message) {
+        try {
+          const match = err.message.match(/HTTP \d+: (.+)/);
+          if (match) {
+            const parsed = JSON.parse(match[1]);
+            errorMessage = parsed.error || parsed.message || errorMessage;
+          } else {
+            errorMessage = err.message;
+          }
+        } catch {
+          errorMessage = err.message;
         }
       }
-    } catch (err) {
-      setError('Failed to upload file');
+      setError(errorMessage);
     } finally {
       setUploading(false);
     }
   };
 
+  const fetchQBInvoices = async () => {
+    setQbLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        start_date: dateRange.start,
+        end_date: dateRange.end,
+      });
+      const data = await safeFetchJson<{ invoices: QBInvoice[]; total: number }>(
+        `${API_BASE}/billing/quickbooks/invoices/?${params}`
+      );
+      setQbInvoices(data.invoices || []);
+      
+      // Auto-select invoices that haven't been imported yet
+      const notImported = data.invoices?.filter(i => !i.already_imported).map(i => i.id) || [];
+      setSelectedQbInvoices(new Set(notImported));
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch QuickBooks invoices');
+    } finally {
+      setQbLoading(false);
+    }
+  };
+
+  const handleQBImport = async () => {
+    if (selectedQbInvoices.size === 0) return;
+    
+    setUploading(true);
+    setError(null);
+    
+    try {
+      const data = await safeFetchJson<any>(`${API_BASE}/billing/quickbooks/import/`, {
+        method: 'POST',
+        body: JSON.stringify({
+          invoice_ids: Array.from(selectedQbInvoices),
+        }),
+      });
+      
+      setResult({
+        source: 'quickbooks',
+        summary: {
+          imported: data.imported?.length || 0,
+          skipped: data.skipped?.length || 0,
+          errors: data.errors?.length || 0,
+        }
+      });
+      
+      if (data.imported?.length > 0) {
+        onSuccess();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to import from QuickBooks');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const toggleQBInvoice = (id: string) => {
+    const newSelected = new Set(selectedQbInvoices);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedQbInvoices(newSelected);
+  };
+
+  const toggleAllQB = () => {
+    const importable = qbInvoices.filter(i => !i.already_imported);
+    if (selectedQbInvoices.size === importable.length) {
+      setSelectedQbInvoices(new Set());
+    } else {
+      setSelectedQbInvoices(new Set(importable.map(i => i.id)));
+    }
+  };
+
+  // Reset state when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setResult(null);
+      setError(null);
+      setUploading(false);
+      setQbInvoices([]);
+      setSelectedQbInvoices(new Set());
+      setSource('csv');
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[80vh] overflow-auto">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-200">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
               <Upload className="w-5 h-5 text-blue-600" />
             </div>
             <div>
               <h3 className="font-semibold text-slate-800">Import Invoices</h3>
-              <p className="text-sm text-slate-500">Upload CSV from QuickBooks/Xero</p>
+              <p className="text-sm text-slate-500">CSV, QuickBooks, or Xero</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
@@ -207,52 +357,296 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuccess })
         </div>
 
         {/* Content */}
-        <div className="p-5 space-y-5">
-          {/* Format Guide */}
-          <div className="bg-slate-50 rounded-xl p-4">
-            <h4 className="font-medium text-slate-700 mb-2 flex items-center gap-2">
-              <FileSpreadsheet className="w-4 h-4" />
-              Expected CSV Format
-            </h4>
-            <code className="text-xs text-slate-600 block bg-white p-3 rounded-lg border border-slate-200 font-mono">
-              client_code,invoice_number,invoice_date,amount,hours_billed<br/>
-              MAVOPS,INV-001,2026-02-01,1500.00,10<br/>
-              DAUPH,INV-002,2026-02-01,2000.00,15
-            </code>
-            <p className="text-xs text-slate-500 mt-2">
-              <strong>Required:</strong> client_code, invoice_number, invoice_date, amount<br/>
-              <strong>Optional:</strong> hours_billed
-            </p>
-          </div>
+        <div className="p-5 overflow-y-auto flex-1">
+          {/* Source Selector */}
+          {!result && (
+            <div className="grid grid-cols-3 gap-3 mb-6">
+              {/* CSV Option */}
+              <button
+                onClick={() => setSource('csv')}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                  source === 'csv'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center mb-3">
+                  <FileSpreadsheet className="w-5 h-5 text-slate-600" />
+                </div>
+                <div className="font-semibold text-slate-800">CSV File</div>
+                <div className="text-xs text-slate-500 mt-1">Upload from Excel</div>
+              </button>
 
-          {/* Upload Area */}
-          <div
-            className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
-              uploading ? 'bg-blue-50 border-blue-300' : 'hover:bg-slate-50 border-slate-300'
-            }`}
-            onClick={() => fileRef.current?.click()}
-          >
-            {uploading ? (
-              <RefreshCw className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
-            ) : (
-              <Upload className="w-8 h-8 text-slate-400 mx-auto mb-3" />
-            )}
-            <p className="text-slate-600 font-medium">
-              {uploading ? 'Uploading...' : 'Click to select CSV file'}
-            </p>
-            <p className="text-sm text-slate-400 mt-1">or drag and drop</p>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv"
-              onChange={handleUpload}
-              className="hidden"
-            />
-          </div>
+              {/* QuickBooks Option */}
+              <button
+                onClick={() => {
+                  setSource('quickbooks');
+                  if (qbConnected && qbInvoices.length === 0) {
+                    fetchQBInvoices();
+                  }
+                }}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                  source === 'quickbooks'
+                    ? 'border-green-500 bg-green-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center mb-3 text-xl">
+                  📗
+                </div>
+                <div className="font-semibold text-slate-800">QuickBooks</div>
+                <div className="text-xs mt-1">
+                  {qbConnected ? (
+                    <span className="text-green-600 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Connected
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">Not connected</span>
+                  )}
+                </div>
+              </button>
+
+              {/* Xero Option */}
+              <button
+                onClick={() => setSource('xero')}
+                className={`p-4 rounded-xl border-2 text-left transition-all opacity-60 cursor-not-allowed ${
+                  source === 'xero'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-slate-200'
+                }`}
+                disabled
+              >
+                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center mb-3 text-xl">
+                  📘
+                </div>
+                <div className="font-semibold text-slate-800">Xero</div>
+                <div className="text-xs text-slate-400 mt-1">Coming Soon</div>
+              </button>
+            </div>
+          )}
+
+          {/* CSV Upload */}
+          {source === 'csv' && !result && (
+            <>
+              {/* Format Guide */}
+              <div className="bg-slate-50 rounded-xl p-4 mb-4">
+                <h4 className="font-medium text-slate-700 mb-2 flex items-center gap-2">
+                  <FileSpreadsheet className="w-4 h-4" />
+                  Expected CSV Format
+                </h4>
+                <code className="text-xs text-slate-600 block bg-white p-3 rounded-lg border border-slate-200 font-mono">
+                  client_code,invoice_number,invoice_date,amount,hours_billed<br/>
+                  MAVOPS,INV-001,2026-02-01,1500.00,10<br/>
+                  DAUPH,INV-002,2026-02-01,2000.00,15
+                </code>
+                <p className="text-xs text-slate-500 mt-2">
+                  <strong>Required:</strong> client_code, invoice_number, invoice_date, amount<br/>
+                  <strong>Optional:</strong> hours_billed
+                </p>
+              </div>
+
+              {/* Upload Area */}
+              <div
+                className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
+                  uploading ? 'bg-blue-50 border-blue-300' : 'hover:bg-slate-50 border-slate-300'
+                }`}
+                onClick={() => fileRef.current?.click()}
+              >
+                {uploading ? (
+                  <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+                ) : (
+                  <Upload className="w-8 h-8 text-slate-400 mx-auto mb-3" />
+                )}
+                <p className="text-slate-600 font-medium">
+                  {uploading ? 'Uploading...' : 'Click to select CSV file'}
+                </p>
+                <p className="text-sm text-slate-400 mt-1">or drag and drop</p>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".csv"
+                  onChange={handleCSVUpload}
+                  className="hidden"
+                />
+              </div>
+            </>
+          )}
+
+          {/* QuickBooks */}
+          {source === 'quickbooks' && !result && (
+            <>
+              {!qbConnected ? (
+                <div className="text-center py-8">
+                  <div className="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl">
+                    📗
+                  </div>
+                  <h4 className="font-semibold text-slate-800 mb-2">Connect QuickBooks</h4>
+                  <p className="text-slate-500 text-sm mb-4">
+                    Connect your QuickBooks account to import invoices automatically
+                  </p>
+                  <a
+                    href="/settings?tab=integrations"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    Go to Settings
+                  </a>
+                </div>
+              ) : qbLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 text-green-500 animate-spin" />
+                </div>
+              ) : qbInvoices.length === 0 ? (
+                <div className="text-center py-8">
+                  <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                  <p className="text-slate-500 font-medium">No invoices found</p>
+                  <p className="text-slate-400 text-sm mt-1">
+                    No invoices in QuickBooks for {dateRange.start} to {dateRange.end}
+                  </p>
+                  <button
+                    onClick={fetchQBInvoices}
+                    className="mt-4 px-4 py-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                  >
+                    <RefreshCw className="w-4 h-4 inline mr-2" />
+                    Refresh
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-slate-700">
+                        {qbInvoices.length} invoice{qbInvoices.length !== 1 ? 's' : ''} from {qbCompanyName}
+                      </span>
+                      <button
+                        onClick={fetchQBInvoices}
+                        className="p-1 hover:bg-slate-100 rounded transition-colors"
+                      >
+                        <RefreshCw className="w-4 h-4 text-slate-400" />
+                      </button>
+                    </div>
+                    <button
+                      onClick={toggleAllQB}
+                      className="text-sm text-blue-600 hover:text-blue-700"
+                    >
+                      {selectedQbInvoices.size === qbInvoices.filter(i => !i.already_imported).length
+                        ? 'Deselect All'
+                        : 'Select All'}
+                    </button>
+                  </div>
+
+                  {/* Invoice List */}
+                  <div className="border border-slate-200 rounded-xl max-h-64 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 sticky top-0">
+                        <tr>
+                          <th className="w-10 px-3 py-2"></th>
+                          <th className="text-left px-3 py-2 font-medium text-slate-700">Invoice</th>
+                          <th className="text-left px-3 py-2 font-medium text-slate-700">Customer</th>
+                          <th className="text-right px-3 py-2 font-medium text-slate-700">Amount</th>
+                          <th className="text-center px-3 py-2 font-medium text-slate-700">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {qbInvoices.map((inv) => (
+                          <tr
+                            key={inv.id}
+                            className={`${inv.already_imported ? 'bg-slate-50 opacity-60' : 'hover:bg-slate-50'}`}
+                          >
+                            <td className="px-3 py-2">
+                              {inv.already_imported ? (
+                                <CheckCircle2 className="w-5 h-5 text-green-500" />
+                              ) : (
+                                <button
+                                  onClick={() => toggleQBInvoice(inv.id)}
+                                  className="focus:outline-none"
+                                >
+                                  {selectedQbInvoices.has(inv.id) ? (
+                                    <CheckSquare className="w-5 h-5 text-blue-600" />
+                                  ) : (
+                                    <Square className="w-5 h-5 text-slate-400" />
+                                  )}
+                                </button>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="font-medium text-slate-800">{inv.doc_number}</div>
+                              <div className="text-xs text-slate-500">{inv.date}</div>
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="text-slate-700">{inv.customer_name}</div>
+                              {inv.client_matched && (
+                                <div className="text-xs text-green-600 flex items-center gap-1">
+                                  <Check className="w-3 h-3" />
+                                  Matched
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium text-slate-800">
+                              {formatCurrency(inv.amount)}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              {inv.already_imported ? (
+                                <span className="text-xs text-slate-500">Imported</span>
+                              ) : (
+                                <span className={`text-xs px-2 py-1 rounded-full ${
+                                  inv.status === 'Paid'
+                                    ? 'bg-green-100 text-green-700'
+                                    : 'bg-amber-100 text-amber-700'
+                                }`}>
+                                  {inv.status}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Import Button */}
+                  {selectedQbInvoices.size > 0 && (
+                    <button
+                      onClick={handleQBImport}
+                      disabled={uploading}
+                      className="mt-4 w-full py-3 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {uploading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Importing...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-4 h-4" />
+                          Import {selectedQbInvoices.size} Invoice{selectedQbInvoices.size !== 1 ? 's' : ''}
+                        </>
+                      )}
+                    </button>
+                  )}
+                </>
+              )}
+            </>
+          )}
+
+          {/* Xero Coming Soon */}
+          {source === 'xero' && !result && (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl">
+                📘
+              </div>
+              <h4 className="font-semibold text-slate-800 mb-2">Xero Integration</h4>
+              <p className="text-slate-500 text-sm">
+                Xero integration is coming soon! For now, export your invoices from Xero as CSV.
+              </p>
+            </div>
+          )}
 
           {/* Error */}
           {error && (
-            <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-red-700 font-medium">Import Failed</p>
@@ -270,19 +664,19 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuccess })
               </div>
               <div className="grid grid-cols-3 gap-3 text-center">
                 <div className="bg-white rounded-lg p-3">
-                  <div className="text-2xl font-bold text-green-600">{result.summary.imported}</div>
+                  <div className="text-2xl font-bold text-green-600">{result.summary?.imported || 0}</div>
                   <div className="text-xs text-slate-500">Imported</div>
                 </div>
                 <div className="bg-white rounded-lg p-3">
-                  <div className="text-2xl font-bold text-amber-600">{result.summary.skipped}</div>
+                  <div className="text-2xl font-bold text-amber-600">{result.summary?.skipped || 0}</div>
                   <div className="text-xs text-slate-500">Skipped</div>
                 </div>
                 <div className="bg-white rounded-lg p-3">
-                  <div className="text-2xl font-bold text-slate-600">{result.summary.unmatched_clients}</div>
-                  <div className="text-xs text-slate-500">Unmatched</div>
+                  <div className="text-2xl font-bold text-slate-600">{result.summary?.unmatched_clients || result.summary?.errors || 0}</div>
+                  <div className="text-xs text-slate-500">{result.source === 'quickbooks' ? 'Errors' : 'Unmatched'}</div>
                 </div>
               </div>
-              {result.summary.unmatched_clients > 0 && (
+              {(result.summary?.unmatched_clients || 0) > 0 && (
                 <p className="text-xs text-amber-700 mt-3">
                   ⚠️ Some invoices have unmatched client codes. You can match them manually in the Invoices tab.
                 </p>
@@ -292,7 +686,7 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuccess })
         </div>
 
         {/* Footer */}
-        <div className="p-5 border-t border-slate-200 flex justify-end gap-3">
+        <div className="p-5 border-t border-slate-200 flex justify-end gap-3 flex-shrink-0">
           <button
             onClick={onClose}
             className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
@@ -313,8 +707,7 @@ const ClientProfitability: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<RealizationSummary | null>(null);
-  const [expandedClient, setExpandedClient] = useState<number | null>(null);
-  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'realization' | 'invoices'>('realization');
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   
@@ -360,7 +753,7 @@ const ClientProfitability: React.FC = () => {
       const result = await safeFetchJson<{ invoices: Invoice[] }>(
         `${API_BASE}/billing/invoices/?${params}`
       );
-      setInvoices(result.invoices);
+      setInvoices(result.invoices || []);
     } catch (err) {
       console.error('Failed to load invoices:', err);
     }
@@ -404,11 +797,16 @@ const ClientProfitability: React.FC = () => {
     });
   };
 
+  const handleImportSuccess = () => {
+    fetchData();
+    fetchInvoices();
+  };
+
   // Loading state
   if (loading && !data) {
     return (
       <div className="flex items-center justify-center py-12">
-        <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
+        <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
       </div>
     );
   }
@@ -423,7 +821,7 @@ const ClientProfitability: React.FC = () => {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setShowUploadModal(true)}
+            onClick={() => setShowImportModal(true)}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             <Upload className="w-4 h-4" />
@@ -606,7 +1004,7 @@ const ClientProfitability: React.FC = () => {
                         Import invoices or adjust the date range
                       </p>
                       <button
-                        onClick={() => setShowUploadModal(true)}
+                        onClick={() => setShowImportModal(true)}
                         className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
                       >
                         Import Invoices
@@ -737,10 +1135,10 @@ const ClientProfitability: React.FC = () => {
                       Import from CSV or connect QuickBooks/Xero
                     </p>
                     <button
-                      onClick={() => setShowUploadModal(true)}
+                      onClick={() => setShowImportModal(true)}
                       className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
                     >
-                      Import CSV
+                      Import Invoices
                     </button>
                   </td>
                 </tr>
@@ -781,14 +1179,12 @@ const ClientProfitability: React.FC = () => {
         </div>
       )}
 
-      {/* Upload Modal */}
-      <UploadModal
-        isOpen={showUploadModal}
-        onClose={() => setShowUploadModal(false)}
-        onSuccess={() => {
-          fetchData();
-          fetchInvoices();
-        }}
+      {/* Import Modal */}
+      <ImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onSuccess={handleImportSuccess}
+        dateRange={dateRange}
       />
     </div>
   );

@@ -45,9 +45,9 @@ def client_groups_list(request):
     
     if request.method == 'GET':
         groups = ClientGroup.objects.filter(org=org).annotate(
-            client_count=Count('clients')
+            num_clients=Count('clients')  # ← Changed name
         ).prefetch_related('clients', 'default_assignees').order_by('name')
-        
+
         data = []
         for group in groups:
             data.append({
@@ -56,7 +56,7 @@ def client_groups_list(request):
                 'description': group.description,
                 'color': group.color,
                 'icon': group.icon,
-                'client_count': group.client_count,
+                'client_count': group.num_clients,  # ← Use the new name here
                 'client_ids': list(group.clients.values_list('id', flat=True)),
                 'default_assignee_ids': list(group.default_assignees.values_list('id', flat=True)),
                 'created_at': group.created_at.isoformat(),

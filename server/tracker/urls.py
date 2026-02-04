@@ -217,9 +217,9 @@ urlpatterns = [
     path('billing/budgets/', views_billing.client_budgets_list),
     path('billing/budgets/<int:budget_id>/', views_billing.client_budgets_detail),
 
-    path('billing/clients/update-billed/', update_client_billed, name='update-client-billed'),
-    path('billing/export/worked-hours/', export_worked_hours_csv, name='export-worked-hours'),
-    path('billing/realization/', realization_with_editable, name='realization-editable'),
+    path('billing/clients/update-billed/', views_billing.update_client_billed, name='update-client-billed'),
+    path('billing/export/worked-hours/', views_billing.export_worked_hours_csv, name='export-worked-hours'),
+    path('billing/realization/', views_billing.realization_with_editable, name='realization-editable'),
         
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),

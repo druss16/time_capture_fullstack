@@ -382,7 +382,7 @@ def client_groups_remove_team(request, group_id):
     if not client_ids:
         return Response({'error': 'No clients in this group'}, status=400)
     
-    query = ClientAssignment.objects.filter(org=org, client_id__in=client_ids)
+    query = ClientAssignment.objects.filter(organization=org, client_id__in=client_ids)
     
     if user_ids:
         # Remove specific users

@@ -47,12 +47,14 @@ import {
   Loader2,
   ChevronDown,
   Calendar,
+  Folder,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
 import ClientImportWizard from '@/components/ClientImportWizard';
+import ClientGroupManager from '@/components/ClientGroupManager';  // ← ADD THIS
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -138,8 +140,8 @@ type EmployeeCostRate = {
   end_date: string | null;
 };
 
-type Tab = 'organization' | 'team' | 'clients' | 'assignments' | 'billing' | 'costs' | 'devices' | 'token';
-
+type Tab = 'organization' | 'team' | 'clients' | 'assignments' | 'groups' | 'billing' | 'costs' | 'devices' | 'token';
+//                                                              
 // Define which plans can access which features
 const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive'];
 const EXECUTIVE_PLANS: PlanType[] = ['executive'];
@@ -301,6 +303,15 @@ export default function Settings() {
             }
           }
           break;
+
+        case 'groups':
+          const [groupClients, groupTeam] = await Promise.all([
+            safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
+            safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
+          ]);
+          setClients(groupClients || []);
+          setTeamMembers(groupTeam || []);
+          break;
           
         case 'clients':
           const [clientList, clientsTeam] = await Promise.all([
@@ -364,15 +375,16 @@ export default function Settings() {
   }, [activeTab, loadTabData]);
 
   const tabs: TabConfig[] = [
-    { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
-    { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
-    { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
-    { id: 'assignments', label: 'Client Access', icon: <Shield className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },
-    { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
-    { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
-    { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
-    { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
-  ];
+  { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
+  { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
+  { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
+  { id: 'assignments', label: 'Client Access', icon: <Shield className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },
+  { id: 'groups', label: 'Client Groups', icon: <Folder className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },  // ← ADD THIS
+  { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
+  { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
+  { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
+  { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
+];
 
   const isTabLocked = (tab: TabConfig): boolean => {
     if (!tab.requiredPlan) return false;
@@ -501,6 +513,12 @@ export default function Settings() {
                       )}
                       {activeTab === 'assignments' && (
                         <ClientAssignmentManager users={teamMembers} clients={clients} onSuccess={showSuccess} onError={showError} />
+                      )}
+                      {activeTab === 'assignments' && (
+                        <ClientAssignmentManager users={teamMembers} clients={clients} onSuccess={showSuccess} onError={showError} />
+                      )}
+                      {activeTab === 'groups' && (
+                        <ClientGroupManager users={teamMembers} clients={clients} onSuccess={showSuccess} onError={showError} />
                       )}
                       {activeTab === 'token' && (
                         <TokenTab token={installToken} onRefresh={() => loadTabData('token')} onSuccess={showSuccess} onError={showError} />

@@ -733,6 +733,91 @@ class ClientBudget(models.Model):
     def __str__(self):
         return f"{self.client.name} - {self.period_start} to {self.period_end} - {self.budget_hours}h"
 
+
+# ============================================================================
+# ADD TO tracker/models.py - Client Groups for Bulk Assignment
+# ============================================================================
+
+class ClientGroup(models.Model):
+    """
+    Groups clients for easier bulk assignment.
+    Examples: "Partner: Smith", "Tax Clients", "Audit Clients", "New 2024"
+    """
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='client_groups'
+    )
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, default='')
+    color = models.CharField(
+        max_length=20,
+        default='slate',
+        help_text='Color for UI display: slate, red, orange, amber, emerald, blue, purple, pink'
+    )
+    icon = models.CharField(
+        max_length=50,
+        default='folder',
+        help_text='Icon name: folder, briefcase, users, star, tag'
+    )
+    
+    # Many-to-many with clients
+    clients = models.ManyToManyField(
+        'Client',
+        related_name='groups',
+        blank=True
+    )
+    
+    # Optional: Default team members for this group
+    # When a new client is added to the group, auto-assign these users
+    default_assignees = models.ManyToManyField(
+        'auth.User',
+        related_name='default_group_assignments',
+        blank=True,
+        help_text='Users automatically assigned when clients are added to this group'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_client_groups'
+    )
+    
+    class Meta:
+        unique_together = ['org', 'name']
+        ordering = ['name']
+    
+    def __str__(self):
+        return f"{self.name} ({self.clients.count()} clients)"
+    
+    @property
+    def client_count(self):
+        return self.clients.count()
+    
+    def assign_team_to_all_clients(self, user_ids, created_by=None):
+        """
+        Assign a list of users to ALL clients in this group.
+        Returns count of assignments created.
+        """
+        from .models import ClientAssignment  # Avoid circular import
+        
+        created = 0
+        for client in self.clients.all():
+            for user_id in user_ids:
+                _, was_created = ClientAssignment.objects.get_or_create(
+                    org=self.org,
+                    client=client,
+                    user_id=user_id,
+                    defaults={'assigned_by': created_by}
+                )
+                if was_created:
+                    created += 1
+        return created
+
+
 # tracker/models.py - Add Integration model
 
 class Integration(models.Model):

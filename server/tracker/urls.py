@@ -216,6 +216,10 @@ urlpatterns = [
     # Client Budgets
     path('billing/budgets/', views_billing.client_budgets_list),
     path('billing/budgets/<int:budget_id>/', views_billing.client_budgets_detail),
+
+    path('billing/clients/update-billed/', update_client_billed, name='update-client-billed'),
+    path('billing/export/worked-hours/', export_worked_hours_csv, name='export-worked-hours'),
+    path('billing/realization/', realization_with_editable, name='realization-editable'),
         
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
@@ -264,6 +268,25 @@ urlpatterns = [
 
     path('categories/', views.get_org_categories, name='get_org_categories'),
     path('industries/', views.get_industry_options, name='get_industry_options'),
+
+    # Client Groups
+    path('settings/client-groups/', views_client_groups.client_groups_list, name='client-groups-list'),
+    path('settings/client-groups/<int:group_id>/', views_client_groups.client_groups_detail, name='client-groups-detail'),
+    
+    # Bulk client operations
+    path('settings/client-groups/<int:group_id>/add-clients/', views_client_groups.client_groups_add_clients, name='client-groups-add-clients'),
+    path('settings/client-groups/<int:group_id>/remove-clients/', views_client_groups.client_groups_remove_clients, name='client-groups-remove-clients'),
+    
+    # Team assignment (the key feature!)
+    path('settings/client-groups/<int:group_id>/assign-team/', views_client_groups.client_groups_assign_team, name='client-groups-assign-team'),
+    path('settings/client-groups/<int:group_id>/remove-team/', views_client_groups.client_groups_remove_team, name='client-groups-remove-team'),
+    
+    # CSV Import
+    path('settings/client-groups/import/', views_client_groups.client_groups_import_csv, name='client-groups-import'),
+    path('settings/client-groups/template/', views_client_groups.client_groups_template, name='client-groups-template'),
+    
+    # Utility
+    path('settings/clients/ungrouped/', views_client_groups.ungrouped_clients, name='ungrouped-clients'),
 
 
 ]

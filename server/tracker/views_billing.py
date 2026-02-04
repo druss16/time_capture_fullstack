@@ -3062,3 +3062,351 @@ def client_budgets_detail(request, budget_id):
     elif request.method == 'DELETE':
         budget.delete()
         return Response({'success': True, 'deleted': budget_id})
+
+
+# ============================================================================
+# ADD TO views_billing.py - Manual Billing Input & Export Endpoints
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def update_client_billed(request):
+    """
+    Manually update billed hours/amount for a client in a period.
+    Creates or updates an Invoice record with source='manual'.
+    
+    POST body: {
+        "client_id": 123,
+        "period_start": "2026-02-01",
+        "period_end": "2026-02-28",
+        "billed_hours": 15.0,
+        "billed_amount": 2000.00
+    }
+    """
+    from .models import Invoice, Client
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    client_id = request.data.get('client_id')
+    period_start = request.data.get('period_start')
+    period_end = request.data.get('period_end')
+    billed_hours = request.data.get('billed_hours')
+    billed_amount = request.data.get('billed_amount')
+    
+    if not client_id:
+        return Response({'error': 'client_id required'}, status=400)
+    
+    try:
+        client = Client.objects.get(id=client_id, org=org)
+    except Client.DoesNotExist:
+        return Response({'error': 'Client not found'}, status=404)
+    
+    # Generate a unique invoice number for manual entries
+    invoice_number = f"MANUAL-{client.code or client_id}-{period_start}-{period_end}"
+    
+    # Try to find existing manual invoice for this client+period
+    invoice, created = Invoice.objects.update_or_create(
+        org=org,
+        client=client,
+        invoice_number=invoice_number,
+        defaults={
+            'invoice_date': period_end,  # Use period end as invoice date
+            'hours_billed': Decimal(str(billed_hours)) if billed_hours else None,
+            'amount': Decimal(str(billed_amount)) if billed_amount else Decimal('0'),
+            'client_code': client.code or '',
+            'source': 'manual',
+            'created_by': request.user,
+        }
+    )
+    
+    return Response({
+        'success': True,
+        'created': created,
+        'invoice_id': invoice.id,
+        'client_id': client.id,
+        'client_name': client.name,
+        'billed_hours': float(invoice.hours_billed) if invoice.hours_billed else None,
+        'billed_amount': float(invoice.amount),
+        'message': f'{"Created" if created else "Updated"} billing for {client.name}',
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan  
+def export_worked_hours_csv(request):
+    """
+    Export worked hours by client as CSV.
+    Can be imported into QuickBooks/Xero for invoicing.
+    
+    Query params:
+    - start_date: YYYY-MM-DD
+    - end_date: YYYY-MM-DD
+    - format: 'detailed' or 'summary' (default: summary)
+    """
+    from django.http import HttpResponse
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    export_format = request.GET.get('format', 'summary')
+    
+    if not start_date or not end_date:
+        return Response({'error': 'start_date and end_date required'}, status=400)
+    
+    # Get worked hours
+    blocks = Block.objects.filter(
+        org=org,
+        day__gte=start_date,
+        day__lte=end_date,
+        is_billable=True,
+        client__isnull=False,
+    ).select_related('client', 'user', 'task_type')
+    
+    if export_format == 'detailed':
+        # Detailed: one row per time block
+        lines = ['date,client_code,client_name,employee,task,hours,billing_rate,amount,description']
+        
+        for block in blocks.order_by('day', 'client__name', 'user__username'):
+            hours = Decimal(str(block.minutes or 0)) / Decimal('60')
+            rate = block.billing_rate or Decimal('0')
+            amount = hours * rate
+            
+            employee_name = f"{block.user.first_name} {block.user.last_name}".strip() or block.user.username
+            task_name = block.task_type.name if block.task_type else 'General'
+            description = (block.description_override or block.notes or '').replace('"', "'").replace('\n', ' ')
+            
+            lines.append(
+                f'{block.day.isoformat()},'
+                f'{block.client.code or ""},'
+                f'"{block.client.name}",'
+                f'"{employee_name}",'
+                f'"{task_name}",'
+                f'{hours:.2f},'
+                f'{rate:.2f},'
+                f'{amount:.2f},'
+                f'"{description}"'
+            )
+    else:
+        # Summary: one row per client
+        from django.db.models import Sum
+        from django.db.models.functions import Coalesce
+        
+        client_totals = blocks.values(
+            'client_id', 'client__code', 'client__name'
+        ).annotate(
+            total_minutes=Coalesce(Sum('minutes'), 0),
+            total_amount=Coalesce(Sum('billing_amount'), Decimal('0')),
+        ).order_by('client__name')
+        
+        lines = ['client_code,client_name,hours,amount,period_start,period_end']
+        
+        for row in client_totals:
+            hours = Decimal(str(row['total_minutes'] or 0)) / Decimal('60')
+            lines.append(
+                f'{row["client__code"] or ""},'
+                f'"{row["client__name"]}",'
+                f'{hours:.2f},'
+                f'{row["total_amount"]:.2f},'
+                f'{start_date},'
+                f'{end_date}'
+            )
+    
+    content = '\n'.join(lines)
+    
+    filename = f'worked_hours_{start_date}_to_{end_date}_{export_format}.csv'
+    response = HttpResponse(content, content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def realization_with_editable(request):
+    """
+    Same as realization_report but includes editable flag and manual invoice IDs.
+    This allows the frontend to show which values can be edited inline.
+    """
+    from .models import Invoice
+    
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    
+    if not start_date or not end_date:
+        return Response({'error': 'start_date and end_date required'}, status=400)
+    
+    # Get invoiced totals by client
+    invoiced = Invoice.objects.filter(
+        org=org,
+        invoice_date__gte=start_date,
+        invoice_date__lte=end_date,
+        client__isnull=False,
+    ).values('client_id', 'client__name', 'client__code').annotate(
+        billed_hours=Coalesce(Sum('hours_billed'), Decimal('0'), output_field=DecimalField()),
+        billed_amount=Coalesce(Sum('amount'), Decimal('0'), output_field=DecimalField()),
+    )
+    
+    invoiced_by_client = {
+        row['client_id']: {
+            'client_id': row['client_id'],
+            'client_name': row['client__name'],
+            'client_code': row['client__code'] or '',
+            'billed_hours': float(row['billed_hours']),
+            'billed_amount': float(row['billed_amount']),
+        }
+        for row in invoiced
+    }
+    
+    # Get manual invoice IDs for each client (for editing)
+    manual_invoices = Invoice.objects.filter(
+        org=org,
+        invoice_date__gte=start_date,
+        invoice_date__lte=end_date,
+        source='manual',
+        client__isnull=False,
+    ).values('client_id', 'id', 'hours_billed', 'amount')
+    
+    manual_by_client = {
+        row['client_id']: {
+            'invoice_id': row['id'],
+            'hours': float(row['hours_billed']) if row['hours_billed'] else None,
+            'amount': float(row['amount']),
+        }
+        for row in manual_invoices
+    }
+    
+    # Get worked hours by client
+    worked = Block.objects.filter(
+        org=org,
+        day__gte=start_date,
+        day__lte=end_date,
+        client__isnull=False,
+        is_billable=True,
+    ).values('client_id', 'client__name', 'client__code').annotate(
+        worked_minutes=Coalesce(Sum('minutes'), 0),
+    )
+    
+    worked_by_client = {
+        row['client_id']: {
+            'client_id': row['client_id'],
+            'client_name': row['client__name'],
+            'client_code': row['client__code'] or '',
+            'worked_hours': float(row['worked_minutes'] or 0) / 60,
+        }
+        for row in worked
+    }
+    
+    # Merge data
+    all_client_ids = set(invoiced_by_client.keys()) | set(worked_by_client.keys())
+    
+    clients = []
+    totals = {
+        'billed_hours': 0,
+        'billed_amount': 0,
+        'worked_hours': 0,
+    }
+    
+    for client_id in all_client_ids:
+        inv_data = invoiced_by_client.get(client_id, {})
+        work_data = worked_by_client.get(client_id, {})
+        manual_data = manual_by_client.get(client_id)
+        
+        billed_hours = inv_data.get('billed_hours', 0)
+        billed_amount = inv_data.get('billed_amount', 0)
+        worked_hours = work_data.get('worked_hours', 0)
+        
+        # Calculate realization
+        if worked_hours > 0 and billed_hours > 0:
+            realization = (billed_hours / worked_hours) * 100
+        elif worked_hours == 0 and billed_hours > 0:
+            realization = 100
+        elif worked_hours > 0 and billed_hours == 0:
+            realization = 0
+        else:
+            realization = None
+        
+        variance_hours = billed_hours - worked_hours if billed_hours and worked_hours else None
+        
+        client_name = inv_data.get('client_name') or work_data.get('client_name', 'Unknown')
+        client_code = inv_data.get('client_code') or work_data.get('client_code', '')
+        
+        # Status
+        if realization is None:
+            status = 'no_data'
+        elif realization >= 125:
+            status = 'excellent'
+        elif realization >= 100:
+            status = 'good'
+        elif realization >= 85:
+            status = 'warning'
+        else:
+            status = 'critical'
+        
+        clients.append({
+            'client_id': client_id,
+            'client_name': client_name,
+            'client_code': client_code,
+            'billed_hours': round(billed_hours, 2),
+            'billed_amount': round(billed_amount, 2),
+            'worked_hours': round(worked_hours, 2),
+            'variance_hours': round(variance_hours, 2) if variance_hours is not None else None,
+            'realization': round(realization, 1) if realization is not None else None,
+            'status': status,
+            # Editable info
+            'manual_invoice_id': manual_data['invoice_id'] if manual_data else None,
+            'is_editable': True,  # All rows can have manual override
+        })
+        
+        totals['billed_hours'] += billed_hours
+        totals['billed_amount'] += billed_amount
+        totals['worked_hours'] += worked_hours
+    
+    # Sort by client name
+    clients.sort(key=lambda x: x['client_name'].lower())
+    
+    # Total realization
+    if totals['worked_hours'] > 0 and totals['billed_hours'] > 0:
+        totals['realization'] = round((totals['billed_hours'] / totals['worked_hours']) * 100, 1)
+    else:
+        totals['realization'] = None
+    
+    totals['variance_hours'] = round(totals['billed_hours'] - totals['worked_hours'], 2)
+    
+    if totals['realization'] is None:
+        totals['status'] = 'no_data'
+    elif totals['realization'] >= 125:
+        totals['status'] = 'excellent'
+    elif totals['realization'] >= 100:
+        totals['status'] = 'good'
+    elif totals['realization'] >= 85:
+        totals['status'] = 'warning'
+    else:
+        totals['status'] = 'critical'
+    
+    return Response({
+        'period_start': start_date,
+        'period_end': end_date,
+        'clients': clients,
+        'totals': totals,
+    })
+
+
+# ============================================================================
+# ADD THESE URLS to urls.py
+# ============================================================================
+"""
+path('billing/clients/update-billed/', update_client_billed, name='update-client-billed'),
+path('billing/export/worked-hours/', export_worked_hours_csv, name='export-worked-hours'),
+path('billing/realization/', realization_with_editable, name='realization-editable'),
+"""

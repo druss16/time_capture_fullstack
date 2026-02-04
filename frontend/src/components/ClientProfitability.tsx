@@ -1,6 +1,6 @@
 // src/components/ClientProfitability.tsx
 // Realization Dashboard: Budget (Billed) vs Actual (Worked)
-// With QuickBooks/Xero Integration
+// With QuickBooks/Xero Integration + Inline Editing + Export
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { safeFetchJson, safeUploadFile, API_BASE } from '@/lib/api';
@@ -24,6 +24,10 @@ import {
   Square,
   CheckSquare,
   Loader2,
+  Pencil,
+  Save,
+  FileDown,
+  Send,
 } from 'lucide-react';
 
 // ===============================
@@ -94,6 +98,12 @@ interface Integration {
   company_name?: string;
 }
 
+interface EditingBilled {
+  clientId: number;
+  hours: string;
+  amount: string;
+}
+
 // ===============================
 // HELPER FUNCTIONS
 // ===============================
@@ -159,6 +169,259 @@ const getStatusLabel = (status: string): string => {
   }
 };
 
+// Calculate realization and status from hours
+const calculateRealization = (billedHours: number, workedHours: number) => {
+  if (workedHours <= 0 || billedHours <= 0) {
+    return { realization: null, variance: null, status: 'no_data' };
+  }
+  
+  const realization = (billedHours / workedHours) * 100;
+  const variance = billedHours - workedHours;
+  
+  let status: string;
+  if (realization >= 125) status = 'excellent';
+  else if (realization >= 100) status = 'good';
+  else if (realization >= 85) status = 'warning';
+  else status = 'critical';
+  
+  return { realization, variance, status };
+};
+
+// ===============================
+// EXPORT MODAL
+// ===============================
+
+interface ExportModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  data: RealizationSummary | null;
+  dateRange: DateRange;
+}
+
+const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, data, dateRange }) => {
+  const [exporting, setExporting] = useState(false);
+  const [exportType, setExportType] = useState<'csv' | 'quickbooks'>('csv');
+  const [qbConnected, setQbConnected] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      // Check QB connection
+      safeFetchJson<{ integrations: Integration[] }>(`${API_BASE}/integrations/`)
+        .then(res => {
+          const qb = res.integrations?.find(i => i.provider === 'quickbooks');
+          setQbConnected(qb?.is_connected || false);
+        })
+        .catch(() => {});
+    }
+  }, [isOpen]);
+
+  const handleExportCSV = () => {
+    if (!data) return;
+    
+    // Build CSV content
+    const headers = ['Client Code', 'Client Name', 'Worked Hours', 'Billed Hours', 'Billed Amount', 'Variance Hours', 'Realization %', 'Status'];
+    const rows = data.clients.map(c => [
+      c.client_code || '',
+      c.client_name,
+      c.worked_hours.toFixed(2),
+      c.billed_hours.toFixed(2),
+      c.billed_amount.toFixed(2),
+      c.variance_hours?.toFixed(2) || '',
+      c.realization?.toFixed(1) || '',
+      c.status,
+    ]);
+    
+    // Add totals row
+    rows.push([
+      '',
+      'TOTALS',
+      data.totals.worked_hours.toFixed(2),
+      data.totals.billed_hours.toFixed(2),
+      data.totals.billed_amount.toFixed(2),
+      data.totals.variance_hours.toFixed(2),
+      data.totals.realization?.toFixed(1) || '',
+      data.totals.status,
+    ]);
+    
+    const csvContent = [
+      `# Realization Report: ${dateRange.start} to ${dateRange.end}`,
+      headers.join(','),
+      ...rows.map(r => r.map(cell => `"${cell}"`).join(',')),
+    ].join('\n');
+    
+    // Download
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `realization-${dateRange.start}-to-${dateRange.end}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    
+    onClose();
+  };
+
+  const handleExportWorkedHoursCSV = () => {
+    if (!data) return;
+    
+    // Export just worked hours for import into other systems
+    const headers = ['client_code', 'client_name', 'period_start', 'period_end', 'worked_hours'];
+    const rows = data.clients.map(c => [
+      c.client_code || '',
+      c.client_name,
+      dateRange.start,
+      dateRange.end,
+      c.worked_hours.toFixed(2),
+    ]);
+    
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(r => r.map(cell => `"${cell}"`).join(',')),
+    ].join('\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `worked-hours-${dateRange.start}-to-${dateRange.end}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    
+    onClose();
+  };
+
+  const handleSyncToQB = async () => {
+    setExporting(true);
+    try {
+      // This would sync time entries to QuickBooks
+      await safeFetchJson(`${API_BASE}/billing/quickbooks/sync-time/`, {
+        method: 'POST',
+        body: JSON.stringify({
+          start_date: dateRange.start,
+          end_date: dateRange.end,
+        }),
+      });
+      onClose();
+    } catch (err) {
+      console.error('Failed to sync to QuickBooks:', err);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+              <FileDown className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-slate-800">Export Data</h3>
+              <p className="text-sm text-slate-500">Download or sync your data</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg">
+            <X className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          {/* Export Worked Hours CSV */}
+          <button
+            onClick={handleExportWorkedHoursCSV}
+            className="w-full p-4 border-2 border-slate-200 rounded-xl hover:border-emerald-300 hover:bg-emerald-50 transition-all text-left group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center group-hover:bg-emerald-200 transition-colors">
+                <Clock className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <div className="font-semibold text-slate-800">Export Worked Hours</div>
+                <div className="text-sm text-slate-500">CSV for import into QB/Xero</div>
+              </div>
+            </div>
+          </button>
+
+          {/* Export Full Report CSV */}
+          <button
+            onClick={handleExportCSV}
+            className="w-full p-4 border-2 border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-all text-left group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center group-hover:bg-blue-200 transition-colors">
+                <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <div className="font-semibold text-slate-800">Export Full Report</div>
+                <div className="text-sm text-slate-500">Billed vs Worked comparison</div>
+              </div>
+            </div>
+          </button>
+
+          {/* Sync to QuickBooks */}
+          <button
+            onClick={handleSyncToQB}
+            disabled={!qbConnected || exporting}
+            className={`w-full p-4 border-2 rounded-xl text-left group transition-all ${
+              qbConnected 
+                ? 'border-slate-200 hover:border-green-300 hover:bg-green-50' 
+                : 'border-slate-200 opacity-50 cursor-not-allowed'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-xl ${
+                qbConnected ? 'bg-green-100 group-hover:bg-green-200' : 'bg-slate-100'
+              }`}>
+                📗
+              </div>
+              <div className="flex-1">
+                <div className="font-semibold text-slate-800">Sync to QuickBooks</div>
+                <div className="text-sm text-slate-500">
+                  {qbConnected ? 'Push time entries to QB' : 'Not connected'}
+                </div>
+              </div>
+              {exporting && <Loader2 className="w-5 h-5 animate-spin text-green-600" />}
+            </div>
+          </button>
+
+          {/* Xero Coming Soon */}
+          <button
+            disabled
+            className="w-full p-4 border-2 border-slate-200 rounded-xl text-left opacity-50 cursor-not-allowed"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center text-xl">
+                📘
+              </div>
+              <div>
+                <div className="font-semibold text-slate-800">Sync to Xero</div>
+                <div className="text-sm text-slate-400">Coming Soon</div>
+              </div>
+            </div>
+          </button>
+        </div>
+
+        <div className="p-5 border-t border-slate-200">
+          <button
+            onClick={onClose}
+            className="w-full py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ===============================
 // IMPORT MODAL (CSV + QuickBooks + Xero)
 // ===============================
@@ -170,7 +433,7 @@ interface ImportModalProps {
   dateRange: DateRange;
 }
 
-type ImportSource = 'csv' | 'quickbooks' | 'xero';
+type ImportSource = 'csv' | 'quickbooks' | 'xero' | 'manual';
 
 const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, dateRange }) => {
   const [source, setSource] = useState<ImportSource>('csv');
@@ -186,7 +449,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
   const [qbLoading, setQbLoading] = useState(false);
   const [selectedQbInvoices, setSelectedQbInvoices] = useState<Set<string>>(new Set());
   
-  // Check integration status on mount
   useEffect(() => {
     if (isOpen) {
       checkIntegrations();
@@ -261,7 +523,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
       );
       setQbInvoices(data.invoices || []);
       
-      // Auto-select invoices that haven't been imported yet
       const notImported = data.invoices?.filter(i => !i.already_imported).map(i => i.id) || [];
       setSelectedQbInvoices(new Set(notImported));
     } catch (err: any) {
@@ -323,7 +584,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
     }
   };
 
-  // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {
       setResult(null);
@@ -340,15 +600,14 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col">
-        {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-slate-200 flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
               <Upload className="w-5 h-5 text-blue-600" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-800">Import Invoices</h3>
-              <p className="text-sm text-slate-500">CSV, QuickBooks, or Xero</p>
+              <h3 className="font-semibold text-slate-800">Import Billed Data</h3>
+              <p className="text-sm text-slate-500">CSV, QuickBooks, or enter manually</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
@@ -356,12 +615,9 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
           </button>
         </div>
 
-        {/* Content */}
         <div className="p-5 overflow-y-auto flex-1">
-          {/* Source Selector */}
           {!result && (
             <div className="grid grid-cols-3 gap-3 mb-6">
-              {/* CSV Option */}
               <button
                 onClick={() => setSource('csv')}
                 className={`p-4 rounded-xl border-2 text-left transition-all ${
@@ -377,7 +633,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
                 <div className="text-xs text-slate-500 mt-1">Upload from Excel</div>
               </button>
 
-              {/* QuickBooks Option */}
               <button
                 onClick={() => {
                   setSource('quickbooks');
@@ -407,21 +662,38 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
                 </div>
               </button>
 
-              {/* Xero Option */}
               <button
-                onClick={() => setSource('xero')}
-                className={`p-4 rounded-xl border-2 text-left transition-all opacity-60 cursor-not-allowed ${
-                  source === 'xero'
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-slate-200'
+                onClick={() => setSource('manual')}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                  source === 'manual'
+                    ? 'border-purple-500 bg-purple-50'
+                    : 'border-slate-200 hover:border-slate-300'
                 }`}
-                disabled
               >
-                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center mb-3 text-xl">
-                  📘
+                <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center mb-3">
+                  <Pencil className="w-5 h-5 text-purple-600" />
                 </div>
-                <div className="font-semibold text-slate-800">Xero</div>
-                <div className="text-xs text-slate-400 mt-1">Coming Soon</div>
+                <div className="font-semibold text-slate-800">Manual Entry</div>
+                <div className="text-xs text-slate-500 mt-1">Edit in table</div>
+              </button>
+            </div>
+          )}
+
+          {/* Manual Entry Instructions */}
+          {source === 'manual' && !result && (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-purple-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <Pencil className="w-8 h-8 text-purple-600" />
+              </div>
+              <h4 className="font-semibold text-slate-800 mb-2">Manual Entry Mode</h4>
+              <p className="text-slate-500 text-sm mb-4">
+                Close this modal and click the <Pencil className="w-4 h-4 inline" /> icon next to any client's billed hours to edit directly in the table.
+              </p>
+              <button
+                onClick={onClose}
+                className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              >
+                Got it, let me edit
               </button>
             </div>
           )}
@@ -429,7 +701,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
           {/* CSV Upload */}
           {source === 'csv' && !result && (
             <>
-              {/* Format Guide */}
               <div className="bg-slate-50 rounded-xl p-4 mb-4">
                 <h4 className="font-medium text-slate-700 mb-2 flex items-center gap-2">
                   <FileSpreadsheet className="w-4 h-4" />
@@ -446,7 +717,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
                 </p>
               </div>
 
-              {/* Upload Area */}
               <div
                 className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
                   uploading ? 'bg-blue-50 border-blue-300' : 'hover:bg-slate-50 border-slate-300'
@@ -514,7 +784,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
                 </div>
               ) : (
                 <>
-                  {/* Header */}
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-slate-700">
@@ -537,7 +806,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
                     </button>
                   </div>
 
-                  {/* Invoice List */}
                   <div className="border border-slate-200 rounded-xl max-h-64 overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 sticky top-0">
@@ -606,7 +874,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
                     </table>
                   </div>
 
-                  {/* Import Button */}
                   {selectedQbInvoices.size > 0 && (
                     <button
                       onClick={handleQBImport}
@@ -631,20 +898,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
             </>
           )}
 
-          {/* Xero Coming Soon */}
-          {source === 'xero' && !result && (
-            <div className="text-center py-8">
-              <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl">
-                📘
-              </div>
-              <h4 className="font-semibold text-slate-800 mb-2">Xero Integration</h4>
-              <p className="text-slate-500 text-sm">
-                Xero integration is coming soon! For now, export your invoices from Xero as CSV.
-              </p>
-            </div>
-          )}
-
-          {/* Error */}
           {error && (
             <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
@@ -655,7 +908,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
             </div>
           )}
 
-          {/* Result */}
           {result && (
             <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
               <div className="flex items-center gap-2 mb-3">
@@ -676,16 +928,10 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
                   <div className="text-xs text-slate-500">{result.source === 'quickbooks' ? 'Errors' : 'Unmatched'}</div>
                 </div>
               </div>
-              {(result.summary?.unmatched_clients || 0) > 0 && (
-                <p className="text-xs text-amber-700 mt-3">
-                  ⚠️ Some invoices have unmatched client codes. You can match them manually in the Invoices tab.
-                </p>
-              )}
             </div>
           )}
         </div>
 
-        {/* Footer */}
         <div className="p-5 border-t border-slate-200 flex justify-end gap-3 flex-shrink-0">
           <button
             onClick={onClose}
@@ -700,6 +946,136 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
 };
 
 // ===============================
+// EDITABLE BILLED CELL
+// ===============================
+
+interface EditableBilledCellProps {
+  clientId: number;
+  clientCode: string;
+  billedHours: number;
+  billedAmount: number;
+  onSave: (clientId: number, hours: number, amount: number) => Promise<void>;
+}
+
+const EditableBilledCell: React.FC<EditableBilledCellProps> = ({
+  clientId,
+  clientCode,
+  billedHours,
+  billedAmount,
+  onSave,
+}) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [hours, setHours] = useState(billedHours.toString());
+  const [amount, setAmount] = useState(billedAmount.toString());
+  const [saving, setSaving] = useState(false);
+  const hoursRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isEditing && hoursRef.current) {
+      hoursRef.current.focus();
+      hoursRef.current.select();
+    }
+  }, [isEditing]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave(
+        clientId,
+        parseFloat(hours) || 0,
+        parseFloat(amount) || 0
+      );
+      setIsEditing(false);
+    } catch (err) {
+      console.error('Failed to save:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setHours(billedHours.toString());
+    setAmount(billedAmount.toString());
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSave();
+    } else if (e.key === 'Escape') {
+      handleCancel();
+    }
+  };
+
+  if (isEditing) {
+    return (
+      <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1">
+            <input
+              ref={hoursRef}
+              type="number"
+              value={hours}
+              onChange={(e) => setHours(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="w-16 px-2 py-1 text-sm border border-blue-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-right"
+              step="0.1"
+              min="0"
+              placeholder="0"
+            />
+            <span className="text-xs text-slate-500">h</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-slate-400">$</span>
+            <input
+              type="number"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="w-20 px-2 py-1 text-sm border border-slate-200 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-right"
+              step="1"
+              min="0"
+              placeholder="0"
+            />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={handleCancel}
+            className="p-1 text-slate-400 hover:bg-slate-100 rounded transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-2 group">
+      <div className="text-right">
+        <div className="font-medium text-slate-800">{formatHours(billedHours)}h</div>
+        <div className="text-xs text-slate-500">{formatCurrency(billedAmount)}</div>
+      </div>
+      <button
+        onClick={() => setIsEditing(true)}
+        className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded opacity-0 group-hover:opacity-100 transition-all"
+        title="Edit billed hours/amount"
+      >
+        <Pencil className="w-4 h-4" />
+      </button>
+    </div>
+  );
+};
+
+// ===============================
 // MAIN COMPONENT
 // ===============================
 
@@ -708,10 +1084,10 @@ const ClientProfitability: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<RealizationSummary | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'realization' | 'invoices'>('realization');
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   
-  // Default to current month
   const getDefaultDates = (): DateRange => {
     const today = new Date();
     const start = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -802,7 +1178,63 @@ const ClientProfitability: React.FC = () => {
     fetchInvoices();
   };
 
-  // Loading state
+  // Save edited billed hours/amount
+  const handleSaveBilled = async (clientId: number, hours: number, amount: number) => {
+    try {
+      await safeFetchJson(`${API_BASE}/billing/client-billed/`, {
+        method: 'POST',
+        body: JSON.stringify({
+          client_id: clientId,
+          period_start: dateRange.start,
+          period_end: dateRange.end,
+          billed_hours: hours,
+          billed_amount: amount,
+        }),
+      });
+      
+      // Update local state immediately
+      if (data) {
+        const updatedClients = data.clients.map(client => {
+          if (client.client_id === clientId) {
+            const calc = calculateRealization(hours, client.worked_hours);
+            return {
+              ...client,
+              billed_hours: hours,
+              billed_amount: amount,
+              variance_hours: calc.variance,
+              realization: calc.realization,
+              status: calc.status as any,
+            };
+          }
+          return client;
+        });
+        
+        // Recalculate totals
+        const totals = {
+          billed_hours: updatedClients.reduce((sum, c) => sum + c.billed_hours, 0),
+          billed_amount: updatedClients.reduce((sum, c) => sum + c.billed_amount, 0),
+          worked_hours: updatedClients.reduce((sum, c) => sum + c.worked_hours, 0),
+          variance_hours: 0,
+          realization: null as number | null,
+          status: 'no_data',
+        };
+        const totalCalc = calculateRealization(totals.billed_hours, totals.worked_hours);
+        totals.variance_hours = totalCalc.variance || 0;
+        totals.realization = totalCalc.realization;
+        totals.status = totalCalc.status;
+        
+        setData({
+          ...data,
+          clients: updatedClients,
+          totals,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to save billed data:', err);
+      throw err;
+    }
+  };
+
   if (loading && !data) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -821,18 +1253,24 @@ const ClientProfitability: React.FC = () => {
         </div>
         <div className="flex items-center gap-3">
           <button
+            onClick={() => setShowExportModal(true)}
+            className="flex items-center gap-2 px-4 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            <FileDown className="w-4 h-4" />
+            Export
+          </button>
+          <button
             onClick={() => setShowImportModal(true)}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             <Upload className="w-4 h-4" />
-            Import Invoices
+            Import Billed
           </button>
           <button
             onClick={() => { fetchData(); fetchInvoices(); }}
             className="flex items-center gap-2 px-4 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
           </button>
         </div>
       </div>
@@ -971,6 +1409,14 @@ const ClientProfitability: React.FC = () => {
             </div>
           </div>
 
+          {/* Inline Edit Hint */}
+          <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-center gap-3">
+            <Pencil className="w-5 h-5 text-purple-600" />
+            <p className="text-sm text-purple-700">
+              <strong>Tip:</strong> Hover over any client's "Billed" column and click the <Pencil className="w-3 h-3 inline" /> icon to edit hours and amounts directly.
+            </p>
+          </div>
+
           {/* Client List */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
             <table className="w-full">
@@ -981,6 +1427,7 @@ const ClientProfitability: React.FC = () => {
                     <span className="flex items-center justify-end gap-1">
                       <DollarSign className="w-3.5 h-3.5" />
                       Billed
+                      <Pencil className="w-3 h-3 text-slate-400" />
                     </span>
                   </th>
                   <th className="text-right px-4 py-3 text-sm font-semibold text-slate-700">
@@ -1001,13 +1448,13 @@ const ClientProfitability: React.FC = () => {
                       <Target className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                       <p className="text-slate-500 font-medium">No data for this period</p>
                       <p className="text-slate-400 text-sm mt-1">
-                        Import invoices or adjust the date range
+                        Import invoices or enter billed hours manually
                       </p>
                       <button
                         onClick={() => setShowImportModal(true)}
                         className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
                       >
-                        Import Invoices
+                        Import Billed Data
                       </button>
                     </td>
                   </tr>
@@ -1035,9 +1482,14 @@ const ClientProfitability: React.FC = () => {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-4 text-right">
-                        <div className="font-medium text-slate-800">{formatHours(client.billed_hours)}h</div>
-                        <div className="text-xs text-slate-500">{formatCurrency(client.billed_amount)}</div>
+                      <td className="px-4 py-4">
+                        <EditableBilledCell
+                          clientId={client.client_id}
+                          clientCode={client.client_code}
+                          billedHours={client.billed_hours}
+                          billedAmount={client.billed_amount}
+                          onSave={handleSaveBilled}
+                        />
                       </td>
                       <td className="px-4 py-4 text-right text-slate-700">
                         {formatHours(client.worked_hours)}h
@@ -1132,7 +1584,7 @@ const ClientProfitability: React.FC = () => {
                     <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                     <p className="text-slate-500 font-medium">No invoices imported yet</p>
                     <p className="text-slate-400 text-sm mt-1">
-                      Import from CSV or connect QuickBooks/Xero
+                      Import from CSV, QuickBooks, or enter manually
                     </p>
                     <button
                       onClick={() => setShowImportModal(true)}
@@ -1184,6 +1636,14 @@ const ClientProfitability: React.FC = () => {
         isOpen={showImportModal}
         onClose={() => setShowImportModal(false)}
         onSuccess={handleImportSuccess}
+        dateRange={dateRange}
+      />
+
+      {/* Export Modal */}
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        data={data}
         dateRange={dateRange}
       />
     </div>

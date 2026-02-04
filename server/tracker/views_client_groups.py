@@ -326,14 +326,14 @@ def client_groups_assign_team(request, group_id):
             if mode == 'replace':
                 # Remove existing assignments for this client
                 deleted_count, _ = ClientAssignment.objects.filter(
-                    org=org, client=client
+                    organization=org, client=client
                 ).exclude(user_id__in=user_ids).delete()
                 deleted += deleted_count
             
             # Add new assignments
             for user_id in user_ids:
                 assignment, was_created = ClientAssignment.objects.get_or_create(
-                    org=org,
+                    organization=org,
                     client=client,
                     user_id=user_id,
                     defaults={'assigned_by': request.user}

@@ -288,5 +288,10 @@ urlpatterns = [
     # Utility
     path('settings/clients/ungrouped/', views_client_groups.ungrouped_clients, name='ungrouped-clients'),
 
+    path('timesheet/needs-review/', views_notifications.timesheet_needs_review, name='timesheet-needs-review'),
+    path('timesheet/dismiss-reminder/', views_notifications.dismiss_timesheet_reminder, name='dismiss-timesheet-reminder'),
+    path('notifications/preferences/', views_notifications.notification_preferences, name='notification-preferences'),
+    path('agent/startup-notification/', views_notifications.agent_startup_notification, name='agent-startup-notification'),
+
 
 ]

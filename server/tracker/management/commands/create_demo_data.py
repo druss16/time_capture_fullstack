@@ -161,6 +161,9 @@ class Command(BaseCommand):
             # 9. Timesheets
             self.stdout.write('\n📋 Creating timesheets...')
             self._create_timesheets(org, users)
+            
+            # 10. Profitability Summary Preview
+            self._show_profitability_preview(org, users)
         
         self.stdout.write('')
         self.stdout.write(self.style.SUCCESS('=' * 60))
@@ -248,7 +251,12 @@ class Command(BaseCommand):
                 defaults={'role': user_data['role']}
             )
             
-            users[user_data['username']] = {'user': user, 'data': user_data}
+            users[user_data['username']] = {
+                'user': user, 
+                'data': user_data,
+                'billing_rate': user_data['billing_rate'],
+                'cost_rate': user_data['cost_rate'],
+            }
             
             role_emoji = {'owner': '👑', 'manager': '📋', 'member': '👤'}.get(user_data['role'], '👤')
             self.stdout.write(f"   {role_emoji} {user.get_full_name()} ({user_data['role']})")
@@ -490,6 +498,7 @@ class Command(BaseCommand):
         ]
         
         demo_user = users['demo']['user']
+        demo_billing_rate = users['demo']['billing_rate']
         client_list = [c['client'] for c in clients.values()]
         
         today = timezone.now().date()
@@ -504,7 +513,8 @@ class Command(BaseCommand):
                 continue
             
             blocks_count = self._generate_day_blocks(
-                org, demo_user, client_list, target_date, ACTIVITY_PATTERNS
+                org, demo_user, client_list, target_date, ACTIVITY_PATTERNS,
+                user_billing_rate=demo_billing_rate
             )
             total_blocks += blocks_count
             
@@ -521,12 +531,13 @@ class Command(BaseCommand):
                 if target_date.weekday() >= 5:
                     continue
                 self._generate_day_blocks(
-                    org, user_info['user'], client_list, target_date, ACTIVITY_PATTERNS, density=0.6
+                    org, user_info['user'], client_list, target_date, ACTIVITY_PATTERNS,
+                    density=0.6, user_billing_rate=user_info['billing_rate']
                 )
         
         self.stdout.write(f"\n   Total blocks for demo user: {total_blocks}")
 
-    def _generate_day_blocks(self, org, user, clients, target_date, patterns, density=1.0):
+    def _generate_day_blocks(self, org, user, clients, target_date, patterns, density=1.0, user_billing_rate=Decimal('150.00')):
         from tracker.models import Block
         
         tz = timezone.get_current_timezone()
@@ -566,6 +577,11 @@ class Command(BaseCommand):
             block_end = current_time + timedelta(minutes=duration)
             
             # Create the block
+            # Determine if billable and calculate billing amount
+            is_billable = pattern['category'] not in ['Admin/Internal', 'Training'] and client is not None
+            billing_rate = user_billing_rate if is_billable else None
+            billing_amount = (Decimal(duration) / Decimal('60') * user_billing_rate) if is_billable else Decimal('0')
+            
             Block.objects.create(
                 org=org,
                 user=user,
@@ -584,7 +600,9 @@ class Command(BaseCommand):
                 is_categorized=True,
                 categorized_at=timezone.now(),
                 categorized_by='ai',
-                is_billable=pattern['category'] not in ['Admin/Internal', 'Training'],
+                is_billable=is_billable,
+                billing_rate=billing_rate,
+                billing_amount=billing_amount,
                 ai_category=pattern['category'],
                 ai_confidence=random.uniform(0.75, 0.95),
             )
@@ -617,3 +635,76 @@ class Command(BaseCommand):
             
             emoji = {'draft': '📝', 'submitted': '📤', 'approved': '✅'}.get(timesheet.status, '📝')
             self.stdout.write(f"   {emoji} {user.get_full_name()}: {timesheet.total_hours}h ({timesheet.status})")
+
+    def _show_profitability_preview(self, org, users):
+        """Show a preview of profitability data for demo."""
+        from tracker.models import Block, EmployeeCostRate
+        from django.db.models import Sum
+        
+        self.stdout.write('\n📊 Profitability Preview...')
+        
+        # Get all billable blocks
+        blocks = Block.objects.filter(
+            org=org,
+            is_billable=True,
+            client__isnull=False,
+        )
+        
+        # Get cost rates
+        cost_rates = {
+            rate.user_id: rate.cost_rate
+            for rate in EmployeeCostRate.objects.filter(organization=org)
+        }
+        
+        total_revenue = Decimal('0')
+        total_cost = Decimal('0')
+        total_hours = Decimal('0')
+        
+        by_user = {}
+        
+        for block in blocks:
+            hours = Decimal(str(block.minutes or 0)) / Decimal('60')
+            revenue = block.billing_amount or Decimal('0')
+            cost_rate = cost_rates.get(block.user_id, Decimal('50'))
+            cost = hours * cost_rate
+            
+            total_hours += hours
+            total_revenue += revenue
+            total_cost += cost
+            
+            if block.user_id not in by_user:
+                by_user[block.user_id] = {
+                    'name': block.user.get_full_name() or block.user.username,
+                    'hours': Decimal('0'),
+                    'revenue': Decimal('0'),
+                    'cost': Decimal('0'),
+                }
+            by_user[block.user_id]['hours'] += hours
+            by_user[block.user_id]['revenue'] += revenue
+            by_user[block.user_id]['cost'] += cost
+        
+        self.stdout.write('')
+        self.stdout.write('   ┌─────────────────────────────────────────────────────────┐')
+        self.stdout.write('   │  Employee       │ Hours │ Revenue  │  Cost   │ Margin % │')
+        self.stdout.write('   ├─────────────────────────────────────────────────────────┤')
+        
+        for user_id, data in by_user.items():
+            margin = data['revenue'] - data['cost']
+            margin_pct = (margin / data['revenue'] * 100) if data['revenue'] > 0 else Decimal('0')
+            name = data['name'][:15].ljust(15)
+            self.stdout.write(
+                f"   │  {name} │ {data['hours']:5.1f} │ ${data['revenue']:7.2f} │ ${data['cost']:6.2f} │ {margin_pct:6.1f}% │"
+            )
+        
+        self.stdout.write('   ├─────────────────────────────────────────────────────────┤')
+        
+        total_margin = total_revenue - total_cost
+        total_margin_pct = (total_margin / total_revenue * 100) if total_revenue > 0 else Decimal('0')
+        
+        self.stdout.write(
+            f"   │  {'TOTAL'.ljust(15)} │ {total_hours:5.1f} │ ${total_revenue:7.2f} │ ${total_cost:6.2f} │ {total_margin_pct:6.1f}% │"
+        )
+        self.stdout.write('   └─────────────────────────────────────────────────────────┘')
+        self.stdout.write('')
+        self.stdout.write(f'   💰 Gross Margin: ${total_margin:.2f}')
+        self.stdout.write(self.style.SUCCESS(f'   ✅ Profitability data ready for /billing/profitability/'))

@@ -200,6 +200,13 @@ from tracker.industry_categories import (
     build_ai_prompt_for_industry,
 )
 
+from tracker.utils.display_formatter import (
+    format_block_for_display,
+    format_blocks_grouped,
+    format_duration,
+    clean_window_title,
+)
+
 def match_client_in_text(text: str, clients: list, known_entities: list = None) -> list:
     """
     Smart client matching that handles various naming patterns.
@@ -1905,6 +1912,13 @@ def get_seasonal_context() -> str:
 
 from tracker.services.pattern_learning import PatternLearningService
 
+# tracker/views.py - COMPLETE ai_suggestions_today function
+# ============================================================
+# REPLACE your existing ai_suggestions_today function with this entire block
+# ============================================================
+
+from tracker.services.pattern_learning import PatternLearningService
+
 @api_view(["GET"])
 @permission_classes([PermUI])
 @throttle_classes([AIGenerateThrottle])
@@ -1918,7 +1932,11 @@ def ai_suggestions_today(request):
     ✅ Auto-saves high-confidence results (>= 0.70)
     ✅ No duplicates (event-centric compaction)
     ✅ No flip-flopping (once saved, never touched again)
+    ✅ Clean display formatting (App - Context format)
     """
+    # Import display formatter
+    from tracker.utils.display_names import format_block_for_display, format_duration
+    
     # Toggles
     username = request.GET.get("user") or None
     hostname = request.GET.get("hostname") or None
@@ -1972,17 +1990,28 @@ def ai_suggestions_today(request):
     # No AI call needed - these blocks are permanent
     # =========================================================
     if not blocks_needing_ai:
-        from tracker.utils.display_names import format_block_for_display
-        
         out = []
         for b in already_categorized:
+            # Get category for display
+            cat_name = list((b.category_hours or {}).keys())[0] if b.category_hours else None
+            client_name = getattr(b.client, "name", None)
+            
+            # ✅ Clean display formatting
+            formatted = format_block_for_display({
+                'app_name': getattr(b, 'app_name', '') or '',
+                'window_title': getattr(b, 'window_title', '') or '',
+                'url': getattr(b, 'url', '') or '',
+                'minutes': b.minutes or 0,
+                'category': cat_name,
+            }, client_name=client_name)
+            
             out.append({
                 "block_id": b.id,
                 "start": b.start,
                 "end": b.end,
                 "title": b.title,
                 "ai_suggestion": {
-                    "client": getattr(b.client, "name", None),
+                    "client": client_name,
                     "project": getattr(b.project, "name", None),
                     "categories": b.category_hours or {},
                     "confidence": 1.0,
@@ -1991,15 +2020,14 @@ def ai_suggestions_today(request):
                     "source": "existing",
                     "auto_saved": False,
                 },
-                # ✅ Display-friendly version for UI
-                "display": format_block_for_display({
-                    'app_name': getattr(b, 'app_name', ''),
-                    'window_title': getattr(b, 'window_title', ''),
-                    'url': getattr(b, 'url', ''),
-                    'minutes': b.minutes,
-                    'category': list((b.category_hours or {}).keys())[0] if b.category_hours else None,
-                }),
-                "current_client": getattr(b.client, "name", None),
+                # ✅ Clean display data for UI
+                "display": {
+                    "title": formatted['title'],
+                    "app": formatted['app'],
+                    "duration": formatted['duration'],
+                    "category_icon": formatted['category_icon'],
+                },
+                "current_client": client_name,
                 "current_project": getattr(b.project, "name", None),
             })
         return Response(out)
@@ -2074,11 +2102,23 @@ def ai_suggestions_today(request):
             "needs_ai": len(blocks_needing_ai),
         })
 
+    # =========================================================
+    # NOAI MODE: Return blocks without calling AI
+    # =========================================================
     if noai:
-        from tracker.utils.display_names import format_block_for_display
-        
         out = []
         for b in blocks[:len(trimmed)]:
+            client_name = getattr(b.client, "name", None)
+            
+            # ✅ Clean display formatting
+            formatted = format_block_for_display({
+                'app_name': getattr(b, 'app_name', '') or '',
+                'window_title': getattr(b, 'window_title', '') or '',
+                'url': getattr(b, 'url', '') or '',
+                'minutes': b.minutes or 0,
+                'category': None,
+            }, client_name=client_name)
+            
             out.append({
                 "block_id": b.id,
                 "start": b.start,
@@ -2093,20 +2133,21 @@ def ai_suggestions_today(request):
                     "reasoning": "NOAI mode",
                     "source": "noai",
                 },
-                # ✅ Display-friendly version for UI
-                "display": format_block_for_display({
-                    'app_name': getattr(b, 'app_name', ''),
-                    'window_title': getattr(b, 'window_title', ''),
-                    'url': getattr(b, 'url', ''),
-                    'minutes': b.minutes,
-                    'category': None,
-                }),
-                "current_client": getattr(b.client, "name", None),
+                # ✅ Clean display data
+                "display": {
+                    "title": formatted['title'],
+                    "app": formatted['app'],
+                    "duration": formatted['duration'],
+                    "category_icon": formatted['category_icon'],
+                },
+                "current_client": client_name,
                 "current_project": getattr(b.project, "name", None),
             })
         return Response(out)
 
-    # OpenAI call
+    # =========================================================
+    # OpenAI API Call
+    # =========================================================
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return Response({"error": "OPENAI_API_KEY not configured"}, status=500)
@@ -2144,7 +2185,7 @@ def ai_suggestions_today(request):
     client = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
 
     # =========================================================
-    # ✅ DYNAMIC: Use industry-specific prompt instead of hardcoded CPA
+    # ✅ DYNAMIC: Use industry-specific prompt
     # =========================================================
     from tracker.industry_categories import build_ai_prompt_for_industry
     
@@ -2182,11 +2223,22 @@ def ai_suggestions_today(request):
         if fallback_mode == "rule":
             return suggestions_today(request)
         
-        # Return fallback response
-        from tracker.utils.display_names import format_block_for_display
-        
+        # =========================================================
+        # FALLBACK: Return blocks with error info
+        # =========================================================
         out = []
         for b in blocks[:len(trimmed)]:
+            client_name = getattr(b.client, "name", None)
+            
+            # ✅ Clean display formatting
+            formatted = format_block_for_display({
+                'app_name': getattr(b, 'app_name', '') or '',
+                'window_title': getattr(b, 'window_title', '') or '',
+                'url': getattr(b, 'url', '') or '',
+                'minutes': b.minutes or 0,
+                'category': None,
+            }, client_name=client_name)
+            
             out.append({
                 "block_id": b.id,
                 "start": b.start,
@@ -2201,15 +2253,14 @@ def ai_suggestions_today(request):
                     "reasoning": f"AI fallback: {str(e)[:120]}",
                     "source": "fallback",
                 },
-                # ✅ Display-friendly version for UI
-                "display": format_block_for_display({
-                    'app_name': getattr(b, 'app_name', ''),
-                    'window_title': getattr(b, 'window_title', ''),
-                    'url': getattr(b, 'url', ''),
-                    'minutes': b.minutes,
-                    'category': None,
-                }),
-                "current_client": getattr(b.client, "name", None),
+                # ✅ Clean display data
+                "display": {
+                    "title": formatted['title'],
+                    "app": formatted['app'],
+                    "duration": formatted['duration'],
+                    "category_icon": formatted['category_icon'],
+                },
+                "current_client": client_name,
                 "current_project": getattr(b.project, "name", None),
             })
         return Response(out, status=200)
@@ -2219,8 +2270,6 @@ def ai_suggestions_today(request):
     # CRITICAL: Only save if is_categorized=False
     # Once saved, the block is LOCKED forever
     # =========================================================
-    from tracker.utils.display_names import format_block_for_display
-    
     out = []
     N = min(len(blocks), len(ai_suggestions))
     saved_count = 0
@@ -2244,14 +2293,12 @@ def ai_suggestions_today(request):
             categories = sug.get("categories", {})
             
             # =========================================================
-            # AUTO-SAVE: Only if confidence >= 0.70 AND not already categorized
-            # This is the ONLY place where is_categorized gets set to True
+            # AUTO-SAVE: Only if confidence >= 0.70 AND not categorized
             # =========================================================
             auto_saved = False
             if confidence >= 0.70 and categories:
                 try:
                     # SAFETY CHECK: Re-fetch block to ensure it's still uncategorized
-                    # (prevents race conditions)
                     fresh_block = Block.objects.select_for_update().get(id=b.id)
                     
                     if not fresh_block.is_categorized:
@@ -2274,7 +2321,6 @@ def ai_suggestions_today(request):
                                     pass
                             
                             if clean_cats:
-                                # Set all categorization fields
                                 fresh_block.category_hours = clean_cats
                                 fresh_block.ai_category = list(clean_cats.keys())[0]
                                 fresh_block.is_categorized = True  # ← LOCK IT
@@ -2300,6 +2346,16 @@ def ai_suggestions_today(request):
                     import traceback
                     traceback.print_exc()
             
+            # ✅ Clean display formatting
+            display_client = client_name or getattr(b.client, "name", None)
+            formatted = format_block_for_display({
+                'app_name': getattr(b, 'app_name', '') or '',
+                'window_title': getattr(b, 'window_title', '') or '',
+                'url': getattr(b, 'url', '') or '',
+                'minutes': b.minutes or 0,
+                'category': list(categories.keys())[0] if categories else None,
+            }, client_name=display_client)
+            
             out.append({
                 "block_id": b.id,
                 "start": b.start,
@@ -2315,14 +2371,13 @@ def ai_suggestions_today(request):
                     "source": "ai_with_context",
                     "auto_saved": auto_saved,
                 },
-                # ✅ Display-friendly version for UI
-                "display": format_block_for_display({
-                    'app_name': getattr(b, 'app_name', ''),
-                    'window_title': getattr(b, 'window_title', ''),
-                    'url': getattr(b, 'url', ''),
-                    'minutes': b.minutes,
-                    'category': list(categories.keys())[0] if categories else None,
-                }),
+                # ✅ Clean display data for UI
+                "display": {
+                    "title": formatted['title'],
+                    "app": formatted['app'],
+                    "duration": formatted['duration'],
+                    "category_icon": formatted['category_icon'],
+                },
                 "current_client": getattr(b.client, "name", None),
                 "current_project": getattr(b.project, "name", None),
             })
@@ -2332,13 +2387,25 @@ def ai_suggestions_today(request):
     # These are READ-ONLY - just returned for display
     # =========================================================
     for b in already_categorized:
+        cat_name = list((b.category_hours or {}).keys())[0] if b.category_hours else None
+        client_name = getattr(b.client, "name", None)
+        
+        # ✅ Clean display formatting
+        formatted = format_block_for_display({
+            'app_name': getattr(b, 'app_name', '') or '',
+            'window_title': getattr(b, 'window_title', '') or '',
+            'url': getattr(b, 'url', '') or '',
+            'minutes': b.minutes or 0,
+            'category': cat_name,
+        }, client_name=client_name)
+        
         out.append({
             "block_id": b.id,
             "start": b.start,
             "end": b.end,
             "title": b.title,
             "ai_suggestion": {
-                "client": getattr(b.client, "name", None),
+                "client": client_name,
                 "project": getattr(b.project, "name", None),
                 "categories": b.category_hours or {},
                 "confidence": 1.0,
@@ -2347,15 +2414,14 @@ def ai_suggestions_today(request):
                 "source": "existing",
                 "auto_saved": False,
             },
-            # ✅ Display-friendly version for UI
-            "display": format_block_for_display({
-                'app_name': getattr(b, 'app_name', ''),
-                'window_title': getattr(b, 'window_title', ''),
-                'url': getattr(b, 'url', ''),
-                'minutes': b.minutes,
-                'category': list((b.category_hours or {}).keys())[0] if b.category_hours else None,
-            }),
-            "current_client": getattr(b.client, "name", None),
+            # ✅ Clean display data for UI
+            "display": {
+                "title": formatted['title'],
+                "app": formatted['app'],
+                "duration": formatted['duration'],
+                "category_icon": formatted['category_icon'],
+            },
+            "current_client": client_name,
             "current_project": getattr(b.project, "name", None),
         })
 
@@ -4363,6 +4429,20 @@ After:  Union of spans = 42 min (correct - actual clock time)
 #                No double-counting!
 # =============================================================================
 
+# tracker/views_today_time.py
+"""
+Updated today_time endpoint with clean display formatting.
+
+REPLACE your existing today_time function in views.py with this version.
+Also add the _today_time_from_blocks helper function.
+
+ALSO: Copy display_names.py to tracker/utils/display_names.py
+"""
+
+# ============================================================================
+# UPDATED today_time() - With Clean Display Formatting
+# ============================================================================
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def today_time(request):
@@ -4371,11 +4451,18 @@ def today_time(request):
     
     Uses EVENT-BASED attribution: each minute belongs to the app
     that had the most recent activity, not block spans.
+    
+    NOW WITH CLEAN DISPLAY FORMATTING:
+    - "Chrome - Aurelia Dashboard (15m)" instead of "Google Chrome (15m)"
+    - "VS Code - views.py (timetracker) (45m)" instead of messy raw titles
     """
     from datetime import datetime, timedelta
     from datetime import timezone as dt_timezone
     from collections import defaultdict
     from django.utils.dateparse import parse_date
+    
+    # Import the display formatter
+    from tracker.utils.display_names import format_block_for_display, format_duration
     
     user = request.user
     
@@ -4415,7 +4502,7 @@ def today_time(request):
     
     # =========================================================================
     # STEP 2: Calculate duration for each event
-    # Duration = time until next event (capped at 30 min)
+    # Duration = time until next event (capped at 3 min)
     # =========================================================================
     IDLE_CAP_SECONDS = 180  # 3 minutes - matches agent's MOUSE_IDLE_PAUSE_S
     
@@ -4458,6 +4545,7 @@ def today_time(request):
             'is_idle': is_idle,
             'app_name': event.app_name or 'Unknown',
             'window_title': event.window_title or '',
+            'url': event.url or '',  # ✅ NEW: Include URL for better formatting
             'block_id': block.id if block else None,
         })
     
@@ -4471,7 +4559,7 @@ def today_time(request):
             'minutes': 0.0,
             'block_count': 0,
             'blocks_seen': set(),
-            'by_title': {},
+            'by_activity': {},  # ✅ RENAMED: by_title → by_activity (keyed by clean title)
         })
     })
     
@@ -4492,17 +4580,23 @@ def today_time(request):
             cat_data['blocks_seen'].add(ev['block_id'])
             cat_data['block_count'] += 1
         
-        # Aggregate by title
-        title = ev['window_title'] or ev['app_name'] or 'Unknown'
-        if len(title) > 60:
-            title = title[:57] + '...'
+        # ✅ NEW: Use display formatter for clean title
+        formatted = format_block_for_display({
+            'app_name': ev['app_name'],
+            'window_title': ev['window_title'],
+            'url': ev['url'],
+            'minutes': minutes,
+        }, client_name=client_name)
         
-        if title in cat_data['by_title']:
-            cat_data['by_title'][title]['minutes'] += minutes
+        clean_title = formatted['title']
+        
+        # Aggregate by CLEAN title (merges similar activities)
+        if clean_title in cat_data['by_activity']:
+            cat_data['by_activity'][clean_title]['minutes'] += minutes
         else:
-            cat_data['by_title'][title] = {
+            cat_data['by_activity'][clean_title] = {
                 'id': ev['block_id'],
-                'title': title,
+                'title': clean_title,
                 'minutes': minutes,
             }
         
@@ -4512,7 +4606,7 @@ def today_time(request):
             billable_minutes += minutes
     
     # =========================================================================
-    # STEP 4: Build response
+    # STEP 4: Build response with clean formatting
     # =========================================================================
     result = []
     for client_name, client_data in sorted(data.items()):
@@ -4523,30 +4617,25 @@ def today_time(request):
             minutes = cat_data['minutes']
             client_total_minutes += minutes
             
-            # Build sample activities (top 10 by time)
+            # Build sample activities (top 10 by time) with CLEAN titles
             aggregated_samples = []
-            sorted_titles = sorted(
-                cat_data['by_title'].items(), 
+            sorted_activities = sorted(
+                cat_data['by_activity'].items(), 
                 key=lambda x: -x[1]['minutes']
             )[:10]
             
-            for title, info in sorted_titles:
+            for clean_title, info in sorted_activities:
                 mins = info['minutes']
-                if mins >= 60:
-                    time_str = f"{mins/60:.1f}h"
-                else:
-                    time_str = f"{mins:.0f}m"
+                time_str = format_duration(mins)  # ✅ Use formatter
                 
-                if info['id']:
-                    aggregated_samples.append(f"[id:{info['id']}] {info['title']} ({time_str})")
-                else:
-                    aggregated_samples.append(f"{info['title']} ({time_str})")
+                # ✅ Clean format: "→ Title (duration)"
+                aggregated_samples.append(f"{clean_title} ({time_str})")
             
             categories.append({
                 'name': cat_name,
                 'hours': round(minutes / 60, 2),
                 'block_count': cat_data['block_count'],
-                'unique_activities': len(cat_data['by_title']),
+                'unique_activities': len(cat_data['by_activity']),
                 'sample_activities': aggregated_samples,
             })
         
@@ -4569,8 +4658,11 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
     """
     Fallback for manual entries or when no events exist.
     Uses block-level data (less accurate but necessary for manual time).
+    
+    NOW WITH CLEAN DISPLAY FORMATTING.
     """
     from collections import defaultdict
+    from tracker.utils.display_names import format_block_for_display, format_duration
     
     blocks = Block.objects.filter(
         user=user,
@@ -4584,7 +4676,7 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
         'categories': defaultdict(lambda: {
             'minutes': 0.0,
             'block_count': 0,
-            'by_title': {},
+            'by_activity': {},
         })
     })
     
@@ -4609,15 +4701,24 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
         cat_data['minutes'] += minutes
         cat_data['block_count'] += 1
         
-        title = block.window_title or block.url or block.app_name or 'Unknown'
-        if len(title) > 60:
-            title = title[:57] + '...'
-        
-        cat_data['by_title'][title] = {
-            'id': block.id,
-            'title': title,
+        # ✅ Use display formatter for clean title
+        formatted = format_block_for_display({
+            'app_name': block.app_name or '',
+            'window_title': block.window_title or '',
+            'url': block.url or '',
             'minutes': minutes,
-        }
+        }, client_name=client_name)
+        
+        clean_title = formatted['title']
+        
+        if clean_title in cat_data['by_activity']:
+            cat_data['by_activity'][clean_title]['minutes'] += minutes
+        else:
+            cat_data['by_activity'][clean_title] = {
+                'id': block.id,
+                'title': clean_title,
+                'minutes': minutes,
+            }
         
         total_minutes += minutes
         if client_id and not is_idle:
@@ -4633,16 +4734,15 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
             client_total += minutes
             
             samples = []
-            for title, info in sorted(cat_data['by_title'].items(), key=lambda x: -x[1]['minutes'])[:10]:
-                mins = info['minutes']
-                time_str = f"{mins/60:.1f}h" if mins >= 60 else f"{mins:.0f}m"
-                samples.append(f"[id:{info['id']}] {info['title']} ({time_str})")
+            for clean_title, info in sorted(cat_data['by_activity'].items(), key=lambda x: -x[1]['minutes'])[:10]:
+                time_str = format_duration(info['minutes'])
+                samples.append(f"{clean_title} ({time_str})")
             
             categories.append({
                 'name': cat_name,
                 'hours': round(minutes / 60, 2),
                 'block_count': cat_data['block_count'],
-                'unique_activities': len(cat_data['by_title']),
+                'unique_activities': len(cat_data['by_activity']),
                 'sample_activities': samples,
             })
         
@@ -4777,12 +4877,20 @@ def group_into_sessions(blocks, max_gap_minutes=15, min_idle_minutes=5):
     return sessions
 
 
+# tracker/views_categorization.py
+"""
+Updated get_categorization_data endpoint with clean display formatting.
+
+REPLACE your existing get_categorization_data function in views.py with this version.
+"""
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_categorization_data(request):
-    """Get uncategorized blocks for manual categorization."""
+    """Get uncategorized blocks for manual categorization with CLEAN formatting."""
     from datetime import datetime, timedelta
     from django.utils.dateparse import parse_date
+    from tracker.utils.display_names import format_block_for_display, format_duration
     
     user = request.user
     date_str = request.GET.get('date')
@@ -4841,6 +4949,15 @@ def get_categorization_data(request):
         
         span_minutes = (last_block.end - first_block.start).total_seconds() / 60.0
         
+        # ✅ NEW: Use display formatter for clean title
+        client_name = first_block.client.name if first_block.client else None
+        formatted = format_block_for_display({
+            'app_name': first_block.app_name or '',
+            'window_title': first_block.window_title or '',
+            'url': first_block.url or '',
+            'minutes': total_minutes,
+        }, client_name=client_name)
+        
         blocks_data.append({
             'id': first_block.id,
             'block_ids': block_ids,
@@ -4849,11 +4966,21 @@ def get_categorization_data(request):
             'end': last_block.end.isoformat(),
             'duration_minutes': total_minutes,
             'span_minutes': round(span_minutes, 1),
+            
+            # ✅ Raw data (for debugging/advanced use)
             'app_name': first_block.app_name or '',
             'window_title': first_block.window_title or '',
             'url': first_block.url or '',
             'file_path': first_block.file_path or '',
-            'current_client': first_block.client.name if first_block.client else None,
+            
+            # ✅ NEW: Clean display data
+            'display': {
+                'title': formatted['title'],
+                'app': formatted['app'],
+                'duration': formatted['duration'],
+            },
+            
+            'current_client': client_name,
             'current_client_id': first_block.client.id if first_block.client else None,
             'suggestions': [],
         })
@@ -4877,8 +5004,8 @@ def get_categorization_data(request):
         'date': target_date.isoformat(),
         'blocks': blocks_data,
         'clients': clients_list,
-        'categories': categories,  # ✅ NOW INDUSTRY-SPECIFIC!
-        'industry_type': industry_type,  # ✅ Include for frontend
+        'categories': categories,
+        'industry_type': industry_type,
         'stats': {
             'uncategorized_count': len(blocks_data),
             'total_minutes': sum(b['duration_minutes'] for b in blocks_data),

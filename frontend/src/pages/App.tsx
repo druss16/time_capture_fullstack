@@ -25,6 +25,8 @@ import ProfilePage from '@/pages/account/ProfilePage';
 import PasswordPage from '@/pages/account/PasswordPage';
 import BillingSettingsPage from '@/pages/account/BillingSettingsPage';
 import DownloadPage from '@/pages/account/DownloadPage';  // ← Add this
+import TimesheetReminderBanner from '@/components/TimesheetReminderBanner';
+
 
 
 // --------- Lazy pages (code-splitting) ---------
@@ -196,6 +198,16 @@ function AccountLayoutWrapper() {
   }, []);
 
   return <AccountLayout role={role} />;
+}
+
+function Layout({ children }) {
+  return (
+    <div>
+      <TimesheetReminderBanner />  {/* Add at the very top */}
+      <Navbar />
+      <main>{children}</main>
+    </div>
+  );
 }
 
 // ============================================================================

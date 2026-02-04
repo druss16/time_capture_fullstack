@@ -5,6 +5,8 @@ Celery configuration for TimeTracker background tasks.
 Includes:
 - Block compaction and AI classification (every 5 min)
 - Timesheet workflow (weekly reminders, auto-submit, manager notifications)
+- Daily timesheet review notifications (Mon-Fri 9am)
+- Weekly summary emails (Monday 9:30am)
 - Maintenance (cleanup, daily summaries)
 """
 
@@ -54,6 +56,20 @@ app.conf.beat_schedule = {
     },
     
     # =========================================================================
+    # DAILY NOTIFICATIONS (Mon-Fri)
+    # =========================================================================
+    
+    # ✅ DAILY 9:00 AM (Mon-Fri): Review yesterday's hours
+    # "You have 6.5 hours from yesterday to review"
+    'daily-timesheet-review-reminder': {
+        'task': 'tracker.tasks.send_daily_timesheet_reminders_task',
+        'schedule': crontab(hour=9, minute=0, day_of_week='1-5'),  # Mon-Fri 9am
+        'options': {
+            'expires': 3600,
+        }
+    },
+    
+    # =========================================================================
     # TIMESHEET WORKFLOW (Weekly)
     # =========================================================================
     
@@ -72,6 +88,16 @@ app.conf.beat_schedule = {
     'timesheet-reminder-monday': {
         'task': 'tracker.send_timesheet_reminders',
         'schedule': crontab(hour=9, minute=0, day_of_week=1),  # Monday 9am
+        'options': {
+            'expires': 3600,
+        }
+    },
+    
+    # ✅ MONDAY 9:30 AM: Weekly summary email
+    # Shows last week's time breakdown by client
+    'weekly-summary-email': {
+        'task': 'tracker.tasks.send_weekly_summary_task',
+        'schedule': crontab(hour=9, minute=30, day_of_week=1),  # Monday 9:30am
         'options': {
             'expires': 3600,
         }
@@ -98,7 +124,7 @@ app.conf.beat_schedule = {
     },
     
     # =========================================================================
-    # MAINTENANCE (Daily)
+    # MAINTENANCE (Daily/Weekly)
     # =========================================================================
     
     # ✅ CLEANUP: Daily at 2 AM
@@ -118,6 +144,16 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=6, minute=0),  # 6:00 AM daily
         'kwargs': {
             'days_back': 1  # Generate summary for yesterday
+        }
+    },
+    
+    # ✅ CLEANUP NOTIFICATION DISMISSALS: Sunday at midnight
+    # Clean up old reminder dismissal records
+    'cleanup-notification-dismissals': {
+        'task': 'tracker.tasks.cleanup_old_notification_dismissals',
+        'schedule': crontab(hour=0, minute=0, day_of_week=0),  # Sunday midnight
+        'options': {
+            'expires': 3600,
         }
     },
 }
@@ -172,13 +208,6 @@ def setup_periodic_tasks(sender, **kwargs):
     print("CELERY BEAT SCHEDULE LOADED:")
     print("=" * 80)
     
-    # Group tasks by category for cleaner output
-    categories = {
-        'BLOCK PROCESSING': ['auto-compact', 'ai-classify'],
-        'TIMESHEET WORKFLOW': ['timesheet', 'create-weekly', 'notify-managers'],
-        'MAINTENANCE': ['cleanup', 'summary'],
-    }
-    
     for task_name, task_config in sorted(app.conf.beat_schedule.items()):
         print(f"  ✓ {task_name}")
         print(f"    Task: {task_config['task']}")
@@ -186,17 +215,27 @@ def setup_periodic_tasks(sender, **kwargs):
         print()
     
     print("=" * 80)
-    print("WEEKLY TIMESHEET WORKFLOW:")
+    print("WEEKLY SCHEDULE OVERVIEW:")
     print("=" * 80)
     print("""
-    SUNDAY     Week ends (users can now submit)
+    DAILY (Mon-Fri)
+    └── 9:00 AM   📧 Daily review reminder: "Review yesterday's hours"
+    
+    SUNDAY     
+    ├── Week ends (users can now submit)
+    └── 12:00 AM  🧹 Cleanup notification dismissals
     
     MONDAY     
     ├── 1:00 AM   Create DRAFT timesheets for new week
-    └── 9:00 AM   📧 Reminder: "Submit your timesheet!"
+    ├── 9:00 AM   📧 Reminder: "Submit your timesheet!"
+    └── 9:30 AM   📊 Weekly summary emails
     
     TUESDAY    
     ├── 9:00 AM   ⚡ Auto-submit remaining DRAFTs
     └── 10:00 AM  📧 Notify managers of pending approvals
+    
+    DAILY
+    ├── 2:00 AM   🧹 Cleanup old raw events
+    └── 6:00 AM   📈 Generate daily summaries
     """)
     print("=" * 80)

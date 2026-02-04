@@ -1,12 +1,15 @@
 # tracker/tasks.py
 """
 Celery background tasks for TimeTracker:
-1. Auto-compact recent events every 10 minutes
+1. Auto-compact recent events every 5 minutes
 2. Run AI classification on uncategorized blocks
 3. Clean up old raw events
-4. Timesheet reminders (Monday 9am)
-5. Timesheet auto-submit (Tuesday 9am)
-6. Weekly timesheet creation (Monday 1am)
+4. Daily timesheet review reminders (Mon-Fri 9am)
+5. Weekly summary emails (Monday 9:30am)
+6. Timesheet reminders (Monday 9am)
+7. Timesheet auto-submit (Tuesday 9am)
+8. Weekly timesheet creation (Monday 1am)
+9. Manager approval notifications (Tuesday 10am)
 """
 
 from celery import shared_task
@@ -19,7 +22,447 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# TIMESHEET WORKFLOW TASKS
+# DAILY NOTIFICATION TASKS (NEW)
+# ============================================================================
+
+@shared_task(name='tracker.tasks.send_daily_timesheet_reminders_task', bind=True, max_retries=3)
+def send_daily_timesheet_reminders_task(self):
+    """
+    Mon-Fri 9am: Send email reminders to users who have unreviewed hours from yesterday.
+    
+    This is DIFFERENT from the weekly submission reminder - this is for DAILY review
+    of time tracked to ensure accurate categorization before it gets too stale.
+    
+    Schedule: crontab(hour=9, minute=0, day_of_week='1-5')  # Mon-Fri 9am
+    """
+    try:
+        from tracker.models import Block, TimesheetSubmission, UserPreference
+        from django.core.mail import send_mail
+        from django.conf import settings
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        yesterday = timezone.localdate() - timedelta(days=1)
+        
+        # Get all users with time tracked yesterday
+        users_with_time = User.objects.filter(
+            blocks__day=yesterday
+        ).distinct()
+        
+        sent_count = 0
+        skipped_count = 0
+        errors = []
+        
+        for user in users_with_time:
+            try:
+                # Skip if no email
+                if not user.email:
+                    skipped_count += 1
+                    continue
+                
+                # Check user preference for email notifications
+                try:
+                    pref = UserPreference.objects.get(user=user)
+                    if not getattr(pref, 'email_timesheet_reminders', True):
+                        skipped_count += 1
+                        continue
+                except UserPreference.DoesNotExist:
+                    pass  # Default to sending
+                
+                # Get their blocks from yesterday
+                blocks = Block.objects.filter(user=user, day=yesterday)
+                total_minutes = sum(b.minutes or 0 for b in blocks)
+                total_hours = total_minutes / 60
+                
+                if total_hours < 0.5:
+                    skipped_count += 1
+                    continue  # Skip if minimal time
+                
+                unassigned_count = blocks.filter(client__isnull=True).count()
+                
+                # Get client breakdown
+                client_hours = {}
+                for block in blocks.filter(client__isnull=False):
+                    client_name = block.client.name
+                    hrs = (block.minutes or 0) / 60
+                    client_hours[client_name] = client_hours.get(client_name, 0) + hrs
+                
+                client_breakdown = sorted(
+                    client_hours.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:5]
+                
+                # Build email
+                user_name = user.first_name or user.username
+                date_str = yesterday.strftime('%A, %b %d')
+                
+                # Client lines for email
+                client_lines = '\n'.join([f'  • {name}: {hrs:.1f}h' for name, hrs in client_breakdown])
+                if not client_lines:
+                    client_lines = '  • No clients assigned yet'
+                
+                unassigned_warning = f'\n⚠️ {unassigned_count} blocks need client assignment.\n' if unassigned_count else ''
+                
+                frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
+                
+                plain_message = f"""
+Hi {user_name},
+
+You tracked {total_hours:.1f} hours on {date_str} that need review:
+
+{client_lines}
+{unassigned_warning}
+Review your timesheet: {frontend_url}/timesheet
+
+—
+TimeTracker
+
+Manage notification preferences: {frontend_url}/settings
+                """.strip()
+                
+                # HTML version
+                client_rows = ''.join([
+                    f'<tr><td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;">{name}</td>'
+                    f'<td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold;">{hrs:.1f}h</td></tr>'
+                    for name, hrs in client_breakdown
+                ])
+                if not client_rows:
+                    client_rows = '<tr><td colspan="2" style="padding: 8px 0; color: #94a3b8;">No clients assigned yet</td></tr>'
+                
+                unassigned_html = f'''
+                <div style="background: #fef3c7; border: 1px solid #fcd34d; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
+                    <p style="margin: 0; color: #92400e; font-size: 14px;">
+                        ⚠️ <strong>{unassigned_count} block{"s" if unassigned_count != 1 else ""}</strong> need client assignment
+                    </p>
+                </div>
+                ''' if unassigned_count else ''
+                
+                html_message = f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+    <div style="max-width: 500px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); padding: 24px; border-radius: 16px 16px 0 0; text-align: center;">
+            <h1 style="margin: 0; color: white; font-size: 24px;">⏰ Review Your Time</h1>
+        </div>
+        <div style="background: white; padding: 24px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+            <p style="color: #475569; font-size: 16px; line-height: 1.5; margin-top: 0;">
+                Hi {user_name},
+            </p>
+            <p style="color: #475569; font-size: 16px; line-height: 1.5;">
+                You tracked <strong style="color: #ea580c;">{total_hours:.1f} hours</strong> on {date_str}:
+            </p>
+            <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+                {client_rows}
+            </table>
+            {unassigned_html}
+            <div style="text-align: center; margin: 24px 0;">
+                <a href="{frontend_url}/timesheet" 
+                   style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: white; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 16px;">
+                    Review Timesheet →
+                </a>
+            </div>
+            <p style="color: #94a3b8; font-size: 12px; margin-bottom: 0; text-align: center;">
+                <a href="{frontend_url}/settings" style="color: #94a3b8;">Manage notification preferences</a>
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+                '''
+                
+                send_mail(
+                    subject=f'⏰ Review your time for {date_str}',
+                    message=plain_message,
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
+                    recipient_list=[user.email],
+                    html_message=html_message,
+                    fail_silently=False,
+                )
+                
+                sent_count += 1
+                logger.info(f"[DAILY-REMINDER] Sent to {user.email}: {total_hours:.1f}h")
+                
+            except Exception as e:
+                errors.append(f'{user.email}: {str(e)}')
+                logger.error(f"[DAILY-REMINDER] Failed for {user.email}: {e}")
+        
+        logger.info(
+            f"[DAILY-REMINDER] Complete: {sent_count} sent, "
+            f"{skipped_count} skipped, {len(errors)} errors"
+        )
+        
+        return {
+            'date': yesterday.isoformat(),
+            'sent': sent_count,
+            'skipped': skipped_count,
+            'errors': errors[:10],  # Limit errors in return
+        }
+        
+    except Exception as exc:
+        logger.error(f"[DAILY-REMINDER] Task failed: {exc}", exc_info=True)
+        raise self.retry(exc=exc, countdown=60 * 5)
+
+
+@shared_task(name='tracker.tasks.send_weekly_summary_task', bind=True, max_retries=3)
+def send_weekly_summary_task(self):
+    """
+    Monday 9:30am: Send weekly summary email showing last week's time breakdown by client.
+    
+    Schedule: crontab(hour=9, minute=30, day_of_week=1)  # Monday 9:30am
+    """
+    try:
+        from tracker.models import Block, UserPreference
+        from django.core.mail import send_mail
+        from django.conf import settings
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        today = timezone.localdate()
+        
+        # Last week = Monday to Sunday
+        days_since_monday = today.weekday()  # Monday = 0
+        last_monday = today - timedelta(days=days_since_monday + 7)
+        last_sunday = last_monday + timedelta(days=6)
+        
+        # Get all active users
+        users = User.objects.filter(is_active=True)
+        
+        sent_count = 0
+        skipped_count = 0
+        
+        for user in users:
+            try:
+                if not user.email:
+                    skipped_count += 1
+                    continue
+                
+                # Check preference
+                try:
+                    pref = UserPreference.objects.get(user=user)
+                    if not getattr(pref, 'email_weekly_summary', True):
+                        skipped_count += 1
+                        continue
+                except UserPreference.DoesNotExist:
+                    pass
+                
+                # Get week's blocks
+                blocks = Block.objects.filter(
+                    user=user,
+                    day__gte=last_monday,
+                    day__lte=last_sunday,
+                )
+                
+                if not blocks.exists():
+                    skipped_count += 1
+                    continue
+                
+                # Calculate totals
+                total_minutes = sum(b.minutes or 0 for b in blocks)
+                total_hours = total_minutes / 60
+                
+                if total_hours < 1:
+                    skipped_count += 1
+                    continue
+                
+                # Client breakdown
+                client_hours = {}
+                for block in blocks.filter(client__isnull=False):
+                    client_name = block.client.name
+                    hrs = (block.minutes or 0) / 60
+                    client_hours[client_name] = client_hours.get(client_name, 0) + hrs
+                
+                client_breakdown = sorted(
+                    client_hours.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+                
+                # Daily breakdown
+                daily_hours = {}
+                day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                for block in blocks:
+                    day_idx = block.day.weekday()
+                    day_name = day_names[day_idx]
+                    hrs = (block.minutes or 0) / 60
+                    daily_hours[day_name] = daily_hours.get(day_name, 0) + hrs
+                
+                user_name = user.first_name or user.username
+                week_str = f"{last_monday.strftime('%b %d')} - {last_sunday.strftime('%b %d')}"
+                
+                # Build email
+                client_lines = '\n'.join([f'  • {name}: {hrs:.1f}h' for name, hrs in client_breakdown[:10]])
+                daily_lines = ' | '.join([f'{day}: {daily_hours.get(day, 0):.1f}h' for day in day_names[:5]])
+                
+                frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
+                
+                plain_message = f"""
+Hi {user_name},
+
+Here's your weekly time summary for {week_str}:
+
+📊 Total: {total_hours:.1f} hours
+
+By Day:
+  {daily_lines}
+
+By Client:
+{client_lines}
+
+View detailed report: {frontend_url}/reports
+
+—
+TimeTracker
+                """.strip()
+                
+                send_mail(
+                    subject=f'📊 Weekly Summary: {total_hours:.1f} hours ({week_str})',
+                    message=plain_message,
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
+                
+                sent_count += 1
+                logger.info(f"[WEEKLY-SUMMARY] Sent to {user.email}: {total_hours:.1f}h")
+                
+            except Exception as e:
+                logger.error(f"[WEEKLY-SUMMARY] Failed for {user.email}: {e}")
+        
+        logger.info(
+            f"[WEEKLY-SUMMARY] Complete: {sent_count} sent, {skipped_count} skipped"
+        )
+        
+        return {
+            'week': f"{last_monday.isoformat()} to {last_sunday.isoformat()}",
+            'sent': sent_count,
+            'skipped': skipped_count,
+        }
+        
+    except Exception as exc:
+        logger.error(f"[WEEKLY-SUMMARY] Task failed: {exc}", exc_info=True)
+        raise self.retry(exc=exc, countdown=60 * 5)
+
+
+@shared_task(name='tracker.tasks.cleanup_old_notification_dismissals')
+def cleanup_old_notification_dismissals():
+    """
+    Sunday midnight: Clean up old notification dismissal records.
+    
+    Schedule: crontab(hour=0, minute=0, day_of_week=0)  # Sunday midnight
+    """
+    try:
+        from tracker.models import UserPreference
+        
+        # Clear dismissals older than 7 days
+        week_ago = (timezone.localdate() - timedelta(days=7)).isoformat()
+        
+        updated = UserPreference.objects.filter(
+            last_timesheet_reminder_dismissed__lt=week_ago
+        ).update(last_timesheet_reminder_dismissed=None)
+        
+        logger.info(f"[CLEANUP] Cleared {updated} old notification dismissals")
+        
+        return {'cleaned': updated}
+        
+    except Exception as e:
+        logger.error(f"[CLEANUP] Notification dismissal cleanup failed: {e}")
+        return {'error': str(e)}
+
+
+@shared_task(name='tracker.tasks.send_approval_notification_task')
+def send_approval_notification_task(user_id: int, timesheet_id: int, status: str):
+    """
+    Send notification when a timesheet is approved/rejected.
+    Called from the approval endpoint (not scheduled).
+    
+    Args:
+        user_id: ID of user who owns the timesheet
+        timesheet_id: ID of the timesheet
+        status: 'approved' or 'rejected'
+    """
+    from django.contrib.auth import get_user_model
+    from django.core.mail import send_mail
+    from django.conf import settings
+    from tracker.models import TimesheetSubmission, UserPreference
+    
+    User = get_user_model()
+    
+    try:
+        user = User.objects.get(id=user_id)
+        timesheet = TimesheetSubmission.objects.get(id=timesheet_id)
+        
+        # Check user preference
+        try:
+            pref = UserPreference.objects.get(user=user)
+            if not getattr(pref, 'email_approval_notifications', True):
+                return {'skipped': 'user preference'}
+        except UserPreference.DoesNotExist:
+            pass
+        
+        if not user.email:
+            return {'skipped': 'no email'}
+        
+        period = f"{timesheet.period_start.strftime('%b %d')} - {timesheet.period_end.strftime('%b %d')}"
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
+        
+        if status == 'approved':
+            subject = f"✅ Timesheet Approved: {period}"
+            message = f"""
+Hi {user.first_name or user.username},
+
+Great news! Your timesheet for {period} has been approved.
+
+Total hours: {timesheet.total_hours:.1f}
+
+View details: {frontend_url}/timesheet
+
+—
+TimeTracker
+            """.strip()
+            
+        elif status == 'rejected':
+            notes = getattr(timesheet, 'reviewer_notes', '') or ''
+            feedback = f"\nFeedback: {notes}" if notes else "\nPlease review and resubmit."
+            
+            subject = f"❌ Timesheet Needs Revision: {period}"
+            message = f"""
+Hi {user.first_name or user.username},
+
+Your timesheet for {period} needs revision.
+{feedback}
+
+Edit timesheet: {frontend_url}/timesheet
+
+—
+TimeTracker
+            """.strip()
+        else:
+            return {'skipped': 'invalid status'}
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+        
+        logger.info(f"[APPROVAL] Sent {status} notification to {user.email}")
+        return {'sent': True, 'status': status}
+        
+    except Exception as e:
+        logger.error(f"[APPROVAL] Failed to send notification: {e}")
+        return {'error': str(e)}
+
+
+# ============================================================================
+# TIMESHEET WORKFLOW TASKS (EXISTING)
 # ============================================================================
 
 @shared_task(name='tracker.send_timesheet_reminders')
@@ -516,7 +959,7 @@ def classify_block_task(self, block_id: int):
 def auto_compact_recent_events():
     """
     Auto-compact recent events for all active users.
-    Runs every 10 minutes via Celery beat.
+    Runs every 5 minutes via Celery beat.
     
     This ensures blocks are created automatically without requiring
     the user to refresh the UI.
@@ -544,7 +987,7 @@ def auto_compact_recent_events():
 def ai_classify_uncategorized_blocks(limit=100):
     """
     Run AI classification on uncategorized blocks.
-    Runs every 15 minutes to learn patterns and auto-categorize.
+    Runs every 5 minutes to learn patterns and auto-categorize.
     
     This ensures:
     1. AI learns from recent activity

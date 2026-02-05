@@ -253,7 +253,7 @@ def agent_startup_notification(request):
         'title': '⏰ Review Your Timesheet',
         'message': f'You have {total_hours:.1f} hours from yesterday to review.',
         'subtitle': f'{unassigned_count} blocks need client assignment' if unassigned_count else None,
-        'url': f'/timesheet?date={yesterday.isoformat()}',
+        'url': f'/daily?date={yesterday.isoformat()}',
         'date': yesterday.isoformat(),
         'hours': round(total_hours, 1),
         'unassigned': unassigned_count,

@@ -4623,13 +4623,16 @@ def today_time(request):
                 cat_data['by_activity'].items(), 
                 key=lambda x: -x[1]['minutes']
             )[:10]
-            
+
             for clean_title, info in sorted_activities:
                 mins = info['minutes']
-                time_str = format_duration(mins)  # ✅ Use formatter
+                time_str = format_duration(mins)
                 
-                # ✅ Clean format: "→ Title (duration)"
-                aggregated_samples.append(f"{clean_title} ({time_str})")
+                # ✅ Clean format with block ID for editing
+                if info['id']:
+                    aggregated_samples.append(f"[id:{info['id']}] {clean_title} ({time_str})")
+                else:
+                    aggregated_samples.append(f"{clean_title} ({time_str})")
             
             categories.append({
                 'name': cat_name,
@@ -4736,7 +4739,10 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
             samples = []
             for clean_title, info in sorted(cat_data['by_activity'].items(), key=lambda x: -x[1]['minutes'])[:10]:
                 time_str = format_duration(info['minutes'])
-                samples.append(f"{clean_title} ({time_str})")
+                if info['id']:
+                    samples.append(f"[id:{info['id']}] {clean_title} ({time_str})")
+                else:
+                    samples.append(f"{clean_title} ({time_str})")
             
             categories.append({
                 'name': cat_name,

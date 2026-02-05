@@ -1085,16 +1085,37 @@ def run_agent():
                     gui_menu_bar._show_client_picker()
                 except Exception as e:
                     log(f"[NOTIF] Failed to open picker: {e}")
-        
+
         def on_notif_snooze(client_id, minutes):
             """Handle user snoozing a client suggestion"""
             log(f"[NOTIF] User snoozed client {client_id} for {minutes} minutes")
         
+        # Create API client for timesheet review notifications
+        class _NotifAPIClient:
+            def __init__(self, base_url, api_key):
+                self.base_url = base_url
+                self.api_key = api_key
+            def get(self, path):
+                req = urllib.request.Request(
+                    f"{self.base_url}{path}",
+                    headers={"Authorization": f"DeviceKey {self.api_key}"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return json.loads(resp.read())
+
+        _notif_api = _NotifAPIClient(API_BASE, config.get("api_key") or API_KEY)
+
+        def on_review(data):
+            log(f"[NOTIF] User clicked Review Now: {data}")
+
         notif_manager = create_notification_system(
             on_confirm=on_notif_confirm,
             on_switch=on_notif_switch,
             on_snooze=on_notif_snooze,
-            config=notif_config
+            config=notif_config,
+            api_client=_notif_api,
+            agent_config={'base_url': 'https://timetracker.mavops.ai'},
+            on_review=on_review,
         )
         
         if notif_manager and notif_manager.ready:
@@ -1113,9 +1134,18 @@ def run_agent():
                 get_current_client=get_current_client_for_notif,
                 poll_interval=30
             )
+
             notif_worker.start()
             log("[NOTIF] Notification worker started")
+            
+            # Check for timesheet review on startup
+            try:
+                review_result = notif_manager.notify_timesheet_review(force=False)
+                log(f"[NOTIF] Startup timesheet review check: {review_result}")
+            except Exception as e:
+                log(f"[NOTIF] Startup review check failed: {e}")
         else:
+
             log("[NOTIF] ⚠️ Push notifications not authorized")
             notif_manager = None
     else:

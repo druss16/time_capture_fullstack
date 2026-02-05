@@ -188,6 +188,9 @@ class ClientNotificationManager:
         self.on_confirm_client: Optional[Callable] = None
         self.on_switch_requested: Optional[Callable] = None
         self.on_snooze: Optional[Callable] = None
+
+        self.api_client = None
+        self.agent_config = None
     
     def setup(self) -> bool:
         """Initialize the Windows toast notifier"""
@@ -273,6 +276,13 @@ class ClientNotificationManager:
                         self.state.snooze_client(client_id, 30)
                         if self.on_snooze:
                             self.on_snooze(client_id, 30)
+                elif action == "review":
+                    # Open browser to timesheet review URL
+                    url = data.get("url")
+                    if url:
+                        import webbrowser
+                        print(f"[NOTIF] Opening browser: {url}")
+                        webbrowser.open(url)
             except Exception as e:
                 print(f"[NOTIF] Callback error: {e}")
                 import traceback
@@ -298,6 +308,61 @@ class ClientNotificationManager:
             _PENDING_NOTIFICATIONS.pop(notif_id, None)
         
         return on_failed
+
+    def notify_timesheet_review(self, force: bool = False) -> bool:
+        """
+        Check server for unreviewed timesheet hours and notify if needed.
+        Called on agent startup.
+        """
+        if not self.api_client:
+            print("[NOTIF] No API client configured for timesheet review")
+            return False
+        
+        if not self.config.enabled:
+            return False
+        
+        try:
+            # Call the server endpoint
+            data = self.api_client.get('/agent/startup-notification/')
+            
+            if not data.get('show_notification'):
+                print("[NOTIF] Server says no timesheet review needed")
+                return False
+            
+            title = data.get('title', '⏰ Review Your Timesheet')
+            message = data.get('message', 'You have hours to review')
+            url = data.get('url', '/daily')
+            
+            # Build full URL for the callback
+            base_url = 'https://timetracker.mavops.ai'
+            if self.agent_config:
+                base_url = self.agent_config.get('base_url', base_url)
+            full_url = f"{base_url}{url}"
+            
+            # Send Windows toast notification
+            result = self._send_notification(
+                notif_type=NotificationType.PERIODIC_CHECKIN,
+                title=title,
+                body=message,
+                buttons=[
+                    ("Review Now", "review"),
+                    ("Later", "dismiss"),
+                ],
+                data={
+                    "url": full_url,  # Store full URL for callback
+                    "hours": data.get('hours'),
+                    "date": data.get('date'),
+                }
+            )
+            
+            if result:
+                print(f"[NOTIF] Sent timesheet_review: {title}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"[NOTIF] Failed to check timesheet review: {e}")
+            return False
     
     def _send_notification(
         self,
@@ -775,7 +840,10 @@ def create_notification_system(
     on_confirm: Callable = None,
     on_switch: Callable = None,
     on_snooze: Callable = None,
-    config: NotificationConfig = None
+    config: NotificationConfig = None,
+    api_client = None,           # ADD
+    agent_config: dict = None,   # ADD
+    on_review: Callable = None,  # ADD
 ) -> ClientNotificationManager:
     """
     Create and setup the notification system.
@@ -793,6 +861,9 @@ def create_notification_system(
     manager.on_confirm_client = on_confirm
     manager.on_switch_requested = on_switch
     manager.on_snooze = on_snooze
+    manager.api_client = api_client        # ADD
+    manager.agent_config = agent_config    # ADD
+    manager.on_review_timesheet = on_review  # ADD
     
     if manager.setup():
         print("[NOTIF] ✅ Windows notification system ready")

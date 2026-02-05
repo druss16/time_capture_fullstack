@@ -239,23 +239,39 @@ def agent_startup_notification(request):
     if _is_date_submitted(user, yesterday, Timesheet):
         return Response({'show_notification': False})
     
-    # Calculate stats
-    total_minutes = sum(b.minutes or 0 for b in blocks)
-    total_hours = total_minutes / 60
+    # Calculate BILLABLE hours only (exclude idle/uncategorized)
+    total_minutes = 0
+    billable_minutes = 0
+    for b in blocks:
+        minutes = b.minutes or 0
+        total_minutes += minutes
+        
+        category = (b.category or '').lower()
+        # Skip non-billable categories
+        if 'idle' in category or 'uncategorized' in category:
+            continue
+        billable_minutes += minutes
     
-    if total_hours < 0.5:
+    billable_hours = billable_minutes / 60
+    
+    # Only notify if meaningful billable hours
+    if billable_hours < 0.5:
         return Response({'show_notification': False})
     
-    unassigned_count = blocks.filter(client__isnull=True).count()
+    unassigned_count = blocks.filter(client__isnull=True).exclude(
+        category__icontains='idle'
+    ).exclude(
+        category__icontains='uncategorized'
+    ).count()
     
     return Response({
         'show_notification': True,
         'title': '⏰ Review Your Timesheet',
-        'message': f'You have {total_hours:.1f} hours from yesterday to review.',
+        'message': f'You have {billable_hours:.1f} billable hours from yesterday to review.',
         'subtitle': f'{unassigned_count} blocks need client assignment' if unassigned_count else None,
         'url': f'/daily?date={yesterday.isoformat()}',
         'date': yesterday.isoformat(),
-        'hours': round(total_hours, 1),
+        'hours': round(billable_hours, 1),
         'unassigned': unassigned_count,
     })
 

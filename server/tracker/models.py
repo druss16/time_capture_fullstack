@@ -2072,3 +2072,66 @@ class AgentError(models.Model):
     def __str__(self):
         username = self.user.username if self.user else self.os_username or 'unknown'
         return f"{self.error_type} | {username}@{self.hostname} | {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class UserPreference(models.Model):
+    """User preferences including notification settings."""
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='preferences'
+    )
+    
+    # Notification preferences
+    email_timesheet_reminders = models.BooleanField(
+        default=True,
+        help_text="Receive daily email reminders for unreviewed timesheets"
+    )
+    email_weekly_summary = models.BooleanField(
+        default=True,
+        help_text="Receive weekly time summary emails"
+    )
+    email_approval_notifications = models.BooleanField(
+        default=True,
+        help_text="Receive emails when timesheets are approved/rejected"
+    )
+    desktop_notifications = models.BooleanField(
+        default=True,
+        help_text="Show desktop notifications from the agent"
+    )
+    reminder_time = models.CharField(
+        max_length=5,
+        default='09:00',
+        help_text="Preferred time for reminders (HH:MM)"
+    )
+    
+    # Tracking
+    last_timesheet_reminder_dismissed = models.CharField(
+        max_length=10,
+        blank=True,
+        null=True,
+        help_text="Date of last dismissed reminder (YYYY-MM-DD)"
+    )
+    
+    # Other preferences
+    default_view = models.CharField(
+        max_length=20,
+        default='timesheet',
+        choices=[
+            ('timesheet', 'My Timesheet'),
+            ('dashboard', 'Dashboard'),
+            ('reports', 'Reports'),
+        ]
+    )
+    timezone = models.CharField(max_length=50, default='America/New_York')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'User Preference'
+        verbose_name_plural = 'User Preferences'
+    
+    def __str__(self):
+        return f"Preferences for {self.user.username}"
+

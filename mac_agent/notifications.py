@@ -9,6 +9,7 @@ Comprehensive notification system for client reminders:
 - Context-switch suggestions
 - Periodic check-ins
 - Smart notification throttling
+- Server-side timesheet review reminders (NEW)
 """
 
 import os
@@ -16,10 +17,16 @@ import json
 import time
 import threading
 import uuid
-from datetime import datetime, timezone
+import webbrowser
+import subprocess
+import platform
+from datetime import datetime, timezone, date, timedelta
 from typing import Optional, Dict, Callable, Any
 from dataclasses import dataclass, field
 from enum import Enum
+import logging
+
+logger = logging.getLogger(__name__)
 
 # macOS notifications
 try:
@@ -43,6 +50,7 @@ class NotificationType(Enum):
     CONTEXT_CHANGE = "context_change"            # Activity changed, switch client?
     PERIODIC_CHECKIN = "periodic_checkin"        # Quick reminder of current client
     NO_CLIENT_REMINDER = "no_client_reminder"    # You haven't selected a client
+    TIMESHEET_REVIEW = "timesheet_review"        # Review yesterday's hours
 
 
 @dataclass
@@ -71,6 +79,12 @@ class NotificationConfig:
     # No client reminder
     no_client_reminder_enabled: bool = True
     no_client_reminder_after_minutes: int = 15  # Remind after 15 min with no client
+    
+    # Timesheet review (server-side)
+    timesheet_review_enabled: bool = True
+    timesheet_review_on_startup: bool = True  # Check on agent startup
+    timesheet_review_periodic: bool = False    # Also check periodically during the day
+    timesheet_review_interval_minutes: int = 240  # If periodic, check every 4 hours
     
     # Throttling
     min_seconds_between_notifications: int = 60  # Don't spam
@@ -115,6 +129,8 @@ class NotificationState:
     last_duration_reminder_time: float = 0
     last_periodic_checkin_time: float = 0
     last_no_client_reminder_time: float = 0
+    last_timesheet_review_time: float = 0
+    last_timesheet_review_date: Optional[str] = None  # Track by date to only show once/day
     client_start_time: float = field(default_factory=time.time)
     current_client_id: Optional[int] = None
     current_client_name: Optional[str] = None
@@ -149,12 +165,14 @@ CATEGORY_IDLE_RETURN = "TIMETRACKER_IDLE_RETURN"
 CATEGORY_CONTEXT_CHANGE = "TIMETRACKER_CONTEXT_CHANGE"
 CATEGORY_CHECKIN = "TIMETRACKER_CHECKIN"
 CATEGORY_NO_CLIENT = "TIMETRACKER_NO_CLIENT"
+CATEGORY_TIMESHEET_REVIEW = "TIMETRACKER_TIMESHEET_REVIEW"
 
 # Action IDs
 ACTION_CONFIRM = "ACTION_CONFIRM"
 ACTION_SWITCH = "ACTION_SWITCH"
 ACTION_SNOOZE = "ACTION_SNOOZE"
 ACTION_DISMISS = "ACTION_DISMISS"
+ACTION_REVIEW = "ACTION_REVIEW"
 
 # Store pending notification data for callbacks
 _PENDING_NOTIFICATIONS: Dict[str, Dict] = {}
@@ -195,6 +213,9 @@ class ClientNotificationDelegate(NSObject):
             elif action_id == ACTION_SNOOZE:
                 if callback:
                     callback("snooze", data)
+            elif action_id == ACTION_REVIEW:
+                if callback:
+                    callback("review", data)
             elif action_id == DISMISS_ACTION:
                 if callback:
                     callback("dismiss", data)
@@ -216,7 +237,7 @@ class ClientNotificationManager:
     and user preference respect.
     """
     
-    def __init__(self, config: NotificationConfig = None):
+    def __init__(self, config: NotificationConfig = None, api_client=None, agent_config=None):
         self.config = config or NotificationConfig.load()
         self.state = NotificationState()
         self.center = None
@@ -224,15 +245,26 @@ class ClientNotificationManager:
         self.ready = False
         self._lock = threading.Lock()
         
+        # Server-side notification support
+        self.api_client = api_client
+        self.agent_config = agent_config or {}
+        self._platform = platform.system().lower()
+        
         # Callbacks
         self.on_confirm_client: Optional[Callable] = None
         self.on_switch_requested: Optional[Callable] = None
         self.on_snooze: Optional[Callable] = None
+        self.on_review_timesheet: Optional[Callable] = None
     
     def setup(self) -> bool:
         """Initialize notification center and register categories"""
         if not NOTIF_AVAILABLE:
             print("[NOTIF] macOS notifications not available")
+            # Still mark as "ready" for fallback notification methods
+            if self._platform == 'darwin' or self._platform == 'windows':
+                self.ready = True
+                print(f"[NOTIF] Fallback notifications available on {self._platform}")
+                return True
             return False
         
         try:
@@ -310,6 +342,20 @@ class ClientNotificationManager:
             )
             categories.add(no_client_cat)
             
+            # Timesheet review category (Review Now / Later)
+            review_action = UNNotificationAction.actionWithIdentifier_title_options_(
+                ACTION_REVIEW, "Review Now", UNNotificationActionOptionForeground
+            )
+            later_action = UNNotificationAction.actionWithIdentifier_title_options_(
+                ACTION_SNOOZE, "Later", 0
+            )
+            review_cat = UNNotificationCategory.categoryWithIdentifier_actions_intentIdentifiers_options_(
+                CATEGORY_TIMESHEET_REVIEW,
+                [review_action, later_action],
+                [], 0
+            )
+            categories.add(review_cat)
+            
             self.center.setNotificationCategories_(categories)
             
             # Request authorization
@@ -378,10 +424,31 @@ class ClientNotificationManager:
         callback: Callable = None,
         delay_seconds: float = 0
     ) -> bool:
-        """Send a notification"""
+        """Send a notification via the best available method"""
         if not self._can_send_notification(notif_type):
             return False
         
+        # Try native UNUserNotificationCenter first
+        if NOTIF_AVAILABLE and self.center:
+            return self._send_native_notification(
+                notif_type, title, body, subtitle, category_id, data, callback, delay_seconds
+            )
+        
+        # Fallback to osascript (macOS) or win10toast/PowerShell (Windows)
+        return self._send_fallback_notification(notif_type, title, body, subtitle, data)
+    
+    def _send_native_notification(
+        self,
+        notif_type: NotificationType,
+        title: str,
+        body: str,
+        subtitle: str = None,
+        category_id: str = None,
+        data: Dict = None,
+        callback: Callable = None,
+        delay_seconds: float = 0
+    ) -> bool:
+        """Send notification via macOS UNUserNotificationCenter"""
         try:
             req_id = f"timetracker-{notif_type.value}-{uuid.uuid4().hex[:8]}"
             
@@ -399,9 +466,6 @@ class ClientNotificationManager:
                 content.setSubtitle_(subtitle)
             if category_id:
                 content.setCategoryIdentifier_(category_id)
-            
-            # Optional: Add sound
-            # content.setSound_(UNNotificationSound.defaultSound())
             
             trigger = None
             if delay_seconds > 0:
@@ -423,8 +487,139 @@ class ClientNotificationManager:
             return True
             
         except Exception as e:
-            print(f"[NOTIF] Send error: {e}")
+            print(f"[NOTIF] Native send error: {e}")
+            # Try fallback
+            return self._send_fallback_notification(notif_type, title, body, subtitle, data)
+    
+    def _send_fallback_notification(
+        self,
+        notif_type: NotificationType,
+        title: str,
+        body: str,
+        subtitle: str = None,
+        data: Dict = None,
+    ) -> bool:
+        """Send notification via platform fallback (osascript, win10toast, etc.)"""
+        try:
+            if self._platform == 'darwin':
+                return self._send_osascript_notification(title, body, subtitle)
+            elif self._platform == 'windows':
+                return self._send_windows_notification(title, body, data)
+            else:
+                logger.warning(f"[NOTIF] No fallback for platform: {self._platform}")
+                return False
+        except Exception as e:
+            logger.error(f"[NOTIF] Fallback send error: {e}")
             return False
+    
+    def _send_osascript_notification(
+        self, title: str, body: str, subtitle: str = None
+    ) -> bool:
+        """Send notification via macOS osascript"""
+        try:
+            subtitle_part = f'subtitle "{subtitle}"' if subtitle else ''
+            script = f'display notification "{body}" with title "{title}" {subtitle_part} sound name "Glass"'
+            
+            subprocess.run(
+                ['osascript', '-e', script],
+                capture_output=True,
+                timeout=5
+            )
+            
+            with self._lock:
+                self.state.last_notification_time = time.time()
+            
+            logger.info(f"[NOTIF] osascript notification: {title}")
+            return True
+        except Exception as e:
+            logger.error(f"[NOTIF] osascript error: {e}")
+            return False
+    
+    def _send_windows_notification(
+        self, title: str, body: str, data: Dict = None
+    ) -> bool:
+        """Send notification on Windows via win10toast → plyer → PowerShell"""
+        url = data.get('url') if data else None
+        
+        # Try win10toast
+        try:
+            from win10toast import ToastNotifier
+            toaster = ToastNotifier()
+            
+            def on_click():
+                if url:
+                    base_url = self.agent_config.get('base_url', 'https://app.timetracker.com')
+                    webbrowser.open(f"{base_url}{url}")
+            
+            toaster.show_toast(
+                title, body, duration=10, threaded=True,
+                callback_on_click=on_click,
+            )
+            
+            with self._lock:
+                self.state.last_notification_time = time.time()
+            
+            logger.info(f"[NOTIF] win10toast: {title}")
+            return True
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"[NOTIF] win10toast failed: {e}")
+        
+        # Try plyer
+        try:
+            from plyer import notification
+            notification.notify(title=title, message=body, app_name='TimeTracker', timeout=10)
+            
+            with self._lock:
+                self.state.last_notification_time = time.time()
+            
+            logger.info(f"[NOTIF] plyer: {title}")
+            return True
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"[NOTIF] plyer failed: {e}")
+        
+        # PowerShell fallback
+        try:
+            import sys
+            ps_script = f'''
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+            $template = @"
+            <toast>
+                <visual>
+                    <binding template="ToastText02">
+                        <text id="1">{title}</text>
+                        <text id="2">{body}</text>
+                    </binding>
+                </visual>
+                <audio src="ms-winsoundevent:Notification.Default"/>
+            </toast>
+"@
+            $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+            $xml.LoadXml($template)
+            $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+            [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("TimeTracker").Show($toast)
+            '''
+            
+            subprocess.run(
+                ['powershell', '-ExecutionPolicy', 'Bypass', '-Command', ps_script],
+                capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+            )
+            
+            with self._lock:
+                self.state.last_notification_time = time.time()
+            
+            logger.info(f"[NOTIF] PowerShell toast: {title}")
+            return True
+        except Exception as e:
+            logger.error(f"[NOTIF] PowerShell toast failed: {e}")
+        
+        return False
     
     def _default_callback(self, action: str, data: Dict):
         """Default notification response handler"""
@@ -445,6 +640,13 @@ class ClientNotificationManager:
                 self.on_snooze(client_id, 30)  # 30 minute snooze
             if client_id:
                 self.state.snooze_client(client_id, 30)
+        elif action == "review":
+            # Open timesheet in browser
+            url = data.get("url", "/timesheet")
+            base_url = self.agent_config.get('base_url', 'https://app.timetracker.com')
+            webbrowser.open(f"{base_url}{url}")
+            if self.on_review_timesheet:
+                self.on_review_timesheet(data)
     
     # ============================================================
     # PUBLIC NOTIFICATION METHODS
@@ -693,6 +895,150 @@ class ClientNotificationManager:
         
         return result
     
+    def notify_timesheet_review(self, force: bool = False) -> bool:
+        """
+        Check server for unreviewed hours and show notification.
+        Called on agent startup and optionally periodically.
+        
+        Requires api_client to be set.
+        
+        Args:
+            force: Send even if already notified today
+        """
+        if not self.config.timesheet_review_enabled and not force:
+            return False
+        
+        if not self.api_client:
+            logger.debug("[NOTIF] No api_client set, skipping timesheet review check")
+            return False
+        
+        # Only show once per day unless forced
+        today = date.today().isoformat()
+        if not force and self.state.last_timesheet_review_date == today:
+            logger.debug("[NOTIF] Already sent timesheet review today")
+            return False
+        
+        try:
+            # Call server API
+            response = self.api_client.get('/agent/startup-notification/')
+            
+            if not response or not response.get('show_notification'):
+                logger.debug("[NOTIF] Server says no notification needed")
+                return False
+            
+            title = response.get('title', '⏰ Review Your Timesheet')
+            message = response.get('message', 'You have hours to review')
+            subtitle = response.get('subtitle')
+            url = response.get('url', '/timesheet')
+            hours = response.get('hours', 0)
+            unassigned = response.get('unassigned', 0)
+            
+            result = self._send_notification(
+                notif_type=NotificationType.TIMESHEET_REVIEW,
+                title=title,
+                subtitle=subtitle,
+                body=message,
+                category_id=CATEGORY_TIMESHEET_REVIEW,
+                data={
+                    "url": url,
+                    "hours": hours,
+                    "unassigned": unassigned,
+                    "date": response.get('date'),
+                }
+            )
+            
+            if result:
+                with self._lock:
+                    self.state.last_timesheet_review_time = time.time()
+                    self.state.last_timesheet_review_date = today
+                logger.info(f"[NOTIF] Timesheet review notification sent: {hours}h")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[NOTIF] Failed to check timesheet review: {e}")
+            return False
+    
+    def notify_timesheet_review_with_alert(self, force: bool = False) -> bool:
+        """
+        Same as notify_timesheet_review but also shows a macOS alert dialog
+        (more intrusive, guarantees user sees it).
+        
+        On Windows, shows a persistent tkinter window.
+        """
+        if not self.config.timesheet_review_enabled and not force:
+            return False
+        
+        if not self.api_client:
+            return False
+        
+        today = date.today().isoformat()
+        if not force and self.state.last_timesheet_review_date == today:
+            return False
+        
+        try:
+            response = self.api_client.get('/agent/startup-notification/')
+            
+            if not response or not response.get('show_notification'):
+                return False
+            
+            title = response.get('title', '⏰ Review Your Timesheet')
+            message = response.get('message', 'You have hours to review')
+            url = response.get('url', '/timesheet')
+            hours = response.get('hours', 0)
+            unassigned = response.get('unassigned', 0)
+            
+            # Send system notification first
+            self.notify_timesheet_review(force=True)
+            
+            # Then show alert dialog
+            if self._platform == 'darwin':
+                self._show_macos_review_alert(title, message, url)
+            elif self._platform == 'windows':
+                window = PersistentNotificationWindow(self.agent_config)
+                window.show(
+                    title="Review Your Timesheet",
+                    message=message,
+                    hours=hours,
+                    unassigned=unassigned,
+                    url=url,
+                )
+            
+            with self._lock:
+                self.state.last_timesheet_review_date = today
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"[NOTIF] Timesheet review alert failed: {e}")
+            return False
+    
+    def _show_macos_review_alert(self, title: str, message: str, url: str = '/timesheet'):
+        """Show macOS alert dialog with Review Now / Later buttons"""
+        try:
+            script = f'''
+            set theResponse to display dialog "{message}" with title "{title}" buttons {{"Later", "Review Now"}} default button "Review Now" with icon caution
+            if button returned of theResponse is "Review Now" then
+                return "review"
+            end if
+            '''
+            
+            result = subprocess.run(
+                ['osascript', '-e', script],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode == 0 and 'review' in result.stdout.lower():
+                base_url = self.agent_config.get('base_url', 'https://app.timetracker.com')
+                webbrowser.open(f"{base_url}{url}")
+                
+        except subprocess.TimeoutExpired:
+            logger.debug("[NOTIF] User didn't respond to review alert")
+        except Exception as e:
+            logger.error(f"[NOTIF] macOS review alert error: {e}")
+    
     # ============================================================
     # STATE MANAGEMENT
     # ============================================================
@@ -736,6 +1082,135 @@ class ClientNotificationManager:
     def check_no_client_reminder(self) -> bool:
         """Check and send no-client reminder if needed"""
         return self.notify_no_client()
+    
+    def check_timesheet_review(self) -> bool:
+        """Check and send timesheet review reminder if needed"""
+        return self.notify_timesheet_review()
+
+
+# ============================================================
+# PERSISTENT NOTIFICATION WINDOW (Windows / cross-platform)
+# ============================================================
+
+class PersistentNotificationWindow:
+    """
+    A small always-on-top window that stays visible until user takes action.
+    More intrusive than system notifications but guarantees visibility.
+    """
+    
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.window = None
+    
+    def show(
+        self,
+        title: str,
+        message: str,
+        hours: float,
+        unassigned: int,
+        url: str = '/timesheet',
+    ):
+        """Show persistent notification window."""
+        try:
+            import tkinter as tk
+        except ImportError:
+            logger.warning("[NOTIF] tkinter not available for persistent notification")
+            return
+        
+        def create_window():
+            self.window = tk.Tk()
+            self.window.title("TimeTracker")
+            self.window.attributes('-topmost', True)
+            self.window.resizable(False, False)
+            
+            # Position in bottom right
+            screen_width = self.window.winfo_screenwidth()
+            screen_height = self.window.winfo_screenheight()
+            window_width = 350
+            window_height = 180
+            x = screen_width - window_width - 20
+            y = screen_height - window_height - 60
+            self.window.geometry(f'{window_width}x{window_height}+{x}+{y}')
+            
+            # Remove window decorations on Windows
+            if platform.system() == 'Windows':
+                self.window.overrideredirect(True)
+            
+            # Main frame
+            frame = tk.Frame(self.window, bg='#ffffff', padx=16, pady=12)
+            frame.pack(fill='both', expand=True)
+            
+            # Header
+            header_frame = tk.Frame(frame, bg='#f59e0b')
+            header_frame.pack(fill='x', pady=(0, 10))
+            
+            title_label = tk.Label(
+                header_frame, text=f"⏰ {title}",
+                font=('Segoe UI', 12, 'bold'), bg='#f59e0b', fg='white',
+                padx=10, pady=8,
+            )
+            title_label.pack(side='left')
+            
+            close_btn = tk.Button(
+                header_frame, text='×', font=('Segoe UI', 14),
+                bg='#f59e0b', fg='white', bd=0,
+                command=self._dismiss, cursor='hand2',
+            )
+            close_btn.pack(side='right', padx=5)
+            
+            # Message
+            msg_label = tk.Label(
+                frame, text=message, font=('Segoe UI', 10),
+                bg='#ffffff', fg='#475569', wraplength=300, justify='left',
+            )
+            msg_label.pack(anchor='w', pady=(0, 5))
+            
+            # Stats
+            stats_text = f"📊 {hours:.1f} hours"
+            if unassigned > 0:
+                stats_text += f" | ⚠️ {unassigned} unassigned"
+            
+            stats_label = tk.Label(
+                frame, text=stats_text, font=('Segoe UI', 9),
+                bg='#ffffff', fg='#64748b',
+            )
+            stats_label.pack(anchor='w', pady=(0, 10))
+            
+            # Buttons
+            btn_frame = tk.Frame(frame, bg='#ffffff')
+            btn_frame.pack(fill='x')
+            
+            review_btn = tk.Button(
+                btn_frame, text='Review Now →', font=('Segoe UI', 10, 'bold'),
+                bg='#f59e0b', fg='white', bd=0, padx=20, pady=8,
+                cursor='hand2', command=lambda: self._review(url),
+            )
+            review_btn.pack(side='right')
+            
+            later_btn = tk.Button(
+                btn_frame, text='Later', font=('Segoe UI', 10),
+                bg='#e2e8f0', fg='#475569', bd=0, padx=15, pady=8,
+                cursor='hand2', command=self._dismiss,
+            )
+            later_btn.pack(side='right', padx=(0, 10))
+            
+            self.window.mainloop()
+        
+        # Run in separate thread to not block agent
+        thread = threading.Thread(target=create_window, daemon=True)
+        thread.start()
+    
+    def _review(self, url: str):
+        """Handle review button click."""
+        base_url = self.config.get('base_url', 'https://app.timetracker.com')
+        webbrowser.open(f"{base_url}{url}")
+        self._dismiss()
+    
+    def _dismiss(self):
+        """Dismiss the notification window."""
+        if self.window:
+            self.window.destroy()
+            self.window = None
 
 
 # ============================================================
@@ -762,6 +1237,7 @@ class NotificationWorker:
         self.poll_interval = poll_interval
         self._stop = threading.Event()
         self._thread = None
+        self._startup_checked = False
     
     def start(self):
         """Start the notification worker"""
@@ -784,6 +1260,12 @@ class NotificationWorker:
         """Main worker loop"""
         while not self._stop.is_set():
             try:
+                # On first run, check for timesheet review (startup notification)
+                if not self._startup_checked:
+                    self._startup_checked = True
+                    if self.notif.config.timesheet_review_on_startup:
+                        self.notif.notify_timesheet_review()
+                
                 # Sync current client state
                 current = self.get_current_client()
                 if current:
@@ -800,6 +1282,10 @@ class NotificationWorker:
                 
                 # Check no-client reminder
                 self.notif.check_no_client_reminder()
+                
+                # Periodically check timesheet review (if enabled)
+                if self.notif.config.timesheet_review_periodic:
+                    self.notif.check_timesheet_review()
                 
                 # Check AI suggestions (if available)
                 if self.get_ai_suggestion:
@@ -819,14 +1305,17 @@ class NotificationWorker:
 
 
 # ============================================================
-# INTEGRATION HELPER
+# INTEGRATION HELPERS
 # ============================================================
 
 def create_notification_system(
     on_confirm: Callable = None,
     on_switch: Callable = None,
     on_snooze: Callable = None,
-    config: NotificationConfig = None
+    on_review: Callable = None,
+    config: NotificationConfig = None,
+    api_client=None,
+    agent_config: Dict = None,
 ) -> ClientNotificationManager:
     """
     Create and setup the notification system.
@@ -835,20 +1324,50 @@ def create_notification_system(
         on_confirm: Called when user confirms current client
         on_switch: Called when user wants to switch client
         on_snooze: Called when user snoozes a suggestion
+        on_review: Called when user clicks "Review Now" on timesheet reminder
         config: Optional custom configuration
+        api_client: API client for server-side notifications
+        agent_config: Agent configuration dict (needs 'base_url')
     
     Returns:
         Configured ClientNotificationManager
     """
-    manager = ClientNotificationManager(config)
+    manager = ClientNotificationManager(
+        config=config,
+        api_client=api_client,
+        agent_config=agent_config,
+    )
     manager.on_confirm_client = on_confirm
     manager.on_switch_requested = on_switch
     manager.on_snooze = on_snooze
+    manager.on_review_timesheet = on_review
     
     if manager.setup():
         print("[NOTIF] Notification system ready")
     else:
-        print("[NOTIF] Notification system setup failed")
+        print("[NOTIF] Notification system setup failed (fallback may be available)")
+    
+    return manager
+
+
+def integrate_notifications(agent) -> ClientNotificationManager:
+    """
+    Call this from your agent's main.py to integrate notifications.
+    
+    Usage:
+        from notifications import integrate_notifications
+        
+        # In your agent initialization:
+        notifier = integrate_notifications(agent)
+    """
+    manager = create_notification_system(
+        api_client=agent.api_client,
+        agent_config=agent.config,
+    )
+    
+    # Check for timesheet review on startup
+    if manager.config.timesheet_review_on_startup:
+        manager.notify_timesheet_review()
     
     return manager
 
@@ -866,10 +1385,14 @@ if __name__ == "__main__":
     def on_snooze(client_id, minutes):
         print(f"Snoozed client {client_id} for {minutes} minutes")
     
+    def on_review(data):
+        print(f"Review requested: {data}")
+    
     manager = create_notification_system(
         on_confirm=on_confirm,
         on_switch=on_switch,
-        on_snooze=on_snooze
+        on_snooze=on_snooze,
+        on_review=on_review,
     )
     
     # Set a test client

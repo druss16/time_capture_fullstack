@@ -14,6 +14,35 @@ from decimal import Decimal
 
 
 # ============================================================================
+# HELPER: Check if a date falls within a submitted/approved timesheet week
+# ============================================================================
+
+def _get_week_start(d):
+    """Get Monday of the week containing date d."""
+    return d - timedelta(days=d.weekday())
+
+
+def _is_date_submitted(user, check_date, Timesheet):
+    """Check if a date falls in a submitted/approved timesheet week."""
+    week_start = _get_week_start(check_date)
+    return Timesheet.objects.filter(
+        user=user,
+        week_start=week_start,
+        status__in=['submitted', 'approved']
+    ).exists()
+
+
+def _get_submitted_weeks(user, Timesheet):
+    """Get set of week_start dates that are submitted/approved."""
+    return set(
+        Timesheet.objects.filter(
+            user=user,
+            status__in=['submitted', 'approved']
+        ).values_list('week_start', flat=True)
+    )
+
+
+# ============================================================================
 # API ENDPOINTS
 # ============================================================================
 
@@ -42,28 +71,15 @@ def timesheet_needs_review(request):
     for _ in range(7):  # Go back up to 7 days to find 5 work days
         if len(days_to_check) >= 5:
             break
-        
-        # Skip weekends optionally (uncomment if desired)
-        # if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
-        #     check_date -= timedelta(days=1)
-        #     continue
-        
         days_to_check.append(check_date)
         check_date -= timedelta(days=1)
     
-    # Get submitted dates
-    submitted_dates = set(
-        Timesheet.objects.filter(
-            user=user,
-            status__in=['submitted', 'approved']
-        ).values_list('period_start', 'period_end')
-    )
+    # Get all submitted/approved week_start dates for this user
+    submitted_weeks = _get_submitted_weeks(user, Timesheet)
     
     def is_submitted(d):
-        for start, end in submitted_dates:
-            if start <= d <= end:
-                return True
-        return False
+        week_start = _get_week_start(d)
+        return week_start in submitted_weeks
     
     # Check each day
     unreviewed_days = []
@@ -213,28 +229,14 @@ def agent_startup_notification(request):
     except UserPreference.DoesNotExist:
         pass
     
-    # Check if already notified today
-    cache_key = f'agent_notified_{user.id}_{today.isoformat()}'
-    # In production, use Django cache
-    # from django.core.cache import cache
-    # if cache.get(cache_key):
-    #     return Response({'show_notification': False})
-    
     # Check yesterday's blocks
     blocks = Block.objects.filter(user=user, day=yesterday)
     
     if not blocks.exists():
         return Response({'show_notification': False})
     
-    # Check if submitted
-    already_submitted = Timesheet.objects.filter(
-        user=user,
-        period_start__lte=yesterday,
-        period_end__gte=yesterday,
-        status__in=['submitted', 'approved']
-    ).exists()
-    
-    if already_submitted:
+    # Check if yesterday's week is already submitted
+    if _is_date_submitted(user, yesterday, Timesheet):
         return Response({'show_notification': False})
     
     # Calculate stats
@@ -246,15 +248,12 @@ def agent_startup_notification(request):
     
     unassigned_count = blocks.filter(client__isnull=True).count()
     
-    # Mark as notified
-    # cache.set(cache_key, True, 60 * 60 * 12)  # 12 hours
-    
     return Response({
         'show_notification': True,
         'title': '⏰ Review Your Timesheet',
         'message': f'You have {total_hours:.1f} hours from yesterday to review.',
         'subtitle': f'{unassigned_count} blocks need client assignment' if unassigned_count else None,
-        'url': '/timesheet',
+        'url': f'/timesheet?date={yesterday.isoformat()}',
         'date': yesterday.isoformat(),
         'hours': round(total_hours, 1),
         'unassigned': unassigned_count,
@@ -270,7 +269,7 @@ def send_daily_timesheet_reminders():
     Send email reminders to users who have unreviewed time from yesterday.
     Call this from a scheduled task (Celery beat, cron, etc.) at 9am.
     
-    Returns: number of emails sent
+    Returns: dict with 'sent' count and 'errors' list
     """
     from django.core.mail import send_mail
     from django.conf import settings
@@ -302,15 +301,8 @@ def send_daily_timesheet_reminders():
             except UserPreference.DoesNotExist:
                 pass  # Default to sending
             
-            # Skip if already submitted
-            already_submitted = Timesheet.objects.filter(
-                user=user,
-                period_start__lte=yesterday,
-                period_end__gte=yesterday,
-                status__in=['submitted', 'approved']
-            ).exists()
-            
-            if already_submitted:
+            # Skip if yesterday's week is already submitted
+            if _is_date_submitted(user, yesterday, Timesheet):
                 continue
             
             # Get their blocks
@@ -339,6 +331,8 @@ def send_daily_timesheet_reminders():
             # Build email
             user_name = user.first_name or user.username
             date_str = yesterday.strftime('%A, %b %d')
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
+            review_url = f'{frontend_url}/timesheet?date={yesterday.isoformat()}'
             
             # Plain text version
             client_lines = '\n'.join([f'  • {name}: {hrs:.1f}h' for name, hrs in client_breakdown])
@@ -347,20 +341,18 @@ def send_daily_timesheet_reminders():
             
             unassigned_warning = f'\n⚠️ {unassigned_count} blocks need client assignment.\n' if unassigned_count else ''
             
-            plain_message = f"""
-Hi {user_name},
+            plain_message = f"""Hi {user_name},
 
 You tracked {total_hours:.1f} hours on {date_str} that need review:
 
 {client_lines}
 {unassigned_warning}
-Review your timesheet: {settings.FRONTEND_URL}/timesheet
+Review your timesheet: {review_url}
 
 —
 TimeTracker
 
-Manage notification preferences: {settings.FRONTEND_URL}/settings
-            """.strip()
+Manage notification preferences: {frontend_url}/settings"""
             
             # HTML version
             client_rows = ''.join([
@@ -379,8 +371,7 @@ Manage notification preferences: {settings.FRONTEND_URL}/settings
             </div>
             ''' if unassigned_count else ''
             
-            html_message = f'''
-<!DOCTYPE html>
+            html_message = f'''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -388,45 +379,33 @@ Manage notification preferences: {settings.FRONTEND_URL}/settings
 </head>
 <body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
     <div style="max-width: 500px; margin: 0 auto; padding: 20px;">
-        <!-- Header -->
         <div style="background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); padding: 24px; border-radius: 16px 16px 0 0; text-align: center;">
             <h1 style="margin: 0; color: white; font-size: 24px;">⏰ Timesheet Reminder</h1>
         </div>
-        
-        <!-- Content -->
         <div style="background: white; padding: 24px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
             <p style="color: #475569; font-size: 16px; line-height: 1.5; margin-top: 0;">
                 Hi {user_name},
             </p>
-            
             <p style="color: #475569; font-size: 16px; line-height: 1.5;">
                 You tracked <strong style="color: #ea580c;">{total_hours:.1f} hours</strong> on {date_str} that need review:
             </p>
-            
-            <!-- Client breakdown -->
             <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
                 {client_rows}
             </table>
-            
             {unassigned_html}
-            
-            <!-- CTA Button -->
             <div style="text-align: center; margin: 24px 0;">
-                <a href="{settings.FRONTEND_URL}/timesheet" 
+                <a href="{review_url}" 
                    style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: white; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 16px;">
                     Review Timesheet →
                 </a>
             </div>
-            
-            <!-- Footer -->
             <p style="color: #94a3b8; font-size: 12px; margin-bottom: 0; text-align: center;">
-                <a href="{settings.FRONTEND_URL}/settings" style="color: #94a3b8;">Manage notification preferences</a>
+                <a href="{frontend_url}/settings" style="color: #94a3b8;">Manage notification preferences</a>
             </p>
         </div>
     </div>
 </body>
-</html>
-            '''
+</html>'''
             
             send_mail(
                 subject=f'⏰ Review your timesheet for {date_str}',
@@ -514,21 +493,14 @@ def send_weekly_summary():
                 reverse=True
             )
             
-            # Daily breakdown
-            daily_hours = {}
-            for block in blocks:
-                day_str = block.day.strftime('%A')
-                hrs = (block.minutes or 0) / 60
-                daily_hours[day_str] = daily_hours.get(day_str, 0) + hrs
-            
             user_name = user.first_name or user.username
             week_str = f"{last_monday.strftime('%b %d')} - {last_sunday.strftime('%b %d')}"
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
             
-            # Build email (simplified - you can expand HTML like above)
+            # Build email
             client_lines = '\n'.join([f'  • {name}: {hrs:.1f}h' for name, hrs in client_breakdown[:10]])
             
-            plain_message = f"""
-Hi {user_name},
+            plain_message = f"""Hi {user_name},
 
 Here's your weekly time summary for {week_str}:
 
@@ -537,11 +509,10 @@ Total: {total_hours:.1f} hours
 By Client:
 {client_lines}
 
-View detailed report: {settings.FRONTEND_URL}/reports
+View detailed report: {frontend_url}/reports
 
 —
-TimeTracker
-            """.strip()
+TimeTracker"""
             
             send_mail(
                 subject=f'📊 Your weekly summary: {total_hours:.1f} hours tracked',
@@ -557,36 +528,3 @@ TimeTracker
             print(f'Failed to send weekly summary to {user.email}: {e}')
     
     return sent_count
-
-
-
-# ============================================================================
-# CELERY TASKS (if using Celery)
-# Add to tracker/tasks.py
-# ============================================================================
-"""
-from celery import shared_task
-
-@shared_task
-def daily_timesheet_reminders_task():
-    from .views_notifications import send_daily_timesheet_reminders
-    return send_daily_timesheet_reminders()
-
-@shared_task
-def weekly_summary_task():
-    from .views_notifications import send_weekly_summary
-    return send_weekly_summary()
-
-
-# In celery.py or settings.py, add beat schedule:
-CELERY_BEAT_SCHEDULE = {
-    'daily-timesheet-reminders': {
-        'task': 'tracker.tasks.daily_timesheet_reminders_task',
-        'schedule': crontab(hour=9, minute=0),  # 9am daily
-    },
-    'weekly-summary': {
-        'task': 'tracker.tasks.weekly_summary_task',
-        'schedule': crontab(hour=9, minute=0, day_of_week=1),  # 9am Monday
-    },
-}
-"""

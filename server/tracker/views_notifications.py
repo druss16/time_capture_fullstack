@@ -53,7 +53,7 @@ def timesheet_needs_review(request):
     
     # Get submitted dates
     submitted_dates = set(
-        TimesheetSubmission.objects.filter(
+        Timesheet.objects.filter(
             user=user,
             status__in=['submitted', 'approved']
         ).values_list('period_start', 'period_end')
@@ -199,7 +199,7 @@ def agent_startup_notification(request):
     Called by desktop agent on startup to check if there are
     pending timesheet reviews. Returns notification data if needed.
     """
-    from .models import Block, TimesheetSubmission, UserPreference
+    from .models import Block, Timesheet, UserPreference
     
     user = request.user
     today = timezone.localdate()
@@ -227,7 +227,7 @@ def agent_startup_notification(request):
         return Response({'show_notification': False})
     
     # Check if submitted
-    already_submitted = TimesheetSubmission.objects.filter(
+    already_submitted = Timesheet.objects.filter(
         user=user,
         period_start__lte=yesterday,
         period_end__gte=yesterday,
@@ -303,7 +303,7 @@ def send_daily_timesheet_reminders():
                 pass  # Default to sending
             
             # Skip if already submitted
-            already_submitted = TimesheetSubmission.objects.filter(
+            already_submitted = Timesheet.objects.filter(
                 user=user,
                 period_start__lte=yesterday,
                 period_end__gte=yesterday,

@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 TimeTracker macOS Menu Bar GUI - Professional Edition
-
 Features:
 - Native macOS menu bar icon
 - Sharp, professional UI with refined aesthetics
@@ -11,7 +10,6 @@ Features:
 - Today's time viewer with detailed breakdown
 - Username display and re-pairing support
 """
-
 import os
 import sys
 import json
@@ -20,8 +18,6 @@ import multiprocessing
 import time as _time
 from datetime import datetime
 from typing import Optional, List, Dict, Callable
-
-import customtkinter as ctk
 
 
 # Required for macOS multiprocessing with frozen apps
@@ -44,26 +40,41 @@ except ImportError:
     from tkinter import ttk, messagebox
 
 # macOS native menu bar
-try:
-    import rumps
-    RUMPS_AVAILABLE = True
-except ImportError:
-    RUMPS_AVAILABLE = False
-    print("Warning: rumps not available. Install with: pip install rumps")
+# CRITICAL: Only import rumps/AppKit in the main process.
+# Subprocesses (spawn) re-import this module, and rumps/AppKit init
+# corrupts NSApplication, causing Tk 9.0 to crash on macOSVersion selector.
+# macOS native menu bar
+# CRITICAL: Only import rumps/AppKit in the main process.
+# Subprocesses (spawn) re-import this module, and rumps/AppKit init
+# corrupts NSApplication, causing Tk 9.0 to crash on macOSVersion selector.
+# Using env var because multiprocessing.parent_process() is unreliable
+# at module import time during spawn bootstrap.
+_is_subprocess = os.environ.get('_TT_SUBPROCESS') == '1'
 
-# Fallback to AppKit if rumps not available
-if not RUMPS_AVAILABLE:
+RUMPS_AVAILABLE = False
+APPKIT_AVAILABLE = False
+
+if not _is_subprocess:
     try:
-        import objc
-        from Foundation import NSObject, NSTimer
-        from AppKit import (
-            NSApplication, NSApp, NSStatusBar, NSMenu, NSMenuItem,
-            NSApplicationActivationPolicyAccessory, NSVariableStatusItemLength
-        )
-        APPKIT_AVAILABLE = True
+        import rumps
+        RUMPS_AVAILABLE = True
     except ImportError:
-        APPKIT_AVAILABLE = False
-        print("Warning: PyObjC not available. Install with: pip install pyobjc")
+        print("Warning: rumps not available. Install with: pip install rumps")
+
+    if not RUMPS_AVAILABLE:
+        try:
+            import objc
+            from Foundation import NSObject, NSTimer
+            from AppKit import (
+                NSApplication, NSApp, NSStatusBar, NSMenu, NSMenuItem,
+                NSApplicationActivationPolicyAccessory, NSVariableStatusItemLength
+            )
+            APPKIT_AVAILABLE = True
+        except ImportError:
+            print("Warning: PyObjC not available. Install with: pip install pyobjc")
+
+    # Mark environment so all spawn children skip rumps/AppKit
+    os.environ['_TT_SUBPROCESS'] = '1'
 
 GUI_AVAILABLE = RUMPS_AVAILABLE or APPKIT_AVAILABLE
 
@@ -1116,16 +1127,8 @@ class ClientPickerWindow:
             print("[GUI] Client picker timed out")
             return
 
-                # Force menu bar to stay visible after subprocess closes
-        try:
-            from AppKit import NSApp
-            import time
-            time.sleep(0.1)
-            NSApp.unhide_(None)
-            NSApp.activateIgnoringOtherApps_(True)
-            print("[GUI] Menu bar reactivated after picker")
-        except Exception as e:
-            print(f"[GUI] Reactivate failed: {e}")
+        # Menu bar reactivation is handled by rumps keepalive timer
+        # Do NOT call AppKit from this background thread - it causes Trace/BPT trap
         
         # Get result
         try:
@@ -1135,7 +1138,6 @@ class ClientPickerWindow:
                 print(f"[GUI] Client selected: {selected_name} (id={selected_id})")
         except Exception as e:
             print(f"[GUI] Client picker - no selection or cancelled")
-
 
 # ============================================================
 # PAIRING WINDOW - with username capture
@@ -1517,7 +1519,6 @@ def _run_pairing_process(result_queue):
     result_queue.put((result["success"], result["api_key"], result["username"], result["org_name"]))
 
 
-
 def show_pairing_window(pair_callback: Callable = None) -> Optional[str]:
     """
     Show pairing window in subprocess to avoid tkinter/rumps conflict.
@@ -1539,16 +1540,8 @@ def show_pairing_window(pair_callback: Callable = None) -> Optional[str]:
         print("[GUI] Pairing window timed out")
         return None
     
-    # Force menu bar to stay visible after subprocess closes
-    try:
-        from AppKit import NSApp
-        import time
-        time.sleep(0.1)
-        NSApp.unhide_(None)
-        NSApp.activateIgnoringOtherApps_(True)
-        print("[GUI] Menu bar reactivated after pairing")
-    except Exception as e:
-        print(f"[GUI] Reactivate failed: {e}")
+    # Menu bar reactivation is handled by rumps keepalive timer
+    # Do NOT call AppKit from this background thread - it causes Trace/BPT trap
     
     # Get result
     try:
@@ -1725,45 +1718,24 @@ if RUMPS_AVAILABLE:
         
         def _on_search(self, _):
             """Open the searchable client picker window"""
-            # Refresh clients from backend first
             if self.controller.fetch_clients_callback:
                 try:
                     self.controller.client_mgr.load(self.controller.fetch_clients_callback)
                 except Exception as e:
                     print(f"[GUI] Failed to refresh clients: {e}")
             
-            # Run picker in a thread to avoid blocking rumps
             def show_picker():
                 picker = ClientPickerWindow(self.controller.client_mgr, self._switch_client)
                 picker.show()
                 
-                # Force menu bar icon to stay visible after picker closes
+                # Rebuild menu on main rumps thread (safe)
                 try:
-                    import time
-                    time.sleep(0.2)
                     self._rebuild_menu()
-                    self._ensure_menubar_visible()
                 except Exception as e:
                     print(f"[GUI] Error after picker close: {e}")
             
             threading.Thread(target=show_picker, daemon=True).start()
         
-        def _ensure_menubar_visible(self):
-            """Ensure the menu bar app stays visible after subprocess windows close"""
-            try:
-                from AppKit import NSApp, NSApplication
-                import time
-                time.sleep(0.1)
-                
-                # Unhide the app if it got hidden
-                NSApp.unhide_(None)
-                
-                # Reset activation policy to accessory (menu bar only)
-                NSApp.setActivationPolicy_(1)  # NSApplicationActivationPolicyAccessory
-                
-                print("[GUI] Menu bar reactivated")
-            except Exception as e:
-                print(f"[GUI] Reactivate error: {e}")
         
         def _show_client_picker(self):
             if self.controller.fetch_clients_callback:
@@ -1774,11 +1746,10 @@ if RUMPS_AVAILABLE:
             
             picker = ClientPickerWindow(self.controller.client_mgr, self._switch_client)
             picker.show()
-            # Keep menu bar visible after window closes
-            try:
-                self._ensure_menubar_visible()
-            except Exception:
-                pass
+        
+        def _show_today_time(self):
+            window = TodayTimeWindowModern(self.controller.get_today_time_callback)
+            window.show_and_refresh()
         
         def _on_clear_client(self, _):
             self._switch_client(0, "No Client")
@@ -1808,8 +1779,8 @@ if RUMPS_AVAILABLE:
         def _on_today_time(self, _):
             """Show today's time summary"""
             try:
-                if self.get_today_time_callback:
-                    data = self.get_today_time_callback()
+                if self.controller.get_today_time_callback:
+                    data = self.controller.get_today_time_callback()
                     if data:
                         total = sum(entry.get('hours', 0) for entry in data)
                         lines = [f"• {entry.get('client', 'Unknown')}: {entry.get('hours', 0):.1f}h" for entry in data[:5]]
@@ -1823,14 +1794,6 @@ if RUMPS_AVAILABLE:
                 import webbrowser
                 webbrowser.open("https://timetracker.mavops.ai/daily")
                 
-        def _show_today_time(self):
-            window = TodayTimeWindowModern(self.controller.get_today_time_callback)
-            window.show_and_refresh()
-            # Keep menu bar visible after window closes
-            try:
-                self._ensure_menubar_visible()
-            except Exception:
-                pass
         
         def _on_relink_device(self, _):
             """Show re-pairing dialog and restart app after success"""

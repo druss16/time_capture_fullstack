@@ -19,13 +19,8 @@ if __name__ == '__main__':
     multiprocessing.freeze_support()
 
 # Check if this is a multiprocessing child - if so, let it run without CLI parsing
-_is_multiprocessing_child = (
-    len(sys.argv) > 1 and (
-        '--multiprocessing-fork' in sys.argv[1] or
-        'multiprocessing' in sys.argv[1].lower() or
-        sys.argv[1].startswith('--')
-    )
-)
+# NEW (works with all start methods)
+_is_multiprocessing_child = multiprocessing.parent_process() is not None
 
 import os
 import time
@@ -41,14 +36,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 
 # CRITICAL: Set activation policy BEFORE any GUI imports
-if sys.platform == 'darwin' and not _is_multiprocessing_child:
-    try:
-        from AppKit import NSApplication, NSApp
-        NSApplication.sharedApplication()
-        NSApp.setActivationPolicy_(1)  # Accessory - menu bar only, no dock
-        print("[INIT] Set macOS activation policy to Accessory")
-    except Exception as e:
-        print(f"[INIT] Could not set activation policy: {e}")
+
 
 from urllib.parse import urlparse
 from timetracker_gui import run_gui_app, show_pairing_window, GUI_AVAILABLE
@@ -89,15 +77,8 @@ try:
 except Exception:
     NOTIF_AVAILABLE = False
 
-try:
-    import AppKit
-    info = AppKit.NSBundle.mainBundle().infoDictionary()
-    info["LSUIElement"] = "1"
-except Exception:
-    pass
 
-info = AppKit.NSBundle.mainBundle().infoDictionary()
-info["LSUIElement"] = "1"
+
 
 sync = None  # Global sync manager, initialized in run_agent()
 notif_manager = None  # Global notification manager, initialized in run_agent()
@@ -2218,6 +2199,18 @@ def run_agent():
     global API_KEY
     global sync
     global notif_manager
+
+        # === Set macOS activation policy (MUST be in run_agent, never at module level) ===
+    if sys.platform == 'darwin':
+        try:
+            from AppKit import NSApplication, NSApp, NSBundle
+            NSApplication.sharedApplication()
+            NSApp.setActivationPolicy_(1)  # Accessory - menu bar only
+            info = NSBundle.mainBundle().infoDictionary()
+            info["LSUIElement"] = "1"
+            print("[INIT] Set macOS activation policy to Accessory")
+        except Exception as e:
+            print(f"[INIT] Could not set activation policy: {e}")
 
     try:
         sys.stdout.reconfigure(line_buffering=True)

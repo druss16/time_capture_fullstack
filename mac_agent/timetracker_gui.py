@@ -1806,9 +1806,23 @@ if RUMPS_AVAILABLE:
             self._rebuild_menu()
         
         def _on_today_time(self, _):
-            # Run in thread since the subprocess will handle GUI
-            threading.Thread(target=self._show_today_time, daemon=True).start()
-        
+            """Show today's time summary"""
+            try:
+                if self.get_today_time_callback:
+                    data = self.get_today_time_callback()
+                    if data:
+                        total = sum(entry.get('hours', 0) for entry in data)
+                        lines = [f"• {entry.get('client', 'Unknown')}: {entry.get('hours', 0):.1f}h" for entry in data[:5]]
+                        message = "\n".join(lines) + f"\n\nTotal: {total:.1f} hours"
+                        rumps.alert(title="Today's Time", message=message, ok="Open Dashboard", cancel="Close")
+                    else:
+                        rumps.alert(title="Today's Time", message="No time tracked yet today")
+            except Exception as e:
+                print(f"[GUI] Today's time error: {e}")
+                # Fallback to browser
+                import webbrowser
+                webbrowser.open("https://timetracker.mavops.ai/daily")
+                
         def _show_today_time(self):
             window = TodayTimeWindowModern(self.controller.get_today_time_callback)
             window.show_and_refresh()

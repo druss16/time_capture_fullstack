@@ -425,7 +425,64 @@ class ClientNotificationManager:
         except Exception as e:
             print(f"[NOTIF] Send error: {e}")
             return False
-    
+
+    def notify_timesheet_review(self, force: bool = False) -> bool:
+        """
+        Check server for unreviewed timesheet hours and notify if needed.
+        Called on agent startup.
+        """
+        if not getattr(self, 'api_client', None):
+            print("[NOTIF] No API client configured for timesheet review")
+            return False
+        
+        if not self.config.enabled:
+            return False
+        
+        try:
+            # Call the server endpoint
+            data = self.api_client.get('/agent/startup-notification/')
+            
+            if not data.get('show_notification'):
+                print("[NOTIF] Server says no timesheet review needed")
+                return False
+            
+            title = data.get('title', '⏰ Review Your Timesheet')
+            message = data.get('message', 'You have hours to review')
+            subtitle = data.get('subtitle')
+            url = data.get('url', '/daily')
+            
+            # Build full URL for the callback
+            base_url = 'https://timetracker.mavops.ai'
+            if getattr(self, 'agent_config', None):
+                base_url = self.agent_config.get('base_url', base_url)
+            full_url = f"{base_url}{url}"
+            
+            # Send macOS notification
+            result = self._send_notification(
+                notif_type=NotificationType.PERIODIC_CHECKIN,
+                title=title,
+                body=message,
+                subtitle=subtitle,
+                category_id=CATEGORY_CHECKIN,
+                data={
+                    "url": full_url,
+                    "hours": data.get('hours'),
+                    "date": data.get('date'),
+                    "action": "review_timesheet",
+                }
+            )
+            
+            if result:
+                print(f"[NOTIF] Sent timesheet_review: {title}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"[NOTIF] Failed to check timesheet review: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+                
     def _default_callback(self, action: str, data: Dict):
         """Default notification response handler"""
         print(f"[NOTIF] Action: {action}, data: {data}")
@@ -826,7 +883,10 @@ def create_notification_system(
     on_confirm: Callable = None,
     on_switch: Callable = None,
     on_snooze: Callable = None,
-    config: NotificationConfig = None
+    config: NotificationConfig = None,
+    api_client = None,           # ADD
+    agent_config: dict = None,   # ADD
+    on_review: Callable = None,  # ADD
 ) -> ClientNotificationManager:
     """
     Create and setup the notification system.
@@ -844,6 +904,9 @@ def create_notification_system(
     manager.on_confirm_client = on_confirm
     manager.on_switch_requested = on_switch
     manager.on_snooze = on_snooze
+    manager.api_client = api_client        # ADD
+    manager.agent_config = agent_config    # ADD
+    manager.on_review_timesheet = on_review  # ADD
     
     if manager.setup():
         print("[NOTIF] Notification system ready")

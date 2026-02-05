@@ -246,8 +246,7 @@ def agent_startup_notification(request):
         minutes = b.minutes or 0
         total_minutes += minutes
         
-        category = (b.category or '').lower()
-        # Skip non-billable categories
+        category = (b.ai_category or '').lower()        # Skip non-billable categories
         if 'idle' in category or 'uncategorized' in category:
             continue
         billable_minutes += minutes
@@ -259,9 +258,9 @@ def agent_startup_notification(request):
         return Response({'show_notification': False})
     
     unassigned_count = blocks.filter(client__isnull=True).exclude(
-        category__icontains='idle'
+        ai_category__icontains='idle'
     ).exclude(
-        category__icontains='uncategorized'
+        ai_category__icontains='uncategorized'
     ).count()
     
     return Response({

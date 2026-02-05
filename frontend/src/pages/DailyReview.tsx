@@ -96,7 +96,6 @@ export default function DailyReview() {
   });
 
 
-
   useEffect(() => { if (!user && whoami) setUser(whoami); }, [whoami, user]);
   useEffect(() => { (async () => { try { await primeCsrf(API_BASE); } catch {} })(); }, []);
 
@@ -186,6 +185,15 @@ export default function DailyReview() {
   }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
   // Check for auto-open params on mount
+
+  // Check for date param on mount (from notification deep link)
+  useEffect(() => {
+    const dateParam = searchParams.get('date');
+    if (dateParam) {
+      setDate(dateParam);
+    }
+  }, [searchParams]);
+
   // Check for auto-open params on mount
   useEffect(() => {
     const shouldAdd = searchParams.get('add') === 'true';

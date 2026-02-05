@@ -30,7 +30,7 @@ def timesheet_needs_review(request):
     - total_unreviewed_hours: total across all days
     - total_unassigned: total unassigned blocks
     """
-    from .models import Block, Timesheet
+    from .models import Block, Timesheet, UserPreference
     
     user = request.user
     today = timezone.localdate()
@@ -275,7 +275,7 @@ def send_daily_timesheet_reminders():
     from django.core.mail import send_mail
     from django.conf import settings
     from django.contrib.auth import get_user_model
-    from .models import Block, TimesheetSubmission, UserPreference
+    from .models import Block, Timesheet, UserPreference
     
     User = get_user_model()
     yesterday = timezone.localdate() - timedelta(days=1)

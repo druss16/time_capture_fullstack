@@ -30,7 +30,7 @@ def timesheet_needs_review(request):
     - total_unreviewed_hours: total across all days
     - total_unassigned: total unassigned blocks
     """
-    from .models import Block, TimesheetSubmission
+    from .models import Block, Timesheet
     
     user = request.user
     today = timezone.localdate()
@@ -558,17 +558,6 @@ TimeTracker
     
     return sent_count
 
-
-# ============================================================================
-# URL ROUTES - Add to urls.py
-# ============================================================================
-"""
-# Notification endpoints
-path('timesheet/needs-review/', timesheet_needs_review, name='timesheet-needs-review'),
-path('timesheet/dismiss-reminder/', dismiss_timesheet_reminder, name='dismiss-timesheet-reminder'),
-path('notifications/preferences/', notification_preferences, name='notification-preferences'),
-path('agent/startup-notification/', agent_startup_notification, name='agent-startup-notification'),
-"""
 
 
 # ============================================================================

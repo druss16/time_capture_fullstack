@@ -90,6 +90,8 @@ try:
         NotificationConfig,
         NotificationWorker,
         create_notification_system,
+        NotificationType,
+
     )
     PUSH_NOTIF_AVAILABLE = True
 except ImportError:
@@ -1487,20 +1489,50 @@ def looks_toolish(bundle_id: Optional[str], url: Optional[str]) -> tuple[bool, s
 
 def is_in_meeting(bundle_id: Optional[str], url: Optional[str], 
                   app_name: Optional[str], title: Optional[str]) -> bool:
-    """Detect if user is in a virtual meeting."""
+    """Detect if user is in a virtual meeting.
+    
+    FIX: Added title-based fallback for browser-hosted meetings (Teams in Chrome, etc.)
+    so that failed URL capture doesn't cause meetings to be treated as idle.
+    """
     if bundle_id and bundle_id in MEETING_BUNDLES:
         if bundle_id in {"com.google.Chrome", "com.apple.Safari", "com.brave.Browser", "org.mozilla.firefox"}:
-            if not url:
-                return False
-            try:
-                host = (urlparse(url).hostname or "").lower()
-                if any(domain in host for domain in MEETING_DOMAINS):
-                    return True
-            except:
-                pass
+            # Check URL first (most reliable)
+            if url:
+                try:
+                    host = (urlparse(url).hostname or "").lower()
+                    if any(domain in host for domain in MEETING_DOMAINS):
+                        return True
+                except:
+                    pass
+            
+            # FIX 2: Title-based fallback when URL capture fails
+            # This is critical for Chrome-hosted Teams, Meet, etc.
+            title_lower = (title or "").lower()
+            
+            # Strong meeting indicators in window title
+            meeting_title_patterns = [
+                # Microsoft Teams
+                "microsoft teams", "teams.microsoft.com", "teams.live.com",
+                "| microsoft teams", "meeting | microsoft teams",
+                # Google Meet  
+                "google meet", "meet.google.com", "meet -",
+                # Zoom
+                "zoom meeting", "zoom.us",
+                # WebEx
+                "webex", "webex meeting",
+                # Generic
+                "- call", "video call", "screen sharing",
+            ]
+            
+            if any(pattern in title_lower for pattern in meeting_title_patterns):
+                log(f"[MEETING] Detected via window title: '{title[:80]}'")
+                return True
+            
             return False
+        # Non-browser meeting apps (Zoom native, Teams native, etc.) - always meetings
         return True
     
+    # Check URL even if bundle isn't in MEETING_BUNDLES
     if url:
         try:
             host = (urlparse(url).hostname or "").lower()
@@ -1509,6 +1541,7 @@ def is_in_meeting(bundle_id: Optional[str], url: Optional[str],
         except:
             pass
     
+    # Keyword check in app name + title
     check_str = f"{app_name or ''} {title or ''}".lower()
     if any(keyword in check_str for keyword in MEETING_KEYWORDS):
         return True
@@ -2481,6 +2514,21 @@ def run_agent():
                         log("[NOTIF] ✅ Startup timesheet review notification sent")
                     else:
                         log("[NOTIF] No notification framework available")
+
+                    # from datetime import date, timedelta
+                    # yesterday = (date.today() - timedelta(days=1)).isoformat()
+                    # review_url = data.get("url", f"https://timetracker.mavops.ai/daily?date={yesterday}")
+                    
+                    # notif_manager._send_notification(
+                    #     notif_type=NotificationType.PERIODIC_CHECKIN,
+                    #     title=title,
+                    #     body=message,
+                    #     subtitle=subtitle,
+                    #     category_id="TIMETRACKER_TIMESHEET_REVIEW",
+                    #     data={"url": review_url},
+                    #     delay_seconds=3,
+                    # )
+                    # log("[NOTIF] ✅ Startup timesheet review notification sent via manager")
                     
                 except urllib.error.HTTPError as e:
                     body = ""
@@ -2701,6 +2749,8 @@ def run_agent():
 
     # === TRACKING LOOP FUNCTION ===
     # === TRACKING LOOP FUNCTION ===
+    # === TRACKING LOOP FUNCTION ===
+    # === TRACKING LOOP FUNCTION ===
     def tracking_loop():
         """Main tracking loop - monitors frontmost app and records dwell time"""
         print("[TRACKING] Initializing...")
@@ -2717,6 +2767,10 @@ def run_agent():
         dwell_start = None
         consecutive_errors = 0
         MAX_CONSECUTIVE_ERRORS = 10
+        
+        # FIX 1: Track last flush time for periodic meeting/long-dwell writes
+        last_flush_time = None
+        MEETING_FLUSH_INTERVAL = 300  # Flush every 5 minutes during meetings
 
         try:
             while True:
@@ -2752,13 +2806,25 @@ def run_agent():
                                     log(f"[SKIP] dwell too short ({int(dwell)}s) before idle for {current_sig[0]}")
                             current_sig = IDLE_SIG
                             dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
+                            last_flush_time = None  # Reset flush tracker on idle
                             log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
                         time.sleep(POLL_SECONDS)
-                        consecutive_errors = 0  # Reset on success
+                        consecutive_errors = 0
                         continue
                     elif in_meeting and idle >= MOUSE_IDLE_PAUSE_S:
+                        # FIX 1: Periodic flush during meetings so we don't lose long passive sessions
+                        now = time.time()
+                        if dwell_start and (now - (last_flush_time or dwell_start)) >= MEETING_FLUSH_INTERVAL:
+                            flush_from = last_flush_time or dwell_start
+                            chunk_seconds = now - flush_from
+                            write_event(conn, cur, os_user, hostname, current_sig, ts_override=flush_from)
+                            last_flush_time = now
+                            log(f"[MEETING] Flushed {int(chunk_seconds)}s meeting chunk for {current_sig[0]} "
+                                f"(total dwell {int(now - dwell_start)}s, mouse idle {int(idle)}s)")
+                        
                         if PRINT_EVERY_POLL or (int(idle) % 60 < POLL_SECONDS):
-                            log(f"[MEETING] In meeting ({current_sig[0]}), skipping idle check (mouse idle {int(idle)}s)")
+                            log(f"[MEETING] In meeting ({current_sig[0]}), skipping idle check "
+                                f"(mouse idle {int(idle)}s, dwell {int(now - dwell_start)}s)")
                         time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
                         continue
@@ -2780,6 +2846,7 @@ def run_agent():
                                 log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
                             current_sig = None
                             dwell_start = None
+                            last_flush_time = None  # Reset flush tracker
 
                     front = get_frontmost_app()
                     if not front:
@@ -2800,6 +2867,7 @@ def run_agent():
                                 write_event(conn, cur, os_user, hostname, current_sig)
                         current_sig = None
                         dwell_start = None
+                        last_flush_time = None
                         time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
                         continue
@@ -2809,6 +2877,31 @@ def run_agent():
 
                     extras = try_get_url_or_path(bundle_id)
                     url, fpath = extras.get("url"), extras.get("file_path")
+                    
+                    # FIX 3: Retry URL capture for potential meeting apps
+                    # Critical for Chrome-based Teams/Meet where URL fetch can fail
+                    if bundle_id in MEETING_BUNDLES and not url:
+                        title_lower = (title or "").lower()
+                        # Only retry if title suggests a meeting
+                        meeting_title_hints = [
+                            "google meet", "meet -", "meeting", "zoom", 
+                            "teams", "microsoft teams", "webex", "- call",
+                            "teams.microsoft.com", "teams.live.com",
+                            "meet.google.com",
+                        ]
+                        if any(hint in title_lower for hint in meeting_title_hints):
+                            for retry in range(2):
+                                time.sleep(0.2)
+                                extras = try_get_url_or_path(bundle_id)
+                                url = extras.get("url")
+                                if url:
+                                    log(f"[MEETING] URL captured on retry {retry+1}: {url[:80]}")
+                                    fpath = extras.get("file_path")
+                                    break
+                            if not url:
+                                log(f"[MEETING] URL retry failed for {bundle_id}, title='{title[:60]}' "
+                                    f"- will rely on title-based detection")
+
                     sig = (app_name, bundle_id, title, url, fpath)
 
                     if sig != current_sig:
@@ -2820,6 +2913,7 @@ def run_agent():
                                 log(f"[SKIP] dwell too short ({int(dwell)}s) for {current_sig[0]}")
                         current_sig = sig
                         dwell_start = time.time()
+                        last_flush_time = None  # Reset flush tracker on new sig
                         
                         if is_in_meeting(bundle_id, url, app_name, title):
                             log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} • [MEETING]")
@@ -2840,7 +2934,7 @@ def run_agent():
                             log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")
 
                     time.sleep(POLL_SECONDS)
-                    consecutive_errors = 0  # Reset on successful iteration
+                    consecutive_errors = 0
 
                 except Exception as e:
                     consecutive_errors += 1
@@ -2855,16 +2949,14 @@ def run_agent():
                     tb = traceback.format_exc()
                     traceback.print_exc()
                     
-                    # Report to backend
                     report_error_to_backend("tracking_loop", str(e), tb, error_context)
                     
-                    # If too many consecutive errors, something is very wrong
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                         log_error(f"[TRACKING] ❌ Too many consecutive errors ({consecutive_errors}), pausing 60s")
                         report_error_to_backend("tracking_loop_critical", 
                                                f"Too many errors: {consecutive_errors}", tb, error_context)
                         time.sleep(60)
-                        consecutive_errors = 0  # Reset after pause
+                        consecutive_errors = 0
                     else:
                         time.sleep(POLL_SECONDS)
                     continue

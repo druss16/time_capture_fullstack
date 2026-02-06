@@ -71,7 +71,7 @@ try:
     from Foundation import NSObject, NSLog
     from UserNotifications import (
         UNUserNotificationCenter, UNMutableNotificationContent, UNNotificationRequest,
-        UNNotificationAction, UNNotificationCategory, UNNotificationActionOptionForeground
+        UNNotificationAction, UNNotificationCategory, UNNotificationActionOptionForeground, UNNotificationSound
     )
     NOTIF_AVAILABLE = True
 except Exception:
@@ -1731,8 +1731,22 @@ class _NotificationDelegate(NSObject):
 
             data = _PENDING_PROMPTS.pop(req_id, None)
             if not data:
-                NSLog(f"[NOTIF] no pending meta for {req_id} (ignored)")
+                # Handle timesheet review notifications by prefix
+                if req_id.startswith("timesheet-review-"):
+                    import webbrowser
+                    webbrowser.open("https://timetracker.mavops.ai/daily")
+                    NSLog(f"[NOTIF] Opened timesheet review in browser")
+                else:
+                    NSLog(f"[NOTIF] no pending meta for {req_id} (ignored)")
             else:
+                # Handle timesheet review type
+                if data.get("type") == "timesheet_review":
+                    import webbrowser
+                    webbrowser.open(data.get("url", "https://timetracker.mavops.ai/daily"))
+                    NSLog(f"[NOTIF] Opened timesheet review in browser")
+                    if completion:
+                        completion()
+                    return
                 DEFAULT = "com.apple.UNNotificationDefaultActionIdentifier"
                 DISMISS = "com.apple.UNNotificationDismissActionIdentifier"
 
@@ -2341,16 +2355,14 @@ def run_agent():
         sync.start()  # Start background polling
         log(f"[SYNC] Started - polling every {sync.poll_interval}s")
 
-    # === PUSH NOTIFICATION SYSTEM ===
+# === PUSH NOTIFICATION SYSTEM ===
     global notif_manager
     notif_worker = None
-    gui_menu_bar = None  # ← ADD THIS LINE HERE (initialize before it's referenced)
+    gui_menu_bar = None
 
-    
     if PUSH_NOTIF_AVAILABLE and NOTIF_ENABLED:
         log("[NOTIF] Initializing push notification system...")
         
-        # Load or create notification config
         notif_config = NotificationConfig(
             enabled=True,
             duration_reminder_enabled=True,
@@ -2369,24 +2381,14 @@ def run_agent():
         def on_notif_confirm(client_id, client_name):
             """Handle user confirming client from notification"""
             log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
-            
-            # Sync to backend
             api_key = config.get("api_key") or API_KEY
             if api_key and API_BASE:
                 set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
-            
-            # Update GUI state AND title AND menu
             if gui_menu_bar:
                 if hasattr(gui_menu_bar, 'state'):
                     gui_menu_bar.state.set_client(client_id, client_name)
-                
-                # Update menu bar title
                 if hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
                     gui_menu_bar.app.title = f"⏱ {client_name}" if client_name else "⏱ None"
-                    log(f"[NOTIF] Updated menu title to: {client_name}")
-                
-
-            # Update notification state
             if notif_manager:
                 notif_manager.set_current_client(client_id, client_name)
                 
@@ -2394,7 +2396,6 @@ def run_agent():
             """Handle user requesting client switch from notification"""
             log("[NOTIF] User requested client switch - opening picker")
             if gui_menu_bar and hasattr(gui_menu_bar, 'app'):
-                # Trigger the client picker UI
                 try:
                     gui_menu_bar.app._on_search(None)
                 except Exception as e:
@@ -2403,34 +2404,12 @@ def run_agent():
         def on_notif_snooze(client_id, minutes):
             """Handle user snoozing a client suggestion"""
             log(f"[NOTIF] User snoozed client {client_id} for {minutes} minutes")
-            # The notification manager handles internal snooze tracking
-        
-        # Create API client for timesheet review notifications
-        class _NotifAPIClient:
-            def __init__(self, base_url, api_key):
-                self.base_url = base_url
-                self.api_key = api_key
-            def get(self, path):
-                req = urllib.request.Request(
-                    f"{self.base_url}{path}",
-                    headers={"Authorization": f"DeviceKey {self.api_key}"}
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    return json.loads(resp.read())
-
-        _notif_api = _NotifAPIClient(API_BASE, config.get("api_key") or API_KEY)
-
-        def on_review(data):
-            log(f"[NOTIF] User clicked Review Now: {data}")
 
         notif_manager = create_notification_system(
             on_confirm=on_notif_confirm,
             on_switch=on_notif_switch,
             on_snooze=on_notif_snooze,
             config=notif_config,
-            api_client=_notif_api,
-            agent_config={'base_url': 'https://timetracker.mavops.ai'},
-            on_review=on_review,
         )
         
         if notif_manager.ready:
@@ -2448,17 +2427,73 @@ def run_agent():
             notif_worker = NotificationWorker(
                 notification_manager=notif_manager,
                 get_current_client=get_current_client_for_notif,
-                poll_interval=30  # Check every 30 seconds
+                poll_interval=30,
             )
             notif_worker.start()
             log("[NOTIF] Notification worker started")
             
             # Check for timesheet review on startup
-            try:
-                review_result = notif_manager.notify_timesheet_review(force=False)
-                log(f"[NOTIF] Startup timesheet review check: {review_result}")
-            except Exception as e:
-                log(f"[NOTIF] Startup review check failed: {e}")
+            def check_startup_timesheet():
+                try:
+                    time.sleep(3)  # Wait for app to fully initialize
+                    
+                    api_key = config.get("api_key") or API_KEY
+                    if not api_key or not API_BASE:
+                        log("[NOTIF] Startup review: no API key")
+                        return
+                    
+                    url = f"{API_BASE}/agent/startup-notification/"
+                    req = urllib.request.Request(url, method="GET")
+                    req.add_header("Authorization", f"DeviceKey {api_key}")
+                    req.add_header("Content-Type", "application/json")
+                    
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = json.loads(resp.read())
+                    
+                    if not data.get("show_notification"):
+                        log("[NOTIF] Startup timesheet review: nothing to review")
+                        return
+                    
+                    title = data.get("title", "⏰ Review Your Timesheet")
+                    message = data.get("message", "You have hours from yesterday to review.")
+                    subtitle = data.get("subtitle")
+                    
+                    log(f"[NOTIF] Startup review: {data.get('hours', 0)}h, {data.get('unassigned', 0)} unassigned")
+                    
+                    if NOTIF_AVAILABLE:
+                        from UserNotifications import UNNotificationSound, UNTimeIntervalNotificationTrigger
+                        content = UNMutableNotificationContent.alloc().init()
+                        content.setTitle_(title)
+                        content.setBody_(message)
+                        if subtitle:
+                            content.setSubtitle_(subtitle)
+                        content.setSound_(UNNotificationSound.defaultSound())
+                        content.setCategoryIdentifier_("TIMETRACKER_TIMESHEET_REVIEW")
+                        
+                        trigger = UNTimeIntervalNotificationTrigger.triggerWithTimeInterval_repeats_(3, False)
+                        req_id = f"timesheet-review-{int(time.time())}"
+                        request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
+                            req_id, content, trigger
+                        )
+                        UNUserNotificationCenter.currentNotificationCenter().addNotificationRequest_withCompletionHandler_(
+                            request, None
+                        )
+                        log("[NOTIF] ✅ Startup timesheet review notification sent")
+                    else:
+                        log("[NOTIF] No notification framework available")
+                    
+                except urllib.error.HTTPError as e:
+                    body = ""
+                    try: body = e.read().decode()[:200]
+                    except: pass
+                    log(f"[NOTIF] Startup review HTTP {e.code}: {body}")
+                except Exception as e:
+                    log(f"[NOTIF] Startup review failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            threading.Thread(target=check_startup_timesheet, daemon=True).start()
+
         else:
             log("[NOTIF] ⚠️ Push notifications not authorized")
             notif_manager = None

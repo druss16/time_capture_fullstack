@@ -175,11 +175,21 @@ class ClientNotificationDelegate(NSObject):
             
             data = _PENDING_NOTIFICATIONS.pop(req_id, None)
             if not data:
+                # Handle startup timesheet review notifications
+                if req_id.startswith("timesheet-review-"):
+                    import webbrowser
+                    from datetime import date, timedelta
+                    yesterday = (date.today() - timedelta(days=1)).isoformat()
+                    webbrowser.open(f"https://timetracker.mavops.ai/daily?date={yesterday}")
+                    NSLog("[NOTIF] Opened timesheet review in browser")
+                    if completion:
+                        completion()
+                    return
                 NSLog(f"[NOTIF] No pending data for {req_id}")
                 if completion:
                     completion()
                 return
-            
+
             callback = data.get("callback")
             notif_type = data.get("type")
             
@@ -223,6 +233,8 @@ class ClientNotificationManager:
         self.delegate = None
         self.ready = False
         self._lock = threading.Lock()
+        self._init_time = time.time()  # ADD THIS LINE
+
         
         # Callbacks
         self.on_confirm_client: Optional[Callable] = None
@@ -413,7 +425,13 @@ class ClientNotificationManager:
                 req_id, content, trigger
             )
             
-            self.center.addNotificationRequest_withCompletionHandler_(request, None)
+            def on_complete(error):
+                if error:
+                    print(f"[NOTIF] ❌ Delivery FAILED: {error}")
+                else:
+                    print(f"[NOTIF] ✅ Delivered to macOS: {req_id}")
+
+            self.center.addNotificationRequest_withCompletionHandler_(request, on_complete)
             
             with self._lock:
                 self.state.last_notification_time = time.time()
@@ -482,7 +500,7 @@ class ClientNotificationManager:
             import traceback
             traceback.print_exc()
             return False
-                
+
     def _default_callback(self, action: str, data: Dict):
         """Default notification response handler"""
         print(f"[NOTIF] Action: {action}, data: {data}")
@@ -737,6 +755,12 @@ class ClientNotificationManager:
         if not force and since_last < self.config.no_client_reminder_after_minutes:
             return False
         
+        # STARTUP GRACE PERIOD: Don't send within first 10 seconds
+        # This allows time for client state to be restored from backend
+        if hasattr(self, '_init_time'):
+            if now - self._init_time < 10:
+                return False
+        
         result = self._send_notification(
             notif_type=NotificationType.NO_CLIENT_REMINDER,
             title="No Client Selected",
@@ -819,6 +843,7 @@ class NotificationWorker:
         self.poll_interval = poll_interval
         self._stop = threading.Event()
         self._thread = None
+
     
     def start(self):
         """Start the notification worker"""

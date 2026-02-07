@@ -295,7 +295,7 @@ class ClientPickerWindow:
     
     WINDOW_TITLE = "Switch Client"
     
-    def __init__(self, client_mgr: ClientManager, on_select: Callable, current_id: int = None):
+    def __init__(self, client_mgr: ClientManager, on_select: Callable, current_id: int = None, parent_root=None):
         self.client_mgr = client_mgr
         self.on_select = on_select
         self.current_id = current_id
@@ -309,6 +309,7 @@ class ClientPickerWindow:
         self.item_widgets = []
         self.shutting_down = False
         self.after_ids = []
+
         
         self.WIDTH = 450
         self.MAX_HEIGHT = 550
@@ -319,13 +320,20 @@ class ClientPickerWindow:
         release_hotkeys()
         allow_set_foreground()
         
-        self._setup_window()
+        self._setup_window(parent_root)
+
         self._setup_ui()
         self._filter_clients("")
     
-    def _setup_window(self):
+
+    def _setup_window(self, parent_root=None):
         ctk.set_appearance_mode("dark")
-        self.root = ctk.CTk()
+        if parent_root:
+            self.root = ctk.CTkToplevel(parent_root)
+        else:
+            self.root = ctk.CTk()
+        
+        # Common setup for both cases
         self.root.title(self.WINDOW_TITLE)
         self.root.attributes('-topmost', True)
         
@@ -590,7 +598,11 @@ class ClientPickerWindow:
             except:
                 pass
         self.after_ids.clear()
-        self.root.quit()
+        if isinstance(self.root, ctk.CTkToplevel):
+            self.root.grab_release()
+            self.root.destroy()
+        else:
+            self.root.quit()
     
     def _force_focus(self):
         """ROBUST focus handling for Windows"""
@@ -639,12 +651,16 @@ class ClientPickerWindow:
         
         self.after_ids.append(self.root.after(100, self._stay_on_top))
         
-        self.root.mainloop()
-        
-        try:
-            self.root.destroy()
-        except:
-            pass
+        # If Toplevel, wait for it to close; if standalone CTk, use mainloop
+        if isinstance(self.root, ctk.CTkToplevel):
+            self.root.grab_set()
+            self.root.wait_window()
+        else:
+            self.root.mainloop()
+            try:
+                self.root.destroy()
+            except:
+                pass
         
         if self._selected_id is not None or self._selected_name == "No Client":
             self.on_select(self._selected_id or 0, self._selected_name)
@@ -1004,8 +1020,17 @@ class TimeTrackerSystemTray:
             threading.Timer(0.05, self._on_today_time).start()
 
         def on_show_widget(icon, item):
-            if self.floating_widget:
-                threading.Thread(target=self.floating_widget.show, daemon=True).start()
+            if self.floating_widget and self.floating_widget.root:
+                # Widget exists but is hidden — just deiconify it
+                self.floating_widget.is_visible = True
+                self.floating_widget._save_state()
+                self.floating_widget.root.after(0, lambda: (
+                    self.floating_widget.root.deiconify(),
+                    self.floating_widget.root.attributes('-topmost', True),
+                    self.floating_widget.root.lift()
+                ))
+            else:
+                print("[GUI] Widget will appear on next restart — cannot recreate mid-session")
         
         def on_repair(icon, item):
             threading.Timer(0.05, self._on_repair_device).start()
@@ -1154,7 +1179,7 @@ class TimeTrackerSystemTray:
         print("[GUI] Repair dialog closed")
 
     def _show_client_picker(self):
-        """Show searchable client picker with ROBUST FOCUS"""
+        """Show searchable client picker - scheduled on main thread"""
         
         now = _time.time() * 1000
         with self._picker_lock:
@@ -1163,7 +1188,7 @@ class TimeTrackerSystemTray:
                 return
             self._last_picker_time = now
         
-        def run_picker():
+        def run_picker_on_main():
             selected_id = None
             selected_name = None
             
@@ -1175,14 +1200,21 @@ class TimeTrackerSystemTray:
             picker = ClientPickerWindow(
                 self.client_mgr, 
                 on_select,
-                current_id=self.state.current_client_id
+                current_id=self.state.current_client_id,
+                parent_root=self.floating_widget.root
             )
             picker.show()
             
             if selected_id is not None or selected_name == "No Client":
                 self._switch_client(selected_id or 0, selected_name)
         
-        threading.Thread(target=run_picker, daemon=True).start()
+        # Schedule on main thread via floating widget
+        if self.floating_widget and self.floating_widget.root:
+            self.floating_widget.root.after(10, run_picker_on_main)
+        else:
+            # No widget — old fallback (will still have threading issues)
+            print("[GUI] WARNING: No floating widget, picker may fail")
+            threading.Thread(target=run_picker_on_main, daemon=True).start()
     
     def _switch_client(self, client_id: int, client_name: str):
         """Handle client switch"""
@@ -1302,30 +1334,6 @@ class TimeTrackerSystemTray:
 # ============================================================
 # Standalone show_client_picker function (for hotkey use)
 # ============================================================
-def show_client_picker(clients: list, current_id: int = None, on_select=None):
-    """
-    Standalone function to show client picker.
-    Can be called from hotkey handlers.
-    """
-    release_hotkeys()
-    allow_set_foreground()
-    
-    class TempClientMgr:
-        def get_all(self):
-            return clients
-    
-    selected = {"id": None, "name": None}
-    
-    def handle_select(cid, cname):
-        selected["id"] = cid
-        selected["name"] = cname
-        if on_select:
-            on_select(cid, cname)
-    
-    picker = ClientPickerWindow(TempClientMgr(), handle_select, current_id)
-    picker.show()
-    
-    return selected.get("id"), selected.get("name")
 
 
 # ============================================================

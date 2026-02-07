@@ -331,7 +331,17 @@ class ClientNotificationManager:
             
             title = data.get('title', '⏰ Review Your Timesheet')
             message = data.get('message', 'You have hours to review')
-            url = data.get('url', '/daily')
+            # url = data.get('url', '/daily')
+            
+            # # Build full URL for the callback
+            # base_url = 'https://timetracker.mavops.ai'
+            # if self.agent_config:
+            #     base_url = self.agent_config.get('base_url', base_url)
+            # full_url = f"{base_url}{url}"
+
+            from datetime import date, timedelta
+            yesterday = (date.today() - timedelta(days=1)).isoformat()
+            url = data.get('url', f'/daily?date={yesterday}')
             
             # Build full URL for the callback
             base_url = 'https://timetracker.mavops.ai'

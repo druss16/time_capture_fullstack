@@ -50,7 +50,7 @@ except ImportError:
 
 # GUI imports (optional)
 try:
-    from timetracker_gui import run_gui_app, GUI_AVAILABLE, show_client_picker
+    from timetracker_gui import run_gui_app, GUI_AVAILABLE
 except ImportError:
     GUI_AVAILABLE = False
     show_client_picker = None
@@ -1139,11 +1139,16 @@ def run_agent():
             log("[NOTIF] Notification worker started")
             
             # Check for timesheet review on startup
-            try:
-                review_result = notif_manager.notify_timesheet_review(force=False)
-                log(f"[NOTIF] Startup timesheet review check: {review_result}")
-            except Exception as e:
-                log(f"[NOTIF] Startup review check failed: {e}")
+            # Check for timesheet review on startup (delayed)
+            def check_startup_timesheet():
+                time.sleep(8)  # Wait for toaster to fully initialize
+                try:
+                    review_result = notif_manager.notify_timesheet_review(force=False)
+                    log(f"[NOTIF] Startup timesheet review check: {review_result}")
+                except Exception as e:
+                    log(f"[NOTIF] Startup review check failed: {e}")
+            
+            threading.Thread(target=check_startup_timesheet, daemon=True).start()
         else:
 
             log("[NOTIF] ⚠️ Push notifications not authorized")
@@ -1179,7 +1184,7 @@ def run_agent():
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
             
             # === QUICK SWITCHER (Alt+Ctrl+T) - FIXED ===
-            if gui_menu_bar and show_client_picker:
+            if gui_menu_bar:
                 try:
                     import keyboard
                     
@@ -1192,7 +1197,6 @@ def run_agent():
                         _hotkey_last[0] = now
                         log("[HOTKEY] Alt+Ctrl+T pressed!")
                         
-                        # Release hotkeys
                         try:
                             keyboard.release('alt')
                             keyboard.release('ctrl')
@@ -1201,17 +1205,9 @@ def run_agent():
                             pass
                         time.sleep(0.1)
                         
-                        # Get clients and current state
-                        clients = gui_menu_bar.client_mgr.get_all()
-                        current_id = gui_menu_bar.state.current_client_id
-                        
-                        def on_select(cid, cname):
-                            if cid is not None or cname == "No Client":
-                                gui_menu_bar._switch_client(cid or 0, cname)
-                        
-                        # Show picker using the GUI module's function
-                        show_client_picker(clients, current_id, on_select)
-                    
+                        # Route through the tray method (which schedules on main thread)
+                        gui_menu_bar._show_client_picker()
+
                     keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed)
                     log("[QUICK] Ready - Alt+Ctrl+T")
                     

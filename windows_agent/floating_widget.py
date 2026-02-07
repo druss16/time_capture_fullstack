@@ -107,14 +107,14 @@ class FloatingClientWidget:
             print(f"[WIDGET] Failed to save state: {e}")
     
     def create(self, parent_root=None):
-        """Create the floating widget window"""
         if not WIDGET_AVAILABLE:
             print("[WIDGET] customtkinter not available")
             return None
         
-        if not self.is_visible:
-            return None
+        # REMOVED the is_visible early return — always allow creation
+        # The user can re-hide it if they want
         
+        self.is_visible = True  # Reset on create
         ctk.set_appearance_mode("dark")
         
         # Use provided root or create new one
@@ -368,8 +368,10 @@ class FloatingClientWidget:
     
     def _start_update_loop(self):
         """Start background loop to poll for client updates"""
+        self._update_running = True
+        
         def update_loop():
-            while self.root and self.root.winfo_exists():
+            while self._update_running:
                 try:
                     if self.get_client:
                         client_info = self.get_client()
@@ -381,19 +383,23 @@ class FloatingClientWidget:
                                 self.current_client_id = new_id
                                 self.current_client_name = new_name
                                 
-                                # Schedule UI update on main thread
-                                if self.root and self.root.winfo_exists():
-                                    self.root.after(0, self._update_appearance)
+                                # Schedule UI update on main thread (don't touch tkinter here)
+                                try:
+                                    if self.root:
+                                        self.root.after(0, self._update_appearance)
+                                except Exception:
+                                    pass
                 except Exception as e:
                     print(f"[WIDGET] Update error: {e}")
                 
-                _time.sleep(2)  # Poll every 2 seconds
+                _time.sleep(2)
         
         thread = threading.Thread(target=update_loop, daemon=True)
         thread.start()
-    
+
     def destroy(self):
         """Clean up the widget"""
+        self._update_running = False  # Stop the loop first
         self._save_state()
         if self.root:
             try:

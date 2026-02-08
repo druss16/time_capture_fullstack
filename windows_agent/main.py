@@ -1297,6 +1297,9 @@ def run_agent():
         dwell_start = None
         consecutive_errors = 0
         MAX_CONSECUTIVE_ERRORS = 10
+
+        # ── FIX 1: Lock screen process names that trigger instant idle ──
+        LOCK_SCREEN_APPS = {"lockapp", "logonui"}
         
         try:
             while True:
@@ -1306,7 +1309,21 @@ def run_agent():
                         break
                     
                     idle = mouse_idle_seconds()
-                    if idle >= MOUSE_IDLE_PAUSE_S:
+
+                    # ── FIX 2: Peek at foreground BEFORE idle check ──
+                    # If the lock screen is active, force immediate idle
+                    # regardless of mouse idle timer
+                    force_idle = False
+                    front_peek = get_foreground_window_info()
+                    if front_peek:
+                        peek_app, peek_exe, peek_pid, peek_title = front_peek
+                        if (peek_app and peek_app.lower() in LOCK_SCREEN_APPS) or \
+                           (peek_title and "lock screen" in peek_title.lower()):
+                            force_idle = True
+                            if current_sig != IDLE_SIG:
+                                log(f"[IDLE] Lock screen detected ({peek_app}) → entering idle immediately")
+
+                    if force_idle or idle >= MOUSE_IDLE_PAUSE_S:
                         if current_sig != IDLE_SIG:
                             if notif_manager:
                                 try:
@@ -1316,14 +1333,28 @@ def run_agent():
                             
                             if current_sig and dwell_start:
                                 now = time.time()
-                                effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                                if force_idle:
+                                    # Lock screen: end dwell at current time
+                                    effective_end = now
+                                else:
+                                    effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
                                 dwell = effective_end - dwell_start
                                 if dwell >= MIN_DWELL_SECONDS:
                                     write_event(conn, cur, os_user, hostname, current_sig)
                             current_sig = IDLE_SIG
-                            dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
-                            log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
-                        time.sleep(POLL_SECONDS)
+                            if force_idle:
+                                dwell_start = time.time()
+                            else:
+                                dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
+                            if not force_idle:
+                                log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
+
+                        # ── FIX 3: During lock screen idle, sleep longer ──
+                        # No need to poll every 5s when screen is locked
+                        if force_idle:
+                            time.sleep(POLL_SECONDS * 3)  # 15s instead of 5s
+                        else:
+                            time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
                         continue
                     else:
@@ -1342,8 +1373,13 @@ def run_agent():
                                 log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
                             current_sig = None
                             dwell_start = None
+
+                            # ── FIX 4: After waking from idle, re-peek foreground ──
+                            # Use the front_peek we already grabbed above
+                            # instead of calling get_foreground_window_info() again
                         
-                        front = get_foreground_window_info()
+                        # Reuse the peek we already did (avoid double call)
+                        front = front_peek
                         if not front:
                             time.sleep(POLL_SECONDS)
                             consecutive_errors = 0

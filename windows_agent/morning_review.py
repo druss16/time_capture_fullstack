@@ -410,7 +410,8 @@ class MorningReviewDialog:
         self.result = "review"
         mark_dismissed()
         yesterday = date.today() - timedelta(days=1)
-        url = f"{self.web_url}/timesheet?date={yesterday.isoformat()}"
+        url = f"{self.web_url}/daily?date={yesterday.isoformat()}"
+
         try:
             webbrowser.open(url)
             print(f"[MORNING] Opened timesheet: {url}")

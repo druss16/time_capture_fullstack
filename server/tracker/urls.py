@@ -293,5 +293,6 @@ urlpatterns = [
     path('notifications/preferences/', views_notifications.notification_preferences, name='notification-preferences'),
     path('agent/startup-notification/', views_notifications.agent_startup_notification, name='agent-startup-notification'),
 
+    path('timesheet/yesterday-summary/', views.yesterday_summary, name='yesterday-summary'),
 
 ]

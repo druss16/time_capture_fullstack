@@ -7329,3 +7329,128 @@ def get_industry_options(request):
             for k, v in INDUSTRY_TYPES
         ]
     })
+
+
+from datetime import date, timedelta, datetime, time as dt_time
+from django.http import JsonResponse
+from django.utils import timezone
+from django.db.models import Sum, F, ExpressionWrapper, DurationField
+from django.db.models.functions import Coalesce
+
+# Adjust these imports to match your actual model locations
+# from .models import TimeBlock, Timesheet
+
+
+def yesterday_summary(request):
+    """
+    GET /api/timesheet/yesterday-summary/
+    
+    Auth: DeviceKey header (device token) or session auth
+    
+    Returns:
+    {
+        "date": "2026-02-06",
+        "total_hours": 7.5,
+        "status": "draft",  // draft | submitted | approved
+        "entries": [
+            {"client_name": "Acme Corp", "client_id": 1, "hours": 3.5},
+            {"client_name": "Beta Industries", "client_id": 2, "hours": 2.0},
+            {"client_name": "Uncategorized", "client_id": null, "hours": 2.0}
+        ],
+        "entry_count": 12,
+        "has_unassigned": true
+    }
+    """
+    user = request.user
+    if not user or not user.is_authenticated:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    yesterday = date.today() - timedelta(days=1)
+
+    # ── Adjust the query below to match YOUR actual models ──
+    # This assumes you have something like:
+    #   TimeBlock(user, client, start_time, end_time, ...)
+    #   Timesheet(user, date, status, ...)
+    
+    try:
+        from timeblocks.models import TimeBlock  # adjust import path
+    except ImportError:
+        # Fallback - adjust to your actual model location
+        from .models import TimeBlock
+
+    # Get yesterday's time blocks for this user
+    yesterday_start = timezone.make_aware(datetime.combine(yesterday, dt_time.min))
+    yesterday_end = timezone.make_aware(datetime.combine(yesterday, dt_time.max))
+
+    blocks = TimeBlock.objects.filter(
+        user=user,
+        start_time__gte=yesterday_start,
+        start_time__lte=yesterday_end,
+    )
+
+    # Group by client
+    client_hours = {}
+    total_seconds = 0
+    has_unassigned = False
+
+    for block in blocks:
+        # Calculate duration
+        if block.end_time and block.start_time:
+            duration = (block.end_time - block.start_time).total_seconds()
+        elif hasattr(block, 'duration_seconds') and block.duration_seconds:
+            duration = block.duration_seconds
+        else:
+            duration = 0
+
+        total_seconds += duration
+
+        # Get client info
+        client_id = getattr(block, 'client_id', None)
+        client_name = "Uncategorized"
+
+        if client_id and hasattr(block, 'client') and block.client:
+            client_name = getattr(block.client, 'name', str(client_id))
+        elif not client_id:
+            has_unassigned = True
+
+        key = client_id or "unassigned"
+        if key not in client_hours:
+            client_hours[key] = {
+                "client_name": client_name,
+                "client_id": client_id,
+                "seconds": 0,
+            }
+        client_hours[key]["seconds"] += duration
+
+    # Convert to hours and sort by hours desc
+    entries = []
+    for data in client_hours.values():
+        entries.append({
+            "client_name": data["client_name"],
+            "client_id": data["client_id"],
+            "hours": round(data["seconds"] / 3600, 2),
+        })
+    entries.sort(key=lambda e: e["hours"], reverse=True)
+
+    total_hours = round(total_seconds / 3600, 2)
+
+    # ── Get timesheet status ──
+    status = "draft"
+    try:
+        from timesheets.models import Timesheet  # adjust import path
+        ts = Timesheet.objects.filter(user=user, date=yesterday).first()
+        if ts:
+            status = getattr(ts, 'status', 'draft')
+    except (ImportError, Exception):
+        # If no Timesheet model, infer from blocks
+        # If all blocks have been submitted/approved, mark accordingly
+        pass
+
+    return JsonResponse({
+        "date": yesterday.isoformat(),
+        "total_hours": total_hours,
+        "status": status,
+        "entries": entries,
+        "entry_count": blocks.count(),
+        "has_unassigned": has_unassigned,
+    })

@@ -685,11 +685,15 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
     _last_control_check = now
     qs = f"?host={host}"
     headers = api_headers(user, host)
-    data = http_get_json(control_url + qs, headers)
-    stop = bool(data.get("stop"))
-    if stop:
-        log(f"[CTRL] Stop received from server: reason={data.get('reason','')}")
-    return stop
+    try:
+        data = http_get_json(control_url + qs, headers, timeout=5)
+        stop = bool(data.get("stop"))
+        if stop:
+            log(f"[CTRL] Stop received from server: reason={data.get('reason','')}")
+        return stop
+    except Exception as e:
+        log(f"[CTRL] get error: {e}")
+        return False  # network down = don't stop, keep tracking
 
 # ---------------- Event Posting ----------------
 def post_event_async(event: dict, user: str, host: str):
@@ -729,6 +733,7 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
         ts_dt = datetime.now(timezone.utc)
     ts_iso = ts_dt.isoformat()
     
+    # ── Local DB write FIRST — always succeeds even if network is down ──
     cur.execute(
         "INSERT INTO raw_events (ts_utc, app_name, bundle_id, window_title, url, file_path, user, hostname) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -740,14 +745,23 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
     current_client_id = None
     current_client_name = None
     
+    # ── FIX: Retry client fetch with backoff (handles DNS failure after wake) ──
     if api_key and API_BASE:
-        try:
-            current = get_current_client_from_backend(API_BASE, api_key)
-            if current and current.get("client_id"):
-                current_client_id = current["client_id"]
-                current_client_name = current.get("client_name")
-        except Exception as e:
-            log(f"[CLIENT] Failed to get current client: {e}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                current = get_current_client_from_backend(API_BASE, api_key)
+                if current and current.get("client_id"):
+                    current_client_id = current["client_id"]
+                    current_client_name = current.get("client_name")
+                break  # success, stop retrying
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait = 2 * (attempt + 1)  # 2s, 4s
+                    log(f"[CLIENT] Fetch failed (attempt {attempt + 1}/{max_retries}), retrying in {wait}s: {e}")
+                    time.sleep(wait)
+                else:
+                    log(f"[CLIENT] Failed to fetch current client after {max_retries} attempts: {e}")
     
     if notif_manager:
         notif_manager.set_current_client(current_client_id, current_client_name)
@@ -774,15 +788,31 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
         if tool_host:
             payload["tool_host"] = tool_host
     
-    post_event_async(payload, user, hostname)
+    # ── FIX: Retry post with backoff (handles DNS failure after wake) ──
+    max_retries = 3
+    posted = False
+    for attempt in range(max_retries):
+        try:
+            post_event_async(payload, user, hostname)
+            posted = True
+            break  # success, stop retrying
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 2 * (attempt + 1)  # 2s, 4s
+                log(f"[POST] Failed (attempt {attempt + 1}/{max_retries}), retrying in {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                log(f"[POST] Failed after {max_retries} attempts: {e}. Event saved locally.")
     
     client_msg = f" → {current_client_name}" if current_client_name else ""
+    post_status = "" if posted else " [OFFLINE - saved locally]"
     log(
         f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} "
         f"• url={url or '-'} • path={fpath or '-'}"
         + (f" • toolish({tool_reason})" if toolish else "")
         + client_msg
         + f" at {ts_iso}"
+        + post_status
     )
 
 # ---------------- Client Sync Helpers ----------------

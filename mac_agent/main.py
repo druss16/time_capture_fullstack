@@ -2060,22 +2060,36 @@ def post_event_async(event: dict, user: str, host: str):
         return
     def _run():
         headers = api_headers(user, host)
-        try:
-            req = urllib.request.Request(POST_URL, data=json.dumps(event).encode("utf-8"), method="POST")
-            for k, v in headers.items(): req.add_header(k, v)
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                _ = resp.read()
-            log(f"[POSTED] {POST_URL}")
-        except urllib.error.HTTPError as e:
-            body = ""
-            try: body = e.read().decode("utf-8", errors="ignore")
-            except: pass
-            log(f"[POST ERROR] HTTP {e.code}: {body[:200]}")
-            if e.code in (401, 403):
-                log("[AUTH] Device key rejected — will re-pair.")
-                drop_api_key()
-        except Exception as e:
-            log(f"[POST ERROR] {e}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                req = urllib.request.Request(POST_URL, data=json.dumps(event).encode("utf-8"), method="POST")
+                for k, v in headers.items(): req.add_header(k, v)
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    _ = resp.read()
+                log(f"[POSTED] {POST_URL}")
+                return  # Success
+            except urllib.error.HTTPError as e:
+                body = ""
+                try: body = e.read().decode("utf-8", errors="ignore")
+                except: pass
+                log(f"[POST ERROR] HTTP {e.code}: {body[:200]}")
+                if e.code in (401, 403):
+                    log("[AUTH] Device key rejected — will re-pair.")
+                    drop_api_key()
+                return  # Don't retry HTTP errors
+            except urllib.error.URLError as e:
+                # Network not ready (common after wake from sleep)
+                if attempt < max_retries - 1:
+                    wait = 5 * (attempt + 1)  # 5s, 10s
+                    log(f"[POST RETRY] Network error (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {wait}s: {e}")
+                    time.sleep(wait)
+                else:
+                    log(f"[POST ERROR] All retries failed: {e}")
+            except Exception as e:
+                log(f"[POST ERROR] {e}")
+                return  # Don't retry unknown errors
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -2271,7 +2285,35 @@ def run_agent():
         from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification
         
         def on_wake(notification):
-            print("[WAKE] System woke from sleep - resetting connections")
+            log("[WAKE] System woke from sleep - resetting connections")
+            
+            # Reset the control check timer so we don't stall
+            global _last_control_check
+            _last_control_check = 0.0
+            
+            # Retry network with backoff (WiFi may not be ready yet)
+            def _reconnect():
+                for attempt in range(5):
+                    try:
+                        time.sleep(3 * (attempt + 1))  # 3s, 6s, 9s, 12s, 15s
+                        api_key_val = config.get("api_key") or API_KEY
+                        if api_key_val and API_BASE:
+                            url = f"{API_BASE}/agents/hello2/"
+                            headers = api_headers(os_user, hostname)
+                            payload = {
+                                "hostname": hostname,
+                                "app_version": APP_VERSION,
+                                "device_id": device_id,
+                                "os_username": os_user,
+                            }
+                            http_post_json(url, payload, headers, timeout=5)
+                            log(f"[WAKE] ✅ Reconnected to server (attempt {attempt + 1})")
+                            return
+                    except Exception as e:
+                        log(f"[WAKE] Reconnect attempt {attempt + 1}/5 failed: {e}")
+                log("[WAKE] ⚠️ All reconnect attempts failed - will retry on next event post")
+            
+            threading.Thread(target=_reconnect, daemon=True).start()
             
         nc = NSWorkspace.sharedWorkspace().notificationCenter()
         nc.addObserverForName_object_queue_usingBlock_(
@@ -2767,6 +2809,8 @@ def run_agent():
         dwell_start = None
         consecutive_errors = 0
         MAX_CONSECUTIVE_ERRORS = 10
+        LOCK_SCREEN_BUNDLES = {"com.apple.loginwindow", "com.apple.ScreenSaver.Engine"}
+        LOCK_SCREEN_APPS = {"loginwindow", "screensaverengine"}
         
         # FIX 1: Track last flush time for periodic meeting/long-dwell writes
         last_flush_time = None
@@ -2781,14 +2825,27 @@ def run_agent():
 
                     idle = mouse_idle_seconds()
                     
+                    # ── FIX: Check for lock screen BEFORE idle timer ──
+                    force_idle = False
+                    front_peek = get_frontmost_app()
+                    if front_peek:
+                        peek_app, peek_bundle, peek_pid, peek_title = front_peek
+                        if (peek_bundle and peek_bundle.lower() in LOCK_SCREEN_BUNDLES) or \
+                           (peek_app and peek_app.lower() in LOCK_SCREEN_APPS) or \
+                           (peek_title and "lock screen" in (peek_title or "").lower()):
+                            force_idle = True
+                            if current_sig != IDLE_SIG:
+                                log(f"[IDLE] Lock screen detected ({peek_app}/{peek_bundle}) → entering idle immediately")
+
+                    # Check if currently in a meeting (meetings skip idle)
                     in_meeting = False
                     if current_sig and current_sig != IDLE_SIG:
                         app_name, bundle_id, title, url, fpath = current_sig
                         in_meeting = is_in_meeting(bundle_id, url, app_name, title)
                     
-                    if idle >= MOUSE_IDLE_PAUSE_S and not in_meeting:
+                    # ── IDLE ENTRY: lock screen, or mouse idle (unless in meeting) ──
+                    if force_idle or (idle >= MOUSE_IDLE_PAUSE_S and not in_meeting):
                         if current_sig != IDLE_SIG:
-                            # === NOTIFY: Going idle ===
                             if notif_manager:
                                 try:
                                     notif_manager.on_idle_start()
@@ -2798,21 +2855,33 @@ def run_agent():
                                                           {"event": "on_idle_start"})
                             if current_sig and dwell_start:
                                 now = time.time()
-                                effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                                if force_idle:
+                                    effective_end = now
+                                else:
+                                    effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
                                 dwell = effective_end - dwell_start
                                 if dwell >= MIN_DWELL_SECONDS:
                                     write_event(conn, cur, os_user, hostname, current_sig)
                                 else:
                                     log(f"[SKIP] dwell too short ({int(dwell)}s) before idle for {current_sig[0]}")
                             current_sig = IDLE_SIG
-                            dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
-                            last_flush_time = None  # Reset flush tracker on idle
-                            log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
-                        time.sleep(POLL_SECONDS)
+                            if force_idle:
+                                dwell_start = time.time()
+                            else:
+                                dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
+                            last_flush_time = None
+                            if not force_idle:
+                                log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
+                        
+                        if force_idle:
+                            time.sleep(POLL_SECONDS * 3)
+                        else:
+                            time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
                         continue
+
+                    # ── MEETING: idle mouse but in a meeting → flush periodically, don't go idle ──
                     elif in_meeting and idle >= MOUSE_IDLE_PAUSE_S:
-                        # FIX 1: Periodic flush during meetings so we don't lose long passive sessions
                         now = time.time()
                         if dwell_start and (now - (last_flush_time or dwell_start)) >= MEETING_FLUSH_INTERVAL:
                             flush_from = last_flush_time or dwell_start
@@ -2828,9 +2897,11 @@ def run_agent():
                         time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
                         continue
+
+                    # ── ACTIVE: user is back or was never idle ──
                     else:
+                        # Exit idle if we were idle
                         if current_sig == IDLE_SIG and dwell_start:
-                            # === NOTIFY: Returning from idle ===
                             if notif_manager:
                                 try:
                                     notif_manager.on_idle_end()
@@ -2846,9 +2917,10 @@ def run_agent():
                                 log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
                             current_sig = None
                             dwell_start = None
-                            last_flush_time = None  # Reset flush tracker
+                            last_flush_time = None
 
-                    front = get_frontmost_app()
+                    # ── FIX: Reuse the peek we already did (no double call) ──
+                    front = front_peek
                     if not front:
                         if PRINT_EVERY_POLL:
                             log("[POLL] No frontmost")

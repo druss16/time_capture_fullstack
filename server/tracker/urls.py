@@ -295,4 +295,7 @@ urlpatterns = [
 
     path('timesheet/yesterday-summary/', views.yesterday_summary, name='yesterday-summary'),
 
+    path('agent/version-check/', views.agent_version_check),
+
+
 ]

@@ -22,7 +22,7 @@ Schedule (Render Cron Job):
     0 13 * * 1-5   (1 PM UTC = 8 AM EST, Mon-Fri)
 
 Place at:
-    yourapp/management/commands/send_timesheet_reminders.py
+    tracker/management/commands/send_timesheet_reminders.py
 """
 
 from datetime import date, timedelta, datetime, time as dt_time
@@ -143,17 +143,7 @@ class Command(BaseCommand):
         - email_timesheet_reminders preference is True (or no preference record yet)
         - Timesheet not already approved (unless --force)
         """
-        # ── Adjust these imports to your actual models ──
-        try:
-            from tracker.models import Block
-        except ImportError:
-            from .models import Block  # adjust!
-
-        try:
-            from timesheets.models import Timesheet
-            HAS_TIMESHEET_MODEL = True
-        except ImportError:
-            HAS_TIMESHEET_MODEL = False
+        from tracker.models import Block, Timesheet
 
         # Base queryset
         if user_id:
@@ -171,67 +161,76 @@ class Command(BaseCommand):
             models.Q(preferences__isnull=True)
         )
 
-        review_start = timezone.make_aware(datetime.combine(review_date, dt_time.min))
-        review_end = timezone.make_aware(datetime.combine(review_date, dt_time.max))
-
         results = []
 
         for user in qs:
-            # Skip if already approved
-            if HAS_TIMESHEET_MODEL and not force:
-                ts = Timesheet.objects.filter(user=user, date=review_date).first()
-                if ts and getattr(ts, 'status', '') == 'approved':
+            # Check if timesheet for this week is already approved
+            if not force:
+                # Find the Monday of the review_date's week
+                days_since_monday = review_date.weekday()
+                week_start = review_date - timedelta(days=days_since_monday)
+                
+                ts = Timesheet.objects.filter(
+                    user=user,
+                    week_start=week_start,
+                ).first()
+                if ts and ts.status == 'approved':
                     continue
 
-            # Get time blocks for review date
+            # Get time blocks for review date using the `day` field
             blocks = Block.objects.filter(
                 user=user,
-                start_time__gte=review_start,
-                start_time__lte=review_end,
+                day=review_date,
             )
 
             # Build summary
             client_hours = {}
-            total_seconds = 0
+            total_minutes = 0
             has_unassigned = False
 
             for block in blocks:
-                if block.end_time and block.start_time:
-                    duration = (block.end_time - block.start_time).total_seconds()
-                elif hasattr(block, 'duration_seconds') and block.duration_seconds:
-                    duration = block.duration_seconds
+                # Use the minutes field (already computed), or calculate from start/end
+                if block.minutes:
+                    duration_mins = block.minutes
+                elif block.start and block.end:
+                    duration_mins = int((block.end - block.start).total_seconds() / 60)
                 else:
-                    duration = 0
+                    duration_mins = 0
 
-                total_seconds += duration
+                total_minutes += duration_mins
 
-                client_id = getattr(block, 'client_id', None)
+                client_id = block.client_id
                 client_name = "Uncategorized"
-                if client_id and hasattr(block, 'client') and block.client:
-                    client_name = getattr(block.client, 'name', str(client_id))
+                if client_id and block.client:
+                    client_name = block.client.name
                 elif not client_id:
                     has_unassigned = True
 
                 key = client_id or "unassigned"
                 if key not in client_hours:
-                    client_hours[key] = {"client_name": client_name, "seconds": 0}
-                client_hours[key]["seconds"] += duration
+                    client_hours[key] = {"client_name": client_name, "minutes": 0}
+                client_hours[key]["minutes"] += duration_mins
 
-            total_hours = round(total_seconds / 3600, 2)
+            total_hours = round(total_minutes / 60, 2)
 
             if MIN_HOURS_TO_SKIP is not None and total_hours <= 0:
                 continue
 
             entries = [
-                {"client_name": d["client_name"], "hours": round(d["seconds"] / 3600, 2)}
-                for d in sorted(client_hours.values(), key=lambda x: x["seconds"], reverse=True)
+                {"client_name": d["client_name"], "hours": round(d["minutes"] / 60, 2)}
+                for d in sorted(client_hours.values(), key=lambda x: x["minutes"], reverse=True)
             ]
 
+            # Get timesheet status
             status = "draft"
-            if HAS_TIMESHEET_MODEL:
-                ts = Timesheet.objects.filter(user=user, date=review_date).first()
-                if ts:
-                    status = getattr(ts, 'status', 'draft')
+            days_since_monday = review_date.weekday()
+            week_start = review_date - timedelta(days=days_since_monday)
+            ts = Timesheet.objects.filter(
+                user=user,
+                week_start=week_start,
+            ).first()
+            if ts:
+                status = ts.status
 
             results.append({
                 'user': user,

@@ -7454,3 +7454,73 @@ def yesterday_summary(request):
         "entry_count": blocks.count(),
         "has_unassigned": has_unassigned,
     })
+
+
+import time
+import json
+import urllib.request
+from django.http import JsonResponse
+from django.views.decorators.http import require_GET
+
+# ── Config ──
+GITHUB_REPO = "druss16/timetracker-releases"
+CACHE_TTL = 300  # 5 minutes — don't hammer GitHub API
+
+# ── Cache ──
+_cache = {"version": None, "fetched_at": 0}
+
+
+def _fetch_latest_version() -> str:
+    """Get latest release tag from GitHub. Returns version string like '1.5.0'."""
+    now = time.time()
+
+    # Return cached if fresh
+    if _cache["version"] and (now - _cache["fetched_at"]) < CACHE_TTL:
+        return _cache["version"]
+
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Accept", "application/vnd.github.v3+json")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            tag = data.get("tag_name", "").lstrip("v")
+            if tag:
+                _cache["version"] = tag
+                _cache["fetched_at"] = now
+                return tag
+    except Exception as e:
+        print(f"[VERSION] GitHub API error: {e}")
+
+    # Fallback to cached even if stale
+    return _cache["version"] or "0.0.0"
+
+
+def _is_newer(latest: str, current: str) -> bool:
+    try:
+        def p(v): return tuple(int(x) for x in v.strip().lstrip('v').split('.'))
+        return p(latest) > p(current)
+    except Exception:
+        return latest != current
+
+
+@require_GET
+def agent_version_check(request):
+    current = request.GET.get('version', '')
+    plat = request.GET.get('platform', '').lower()
+
+    latest = _fetch_latest_version()
+    update_needed = _is_newer(latest, current)
+
+    base = f"https://github.com/{GITHUB_REPO}/releases/latest/download"
+    if 'mac' in plat or 'darwin' in plat:
+        download_url = f"{base}/TimeTracker.pkg"
+    else:
+        download_url = f"{base}/TimeTracker-Windows-Setup.exe"
+
+    return JsonResponse({
+        "update_available": update_needed,
+        "force": update_needed,
+        "latest_version": latest,
+        "download_url": download_url,
+    })

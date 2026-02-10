@@ -46,16 +46,16 @@ export default function AccountLayout({ role }: AccountLayoutProps) {
       icon: Bell,
     },
     {
-      path: '/account/download',
-      label: 'Desktop Agent',
-      description: 'Download and pair your device',
-      icon: Download,
-    },
-    {
       path: '/account/password',
       label: 'Password',
       description: 'Change your password',
       icon: KeyRound,
+    },
+    {
+      path: '/account/download',
+      label: 'Desktop Agent',
+      description: 'Download and pair your device',
+      icon: Download,
     },
     // Billing only for owners
     ...(role === 'owner'

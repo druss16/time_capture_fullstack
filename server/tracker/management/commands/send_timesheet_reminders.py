@@ -164,6 +164,11 @@ class Command(BaseCommand):
         results = []
 
         for user in qs:
+            # Skip test/demo accounts
+            email = (user.email or '').lower()
+            if 'test' in email and email.endswith('@gmail.com'):
+                continue
+
             # Check if timesheet for this week is already approved
             if not force:
                 # Find the Monday of the review_date's week

@@ -14,6 +14,7 @@ Features:
 - System tray GUI integration
 - Error logging and remote error reporting
 - Watchdog thread for crash recovery
+- Sleep/wake recovery with automatic reconnection
 """
 
 import os
@@ -42,11 +43,16 @@ try:
     import win32process
     import win32api
     import win32con
-    import psutil
     WIN_API_AVAILABLE = True
 except ImportError:
     WIN_API_AVAILABLE = False
     print("Warning: pywin32 not available. Install with: pip install pywin32")
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+    print("Warning: psutil not available. Install with: pip install psutil")
 
 # GUI imports (optional)
 try:
@@ -432,10 +438,14 @@ def get_foreground_window_info() -> Optional[Tuple[str, str, int, Optional[str]]
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         
         try:
-            process = psutil.Process(pid)
-            exe_name = process.name()
-            app_name = exe_name.replace(".exe", "").title()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            if psutil:
+                process = psutil.Process(pid)
+                exe_name = process.name()
+                app_name = exe_name.replace(".exe", "").title()
+            else:
+                exe_name = "Unknown"
+                app_name = "Unknown"
+        except (psutil.NoSuchProcess, psutil.AccessDenied) if psutil else Exception:
             exe_name = "Unknown"
             app_name = "Unknown"
         
@@ -694,6 +704,90 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
     except Exception as e:
         log(f"[CTRL] get error: {e}")
         return False  # network down = don't stop, keep tracking
+
+
+# ---------------- Sleep/Wake Recovery ----------------
+def register_power_notifications(os_user: str, hostname: str, device_id: str):
+    """
+    Register for Windows power state changes (sleep/wake/resume).
+    Creates a hidden window on a background thread to receive WM_POWERBROADCAST messages.
+    On wake: resets control timer and reconnects to backend with backoff.
+    """
+    if not WIN_API_AVAILABLE:
+        log("[POWER] pywin32 not available — sleep/wake detection disabled")
+        return
+
+    def _power_listener():
+        import win32gui
+        import win32con
+
+        PBT_APMRESUMESUSPEND = 0x0007     # Resume from suspend
+        PBT_APMRESUMEAUTOMATIC = 0x0012   # Automatic resume (e.g. wake timers)
+        PBT_APMSUSPEND = 0x0004           # Going to sleep
+
+        def _on_wake():
+            global _last_control_check
+            log("[WAKE] System resumed from sleep — resetting connections")
+            _last_control_check = 0.0  # Force control check on next loop
+
+            def _reconnect():
+                for attempt in range(5):
+                    try:
+                        wait = 3 * (attempt + 1)  # 3s, 6s, 9s, 12s, 15s
+                        time.sleep(wait)
+                        api_key_val = config.get("api_key") or API_KEY
+                        if api_key_val and API_BASE:
+                            headers = api_headers(os_user, hostname)
+                            payload = {
+                                "hostname": hostname,
+                                "app_version": APP_VERSION,
+                                "device_id": device_id,
+                                "os_username": os_user,
+                            }
+                            http_post_json(HELLO_URL, payload, headers, timeout=5)
+                            log(f"[WAKE] ✅ Reconnected to server (attempt {attempt + 1})")
+                            return
+                    except Exception as e:
+                        log(f"[WAKE] Reconnect attempt {attempt + 1}/5 failed: {e}")
+                log("[WAKE] ⚠️ All reconnect attempts failed — will retry on next event post")
+
+            threading.Thread(target=_reconnect, daemon=True).start()
+
+        def wndproc(hwnd, msg, wparam, lparam):
+            if msg == win32con.WM_POWERBROADCAST:
+                if wparam == PBT_APMSUSPEND:
+                    log("[POWER] System going to sleep...")
+                elif wparam in (PBT_APMRESUMESUSPEND, PBT_APMRESUMEAUTOMATIC):
+                    _on_wake()
+            return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+
+        # Create hidden window to receive power messages
+        wc = win32gui.WNDCLASS()
+        wc.lpfnWndProc = wndproc
+        wc.lpszClassName = "TimeTrackerPowerWatcher"
+        wc.hInstance = win32api.GetModuleHandle(None)
+
+        try:
+            class_atom = win32gui.RegisterClass(wc)
+            hwnd = win32gui.CreateWindow(
+                class_atom, "TimeTrackerPowerWatcher",
+                0, 0, 0, 0, 0,
+                0, 0, wc.hInstance, None
+            )
+            log("[POWER] ✅ Sleep/wake handler registered (hidden window)")
+
+            # Message pump — must run forever on this thread
+            while True:
+                win32gui.PumpWaitingMessages()
+                time.sleep(0.5)
+        except Exception as e:
+            log(f"[POWER] ❌ Failed to create power watcher: {e}")
+            log_error(f"[POWER] {e}")
+
+    t = threading.Thread(target=_power_listener, daemon=True)
+    t.start()
+    log("[POWER] Started power notification listener thread")
+
 
 # ---------------- Event Posting ----------------
 def post_event_async(event: dict, user: str, host: str):
@@ -1311,6 +1405,9 @@ def run_agent():
             except Exception as e:
                 log(f"[CLIENT] Failed to restore client state: {e}")
     
+    # === SLEEP/WAKE RECOVERY ===
+    register_power_notifications(os_user, hostname, device_id)
+
     # === TRACKING LOOP WITH ERROR HANDLING ===
     def tracking_loop():
         log("[TRACKING] Initializing...")

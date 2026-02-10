@@ -1166,6 +1166,7 @@ def run_agent():
             print("[SYNC] agent_sync_integration not available")
 
     # === PUSH NOTIFICATION SYSTEM ===
+    # === PUSH NOTIFICATION SYSTEM ===
     notif_worker = None
     
     if PUSH_NOTIF_AVAILABLE and NOTIF_ENABLED:
@@ -1200,7 +1201,6 @@ def run_agent():
                 if hasattr(gui_menu_bar, 'state'):
                     gui_menu_bar.state.set_client(client_id, client_name)
                 log(f"[NOTIF] Updated GUI state to: {client_name}")
-
             # Update notification state
             if notif_manager:
                 notif_manager.set_current_client(client_id, client_name)
@@ -1266,7 +1266,6 @@ def run_agent():
             notif_worker.start()
             log("[NOTIF] Notification worker started")
             
-            # Check for timesheet review on startup
             # Check for timesheet review on startup (delayed)
             def check_startup_timesheet():
                 time.sleep(8)  # Wait for toaster to fully initialize
@@ -1278,7 +1277,6 @@ def run_agent():
             
             threading.Thread(target=check_startup_timesheet, daemon=True).start()
         else:
-
             log("[NOTIF] ⚠️ Push notifications not authorized")
             notif_manager = None
     else:
@@ -1426,6 +1424,21 @@ def run_agent():
                     log(f"[CLIENT] Restored from backend: {current['client_name']}")
             except Exception as e:
                 log(f"[CLIENT] Failed to restore client state: {e}")
+
+    # Prompt client selection shortly after startup if no client set
+    def _prompt_client_after_startup():
+        time.sleep(5)
+        try:
+            current = get_current_client_from_backend(API_BASE, config.get("api_key") or API_KEY)
+            if not current or not current.get("client_id"):
+                log("[AGENT] No client selected after startup - prompting picker")
+                if gui_menu_bar:
+                    gui_menu_bar._show_client_picker()
+        except Exception as e:
+            log(f"[AGENT] Startup client check failed: {e}")
+
+    threading.Thread(target=_prompt_client_after_startup, daemon=True).start()
+
     
     # === SLEEP/WAKE RECOVERY ===
     register_power_notifications(os_user, hostname, device_id)

@@ -456,6 +456,30 @@ class ModernConfigGUI:
         )
         self.update_label.pack(side="right")
         self.update_label.pack_forget()  # Hide initially
+
+    def _show_paired_success(self):
+        """Show success message pointing to system tray, then close GUI"""
+        try:
+            from CTkMessagebox import CTkMessagebox
+            CTkMessagebox(
+                title="Device Paired!",
+                message=(
+                    "TimeTracker is now running!\n\n"
+                    "Look for the ⏱ icon in your system tray\n"
+                    "(bottom-right corner of your taskbar).\n\n"
+                    "Right-click it to switch clients."
+                ),
+                icon="check",
+                option_1="Got it!"
+            )
+        except Exception:
+            messagebox.showinfo(
+                "Device Paired!",
+                "TimeTracker is now running!\n\n"
+                "Look for the icon in your system tray (bottom-right corner).\n"
+                "Right-click it to switch clients."
+            )
+        self.root.destroy()
     
     def _create_input_field(self, parent, label, var_name, default="", placeholder="", help_text="", show=None):
         """Create a styled input field"""
@@ -845,9 +869,24 @@ class ModernConfigGUI:
                         self.api_key_var.set(api_key)
                     # Clear the pairing code field after successful pairing
                     self.pair_code_var.set("")
-                    self._show_toast("Paired!", "Device paired successfully. Click Start Agent to begin.", "success")
+
+                    # Save config immediately so agent can read it
+                    config = {
+                        "api_base": api_base,
+                        "api_key": api_key,
+                    }
+                    if server_device_id:
+                        config["server_device_id"] = server_device_id
+                    save_config(config)
+                    self.config = config
+                    
+                    # Auto-start the agent
+                    self._start_agent()
+                    
+                    # Show success pointing to system tray, then close
+                    self._show_paired_success()
+                    return
                 else:
-                    # Pairing failed - error already shown in _try_pair
                     return
             
             config = {

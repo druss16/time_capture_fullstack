@@ -1179,7 +1179,7 @@ class TimeTrackerSystemTray:
         print("[GUI] Repair dialog closed")
 
     def _show_client_picker(self):
-        """Show searchable client picker - scheduled on main thread"""
+        """Show searchable client picker - works with or without floating widget"""
         
         now = _time.time() * 1000
         with self._picker_lock:
@@ -1188,7 +1188,7 @@ class TimeTrackerSystemTray:
                 return
             self._last_picker_time = now
         
-        def run_picker_on_main():
+        def run_picker():
             selected_id = None
             selected_name = None
             
@@ -1197,24 +1197,37 @@ class TimeTrackerSystemTray:
                 selected_id = cid
                 selected_name = cname
             
+            # Use floating widget root as parent if available, otherwise standalone
+            parent = None
+            if self.floating_widget and self.floating_widget.root:
+                try:
+                    if self.floating_widget.root.winfo_exists():
+                        parent = self.floating_widget.root
+                except Exception:
+                    parent = None
+            
             picker = ClientPickerWindow(
-                self.client_mgr, 
+                self.client_mgr,
                 on_select,
                 current_id=self.state.current_client_id,
-                parent_root=self.floating_widget.root
+                parent_root=parent
             )
             picker.show()
             
             if selected_id is not None or selected_name == "No Client":
                 self._switch_client(selected_id or 0, selected_name)
         
-        # Schedule on main thread via floating widget
+        # Schedule on main thread if possible, otherwise run in thread
         if self.floating_widget and self.floating_widget.root:
-            self.floating_widget.root.after(10, run_picker_on_main)
-        else:
-            # No widget — old fallback (will still have threading issues)
-            print("[GUI] WARNING: No floating widget, picker may fail")
-            threading.Thread(target=run_picker_on_main, daemon=True).start()
+            try:
+                if self.floating_widget.root.winfo_exists():
+                    self.floating_widget.root.after(10, run_picker)
+                    return
+            except Exception:
+                pass
+        
+        # Fallback: run standalone in new thread (creates its own CTk root)
+        threading.Thread(target=run_picker, daemon=True).start()
     
     def _switch_client(self, client_id: int, client_name: str):
         """Handle client switch"""

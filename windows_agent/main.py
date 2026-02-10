@@ -1402,13 +1402,25 @@ def run_agent():
             return
     
     if not hello(HELLO_URL, os_user, hostname, device_id):
-        log("[HELLO] Attempting re-pair after hello failure.")
-        drop_api_key()
-        key = ensure_api_key_interactive(hostname)
-        if not key or not hello(HELLO_URL, os_user, hostname, device_id):
-            print("Exiting: hello failed.")
-            remove_pid()
-            return
+        log("[HELLO] First hello failed - retrying with backoff...")
+        hello_success = False
+        for attempt in range(4):
+            wait = 5 * (attempt + 1)  # 5s, 10s, 15s, 20s
+            log(f"[HELLO] Retry {attempt + 1}/4 in {wait}s...")
+            time.sleep(wait)
+            if hello(HELLO_URL, os_user, hostname, device_id):
+                hello_success = True
+                log("[HELLO] ✅ Connected on retry")
+                break
+        
+        if not hello_success:
+            log("[HELLO] All retries failed - attempting re-pair.")
+            drop_api_key()
+            key = ensure_api_key_interactive(hostname)
+            if not key or not hello(HELLO_URL, os_user, hostname, device_id):
+                print("Exiting: hello failed.")
+                remove_pid()
+                return
     
     # Pass user name to GUI
     if gui_menu_bar and SERVER_USER_NAME:
@@ -1429,7 +1441,11 @@ def run_agent():
     def _prompt_client_after_startup():
         time.sleep(5)
         try:
-            current = get_current_client_from_backend(API_BASE, config.get("api_key") or API_KEY)
+            api_key_val = config.get("api_key") or API_KEY
+            if not api_key_val:
+                log("[AGENT] No API key yet - skipping startup client prompt")
+                return
+            current = get_current_client_from_backend(API_BASE, api_key_val)
             if not current or not current.get("client_id"):
                 log("[AGENT] No client selected after startup - prompting picker")
                 if gui_menu_bar:

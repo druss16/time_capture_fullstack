@@ -145,9 +145,9 @@ class Command(BaseCommand):
         """
         # ── Adjust these imports to your actual models ──
         try:
-            from timeblocks.models import TimeBlock
+            from tracker.models import Block
         except ImportError:
-            from .models import TimeBlock  # adjust!
+            from .models import Block  # adjust!
 
         try:
             from timesheets.models import Timesheet
@@ -184,7 +184,7 @@ class Command(BaseCommand):
                     continue
 
             # Get time blocks for review date
-            blocks = TimeBlock.objects.filter(
+            blocks = Block.objects.filter(
                 user=user,
                 start_time__gte=review_start,
                 start_time__lte=review_end,

@@ -1329,7 +1329,7 @@ def run_agent():
                             keyboard.release('t')
                         except:
                             pass
-                        time.sleep(0.1)
+                        time.sleep(0.02)
                         
                         # Route through the tray method (which schedules on main thread)
                         gui_menu_bar._show_client_picker()

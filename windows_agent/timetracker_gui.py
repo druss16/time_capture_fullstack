@@ -1178,8 +1178,9 @@ class TimeTrackerSystemTray:
         root.mainloop()
         print("[GUI] Repair dialog closed")
 
+\
     def _show_client_picker(self):
-        """Show searchable client picker - works with or without floating widget"""
+        """Show searchable client picker - instant open"""
         
         now = _time.time() * 1000
         with self._picker_lock:
@@ -1197,7 +1198,22 @@ class TimeTrackerSystemTray:
                 selected_id = cid
                 selected_name = cname
             
-            # Use floating widget root as parent if available, otherwise standalone
+            # Refresh client list in background BEFORE showing picker
+            # so cached data is fresh, but don't block on it
+            try:
+                if hasattr(self, 'fetch_clients') and self.fetch_clients:
+                    def _bg_refresh():
+                        try:
+                            fresh = self.fetch_clients()
+                            if fresh:
+                                self.client_mgr.clients = fresh
+                                self.client_mgr.save()
+                        except:
+                            pass
+                    threading.Thread(target=_bg_refresh, daemon=True).start()
+            except:
+                pass
+            
             parent = None
             if self.floating_widget and self.floating_widget.root:
                 try:
@@ -1217,16 +1233,14 @@ class TimeTrackerSystemTray:
             if selected_id is not None or selected_name == "No Client":
                 self._switch_client(selected_id or 0, selected_name)
         
-        # Schedule on main thread if possible, otherwise run in thread
         if self.floating_widget and self.floating_widget.root:
             try:
                 if self.floating_widget.root.winfo_exists():
-                    self.floating_widget.root.after(10, run_picker)
+                    self.floating_widget.root.after(0, run_picker)  # was 10, use 0
                     return
             except Exception:
                 pass
         
-        # Fallback: run standalone in new thread (creates its own CTk root)
         threading.Thread(target=run_picker, daemon=True).start()
     
     def _switch_client(self, client_id: int, client_name: str):

@@ -1127,6 +1127,10 @@ def repair_device():
 def run_agent():
     """Main agent function with GUI integration"""
     global API_KEY, notif_manager, notif_worker, sync, gui_menu_bar, SERVER_USER_NAME
+
+    # === FORCED UPDATE CHECK ===
+    from update_checker import check_for_update_blocking, start_background_checker
+    check_for_update_blocking(API_BASE, APP_VERSION)
     
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -1577,6 +1581,9 @@ def run_agent():
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
     tracking_thread.start()
     log("[TRACKING] Started tracking thread")
+
+    # === RE-CHECK FOR UPDATES EVERY HOUR ===
+    start_background_checker(API_BASE, APP_VERSION)
     
     # === WATCHDOG: Restart tracking if it dies ===
     def watchdog():

@@ -182,18 +182,33 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           
-          # ── Postinstall: kill old, install LaunchAgent, bootstrap (auto-starts app) ──
+          # ── Preinstall: kill running app so macOS can overwrite the binary ──
           mkdir -p scripts
+          cat > scripts/preinstall << 'SCRIPT'
+          #!/bin/bash
+          LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
+          LOGGED_IN_UID=$(id -u "$LOGGED_IN_USER" 2>/dev/null || echo "")
+
+          # Unload LaunchAgent first (prevents auto-restart during install)
+          if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ] && [ -n "$LOGGED_IN_UID" ]; then
+              PLIST="/Users/$LOGGED_IN_USER/Library/LaunchAgents/com.mavops.timetracker.plist"
+              sudo -u "$LOGGED_IN_USER" launchctl bootout "gui/$LOGGED_IN_UID" "$PLIST" 2>/dev/null || true
+          fi
+
+          # Force kill all TimeTracker processes
+          pkill -9 -f "TimeTracker.app" 2>/dev/null || true
+          sleep 2
+          exit 0
+          SCRIPT
+          chmod +x scripts/preinstall
+
+          # ── Postinstall: install LaunchAgent, bootstrap (auto-starts app) ──
           cat > scripts/postinstall << 'SCRIPT'
           #!/bin/bash
           LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
           LOGGED_IN_UID=$(id -u "$LOGGED_IN_USER" 2>/dev/null || echo "")
 
           if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ] && [ -n "$LOGGED_IN_UID" ]; then
-              # Kill any existing TimeTracker
-              pkill -f "TimeTracker.app" 2>/dev/null || true
-              sleep 1
-
               # Install LaunchAgent (auto-start + auto-restart on crash)
               PLIST_SRC="/Applications/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist"
               PLIST_DST="/Users/$LOGGED_IN_USER/Library/LaunchAgents/com.mavops.timetracker.plist"

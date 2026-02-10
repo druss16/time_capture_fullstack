@@ -336,7 +336,7 @@ jobs:
           certificate-profile-name: timetracker-cert
           files-folder: ${{ github.workspace }}/windows_agent/dist
           files-folder-filter: exe
-          files-folder-recurse: false
+          files-folder-recurse: true
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
       

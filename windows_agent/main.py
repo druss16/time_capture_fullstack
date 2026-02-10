@@ -1366,17 +1366,35 @@ def run_agent():
     
     key = config.get("api_key") or API_KEY
     if not key:
-        # Launch pairing GUI if available
-        gui_script = os.path.join(os.path.dirname(__file__), "gui.py")
-        if os.path.exists(gui_script):
-            print("[AGENT] No API key configured - launching pairing GUI...")
-            try:
-                subprocess.Popen([sys.executable, gui_script])
-                print("[AGENT] Please pair your device in the GUI window, then restart the agent.")
-                remove_pid()
-                return
-            except Exception as e:
-                print(f"[AGENT] Failed to launch GUI: {e}")
+        gui_launched = False
+        
+        # If frozen exe, look for TimeTracker.exe (GUI) in same directory
+        if getattr(sys, 'frozen', False):
+            exe_dir = os.path.dirname(sys.executable)
+            gui_exe = os.path.join(exe_dir, "TimeTracker.exe")
+            if os.path.exists(gui_exe):
+                print(f"[AGENT] No API key - launching GUI: {gui_exe}")
+                try:
+                    subprocess.Popen([gui_exe])
+                    gui_launched = True
+                except Exception as e:
+                    print(f"[AGENT] Failed to launch GUI exe: {e}")
+        
+        # Dev mode: look for gui.py
+        if not gui_launched:
+            gui_script = os.path.join(os.path.dirname(__file__), "gui.py")
+            if os.path.exists(gui_script):
+                print(f"[AGENT] No API key - launching GUI script: {gui_script}")
+                try:
+                    subprocess.Popen([sys.executable, gui_script])
+                    gui_launched = True
+                except Exception as e:
+                    print(f"[AGENT] Failed to launch GUI script: {e}")
+        
+        if gui_launched:
+            print("[AGENT] Please pair your device in the GUI window, then restart the agent.")
+            remove_pid()
+            return
         
         # Fallback to console pairing
         key = ensure_api_key_interactive(hostname)

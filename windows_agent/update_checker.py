@@ -10,6 +10,7 @@ Usage in main.py:
     check_for_update_blocking(API_BASE, APP_VERSION)
 """
 
+import os
 import sys
 import json
 import time
@@ -22,6 +23,45 @@ import urllib.error
 
 # How often to re-check while agent is running (seconds)
 RECHECK_INTERVAL = 3600  # 1 hour
+
+# Track which version we already nagged about (survives restarts)
+def _nag_file() -> str:
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/.timetracker/.update_nagged")
+    else:
+        appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+        return os.path.join(appdata, "TimeTracker", ".update_nagged")
+
+def _already_nagged(version: str) -> bool:
+    """Check if we already showed the update dialog for this version."""
+    try:
+        path = _nag_file()
+        if os.path.exists(path):
+            with open(path) as f:
+                data = json.load(f)
+                return data.get("version") == version
+    except Exception:
+        pass
+    return False
+
+def _mark_nagged(version: str):
+    """Record that we showed the update dialog for this version."""
+    try:
+        path = _nag_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"version": version, "ts": time.time()}, f)
+    except Exception:
+        pass
+
+def _clear_nag():
+    """Clear the nag file (called when a new version is successfully installed)."""
+    try:
+        path = _nag_file()
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
 
 
 def check_version(api_base: str, current_version: str) -> dict:
@@ -134,11 +174,22 @@ def check_for_update_blocking(api_base: str, current_version: str):
         print("[UPDATE] Could not reach server — skipping update check")
         return
 
+    if not data.get("update_available"):
+        # Running latest version — clear any old nag file
+        _clear_nag()
+        return
+
     if data.get("force") and data.get("update_available"):
         latest = data.get("latest_version", "unknown")
         url = data.get("download_url", "https://github.com/druss16/timetracker-releases/releases/latest")
 
+        # Already showed popup for this version — don't nag again
+        if _already_nagged(latest):
+            print(f"[UPDATE] Update to v{latest} available but already notified — running anyway")
+            return
+
         print(f"[UPDATE] ⚠️ Forced update required: {current_version} → {latest}")
+        _mark_nagged(latest)
         _show_blocking_dialog(latest, url)
         # _show_blocking_dialog calls sys.exit — we never get here
 
@@ -160,8 +211,11 @@ def start_background_checker(api_base: str, current_version: str):
                 data = check_version(api_base, current_version)
                 if data and data.get("force") and data.get("update_available"):
                     latest = data.get("latest_version", "unknown")
+                    if _already_nagged(latest):
+                        continue  # Already notified, skip
                     url = data.get("download_url", "")
                     print(f"[UPDATE] ⚠️ Forced update detected mid-session: {current_version} → {latest}")
+                    _mark_nagged(latest)
                     _show_blocking_dialog(latest, url)
             except Exception as e:
                 print(f"[UPDATE] Background check error: {e}")

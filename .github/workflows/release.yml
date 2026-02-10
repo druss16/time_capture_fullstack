@@ -97,6 +97,43 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Print :LSUIElement" "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Print :NSAppSleepDisabled" "$INFO_PLIST"
+
+      # ── Bundle LaunchAgent plist BEFORE signing (modifying .app after signing invalidates it) ──
+      - name: Add LaunchAgent plist to app bundle
+        working-directory: mac_agent
+        run: |
+          cat > dist/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Label</key>
+              <string>com.mavops.timetracker</string>
+              <key>ProgramArguments</key>
+              <array>
+                  <string>/Applications/TimeTracker.app/Contents/MacOS/TimeTracker</string>
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+              <key>KeepAlive</key>
+              <dict>
+                  <key>SuccessfulExit</key>
+                  <false/>
+              </dict>
+              <key>ProcessType</key>
+              <string>Interactive</string>
+              <key>ThrottleInterval</key>
+              <integer>5</integer>
+              <key>StandardOutPath</key>
+              <string>/tmp/timetracker.stdout.log</string>
+              <key>StandardErrorPath</key>
+              <string>/tmp/timetracker.stderr.log</string>
+          </dict>
+          </plist>
+          EOF
+          echo "=== LaunchAgent plist bundled ==="
+          cat dist/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist
       
       - name: Import signing certificates
         env:
@@ -137,43 +174,6 @@ jobs:
           echo "Signing app bundle..."
           codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
           codesign --verify --verbose dist/TimeTracker.app
-
-      # ── NEW: Bundle LaunchAgent plist inside the .app for the postinstall to copy ──
-      - name: Add LaunchAgent plist to app bundle
-        working-directory: mac_agent
-        run: |
-          cat > dist/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>Label</key>
-              <string>com.mavops.timetracker</string>
-              <key>ProgramArguments</key>
-              <array>
-                  <string>/Applications/TimeTracker.app/Contents/MacOS/TimeTracker</string>
-              </array>
-              <key>RunAtLoad</key>
-              <true/>
-              <key>KeepAlive</key>
-              <dict>
-                  <key>SuccessfulExit</key>
-                  <false/>
-              </dict>
-              <key>ProcessType</key>
-              <string>Interactive</string>
-              <key>ThrottleInterval</key>
-              <integer>5</integer>
-              <key>StandardOutPath</key>
-              <string>/tmp/timetracker.stdout.log</string>
-              <key>StandardErrorPath</key>
-              <string>/tmp/timetracker.stderr.log</string>
-          </dict>
-          </plist>
-          EOF
-          echo "=== LaunchAgent plist bundled ==="
-          cat dist/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist
       
       - name: Create signed pkg installer
         env:

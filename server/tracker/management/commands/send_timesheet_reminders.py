@@ -147,7 +147,7 @@ class Command(BaseCommand):
         try:
             from timeblocks.models import TimeBlock
         except ImportError:
-            from yourapp.models import TimeBlock  # adjust!
+            from tracker.models import TimeBlock  # adjust!
 
         try:
             from timesheets.models import Timesheet

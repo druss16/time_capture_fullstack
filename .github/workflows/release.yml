@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  ENABLE_WINDOWS_SIGNING: 'false'
+  ENABLE_WINDOWS_SIGNING: 'true'
 
 jobs:
   build-mac:
@@ -333,7 +333,7 @@ jobs:
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: https://eus.codesigning.azure.net/
           trusted-signing-account-name: timetracker-signing
-          certificate-profile-name: timetracker-profile
+          certificate-profile-name: timetracker-cert
           files-folder: ${{ github.workspace }}/windows_agent/dist
           files-folder-filter: exe
           files-folder-recurse: false
@@ -359,10 +359,10 @@ jobs:
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: https://eus.codesigning.azure.net/
           trusted-signing-account-name: timetracker-signing
-          certificate-profile-name: timetracker-profile
+          certificate-profile-name: timetracker-cert
           files-folder: ${{ github.workspace }}/windows_agent/Output
           files-folder-filter: exe
-          files-folder-recurse: false
+          files-folder-recurse: true
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
       

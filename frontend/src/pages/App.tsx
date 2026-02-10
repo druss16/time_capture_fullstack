@@ -26,6 +26,8 @@ import PasswordPage from '@/pages/account/PasswordPage';
 import BillingSettingsPage from '@/pages/account/BillingSettingsPage';
 import DownloadPage from '@/pages/account/DownloadPage';  // ← Add this
 import TimesheetReminderBanner from '@/components/TimesheetReminderBanner';
+import NotificationsPage from '@/pages/account/NotificationsPage';
+
 
 
 
@@ -365,10 +367,15 @@ export default function App() {
                   path="/account"
                   element={
                     <MaybeProtected>
-                      <AccountLayoutWrapper />
+                      <AppLayout>
+                        <AccountLayoutWrapper />
+                      </AppLayout>
                     </MaybeProtected>
                   }
                 >
+                  // Add route inside the /account block, after the index route
+                  <Route path="notifications" element={<NotificationsPage />} />
+
                   {/* /account - Profile page */}
                   <Route index element={<ProfilePage />} />
 
@@ -388,6 +395,8 @@ export default function App() {
                     }
                   />
                 </Route>
+
+
 
                 {/* ============================================ */}
                 {/* Public Routes (No Auth)                     */}

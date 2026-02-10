@@ -2,43 +2,36 @@
 Send Timesheet Review Reminder Emails
 
 Django management command that sends morning email digests to users
-who have unreviewed/unsubmitted time from yesterday.
+who have unreviewed/unsubmitted time from the last workday.
+
+Features:
+  - Monday mornings review Friday's timesheet
+  - Respects per-user email_timesheet_reminders preference
+  - Skips users with already-approved timesheets
+  - Beautiful dark-themed HTML email with client breakdown
+  - Plain text fallback
+  - Dry run mode for testing
 
 Usage:
-    # Manual run
     python manage.py send_timesheet_reminders
-    
-    # Dry run (see who would get emails without sending)
     python manage.py send_timesheet_reminders --dry-run
-    
-    # Force send even if already sent today
     python manage.py send_timesheet_reminders --force
-    
-    # Schedule via cron (recommended: 8:00 AM weekdays):
-    # 0 8 * * 1-5 cd /path/to/project && python manage.py send_timesheet_reminders
-    
-    # Or via Celery Beat:
-    # CELERY_BEAT_SCHEDULE = {
-    #     'send-timesheet-reminders': {
-    #         'task': 'yourapp.tasks.send_timesheet_reminders',
-    #         'schedule': crontab(hour=8, minute=0, day_of_week='1-5'),
-    #     },
-    # }
+    python manage.py send_timesheet_reminders --user-id 1
 
-Place this file at:
+Schedule (Render Cron Job):
+    0 13 * * 1-5   (1 PM UTC = 8 AM EST, Mon-Fri)
+
+Place at:
     yourapp/management/commands/send_timesheet_reminders.py
 """
 
 from datetime import date, timedelta, datetime, time as dt_time
 
 from django.core.management.base import BaseCommand
-from django.core.mail import send_mail, EmailMultiAlternatives
-from django.template.loader import render_to_string
+from django.core.mail import EmailMultiAlternatives
+from django.db import models
 from django.utils import timezone
-from django.utils.html import strip_tags
 from django.conf import settings
-
-# Adjust imports to your actual models
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -50,12 +43,11 @@ User = get_user_model()
 REMINDER_FROM_EMAIL = getattr(settings, 'TIMESHEET_REMINDER_FROM_EMAIL',
                               settings.DEFAULT_FROM_EMAIL or 'noreply@timetracker.mavops.ai')
 WEB_APP_URL = getattr(settings, 'TIMETRACKER_WEB_URL', 'https://timetracker.mavops.ai')
-SKIP_WEEKENDS = getattr(settings, 'TIMESHEET_REMINDER_SKIP_WEEKENDS', True)
-MIN_HOURS_TO_SKIP = getattr(settings, 'TIMESHEET_REMINDER_MIN_HOURS_TO_SKIP', None)  # None = always send
+MIN_HOURS_TO_SKIP = getattr(settings, 'TIMESHEET_REMINDER_MIN_HOURS_TO_SKIP', None)
 
 
 class Command(BaseCommand):
-    help = 'Send morning timesheet review reminder emails to users with unsubmitted time from yesterday'
+    help = 'Send morning timesheet review reminder emails for the last workday'
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -66,7 +58,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--force',
             action='store_true',
-            help='Send even if reminders were already sent today',
+            help='Send even if timesheet is already approved',
         )
         parser.add_argument(
             '--user-id',
@@ -74,24 +66,35 @@ class Command(BaseCommand):
             help='Send only to a specific user (for testing)',
         )
 
+    def _get_review_date(self):
+        """
+        Get the last workday to review.
+        - Monday → Friday
+        - Tue-Fri → yesterday
+        - Sat/Sun → None (skip)
+        """
+        today = date.today()
+        if today.weekday() == 0:  # Monday
+            return today - timedelta(days=3)  # Friday
+        elif today.weekday() in (5, 6):  # Sat/Sun
+            return None
+        else:
+            return today - timedelta(days=1)
+
     def handle(self, *args, **options):
         dry_run = options['dry_run']
         force = options['force']
         user_id = options.get('user_id')
 
-        yesterday = date.today() - timedelta(days=1)
-
-        # Skip weekends
-        if SKIP_WEEKENDS and yesterday.weekday() >= 5:
-            self.stdout.write(self.style.WARNING(
-                f'Skipping: yesterday ({yesterday}) was a weekend'
-            ))
+        review_date = self._get_review_date()
+        if review_date is None:
+            self.stdout.write(self.style.WARNING('Weekend — no workday to review. Skipping.'))
             return
 
-        self.stdout.write(f'Checking timesheets for {yesterday}...')
+        day_label = "Friday" if date.today().weekday() == 0 else "yesterday"
+        self.stdout.write(f'Checking timesheets for {review_date} ({day_label})...')
 
-        # Get users to notify
-        users = self._get_users_to_notify(yesterday, user_id, force)
+        users = self._get_users_to_notify(review_date, user_id, force)
 
         if not users:
             self.stdout.write(self.style.SUCCESS('No users need reminders today.'))
@@ -114,7 +117,7 @@ class Command(BaseCommand):
                 continue
 
             try:
-                self._send_reminder_email(user, yesterday, summary)
+                self._send_reminder_email(user, review_date, summary)
                 sent_count += 1
             except Exception as e:
                 error_count += 1
@@ -131,16 +134,16 @@ class Command(BaseCommand):
                 f'\nDone: {sent_count} sent, {error_count} failed.'
             ))
 
-    def _get_users_to_notify(self, yesterday, user_id=None, force=False):
+    def _get_users_to_notify(self, review_date, user_id=None, force=False):
         """
-        Get list of users who need a timesheet reminder.
+        Get users who need a timesheet reminder.
         
-        A user needs a reminder if:
-        - They have time blocks from yesterday AND status is not 'approved'
-        - OR they have NO time blocks (reminder to log time!)
-        - AND they have email_notifications enabled (if that field exists)
+        Filters:
+        - Active users with email addresses
+        - email_timesheet_reminders preference is True (or no preference record yet)
+        - Timesheet not already approved (unless --force)
         """
-        # ── Adjust these imports to your models ──
+        # ── Adjust these imports to your actual models ──
         try:
             from timeblocks.models import TimeBlock
         except ImportError:
@@ -152,35 +155,39 @@ class Command(BaseCommand):
         except ImportError:
             HAS_TIMESHEET_MODEL = False
 
-        # Filter users
+        # Base queryset
         if user_id:
             qs = User.objects.filter(id=user_id, is_active=True)
         else:
             qs = User.objects.filter(is_active=True)
 
-        # Only users with email addresses
+        # Must have email
         qs = qs.exclude(email='').exclude(email__isnull=True)
 
-        # If user profile has notification preferences, respect them
-        # qs = qs.filter(profile__email_notifications=True)  # uncomment if applicable
+        # Respect user preferences:
+        # Include users who opted IN, or who have no preferences record yet (default=on)
+        qs = qs.filter(
+            models.Q(preferences__email_timesheet_reminders=True) |
+            models.Q(preferences__isnull=True)
+        )
 
-        yesterday_start = timezone.make_aware(datetime.combine(yesterday, dt_time.min))
-        yesterday_end = timezone.make_aware(datetime.combine(yesterday, dt_time.max))
+        review_start = timezone.make_aware(datetime.combine(review_date, dt_time.min))
+        review_end = timezone.make_aware(datetime.combine(review_date, dt_time.max))
 
         results = []
 
         for user in qs:
-            # Check if timesheet is already approved
+            # Skip if already approved
             if HAS_TIMESHEET_MODEL and not force:
-                ts = Timesheet.objects.filter(user=user, date=yesterday).first()
+                ts = Timesheet.objects.filter(user=user, date=review_date).first()
                 if ts and getattr(ts, 'status', '') == 'approved':
-                    continue  # Already approved, skip
+                    continue
 
-            # Get yesterday's blocks
+            # Get time blocks for review date
             blocks = TimeBlock.objects.filter(
                 user=user,
-                start_time__gte=yesterday_start,
-                start_time__lte=yesterday_end,
+                start_time__gte=review_start,
+                start_time__lte=review_end,
             )
 
             # Build summary
@@ -212,7 +219,6 @@ class Command(BaseCommand):
 
             total_hours = round(total_seconds / 3600, 2)
 
-            # Skip if user has 0 hours and MIN_HOURS_TO_SKIP is set
             if MIN_HOURS_TO_SKIP is not None and total_hours <= 0:
                 continue
 
@@ -223,14 +229,14 @@ class Command(BaseCommand):
 
             status = "draft"
             if HAS_TIMESHEET_MODEL:
-                ts = Timesheet.objects.filter(user=user, date=yesterday).first()
+                ts = Timesheet.objects.filter(user=user, date=review_date).first()
                 if ts:
                     status = getattr(ts, 'status', 'draft')
 
             results.append({
                 'user': user,
                 'summary': {
-                    'date': yesterday.isoformat(),
+                    'date': review_date.isoformat(),
                     'total_hours': total_hours,
                     'status': status,
                     'entries': entries,
@@ -241,15 +247,12 @@ class Command(BaseCommand):
 
         return results
 
-    def _send_reminder_email(self, user, yesterday, summary):
-        """Send the actual reminder email with HTML template."""
+    def _send_reminder_email(self, user, review_date, summary):
+        """Send the reminder email with HTML template."""
         display_name = getattr(user, 'first_name', '') or user.username
-        date_str = yesterday.strftime('%A, %B %d')
+        date_str = review_date.strftime('%A, %B %d')
+        review_url = f"{WEB_APP_URL}/daily?date={review_date.isoformat()}"
 
-        # Build review URL
-        review_url = f"{WEB_APP_URL}/daily?date={yesterday.isoformat()}"
-
-        # Status messaging
         status = summary.get('status', 'draft')
         if status == 'submitted':
             status_text = "Submitted — pending approval"
@@ -263,11 +266,9 @@ class Command(BaseCommand):
 
         subject = f"⏱ Review your timesheet for {date_str}"
 
-        # Build HTML email
         html_content = self._build_html_email(
             display_name=display_name,
             date_str=date_str,
-            yesterday_iso=yesterday.isoformat(),
             summary=summary,
             review_url=review_url,
             status_text=status_text,
@@ -291,13 +292,12 @@ class Command(BaseCommand):
         msg.attach_alternative(html_content, "text/html")
         msg.send(fail_silently=False)
 
-    def _build_html_email(self, display_name, date_str, yesterday_iso,
-                          summary, review_url, status_text, status_color):
+    def _build_html_email(self, display_name, date_str, summary,
+                          review_url, status_text, status_color):
         """Build the HTML email content."""
         entries = summary.get('entries', [])
         total_hours = summary.get('total_hours', 0)
 
-        # Build client rows
         client_rows = ""
         if entries:
             for entry in entries:
@@ -314,7 +314,7 @@ class Command(BaseCommand):
             client_rows = """
                 <tr>
                     <td colspan="2" style="padding: 20px 16px; color: #F59E0B; text-align: center; font-size: 14px;">
-                        ⚠️ No time was tracked yesterday
+                        ⚠️ No time was tracked
                     </td>
                 </tr>"""
 
@@ -333,18 +333,12 @@ class Command(BaseCommand):
                     <!-- Header -->
                     <tr>
                         <td style="background: linear-gradient(135deg, #14B8A6, #0D9488); padding: 24px 30px;">
-                            <table width="100%">
-                                <tr>
-                                    <td>
-                                        <h1 style="margin: 0; color: #fff; font-size: 20px; font-weight: 700;">
-                                            📋 Review Your Timesheet
-                                        </h1>
-                                        <p style="margin: 6px 0 0; color: rgba(255,255,255,0.85); font-size: 14px;">
-                                            {date_str}
-                                        </p>
-                                    </td>
-                                </tr>
-                            </table>
+                            <h1 style="margin: 0; color: #fff; font-size: 20px; font-weight: 700;">
+                                📋 Review Your Timesheet
+                            </h1>
+                            <p style="margin: 6px 0 0; color: rgba(255,255,255,0.85); font-size: 14px;">
+                                {date_str}
+                            </p>
                         </td>
                     </tr>
                     
@@ -353,7 +347,7 @@ class Command(BaseCommand):
                         <td style="padding: 24px 30px 8px;">
                             <p style="margin: 0; color: #ccc; font-size: 15px; line-height: 1.5;">
                                 Hi {display_name},<br>
-                                Here's your time summary from yesterday. Please review and submit your timesheet.
+                                Here's your time summary. Please review and submit your timesheet.
                             </p>
                         </td>
                     </tr>
@@ -443,11 +437,11 @@ class Command(BaseCommand):
         lines = [
             f"Review Your Timesheet — {date_str}",
             f"{'=' * 40}",
-            f"",
+            "",
             f"Hi {display_name},",
-            f"",
-            f"Here's your time summary from yesterday:",
-            f"",
+            "",
+            "Here's your time summary. Please review and submit your timesheet.",
+            "",
         ]
 
         if entries:
@@ -458,17 +452,17 @@ class Command(BaseCommand):
             lines.append(f"  {'─' * (max_name_len + 12)}")
             lines.append(f"  {'Total'.ljust(max_name_len)}  {total_hours:.1f} hrs")
         else:
-            lines.append("  ⚠️ No time was tracked yesterday")
+            lines.append("  ⚠️ No time was tracked")
 
         lines.extend([
-            f"",
+            "",
             f"Status: {status_text}",
-            f"",
-            f"Review and submit your timesheet:",
-            f"{review_url}",
-            f"",
-            f"—",
-            f"TimeTracker automated reminder",
+            "",
+            "Review and submit your timesheet:",
+            review_url,
+            "",
+            "—",
+            "TimeTracker automated reminder",
         ])
 
         return "\n".join(lines)

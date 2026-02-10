@@ -88,10 +88,15 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$INFO_PLIST"
           
+          # CRITICAL: Prevent macOS App Nap from killing the agent overnight
+          /usr/libexec/PlistBuddy -c "Add :NSAppSleepDisabled bool true" "$INFO_PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :NSAppSleepDisabled true" "$INFO_PLIST"
+          
           echo "=== Info.plist version info ==="
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Print :LSUIElement" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Print :NSAppSleepDisabled" "$INFO_PLIST"
       
       - name: Import signing certificates
         env:
@@ -132,6 +137,43 @@ jobs:
           echo "Signing app bundle..."
           codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
           codesign --verify --verbose dist/TimeTracker.app
+
+      # ── NEW: Bundle LaunchAgent plist inside the .app for the postinstall to copy ──
+      - name: Add LaunchAgent plist to app bundle
+        working-directory: mac_agent
+        run: |
+          cat > dist/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Label</key>
+              <string>com.mavops.timetracker</string>
+              <key>ProgramArguments</key>
+              <array>
+                  <string>/Applications/TimeTracker.app/Contents/MacOS/TimeTracker</string>
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+              <key>KeepAlive</key>
+              <dict>
+                  <key>SuccessfulExit</key>
+                  <false/>
+              </dict>
+              <key>ProcessType</key>
+              <string>Interactive</string>
+              <key>ThrottleInterval</key>
+              <integer>5</integer>
+              <key>StandardOutPath</key>
+              <string>/tmp/timetracker.stdout.log</string>
+              <key>StandardErrorPath</key>
+              <string>/tmp/timetracker.stderr.log</string>
+          </dict>
+          </plist>
+          EOF
+          echo "=== LaunchAgent plist bundled ==="
+          cat dist/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist
       
       - name: Create signed pkg installer
         env:
@@ -140,20 +182,39 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           
-          # Create postinstall script to quit old version and launch new
+          # ── Postinstall: kill old, install LaunchAgent, bootstrap (auto-starts app) ──
           mkdir -p scripts
-          echo '#!/bin/bash' > scripts/postinstall
-          echo '# Quit any running TimeTracker and launch new version' >> scripts/postinstall
-          echo 'LOGGED_IN_USER=$(stat -f "%Su" /dev/console)' >> scripts/postinstall
-          echo 'if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ]; then' >> scripts/postinstall
-          echo '    # Kill any existing TimeTracker processes' >> scripts/postinstall
-          echo '    pkill -f "TimeTracker.app" 2>/dev/null || true' >> scripts/postinstall
-          echo '    sleep 1' >> scripts/postinstall
-          echo '    # Launch the new version' >> scripts/postinstall
-          echo '    sudo -u "$LOGGED_IN_USER" open /Applications/TimeTracker.app &' >> scripts/postinstall
-          echo 'fi' >> scripts/postinstall
-          echo 'exit 0' >> scripts/postinstall
+          cat > scripts/postinstall << 'SCRIPT'
+          #!/bin/bash
+          LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
+          LOGGED_IN_UID=$(id -u "$LOGGED_IN_USER" 2>/dev/null || echo "")
+
+          if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ] && [ -n "$LOGGED_IN_UID" ]; then
+              # Kill any existing TimeTracker
+              pkill -f "TimeTracker.app" 2>/dev/null || true
+              sleep 1
+
+              # Install LaunchAgent (auto-start + auto-restart on crash)
+              PLIST_SRC="/Applications/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist"
+              PLIST_DST="/Users/$LOGGED_IN_USER/Library/LaunchAgents/com.mavops.timetracker.plist"
+
+              # Unload old version if present
+              sudo -u "$LOGGED_IN_USER" launchctl bootout "gui/$LOGGED_IN_UID" "$PLIST_DST" 2>/dev/null || true
+              sleep 0.5
+
+              # Copy plist and set ownership
+              mkdir -p "/Users/$LOGGED_IN_USER/Library/LaunchAgents"
+              cp "$PLIST_SRC" "$PLIST_DST"
+              chown "$LOGGED_IN_USER" "$PLIST_DST"
+              chmod 644 "$PLIST_DST"
+
+              # Load new version — this starts the app immediately via KeepAlive
+              sudo -u "$LOGGED_IN_USER" launchctl bootstrap "gui/$LOGGED_IN_UID" "$PLIST_DST"
+          fi
+          exit 0
+          SCRIPT
           chmod +x scripts/postinstall
+          echo "=== postinstall script ==="
           cat scripts/postinstall
           
           echo "Packaging .app bundle..."

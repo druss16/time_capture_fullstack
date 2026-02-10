@@ -54,7 +54,6 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "startupicon"; Description: "Start TimeTracker Agent when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked
 Name: "cleaninstall"; Description: "Fresh install (clear all saved settings and pairing data)"; GroupDescription: "Install Options:"; Flags: unchecked
 
 [InstallDelete]
@@ -69,10 +68,9 @@ Source: "timetracker.ico"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\timetracker.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\timetracker.ico"; Tasks: desktopicon
-Name: "{userstartup}\TimeTracker Agent"; Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "start"; Tasks: startupicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\TimeTrackerAgent.exe"; Description: "Start TimeTracker Agent"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopAgent"
@@ -83,6 +81,99 @@ Type: filesandordirs; Name: "{userappdata}\TimeTracker"
 Type: filesandordirs; Name: "{localappdata}\Programs\TimeTracker"
 
 [Code]
+
+// ── Task Scheduler: auto-start on login + auto-restart on crash ──
+
+procedure CreateScheduledTask;
+var
+  ResultCode: Integer;
+  AgentPath: String;
+  XmlPath: String;
+  XmlContent: String;
+begin
+  AgentPath := ExpandConstant('{app}\TimeTrackerAgent.exe');
+  XmlPath := ExpandConstant('{tmp}\timetracker_task.xml');
+
+  // XML task definition gives us restart-on-failure (schtasks /create can't do that)
+  XmlContent :=
+    '<?xml version="1.0">' + #13#10 +
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
+    '  <RegistrationInfo>' + #13#10 +
+    '    <Description>MavOps TimeTracker Agent - runs in background, auto-restarts on crash</Description>' + #13#10 +
+    '  </RegistrationInfo>' + #13#10 +
+    '  <Triggers>' + #13#10 +
+    '    <LogonTrigger>' + #13#10 +
+    '      <Enabled>true</Enabled>' + #13#10 +
+    '    </LogonTrigger>' + #13#10 +
+    '  </Triggers>' + #13#10 +
+    '  <Principals>' + #13#10 +
+    '    <Principal id="Author">' + #13#10 +
+    '      <LogonType>InteractiveToken</LogonType>' + #13#10 +
+    '      <RunLevel>LeastPrivilege</RunLevel>' + #13#10 +
+    '    </Principal>' + #13#10 +
+    '  </Principals>' + #13#10 +
+    '  <Settings>' + #13#10 +
+    '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>' + #13#10 +
+    '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' + #13#10 +
+    '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>' + #13#10 +
+    '    <AllowHardTerminate>true</AllowHardTerminate>' + #13#10 +
+    '    <StartWhenAvailable>true</StartWhenAvailable>' + #13#10 +
+    '    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>' + #13#10 +
+    '    <AllowStartOnDemand>true</AllowStartOnDemand>' + #13#10 +
+    '    <Enabled>true</Enabled>' + #13#10 +
+    '    <Hidden>false</Hidden>' + #13#10 +
+    '    <RunOnlyIfIdle>false</RunOnlyIfIdle>' + #13#10 +
+    '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>' + #13#10 +
+    '    <RestartOnFailure>' + #13#10 +
+    '      <Interval>PT30S</Interval>' + #13#10 +
+    '      <Count>999</Count>' + #13#10 +
+    '    </RestartOnFailure>' + #13#10 +
+    '  </Settings>' + #13#10 +
+    '  <Actions>' + #13#10 +
+    '    <Exec>' + #13#10 +
+    '      <Command>' + AgentPath + '</Command>' + #13#10 +
+    '      <Arguments>start</Arguments>' + #13#10 +
+    '    </Exec>' + #13#10 +
+    '  </Actions>' + #13#10 +
+    '</Task>';
+
+  // Write XML to temp file
+  SaveStringToFile(XmlPath, XmlContent, False);
+
+  // Delete old task if exists
+  Exec('schtasks.exe', '/delete /tn "MavOps TimeTracker" /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Create task from XML (supports RestartOnFailure)
+  Exec('schtasks.exe',
+       '/create /tn "MavOps TimeTracker" /xml "' + XmlPath + '" /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if ResultCode = 0 then
+    Log('Scheduled task created successfully')
+  else
+    Log('Scheduled task creation failed with code: ' + IntToStr(ResultCode));
+
+  // Clean up temp XML
+  DeleteFile(XmlPath);
+
+  // Also remove old startup shortcut if it exists (from previous versions)
+  DeleteFile(ExpandConstant('{userstartup}\TimeTracker Agent.lnk'));
+end;
+
+procedure RemoveScheduledTask;
+var
+  ResultCode: Integer;
+begin
+  Exec('schtasks.exe', '/delete /tn "MavOps TimeTracker" /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Also clean up any old startup shortcut
+  DeleteFile(ExpandConstant('{userstartup}\TimeTracker Agent.lnk'));
+end;
+
+
+// ── Existing cleanup procedures ──
+
 procedure CleanupOldInstalls();
 var
   ResultCode: Integer;
@@ -132,12 +223,19 @@ begin
     Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(500);
   end;
+
+  // ── Create scheduled task after install completes ──
+  if CurStep = ssPostInstall then
+    CreateScheduledTask;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    // Remove the scheduled task
+    RemoveScheduledTask;
+
     if MsgBox('Do you want to remove all TimeTracker settings and data?', mbConfirmation, MB_YESNO) = IDYES then
       CleanupUserData();
   end;

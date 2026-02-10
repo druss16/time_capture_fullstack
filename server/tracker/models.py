@@ -2104,6 +2104,8 @@ class UserPreference(models.Model):
         default='09:00',
         help_text="Preferred time for reminders (HH:MM)"
     )
+
+    email_timesheet_reminder = models.BooleanField(default=True)
     
     # Tracking
     last_timesheet_reminder_dismissed = models.CharField(

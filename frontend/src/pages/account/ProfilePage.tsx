@@ -35,6 +35,10 @@ export default function ProfilePage() {
   const loadProfile = async () => {
     try {
       const token = localStorage.getItem('auth_token');
+      if (!token) {
+        window.location.href = '/login';
+        return;
+      }
       const response = await fetch(`${API_BASE}/profile/`, {
         headers: {
           'Authorization': `Bearer ${token}`,

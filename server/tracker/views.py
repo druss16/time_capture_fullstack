@@ -7524,3 +7524,27 @@ def agent_version_check(request):
         "latest_version": latest,
         "download_url": download_url,
     })
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def user_preferences(request):
+    from .models import UserPreference
+    
+    prefs, created = UserPreference.objects.get_or_create(user=request.user)
+    
+    if request.method == 'GET':
+        return Response({
+            'email_timesheet_reminders': prefs.email_timesheet_reminders,
+            'email_weekly_summary': prefs.email_weekly_summary,
+            'email_approval_notifications': prefs.email_approval_notifications,
+            'desktop_notifications': prefs.desktop_notifications,
+        })
+    
+    elif request.method == 'PATCH':
+        for field in ['email_timesheet_reminders', 'email_weekly_summary', 
+                       'email_approval_notifications', 'desktop_notifications']:
+            if field in request.data:
+                setattr(prefs, field, request.data[field])
+        prefs.save()
+        return Response({'ok': True})

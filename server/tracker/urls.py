@@ -297,5 +297,7 @@ urlpatterns = [
 
     path('agent/version-check/', views.agent_version_check),
 
+    path("user/preferences/", views.user_preferences, name="user_preferences"),
+
 
 ]

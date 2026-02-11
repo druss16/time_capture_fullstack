@@ -9,7 +9,7 @@ Usage in main.py:
     # Call BEFORE starting the agent — blocks until user updates if outdated
     check_for_update_blocking(API_BASE, APP_VERSION)
     
-    # Call AFTER starting the agent — re-checks every hour
+    # Call AFTER starting the agent — re-checks every 5 minutes
     start_background_checker(API_BASE, APP_VERSION)
 """
 
@@ -65,6 +65,29 @@ def _clear_nag():
             os.remove(path)
     except Exception:
         pass
+
+
+def _disable_restart_task():
+    """
+    Disable the Windows scheduled task so the OLD version doesn't auto-restart
+    after os._exit(0) during an update. The installer re-creates the task
+    in ssPostInstall, so it will be re-enabled after the new version installs.
+    """
+    if sys.platform == "darwin":
+        return  # Mac uses launchd, not schtasks
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['schtasks', '/change', '/tn', 'MavOps TimeTracker', '/disable'],
+            capture_output=True, timeout=5
+        )
+        if result.returncode == 0:
+            print("[UPDATE] Disabled restart task during update")
+        else:
+            print(f"[UPDATE] Could not disable task: {result.stderr.decode(errors='ignore').strip()}")
+    except Exception as e:
+        print(f"[UPDATE] Failed to disable restart task: {e}")
 
 
 def check_version(api_base: str, current_version: str) -> dict:
@@ -132,11 +155,16 @@ def _show_blocking_dialog(latest_version: str, download_url: str):
             if result == 1:  # IDOK
                 webbrowser.open(download_url)
 
+            # Disable scheduled task so old version doesn't restart and wipe config.
+            # The installer re-creates the task after the new version installs.
+            _disable_restart_task()
+
             print(f"[UPDATE] Exiting — update required to v{latest_version}")
             os._exit(0)
 
         except Exception as e:
             print(f"[UPDATE] MessageBox failed: {e}")
+            _disable_restart_task()
             webbrowser.open(download_url)
             os._exit(0)
 

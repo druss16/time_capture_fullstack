@@ -2076,7 +2076,6 @@ def post_event_async(event: dict, user: str, host: str):
                 log(f"[POST ERROR] HTTP {e.code}: {body[:200]}")
                 if e.code in (401, 403):
                     log("[AUTH] Device key rejected — will re-pair.")
-                    drop_api_key()
                 return  # Don't retry HTTP errors
             except urllib.error.URLError as e:
                 # Network not ready (common after wake from sleep)
@@ -2413,13 +2412,9 @@ def run_agent():
                 break
         
         if not hello_success:
-            log("[HELLO] All retries failed - attempting re-pair.")
-            drop_api_key()
-            key = ensure_api_key_interactive(hostname)
-            if not key or not hello(HELLO_URL, os_user, hostname, device_id):
-                print("Exiting: hello failed.")
-                remove_pid()
-                return
+            log("[HELLO] All retries failed — running in offline mode (key preserved)")
+            # DON'T drop key. Server may be temporarily down.
+
 
     # === SYNC INITIALIZATION ===
     # === SYNC INITIALIZATION ===

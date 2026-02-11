@@ -77,10 +77,16 @@ Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden wai
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
-Type: filesandordirs; Name: "{userappdata}\TimeTracker"
 Type: filesandordirs; Name: "{localappdata}\Programs\TimeTracker"
 
 [Code]
+
+// ── Global variables for config backup/restore ──
+var
+  ConfigBackupPath: String;
+  ConfigBackedUp: Boolean;
+  DeviceIdBackupPath: String;
+  DeviceIdBackedUp: Boolean;
 
 // ── Task Scheduler: auto-start on login + auto-restart on crash ──
 
@@ -94,7 +100,6 @@ begin
   AgentPath := ExpandConstant('{app}\TimeTrackerAgent.exe');
   XmlPath := ExpandConstant('{tmp}\timetracker_task.xml');
 
-  // XML task definition gives us restart-on-failure (schtasks /create can't do that)
   XmlContent :=
     '<?xml version="1.0">' + #13#10 +
     '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
@@ -137,14 +142,11 @@ begin
     '  </Actions>' + #13#10 +
     '</Task>';
 
-  // Write XML to temp file
   SaveStringToFile(XmlPath, XmlContent, False);
 
-  // Delete old task if exists
   Exec('schtasks.exe', '/delete /tn "MavOps TimeTracker" /f',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-  // Create task from XML (supports RestartOnFailure)
   Exec('schtasks.exe',
        '/create /tn "MavOps TimeTracker" /xml "' + XmlPath + '" /f',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -154,10 +156,7 @@ begin
   else
     Log('Scheduled task creation failed with code: ' + IntToStr(ResultCode));
 
-  // Clean up temp XML
   DeleteFile(XmlPath);
-
-  // Also remove old startup shortcut if it exists (from previous versions)
   DeleteFile(ExpandConstant('{userstartup}\TimeTracker Agent.lnk'));
 end;
 
@@ -167,8 +166,100 @@ var
 begin
   Exec('schtasks.exe', '/delete /tn "MavOps TimeTracker" /f',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  // Also clean up any old startup shortcut
   DeleteFile(ExpandConstant('{userstartup}\TimeTracker Agent.lnk'));
+end;
+
+
+// ── Config backup: saves config.json and .device_id to temp before any cleanup ──
+
+procedure BackupUserConfig();
+var
+  UserProfile: String;
+  ConfigPath: String;
+  DeviceIdPath: String;
+  AppDataDeviceId: String;
+begin
+  UserProfile := GetEnv('USERPROFILE');
+  ConfigBackupPath := ExpandConstant('{tmp}\timetracker_config_backup.json');
+  DeviceIdBackupPath := ExpandConstant('{tmp}\timetracker_deviceid_backup.txt');
+  ConfigBackedUp := False;
+  DeviceIdBackedUp := False;
+
+  // Backup config.json (contains api_key, server_device_id, api_base)
+  ConfigPath := UserProfile + '\.timetracker\config.json';
+  if FileExists(ConfigPath) then begin
+    if FileCopy(ConfigPath, ConfigBackupPath, False) then begin
+      ConfigBackedUp := True;
+      Log('Backed up config.json to ' + ConfigBackupPath);
+    end else
+      Log('WARNING: Failed to backup config.json');
+  end else
+    Log('No config.json found at ' + ConfigPath);
+
+  // Backup .device_id (check both locations)
+  DeviceIdPath := UserProfile + '\.timetracker\.device_id';
+  AppDataDeviceId := ExpandConstant('{userappdata}') + '\TimeTracker\.device_id';
+
+  if FileExists(DeviceIdPath) then begin
+    if FileCopy(DeviceIdPath, DeviceIdBackupPath, False) then begin
+      DeviceIdBackedUp := True;
+      Log('Backed up .device_id from ' + DeviceIdPath);
+    end;
+  end else if FileExists(AppDataDeviceId) then begin
+    if FileCopy(AppDataDeviceId, DeviceIdBackupPath, False) then begin
+      DeviceIdBackedUp := True;
+      Log('Backed up .device_id from ' + AppDataDeviceId);
+    end;
+  end else
+    Log('No .device_id found to backup');
+end;
+
+
+// ── Config restore: puts config.json and .device_id back after install ──
+
+procedure RestoreUserConfig();
+var
+  UserProfile: String;
+  ConfigDir: String;
+  ConfigPath: String;
+  DeviceIdPath: String;
+begin
+  // Skip restore if user requested clean install
+  if IsTaskSelected('cleaninstall') then begin
+    Log('Clean install selected - skipping config restore');
+    Exit;
+  end;
+
+  UserProfile := GetEnv('USERPROFILE');
+  ConfigDir := UserProfile + '\.timetracker';
+  ConfigPath := ConfigDir + '\config.json';
+  DeviceIdPath := ConfigDir + '\.device_id';
+
+  // Ensure directory exists
+  if not DirExists(ConfigDir) then
+    ForceDirectories(ConfigDir);
+
+  // Restore config.json (only if missing - don't overwrite a fresh pair)
+  if ConfigBackedUp then begin
+    if not FileExists(ConfigPath) then begin
+      if FileCopy(ConfigBackupPath, ConfigPath, False) then
+        Log('Restored config.json from backup')
+      else
+        Log('WARNING: Failed to restore config.json');
+    end else
+      Log('config.json already exists - skipping restore');
+  end;
+
+  // Restore .device_id
+  if DeviceIdBackedUp then begin
+    if not FileExists(DeviceIdPath) then begin
+      if FileCopy(DeviceIdBackupPath, DeviceIdPath, False) then
+        Log('Restored .device_id from backup')
+      else
+        Log('WARNING: Failed to restore .device_id');
+    end else
+      Log('.device_id already exists - skipping restore');
+  end;
 end;
 
 
@@ -181,10 +272,10 @@ begin
   Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(1500);
-  
+
   if DirExists(ExpandConstant('{localappdata}\TimeTracker')) then
     DelTree(ExpandConstant('{localappdata}\TimeTracker'), True, True, True);
-  
+
   if DirExists(ExpandConstant('{localappdata}\Programs\TimeTracker')) then
     DelTree(ExpandConstant('{localappdata}\Programs\TimeTracker'), True, True, True);
 end;
@@ -196,10 +287,10 @@ var
 begin
   UserProfile := GetEnv('USERPROFILE');
   AppData := ExpandConstant('{userappdata}');
-  
+
   if DirExists(UserProfile + '\.timetracker') then
     DelTree(UserProfile + '\.timetracker', True, True, True);
-  
+
   if DirExists(AppData + '\TimeTracker') then
     DelTree(AppData + '\TimeTracker', True, True, True);
 end;
@@ -207,8 +298,12 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
+
+  // ALWAYS backup config BEFORE any cleanup
+  BackupUserConfig();
+
   CleanupOldInstalls();
-  
+
   if IsTaskSelected('cleaninstall') then
     CleanupUserData();
 end;
@@ -224,16 +319,17 @@ begin
     Sleep(500);
   end;
 
-  // ── Create scheduled task after install completes ──
-  if CurStep = ssPostInstall then
+  // ── After install: restore config, then create scheduled task ──
+  if CurStep = ssPostInstall then begin
+    RestoreUserConfig();
     CreateScheduledTask;
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
   begin
-    // Remove the scheduled task
     RemoveScheduledTask;
 
     if MsgBox('Do you want to remove all TimeTracker settings and data?', mbConfirmation, MB_YESNO) = IDYES then

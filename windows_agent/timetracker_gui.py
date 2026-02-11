@@ -54,6 +54,12 @@ try:
 except ImportError:
     WIDGET_AVAILABLE = False
 
+# App version
+try:
+    from version import APP_VERSION
+except ImportError:
+    APP_VERSION = "dev"
+
 GUI_AVAILABLE = TRAY_AVAILABLE
 
 # Config paths
@@ -1060,6 +1066,7 @@ class TimeTrackerSystemTray:
             Item("Show Client Widget", on_show_widget),
             pystray.Menu.SEPARATOR,
             Item("🔧 Repair Device...", on_repair),
+            Item(f"v{APP_VERSION}", None, enabled=False),
             Item("Quit", on_quit),
         ])
         

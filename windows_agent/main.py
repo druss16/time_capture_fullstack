@@ -618,6 +618,7 @@ def ensure_api_key_interactive(hostname: str):
     return None
 
 def drop_api_key():
+    """Only used by repair_device(). NEVER call on transient network failures."""
     if "api_key" in config:
         del config["api_key"]
         save_config(config)
@@ -790,11 +791,14 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
 
 
 # ---------------- Event Posting ----------------
+_consecutive_auth_failures = 0  # Track consecutive 401/403 errors
+
 def post_event_async(event: dict, user: str, host: str):
     if not POST_URL:
         return
     
     def _run():
+        global _consecutive_auth_failures
         headers = api_headers(user, host)
         try:
             req = urllib.request.Request(POST_URL, data=json.dumps(event).encode("utf-8"), method="POST")
@@ -803,6 +807,7 @@ def post_event_async(event: dict, user: str, host: str):
             with urllib.request.urlopen(req, timeout=6) as resp:
                 _ = resp.read()
             log(f"[POSTED] {POST_URL}")
+            _consecutive_auth_failures = 0  # Reset on success
         except urllib.error.HTTPError as e:
             body = ""
             try:
@@ -811,8 +816,11 @@ def post_event_async(event: dict, user: str, host: str):
                 pass
             log(f"[POST ERROR] HTTP {e.code}: {body[:200]}")
             if e.code in (401, 403):
-                log("[AUTH] Device key rejected — will re-pair.")
-                drop_api_key()
+                _consecutive_auth_failures += 1
+                log(f"[AUTH] Got {e.code} posting event (consecutive: {_consecutive_auth_failures}) — will retry next cycle")
+                # DON'T drop key on transient failures. Render cold starts
+                # and brief server restarts can cause spurious 401/403s.
+                # The key is almost certainly still valid.
         except Exception as e:
             log(f"[POST ERROR] {e}")
     
@@ -1165,7 +1173,6 @@ def run_agent():
         except ImportError:
             print("[SYNC] agent_sync_integration not available")
 
-    # === PUSH NOTIFICATION SYSTEM ===
     # === PUSH NOTIFICATION SYSTEM ===
     notif_worker = None
     

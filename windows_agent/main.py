@@ -1405,9 +1405,9 @@ def run_agent():
     if not hello(HELLO_URL, os_user, hostname, device_id):
         log("[HELLO] First hello failed - retrying with backoff...")
         hello_success = False
-        for attempt in range(4):
-            wait = 5 * (attempt + 1)  # 5s, 10s, 15s, 20s
-            log(f"[HELLO] Retry {attempt + 1}/4 in {wait}s...")
+        for attempt in range(10):  # Up to ~5 minutes
+            wait = min(10 * (attempt + 1), 60)  # 10s, 20s, 30s... max 60s
+            log(f"[HELLO] Retry {attempt + 1}/10 in {wait}s...")
             time.sleep(wait)
             if hello(HELLO_URL, os_user, hostname, device_id):
                 hello_success = True
@@ -1415,13 +1415,9 @@ def run_agent():
                 break
         
         if not hello_success:
-            log("[HELLO] All retries failed - attempting re-pair.")
-            drop_api_key()
-            key = ensure_api_key_interactive(hostname)
-            if not key or not hello(HELLO_URL, os_user, hostname, device_id):
-                print("Exiting: hello failed.")
-                remove_pid()
-                return
+            log("[HELLO] ⚠️ Server unreachable - running offline, will retry on next event post")
+            # DON'T drop the key. DON'T exit. Just keep running.
+            # The key is valid - the server is just down.
     
     # Pass user name to GUI
     if gui_menu_bar and SERVER_USER_NAME:

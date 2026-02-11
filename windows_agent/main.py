@@ -1189,18 +1189,20 @@ def run_agent():
         
         def on_notif_confirm(client_id, client_name):
             """Handle user confirming client from notification"""
-            def _do():
-                log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
-                api_key = config.get("api_key") or API_KEY
-                if api_key and API_BASE:
-                    set_current_client_backend(API_BASE, api_key, client_id)
-                if gui_menu_bar:
-                    if hasattr(gui_menu_bar, 'state'):
-                        gui_menu_bar.state.set_client(client_id, client_name)
-                    log(f"[NOTIF] Updated GUI state to: {client_name}")
-                if notif_manager:
-                    notif_manager.set_current_client(client_id, client_name)
-            threading.Thread(target=_do, daemon=True).start()
+            log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
+            
+            # Sync to backend
+            api_key = config.get("api_key") or API_KEY
+            if api_key and API_BASE:
+                set_current_client_backend(API_BASE, api_key, client_id)
+            
+            # Update GUI — tray tooltip, floating widget, state, all at once
+            if gui_menu_bar:
+                gui_menu_bar._switch_client(client_id, client_name)
+            
+            # Update notification state
+            if notif_manager:
+                notif_manager.set_current_client(client_id, client_name)
         
         def on_notif_switch():
             """Handle user requesting client switch from notification"""

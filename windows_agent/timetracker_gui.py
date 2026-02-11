@@ -1052,10 +1052,7 @@ class TimeTrackerSystemTray:
             menu_items.append(Item(f"👤 {self.user_name}", None, enabled=False))
             menu_items.append(pystray.Menu.SEPARATOR)
         
-        # Current client status
-        current_client = self.state.current_client_name or "No Client"
-        menu_items.append(Item(f"⏱ {current_client}", None, enabled=False))
-        menu_items.append(pystray.Menu.SEPARATOR)
+
         
         # Main actions
         menu_items.extend([

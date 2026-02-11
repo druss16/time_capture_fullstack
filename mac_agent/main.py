@@ -2399,14 +2399,27 @@ def run_agent():
             return
 
     # Hello (with key)
+    # Hello (with key)
     if not hello(HELLO_URL, os_user, hostname, device_id):
-        log("[HELLO] Attempting re-pair after hello failure.")
-        drop_api_key()
-        key = ensure_api_key_interactive(hostname)
-        if not key or not hello(HELLO_URL, os_user, hostname, device_id):
-            print("Exiting: hello failed.")
-            remove_pid()
-            return
+        log("[HELLO] First hello failed - retrying with backoff...")
+        hello_success = False
+        for attempt in range(4):
+            wait = 5 * (attempt + 1)
+            log(f"[HELLO] Retry {attempt + 1}/4 in {wait}s...")
+            time.sleep(wait)
+            if hello(HELLO_URL, os_user, hostname, device_id):
+                hello_success = True
+                log("[HELLO] ✅ Connected on retry")
+                break
+        
+        if not hello_success:
+            log("[HELLO] All retries failed - attempting re-pair.")
+            drop_api_key()
+            key = ensure_api_key_interactive(hostname)
+            if not key or not hello(HELLO_URL, os_user, hostname, device_id):
+                print("Exiting: hello failed.")
+                remove_pid()
+                return
 
     # === SYNC INITIALIZATION ===
     # === SYNC INITIALIZATION ===
@@ -2459,36 +2472,63 @@ def run_agent():
         
         def on_notif_confirm(client_id, client_name):
             """Handle user confirming client from notification"""
-            log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
-            api_key = config.get("api_key") or API_KEY
-            if api_key and API_BASE:
-                set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
-            if gui_menu_bar:
-                if hasattr(gui_menu_bar, 'state'):
-                    gui_menu_bar.state.set_client(client_id, client_name)
-                if hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
-                    gui_menu_bar.app.title = f"⏱ {client_name}" if client_name else "⏱ None"
-            if notif_manager:
-                notif_manager.set_current_client(client_id, client_name)
+            def _do():
+                log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
+                api_key = config.get("api_key") or API_KEY
+                if api_key and API_BASE:
+                    set_current_client_on_backend(API_BASE, api_key, client_id=client_id)
+                if gui_menu_bar:
+                    if hasattr(gui_menu_bar, 'state'):
+                        gui_menu_bar.state.set_client(client_id, client_name)
+                    if hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
+                        gui_menu_bar.app.title = f"⏱ {client_name}" if client_name else "⏱ None"
+                if notif_manager:
+                    notif_manager.set_current_client(client_id, client_name)
+            threading.Thread(target=_do, daemon=True).start()
                 
         def on_notif_switch():
             """Handle user requesting client switch from notification"""
-            log("[NOTIF] User requested client switch - opening picker")
-            if gui_menu_bar and hasattr(gui_menu_bar, 'app'):
-                try:
-                    gui_menu_bar.app._on_search(None)
-                except Exception as e:
-                    log(f"[NOTIF] Failed to open picker: {e}")
+            def _do():
+                log("[NOTIF] User requested client switch - opening picker")
+                if gui_menu_bar and hasattr(gui_menu_bar, 'app'):
+                    try:
+                        gui_menu_bar.app._on_search(None)
+                    except Exception as e:
+                        log(f"[NOTIF] Failed to open picker: {e}")
+            threading.Thread(target=_do, daemon=True).start()
         
         def on_notif_snooze(client_id, minutes):
             """Handle user snoozing a client suggestion"""
-            log(f"[NOTIF] User snoozed client {client_id} for {minutes} minutes")
+            def _do():
+                log(f"[NOTIF] User snoozed client {client_id} for {minutes} minutes")
+            threading.Thread(target=_do, daemon=True).start()
+
+        # Create API client for timesheet review notifications
+        class _NotifAPIClient:
+            def __init__(self, base_url, api_key):
+                self.base_url = base_url
+                self.api_key = api_key
+            def get(self, path):
+                req = urllib.request.Request(
+                    f"{self.base_url}{path}",
+                    headers={"Authorization": f"DeviceKey {self.api_key}"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return json.loads(resp.read())
+
+        _notif_api = _NotifAPIClient(API_BASE, config.get("api_key") or API_KEY)
+
+        def on_review(data):
+            log(f"[NOTIF] User clicked Review Now: {data}")
 
         notif_manager = create_notification_system(
             on_confirm=on_notif_confirm,
             on_switch=on_notif_switch,
             on_snooze=on_notif_snooze,
             config=notif_config,
+            api_client=_notif_api,
+            agent_config={'base_url': 'https://timetracker.mavops.ai'},
+            on_review=on_review,
         )
         
         if notif_manager.ready:

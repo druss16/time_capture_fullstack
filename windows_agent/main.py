@@ -1189,34 +1189,35 @@ def run_agent():
         
         def on_notif_confirm(client_id, client_name):
             """Handle user confirming client from notification"""
-            log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
-            
-            # Sync to backend
-            api_key = config.get("api_key") or API_KEY
-            if api_key and API_BASE:
-                set_current_client_backend(API_BASE, api_key, client_id)
-            
-            # Update GUI state AND title
-            if gui_menu_bar:
-                if hasattr(gui_menu_bar, 'state'):
-                    gui_menu_bar.state.set_client(client_id, client_name)
-                log(f"[NOTIF] Updated GUI state to: {client_name}")
-            # Update notification state
-            if notif_manager:
-                notif_manager.set_current_client(client_id, client_name)
+            def _do():
+                log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
+                api_key = config.get("api_key") or API_KEY
+                if api_key and API_BASE:
+                    set_current_client_backend(API_BASE, api_key, client_id)
+                if gui_menu_bar:
+                    if hasattr(gui_menu_bar, 'state'):
+                        gui_menu_bar.state.set_client(client_id, client_name)
+                    log(f"[NOTIF] Updated GUI state to: {client_name}")
+                if notif_manager:
+                    notif_manager.set_current_client(client_id, client_name)
+            threading.Thread(target=_do, daemon=True).start()
         
         def on_notif_switch():
             """Handle user requesting client switch from notification"""
-            log("[NOTIF] User requested client switch - opening picker")
-            if gui_menu_bar and hasattr(gui_menu_bar, '_show_client_picker'):
-                try:
-                    gui_menu_bar._show_client_picker()
-                except Exception as e:
-                    log(f"[NOTIF] Failed to open picker: {e}")
+            def _do():
+                log("[NOTIF] User requested client switch - opening picker")
+                if gui_menu_bar and hasattr(gui_menu_bar, '_show_client_picker'):
+                    try:
+                        gui_menu_bar._show_client_picker()
+                    except Exception as e:
+                        log(f"[NOTIF] Failed to open picker: {e}")
+            threading.Thread(target=_do, daemon=True).start()
 
         def on_notif_snooze(client_id, minutes):
             """Handle user snoozing a client suggestion"""
-            log(f"[NOTIF] User snoozed client {client_id} for {minutes} minutes")
+            def _do():
+                log(f"[NOTIF] User snoozed client {client_id} for {minutes} minutes")
+            threading.Thread(target=_do, daemon=True).start()
         
         # Create API client for timesheet review notifications
         class _NotifAPIClient:

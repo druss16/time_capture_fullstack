@@ -263,7 +263,8 @@ export default function DailyReview() {
   const isIdleCategory = (n: string) => n.toLowerCase().includes('idle');
   const isUncategorizedCategory = (n: string) => n.toLowerCase().includes('uncategorized');
   const isUnassignedClient = (n: string) => n.toLowerCase() === 'unassigned';
-  const isNonBillable = (n: string) => isIdleCategory(n) || isUncategorizedCategory(n);
+  const isPersonalCategory = (n: string) => n.toLowerCase().includes('personal');
+  const isNonBillable = (n: string) => isIdleCategory(n) || isUncategorizedCategory(n) || isPersonalCategory(n);
 
 
   const getClientBillableHours = (client: ClientTime) => 

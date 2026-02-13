@@ -3,24 +3,22 @@ from __future__ import annotations
 
 import os
 import sys
+import logging
 import threading
 from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, m2m_changed
 from django.dispatch import receiver
 from django.utils import timezone
 
-from tracker.models import Block
+from tracker.models import Block, Organization, OrganizationMembership
 from tracker.utils.monitoring import capture_exception
 
-
 from django.contrib.auth.models import User, Group
-from django.db.models.signals import m2m_changed
-from django.dispatch import receiver
-from tracker.models import Organization, OrganizationMembership
 
+logger = logging.getLogger(__name__)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -72,10 +70,10 @@ def _needs_classification(b: Block, created: bool) -> bool:
 
     return False
 
+
 # ────────────────────────────────────────────────────────────────────────────────
-# COMMENTED OUT: classify_block_task doesn't exist yet (needs Celery setup)
-# Using ai_suggestions_today() endpoint for batch classification instead
-# Uncomment when Celery is properly configured
+# Block auto-classification on save
+# ────────────────────────────────────────────────────────────────────────────────
 
 @receiver(post_save, sender=Block, dispatch_uid="tracker.block.auto_classify")
 def _auto_classify_block(sender, instance: Block, created: bool, **kwargs):
@@ -106,65 +104,117 @@ def _auto_classify_block(sender, instance: Block, created: bool, **kwargs):
     transaction.on_commit(_do)
 
 
-from django.apps import AppConfig
+# ────────────────────────────────────────────────────────────────────────────────
+# Auto-create "Internal" client for new organizations
+# ────────────────────────────────────────────────────────────────────────────────
 
-class TrackerConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'tracker'
+@receiver(post_save, sender=Organization, dispatch_uid="tracker.org.create_internal_client")
+def create_internal_client(sender, instance, created, **kwargs):
+    """
+    Auto-create an 'Internal' client for every new organization.
     
-    def ready(self):
-        import tracker.signals  # ← Import signals
+    Used for non-client work: team meetings, admin, training, PTO,
+    internal projects, R&D, business development, etc.
+    """
+    if _running_management_command():
+        return
+    
+    if not created:
+        return
+    
+    from tracker.models import Client
+    
+    try:
+        Client.objects.get_or_create(
+            org=instance,
+            code='INTERNAL',
+            defaults={
+                'name': 'Internal',
+                'is_active': True,
+                'visibility': 'all',
+            }
+        )
+        logger.info(f"[ORG] Created 'Internal' client for org: {instance.name}")
+    except Exception as e:
+        logger.warning(f"[ORG] Failed to create Internal client for {instance.name}: {e}")
 
 
-# Add this to tracker/signals.py (create this file if it doesn't exist)
+def backfill_internal_clients():
+    """
+    One-time helper to create 'Internal' client for all existing orgs.
+    
+    Run from Django shell:
+        from tracker.signals import backfill_internal_clients
+        backfill_internal_clients()
+    """
+    from tracker.models import Client
+    
+    created_count = 0
+    skipped_count = 0
+    
+    for org in Organization.objects.all():
+        _, was_created = Client.objects.get_or_create(
+            org=org,
+            code='INTERNAL',
+            defaults={
+                'name': 'Internal',
+                'is_active': True,
+                'visibility': 'all',
+            }
+        )
+        if was_created:
+            created_count += 1
+            logger.info(f"[BACKFILL] Created 'Internal' client for: {org.name}")
+        else:
+            skipped_count += 1
+    
+    logger.info(f"[BACKFILL] Done. Created: {created_count}, Already existed: {skipped_count}")
+    return {'created': created_count, 'skipped': skipped_count}
 
-"""
-Auto-create OrganizationMembership when users are added to Groups via Django admin.
-This keeps Django Groups and OrganizationMembership in sync.
-"""
 
+# ────────────────────────────────────────────────────────────────────────────────
+# Auto-create OrganizationMembership when users are added to Groups via admin
+# ────────────────────────────────────────────────────────────────────────────────
 
 @receiver(m2m_changed, sender=User.groups.through)
 def auto_create_org_membership(sender, instance, action, pk_set, **kwargs):
     """
-    Signal handler: When a user is added to a Group via Django admin,
+    When a user is added to a Group via Django admin,
     automatically create the corresponding OrganizationMembership.
-    
-    This allows Django admin and Settings page to work together seamlessly.
     """
-    if action == "post_add":
-        user = instance
-        
-        for group_id in pk_set:
-            try:
-                group = Group.objects.get(id=group_id)
-                
-                # Find or create Organization with same name as Group
-                org, org_created = Organization.objects.get_or_create(
-                    name=group.name,
-                    defaults={
-                        'billing_email': '',
-                        'billing_contact': '',
-                    }
-                )
-                
-                if org_created:
-                    print(f"📦 Created Organization: {org.name}")
-                
-                # Create OrganizationMembership if it doesn't exist
-                membership, mem_created = OrganizationMembership.objects.get_or_create(
-                    user=user,
-                    organization=org,
-                    defaults={
-                        'role': 'member',  # Default role when added via admin
-                        'invited_by': None,
-                    }
-                )
-                
-                if mem_created:
-                    print(f"✅ Auto-created membership: {user.username} → {org.name} (member)")
-                else:
-                    print(f"ℹ️  Membership already exists: {user.username} → {org.name} ({membership.role})")
+    if action != "post_add":
+        return
+    
+    user = instance
+    
+    for group_id in pk_set:
+        try:
+            group = Group.objects.get(id=group_id)
+            
+            # Find or create Organization with same name as Group
+            org, org_created = Organization.objects.get_or_create(
+                name=group.name,
+                defaults={
+                    'billing_email': '',
+                    'billing_contact': '',
+                }
+            )
+            
+            if org_created:
+                logger.info(f"[ORG] Created Organization: {org.name}")
+            
+            # Create OrganizationMembership if it doesn't exist
+            membership, mem_created = OrganizationMembership.objects.get_or_create(
+                user=user,
+                organization=org,
+                defaults={
+                    'role': 'member',
+                    'invited_by': None,
+                }
+            )
+            
+            if mem_created:
+                logger.info(f"[ORG] Auto-created membership: {user.username} → {org.name} (member)")
                     
-            except Exception as e:
-                print(f"❌ Error in auto_create_org_membership: {e}")
+        except Exception as e:
+            logger.warning(f"[ORG] Error in auto_create_org_membership: {e}")

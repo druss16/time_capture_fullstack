@@ -7,6 +7,10 @@ Each industry has:
 - TOOL_DETECTION: Pattern matching for auto-categorization
 - TASK_TYPES: Default TaskType seeds for new orgs
 - SEASONAL_CONTEXT: Industry-specific seasonal patterns
+
+UNIVERSAL categories added to ALL industries:
+- "Idle" (system-detected inactivity)
+- "Personal/Non-Billable" (social media, personal browsing, etc.)
 """
 
 # =============================================================================
@@ -25,41 +29,118 @@ INDUSTRY_CHOICES = [(k, v) for k, v in INDUSTRY_TYPES]
 
 
 # =============================================================================
+# UNIVERSAL CATEGORIES (added to every industry)
+# =============================================================================
+
+UNIVERSAL_SYSTEM_CATEGORIES = [
+    "Idle",
+    "Personal/Non-Billable",
+]
+
+
+# =============================================================================
+# PERSONAL / NON-WORK DETECTION (universal across all industries)
+# =============================================================================
+
+PERSONAL_SITE_DETECTION = {
+    "social_media": {
+        "keywords": [
+            "facebook", "instagram", "tiktok", "snapchat", "pinterest",
+            "twitter", "x.com", "threads", "mastodon", "bluesky",
+            "linkedin.com/feed", "linkedin.com/messaging",
+        ],
+        "domains": [
+            "facebook.com", "instagram.com", "tiktok.com", "snapchat.com",
+            "pinterest.com", "twitter.com", "x.com", "threads.net",
+            "mastodon.social", "bsky.app",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.92
+    },
+    "streaming": {
+        "keywords": [
+            "netflix", "hulu", "disney+", "disneyplus", "amazon prime video",
+            "hbo max", "max.com", "peacock", "paramount+", "apple tv+",
+            "crunchyroll", "spotify", "pandora", "apple music",
+        ],
+        "domains": [
+            "netflix.com", "hulu.com", "disneyplus.com", "max.com",
+            "peacocktv.com", "paramountplus.com", "tv.apple.com",
+            "crunchyroll.com", "spotify.com", "pandora.com",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.95
+    },
+    "video_entertainment": {
+        "keywords": ["youtube", "twitch", "rumble"],
+        "domains": ["youtube.com", "twitch.tv", "rumble.com"],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.80  # Lower - YouTube can be work-related tutorials
+    },
+    "news_casual": {
+        "keywords": ["reddit", "buzzfeed", "9gag", "imgur"],
+        "domains": ["reddit.com", "buzzfeed.com", "9gag.com", "imgur.com"],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.82  # Lower - Reddit can be work research
+    },
+    "shopping": {
+        "keywords": [
+            "amazon.com/gp", "amazon.com/dp", "ebay", "etsy", "walmart",
+            "target.com", "bestbuy", "wayfair", "aliexpress",
+        ],
+        "domains": [
+            "amazon.com", "ebay.com", "etsy.com", "walmart.com",
+            "target.com", "bestbuy.com", "wayfair.com", "aliexpress.com",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.85
+    },
+    "personal_finance": {
+        "keywords": ["mint.com", "venmo", "zelle", "cashapp", "personal banking"],
+        "domains": [
+            "mint.intuit.com", "venmo.com", "cash.app",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.85
+    },
+    "gaming": {
+        "keywords": ["steam", "epic games", "roblox", "minecraft"],
+        "domains": ["store.steampowered.com", "epicgames.com", "roblox.com"],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.95
+    },
+    "dating": {
+        "keywords": ["tinder", "bumble", "hinge", "match.com"],
+        "domains": ["tinder.com", "bumble.com", "hinge.co", "match.com"],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.98
+    },
+}
+
+
+# =============================================================================
 # CPA / ACCOUNTING FIRM CATEGORIES
 # =============================================================================
 
 CPA_CATEGORIES = [
-    # System
-    "Idle",
-    
-    # Core Tax Services
+    *UNIVERSAL_SYSTEM_CATEGORIES,
     "Tax Preparation",
     "Tax Planning",
     "Tax Research",
     "Tax Compliance",
-    
-    # Accounting Services
     "Accounting/Bookkeeping",
     "Financial Statement Prep",
     "Audit/Assurance",
     "Payroll Services",
-    
-    # Advisory Services
     "Advisory/Financial Planning",
     "Valuation/Advisory",
     "Forensic/Fraud Investigation",
-    
-    # Compliance & Regulatory
     "SEC/Regulatory Compliance",
     "Employee Benefits/ERISA",
-    
-    # Specialized Industry
     "Real Estate/Property",
     "Nonprofit/Form 990",
     "Healthcare/Medical Practice",
     "Construction/Contractors",
-    
-    # Administrative
     "Email/Communication",
     "Meetings",
     "Administration",
@@ -103,6 +184,7 @@ CPA_TASK_TYPES = [
     {"name": "Email/Communication", "code": "EMAIL", "color": "#6b7280", "is_billable": False},
     {"name": "Meetings", "code": "MTG", "color": "#0891b2", "is_billable": True},
     {"name": "Administration", "code": "ADMIN", "color": "#9ca3af", "is_billable": False},
+    {"name": "Personal/Non-Billable", "code": "PERS", "color": "#d1d5db", "is_billable": False},
 ]
 
 
@@ -111,43 +193,30 @@ CPA_TASK_TYPES = [
 # =============================================================================
 
 AI_CONSULTING_CATEGORIES = [
-    # System
-    "Idle",
-    
-    # Core Development
+    *UNIVERSAL_SYSTEM_CATEGORIES,
     "Software Development",
     "Code Review",
     "Architecture/Design",
     "Testing/QA",
     "Debugging",
-    
-    # AI/ML Specific
     "Model Development",
     "Prompt Engineering",
     "Data Preparation",
     "Model Training",
     "Model Evaluation",
     "AI Research",
-    
-    # Infrastructure
     "DevOps/Deployment",
     "Infrastructure",
     "Database Work",
     "API Development",
-    
-    # Client Work
     "Client Discovery",
     "Requirements Gathering",
     "Technical Consulting",
     "Training/Workshop",
     "Documentation",
-    
-    # Research & Learning
     "Research/AI Assistance",
     "Learning/Upskilling",
     "Technical Writing",
-    
-    # Administrative
     "Email/Communication",
     "Meetings",
     "Project Management",
@@ -222,6 +291,7 @@ AI_CONSULTING_TASK_TYPES = [
     {"name": "Meetings", "code": "MTG", "color": "#6366f1", "is_billable": True},
     {"name": "Email/Communication", "code": "EMAIL", "color": "#6b7280", "is_billable": False},
     {"name": "Administration", "code": "ADMIN", "color": "#9ca3af", "is_billable": False},
+    {"name": "Personal/Non-Billable", "code": "PERS", "color": "#d1d5db", "is_billable": False},
 ]
 
 
@@ -230,51 +300,36 @@ AI_CONSULTING_TASK_TYPES = [
 # =============================================================================
 
 MARKETING_CATEGORIES = [
-    # System
-    "Idle",
-    
-    # Strategy & Planning
+    *UNIVERSAL_SYSTEM_CATEGORIES,
     "Strategy/Planning",
     "Campaign Planning",
     "Market Research",
     "Competitive Analysis",
     "Client Discovery",
-    
-    # Content Creation
     "Content Writing",
     "Copywriting",
     "Blog/Article Writing",
     "Social Media Content",
     "Video Scripting",
-    
-    # Design & Creative
     "Graphic Design",
     "Video Production",
     "Video Editing",
     "Photography",
     "Brand Development",
     "UI/UX Design",
-    
-    # Digital Marketing
     "SEO/SEM",
     "Paid Advertising",
     "Email Marketing",
     "Social Media Management",
     "Analytics/Reporting",
-    
-    # Web & Tech
     "Web Development",
     "Website Updates",
     "Landing Pages",
     "CMS Management",
-    
-    # Client Management
     "Client Meetings",
     "Presentations",
     "Proposals/Pitches",
     "Account Management",
-    
-    # Administrative
     "Email/Communication",
     "Meetings",
     "Project Management",
@@ -362,6 +417,7 @@ MARKETING_TASK_TYPES = [
     {"name": "Client Meetings", "code": "MTG", "color": "#f59e0b", "is_billable": True},
     {"name": "Email/Communication", "code": "EMAIL", "color": "#6b7280", "is_billable": False},
     {"name": "Administration", "code": "ADMIN", "color": "#9ca3af", "is_billable": False},
+    {"name": "Personal/Non-Billable", "code": "PERS", "color": "#d1d5db", "is_billable": False},
 ]
 
 
@@ -370,34 +426,23 @@ MARKETING_TASK_TYPES = [
 # =============================================================================
 
 LEGAL_CATEGORIES = [
-    # System
-    "Idle",
-    
-    # Core Legal Work
+    *UNIVERSAL_SYSTEM_CATEGORIES,
     "Legal Research",
     "Document Drafting",
     "Contract Review",
     "Brief Writing",
     "Case Preparation",
-    
-    # Litigation
     "Litigation",
     "Discovery",
     "Depositions",
     "Court Appearances",
     "Trial Preparation",
-    
-    # Client Work
     "Client Consultation",
     "Client Communication",
     "Negotiations",
-    
-    # Transactional
     "Due Diligence",
     "Closing",
     "Regulatory Filing",
-    
-    # Administrative
     "Email/Communication",
     "Meetings",
     "Administration",
@@ -434,6 +479,7 @@ LEGAL_TASK_TYPES = [
     {"name": "Meetings", "code": "MTG", "color": "#0891b2", "is_billable": True},
     {"name": "Email/Communication", "code": "EMAIL", "color": "#6b7280", "is_billable": False},
     {"name": "Administration", "code": "ADMIN", "color": "#9ca3af", "is_billable": False},
+    {"name": "Personal/Non-Billable", "code": "PERS", "color": "#d1d5db", "is_billable": False},
 ]
 
 
@@ -442,22 +488,15 @@ LEGAL_TASK_TYPES = [
 # =============================================================================
 
 GENERAL_CATEGORIES = [
-    # System
-    "Idle",
-    
-    # Core Work
+    *UNIVERSAL_SYSTEM_CATEGORIES,
     "Project Work",
     "Client Work",
     "Research",
     "Documentation",
     "Review",
-    
-    # Communication
     "Email/Communication",
     "Meetings",
     "Calls",
-    
-    # Administrative
     "Administration",
     "Planning",
     "Travel",
@@ -496,6 +535,7 @@ GENERAL_TASK_TYPES = [
     {"name": "Meetings", "code": "MTG", "color": "#0891b2", "is_billable": True},
     {"name": "Email/Communication", "code": "EMAIL", "color": "#6b7280", "is_billable": False},
     {"name": "Administration", "code": "ADMIN", "color": "#9ca3af", "is_billable": False},
+    {"name": "Personal/Non-Billable", "code": "PERS", "color": "#d1d5db", "is_billable": False},
 ]
 
 
@@ -546,7 +586,6 @@ def get_seasonal_context_for_industry(industry_type: str) -> str:
     month = now.month
     
     if industry_type == 'cpa':
-        # CPA has very specific seasons
         if month in (1, 2, 3) or (month == 4 and now.day <= 15):
             return """
 **SEASON: TAX SEASON (Jan-Apr 15)**
@@ -622,8 +661,6 @@ def build_ai_prompt_for_industry(industry_type: str) -> str:
     }
     
     industry_desc = industry_descriptions.get(industry_type, "Professional services firm")
-    
-    # Build category list for prompt
     category_list = "\n".join([f"- {cat}" for cat in categories if cat != "Idle"])
     
     return f"""You are an expert time-tracking classifier for a {industry_desc}.
@@ -637,6 +674,7 @@ Your goal is to accurately categorize every billable minute into the correct cli
 2. Confidence Scoring: >= 0.90 obvious tools, >= 0.80 clear patterns, >= 0.70 reasonable inference
 3. Client Identification: Check window titles, URLs, file paths for client names
 4. Time Allocation: Split time proportionally if multiple activities
+5. Personal Browsing: Social media, streaming, shopping, gaming → "Personal/Non-Billable"
 
 {seasonal}
 
@@ -659,11 +697,20 @@ Return ONLY a JSON array with one object per block:
 
 def get_combined_tool_detection(industry_type: str) -> dict:
     """
-    Get tool detection combining industry-specific + universal patterns.
-    Universal patterns (Zoom, Gmail, etc.) are always included.
+    Get tool detection combining:
+    1. Personal/non-work site detection (universal)
+    2. Universal work patterns (Zoom, Gmail, etc.)
+    3. Industry-specific patterns
+    
+    Personal patterns are included first, then overridden by work patterns.
+    This means if a marketing agency uses facebook.com/adsmanager, the
+    industry-specific "meta_ads" pattern overrides the generic "social_media" one.
     """
-    # Start with universal patterns
-    combined = {
+    # Start with personal site detection (lowest priority - can be overridden)
+    combined = dict(PERSONAL_SITE_DETECTION)
+    
+    # Add universal work patterns
+    combined.update({
         "zoom": {
             "keywords": ["zoom", "zoom meeting"],
             "domains": ["zoom.us"],
@@ -700,10 +747,39 @@ def get_combined_tool_detection(industry_type: str) -> dict:
             "category": "Email/Communication",
             "confidence": 0.90
         },
-    }
+    })
     
-    # Add industry-specific patterns (they override universal if same key)
+    # Add industry-specific patterns (highest priority - override everything)
     industry_patterns = get_tool_detection_for_industry(industry_type)
     combined.update(industry_patterns)
     
     return combined
+
+
+# =============================================================================
+# INTERNAL CLIENT HELPER
+# =============================================================================
+
+def ensure_internal_client(org):
+    """
+    Ensure an 'Internal' client exists for the given org.
+    Called on org creation and can be called idempotently.
+    Returns the Internal client instance.
+    """
+    from tracker.models import Client
+    
+    client, created = Client.objects.get_or_create(
+        org=org,
+        code='INTERNAL',
+        defaults={
+            'name': 'Internal',
+            'is_active': True,
+        }
+    )
+    
+    if created:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[INTERNAL] Created 'Internal' client for org: {org.name}")
+    
+    return client

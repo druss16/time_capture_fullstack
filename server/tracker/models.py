@@ -398,12 +398,14 @@ class UserWorkPattern(models.Model):
     
     # Pattern types
     PATTERN_TYPES = [
+        ('app', 'Application Pattern'),
+        ('domain', 'URL Domain Pattern'),
+        ('window_title_prefix', 'Window Title Pattern'),
         ('file_path', 'File Path Pattern'),
-        ('time_of_day', 'Time of Day Pattern'),
-        ('day_of_week', 'Day of Week Pattern'),
-        ('app_sequence', 'Application Sequence'),
-        ('tool_usage', 'Tool Usage Pattern'),
         ('client_folder', 'Client Folder Mapping'),
+        ('category_folder', 'Category Folder Pattern'),
+        ('time_slot', 'Time Slot Pattern'),
+        ('app_sequence', 'Application Sequence'),
     ]
     pattern_type = models.CharField(max_length=30, choices=PATTERN_TYPES, db_index=True)
     

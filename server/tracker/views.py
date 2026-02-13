@@ -5059,8 +5059,8 @@ def save_categorization(request):
                 {'error': f'Client {client_id} not found'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-    
-    # Validate category
+
+    # Validate category using industry-specific list
     category = data.get('category', '').strip()
     if not category:
         return Response(
@@ -5068,9 +5068,12 @@ def save_categorization(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    if category not in CPA_CATEGORIES:
+    industry_type = getattr(org, 'industry_type', 'general') or 'general'
+    valid_categories = get_categories_for_industry(industry_type)
+    
+    if category not in valid_categories:
         return Response(
-            {'error': f'Invalid category: {category}', 'valid_categories': CPA_CATEGORIES},
+            {'error': f'Invalid category: {category}', 'valid_categories': valid_categories},
             status=status.HTTP_400_BAD_REQUEST
         )
     
@@ -5174,6 +5177,10 @@ def bulk_categorize(request):
     org = get_user_org(user)
     if not org:
         org, _ = Organization.objects.get_or_create(name="default-org", defaults={"slug": "default-org"})
+
+
+    industry_type = getattr(org, 'industry_type', 'general') or 'general'
+    valid_categories = get_categories_for_industry(industry_type)
     
     results = {
         'success_count': 0,
@@ -5208,8 +5215,8 @@ def bulk_categorize(request):
                 results['errors'].append({'block_id': block_id, 'error': 'category missing'})
                 results['error_count'] += 1
                 continue
-            
-            if category not in CPA_CATEGORIES:
+
+            if category not in valid_categories:
                 results['errors'].append({'block_id': block_id, 'error': f'invalid category: {category}'})
                 results['error_count'] += 1
                 continue

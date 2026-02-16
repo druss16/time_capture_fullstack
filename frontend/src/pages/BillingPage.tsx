@@ -477,12 +477,7 @@ const BillingPage: React.FC = () => {
                 <>
                   {activeTab === 'timesheet' && <WeeklyTimesheet />}
                   {activeTab === 'approvals' && <ApprovalQueue />}
-                  {activeTab === 'billing' && (
-                    <div className="space-y-6">
-                      <ClientSummary />
-                      <IntegrationPushPanel />
-                    </div>
-                  )}
+                  {activeTab === 'billing' && <ClientSummary />}
                   {activeTab === 'profitability' && (
                     <div className="space-y-6">
                       <ClientProfitability />

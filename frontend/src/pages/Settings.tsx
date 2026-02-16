@@ -232,7 +232,12 @@ function UpgradePrompt({ featureName }: { featureName: string }) {
 // Main Component
 // ============================================================================
 export default function Settings() {
-  const [activeTab, setActiveTab] = useState<Tab>('organization');
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+  const params = new URLSearchParams(window.location.search);
+  const tab = params.get('tab');
+  const validTabs: Tab[] = ['organization', 'team', 'clients', 'assignments', 'groups', 'integrations', 'billing', 'costs', 'devices', 'token'];
+  return validTabs.includes(tab as Tab) ? (tab as Tab) : 'organization';
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);

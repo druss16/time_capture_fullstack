@@ -146,6 +146,12 @@ class OrganizationMembership(models.Model):
         related_name='invites_sent'
     )
     joined_at = models.DateTimeField(auto_now_add=True)
+
+    # In OrganizationMembership class, after the role field:
+    quickbooks_employee_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text='QuickBooks Employee ID for time entry push'
+    )
     
     class Meta:
         unique_together = ['user', 'organization']

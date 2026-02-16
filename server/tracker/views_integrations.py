@@ -622,6 +622,7 @@ def quickbooks_push_time(request):
             'Minutes': mins,
             'Description': description[:4000],
             'CustomerRef': {'value': block.client.quickbooks_id},
+            'BillableStatus': 'Billable' if block.is_billable else 'NotBillable',
         }
 
         # EmployeeRef is REQUIRED when NameOf=Employee

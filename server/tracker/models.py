@@ -1091,6 +1091,15 @@ class Block(models.Model):
         default='',
         help_text="Reference to external invoice (e.g., QBO invoice ID)"
     )
+    # Integration push tracking
+    qb_time_activity_id = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text='QuickBooks TimeActivity ID after push'
+    )
+    xero_invoice_id = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text='Xero Invoice ID after push'
+    )
 
     # ===============================
     # AI Classification Metadata

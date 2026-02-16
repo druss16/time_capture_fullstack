@@ -3,6 +3,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
+import IntegrationStatusBanner from '@/components/IntegrationStatusBanner';
+
 
 // ===============================
 // TYPES
@@ -412,6 +414,12 @@ const ClientSummary: React.FC<ClientSummaryProps> = () => {
           </label>
         </div>
       </div>
+
+      {/* Integration Status */}
+      <IntegrationStatusBanner
+        context="billing"
+        onDataRefresh={fetchSummary}
+      />
 
       {/* Error Display */}
       {error && (

@@ -1,203 +1,319 @@
 # tracker/views_integrations.py
+#
+# Integration endpoints for QuickBooks Online & Xero
+# Supports: OAuth connect/disconnect, client import,
+#           time entry PUSH (to billing), invoice PULL (for profitability)
+#
+# v2 CHANGELOG:
+# - Added retry logic on token refresh (retry once before disconnecting)
+# - Fixed Xero N+1 import (batch fetch + client-side filter)
+# - Added generic API call helpers with auto-refresh
+# - Added PUSH endpoints: push approved time entries to QBO/Xero
+# - Added PULL endpoints: pull invoices from QBO/Xero for profitability
+# - Consistent error response format with error codes
+# - Better logging throughout
 
 import requests
 import logging
-from datetime import timedelta
+from collections import defaultdict
+from datetime import timedelta, date, datetime
+from decimal import Decimal
 from django.conf import settings
 from django.shortcuts import redirect
 from django.utils import timezone
+from django.db import transaction
+from django.db.models import Sum, Q
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from urllib.parse import urlencode
 from django.http import HttpResponse
-from .models import Integration, OrganizationMembership, Client
+from .models import (
+    Integration,
+    OrganizationMembership,
+    Client,
+    Block,
+    BillingRate,
+)
 
 logger = logging.getLogger(__name__)
 
-from django.conf import settings
-
-# Add this constant near the top
 QB_API_BASE = settings.QUICKBOOKS_API_BASE
 
 
+# ============================================================================
+# Shared Helpers
+# ============================================================================
+
 def get_user_org(user):
     """Get the user's organization."""
-    membership = OrganizationMembership.objects.filter(user=user).select_related('organization').first()
+    membership = OrganizationMembership.objects.filter(
+        user=user
+    ).select_related('organization').first()
     return membership.organization if membership else None
 
 
+def error_response(message, status=400, code=None):
+    """Consistent error response format."""
+    payload = {'error': message}
+    if code:
+        payload['error_code'] = code
+    return Response(payload, status=status)
+
+
+def get_integration(org, provider, connected_only=True):
+    """
+    Get integration for org+provider.
+    Returns (integration, error_response) tuple.
+    """
+    if not org:
+        return None, error_response('No organization found', 404, 'no_org')
+
+    try:
+        filters = {'organization': org, 'provider': provider}
+        if connected_only:
+            filters['is_connected'] = True
+        integration = Integration.objects.get(**filters)
+        return integration, None
+    except Integration.DoesNotExist:
+        if connected_only:
+            return None, error_response(
+                f'Not connected to {provider.replace("_", " ").title()}. '
+                f'Please connect first in Settings.',
+                400, 'not_connected'
+            )
+        return None, None
+
+
+def _oauth_success_response(provider):
+    """Standard OAuth success HTML with postMessage to parent window."""
+    frontend_url = settings.FRONTEND_URL
+    return HttpResponse(f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Connected!</title></head>
+        <body>
+        <script>
+            const message = {{
+                type: 'oauth_callback',
+                integration: '{provider}',
+                success: true
+            }};
+            if (window.opener && !window.opener.closed) {{
+                window.opener.postMessage(message, '{frontend_url}');
+                window.close();
+            }} else {{
+                window.location.href = '{frontend_url}/settings?{provider}_connected=true';
+            }}
+        </script>
+        <p>Connected successfully! Redirecting...</p>
+        <p>If not redirected, <a href="{frontend_url}/settings">click here</a>.</p>
+        </body>
+        </html>
+    """)
+
+
 # ============================================================================
-# Token Refresh Helpers
+# Token Refresh (generic with single retry)
 # ============================================================================
 
-def refresh_quickbooks_token(integration):
+def _do_token_refresh(integration, token_url, auth_tuple, default_expiry):
     """
-    Refresh QuickBooks access token if expired or expiring soon.
-    Returns True if successful, False if refresh failed.
+    Generic token refresh with single retry before disconnecting.
+    Returns True if token is valid/refreshed, False if failed.
     """
-    # Check if token needs refresh (refresh 5 min before expiry)
+    # Check if token still valid (5 min buffer)
     if integration.token_expires_at:
         if integration.token_expires_at > timezone.now() + timedelta(minutes=5):
-            return True  # Token still valid
-    
+            return True
+
     if not integration.refresh_token:
-        logger.error(f"No refresh token for QB integration {integration.id}")
-        return False
-    
-    logger.info(f"Refreshing QuickBooks token for org {integration.organization_id}")
-    
-    token_url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
-    
-    try:
-        response = requests.post(
-            token_url,
-            data={
-                'grant_type': 'refresh_token',
-                'refresh_token': integration.refresh_token,
-            },
-            auth=(settings.QUICKBOOKS_CLIENT_ID, settings.QUICKBOOKS_CLIENT_SECRET),
-            timeout=30
+        logger.error(
+            f"No refresh token for {integration.provider} "
+            f"integration {integration.id}"
         )
-        
-        if response.status_code != 200:
-            logger.error(f"QB token refresh failed: {response.status_code} - {response.text}")
-            # Mark as disconnected if refresh fails
-            integration.is_connected = False
-            integration.save(update_fields=['is_connected'])
-            return False
-        
-        tokens = response.json()
-        
-        integration.access_token = tokens['access_token']
-        integration.refresh_token = tokens.get('refresh_token', integration.refresh_token)
-        # QB tokens expire in 1 hour (3600 seconds)
-        integration.token_expires_at = timezone.now() + timedelta(seconds=tokens.get('expires_in', 3600))
-        integration.save(update_fields=['access_token', 'refresh_token', 'token_expires_at'])
-        
-        logger.info(f"QB token refreshed successfully, expires at {integration.token_expires_at}")
-        return True
-        
-    except requests.RequestException as e:
-        logger.error(f"QB token refresh request failed: {e}")
         return False
+
+    logger.info(
+        f"Refreshing {integration.provider} token "
+        f"for org {integration.organization_id}"
+    )
+
+    max_attempts = 2
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.post(
+                token_url,
+                data={
+                    'grant_type': 'refresh_token',
+                    'refresh_token': integration.refresh_token,
+                },
+                auth=auth_tuple,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                tokens = response.json()
+                integration.access_token = tokens['access_token']
+                integration.refresh_token = tokens.get(
+                    'refresh_token', integration.refresh_token
+                )
+                integration.token_expires_at = timezone.now() + timedelta(
+                    seconds=tokens.get('expires_in', default_expiry)
+                )
+                integration.save(update_fields=[
+                    'access_token', 'refresh_token', 'token_expires_at'
+                ])
+                logger.info(
+                    f"{integration.provider} token refreshed OK "
+                    f"(attempt {attempt})"
+                )
+                return True
+
+            logger.warning(
+                f"{integration.provider} refresh attempt {attempt}: "
+                f"{response.status_code}"
+            )
+            # Don't retry on non-rate-limit 4xx
+            if 400 <= response.status_code < 500 and response.status_code != 429:
+                break
+
+        except requests.RequestException as e:
+            logger.warning(
+                f"{integration.provider} refresh attempt {attempt}: {e}"
+            )
+
+    # All attempts failed
+    logger.error(f"{integration.provider} token refresh failed — disconnecting")
+    integration.is_connected = False
+    integration.save(update_fields=['is_connected'])
+    return False
+
+
+def refresh_quickbooks_token(integration):
+    return _do_token_refresh(
+        integration,
+        "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+        (settings.QUICKBOOKS_CLIENT_ID, settings.QUICKBOOKS_CLIENT_SECRET),
+        3600,
+    )
 
 
 def refresh_xero_token(integration):
+    return _do_token_refresh(
+        integration,
+        "https://identity.xero.com/connect/token",
+        (settings.XERO_CLIENT_ID, settings.XERO_CLIENT_SECRET),
+        1800,
+    )
+
+
+# ============================================================================
+# Authenticated API Call Helpers
+# ============================================================================
+
+def _api_call(integration, method, url, headers, refresh_fn, **kwargs):
     """
-    Refresh Xero access token if expired or expiring soon.
-    Returns True if successful, False if refresh failed.
+    Generic authenticated API call with auto-refresh on 401.
+    Returns (response_json, error_response).
     """
-    # Check if token needs refresh (refresh 5 min before expiry)
-    if integration.token_expires_at:
-        if integration.token_expires_at > timezone.now() + timedelta(minutes=5):
-            return True  # Token still valid
-    
-    if not integration.refresh_token:
-        logger.error(f"No refresh token for Xero integration {integration.id}")
-        return False
-    
-    logger.info(f"Refreshing Xero token for org {integration.organization_id}")
-    
-    token_url = "https://identity.xero.com/connect/token"
-    
-    try:
-        response = requests.post(
-            token_url,
-            data={
-                'grant_type': 'refresh_token',
-                'refresh_token': integration.refresh_token,
-            },
-            auth=(settings.XERO_CLIENT_ID, settings.XERO_CLIENT_SECRET),
-            timeout=30
+    if not refresh_fn(integration):
+        return None, error_response(
+            f'{integration.provider.title()} auth failed. Please reconnect.',
+            401, 'auth_failed'
         )
-        
-        if response.status_code != 200:
-            logger.error(f"Xero token refresh failed: {response.status_code} - {response.text}")
-            integration.is_connected = False
-            integration.save(update_fields=['is_connected'])
-            return False
-        
-        tokens = response.json()
-        
-        integration.access_token = tokens['access_token']
-        integration.refresh_token = tokens.get('refresh_token', integration.refresh_token)
-        # Xero tokens expire in 30 minutes (1800 seconds)
-        integration.token_expires_at = timezone.now() + timedelta(seconds=tokens.get('expires_in', 1800))
-        integration.save(update_fields=['access_token', 'refresh_token', 'token_expires_at'])
-        
-        logger.info(f"Xero token refreshed successfully, expires at {integration.token_expires_at}")
-        return True
-        
+
+    headers['Authorization'] = f'Bearer {integration.access_token}'
+
+    try:
+        resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
     except requests.RequestException as e:
-        logger.error(f"Xero token refresh request failed: {e}")
-        return False
+        logger.error(f"{integration.provider} API error: {e}")
+        return None, error_response(
+            f'Failed to connect to {integration.provider.title()}', 500
+        )
+
+    # Retry once on 401
+    if resp.status_code == 401:
+        if refresh_fn(integration):
+            headers['Authorization'] = f'Bearer {integration.access_token}'
+            try:
+                resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+            except requests.RequestException:
+                return None, error_response('Connection failed after retry', 500)
+
+    if resp.status_code not in (200, 201):
+        logger.error(f"{integration.provider} API {resp.status_code}: {resp.text[:300]}")
+        return None, error_response(
+            f'{integration.provider.title()} API error ({resp.status_code})', 500
+        )
+
+    return resp.json(), None
+
+
+def qb_api_call(integration, method, endpoint, **kwargs):
+    """QuickBooks authenticated API call."""
+    url = f"{QB_API_BASE}/v3/company/{integration.realm_id}{endpoint}"
+    headers = {'Accept': 'application/json', 'Content-Type': 'application/json'}
+    return _api_call(integration, method, url, headers, refresh_quickbooks_token, **kwargs)
+
+
+def xero_api_call(integration, method, endpoint, **kwargs):
+    """Xero authenticated API call."""
+    url = f"https://api.xero.com/api.xro/2.0{endpoint}"
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Xero-tenant-id': integration.tenant_id,
+    }
+    return _api_call(integration, method, url, headers, refresh_xero_token, **kwargs)
 
 
 def fetch_xero_tenant_id(integration):
-    """
-    Fetch and store Xero tenant ID after OAuth.
-    Must be called after token exchange.
-    """
+    """Fetch and store Xero tenant ID after OAuth."""
     if integration.tenant_id:
         return True
-    
-    logger.info(f"Fetching Xero tenant ID for org {integration.organization_id}")
-    
     try:
-        response = requests.get(
+        resp = requests.get(
             "https://api.xero.com/connections",
             headers={
                 'Authorization': f'Bearer {integration.access_token}',
                 'Content-Type': 'application/json',
             },
-            timeout=30
+            timeout=30,
         )
-        
-        if response.status_code != 200:
-            logger.error(f"Failed to fetch Xero connections: {response.status_code}")
+        if resp.status_code != 200:
+            logger.error(f"Xero connections fetch failed: {resp.status_code}")
             return False
-        
-        connections = response.json()
-        
+        connections = resp.json()
         if not connections:
-            logger.error("No Xero tenants found for this connection")
+            logger.error("No Xero tenants found")
             return False
-        
-        # Use the first tenant (most users have one)
-        # For multi-org Xero users, you might want to let them choose
         integration.tenant_id = connections[0]['tenantId']
         integration.save(update_fields=['tenant_id'])
-        
-        logger.info(f"Stored Xero tenant ID: {integration.tenant_id}")
         return True
-        
     except requests.RequestException as e:
         logger.error(f"Failed to fetch Xero tenant: {e}")
         return False
 
 
 # ============================================================================
-# QuickBooks Online
+# QuickBooks OAuth
 # ============================================================================
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def quickbooks_connect(request):
-    """Start QuickBooks OAuth flow."""
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
+        return error_response('No organization', 404)
+
     import secrets
     state = secrets.token_urlsafe(32)
-    
     Integration.objects.update_or_create(
-        organization=org,
-        provider='quickbooks',
-        defaults={'oauth_state': state}
+        organization=org, provider='quickbooks',
+        defaults={'oauth_state': state},
     )
-    
     params = {
         'client_id': settings.QUICKBOOKS_CLIENT_ID,
         'response_type': 'code',
@@ -205,201 +321,122 @@ def quickbooks_connect(request):
         'redirect_uri': settings.QUICKBOOKS_REDIRECT_URI,
         'state': state,
     }
-    
     auth_url = f"https://appcenter.intuit.com/connect/oauth2?{urlencode(params)}"
-    
     return Response({'auth_url': auth_url})
 
 
 @api_view(['GET'])
 def quickbooks_callback(request):
-    """Handle QuickBooks OAuth callback."""
     code = request.GET.get('code')
     state = request.GET.get('state')
     realm_id = request.GET.get('realmId')
     error = request.GET.get('error')
-    
+
     if error:
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error={error}")
-    
+
     try:
         integration = Integration.objects.get(oauth_state=state, provider='quickbooks')
     except Integration.DoesNotExist:
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=invalid_state")
-    
-    # Exchange code for tokens
-    token_url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
-    
+
     try:
-        response = requests.post(
-            token_url,
+        resp = requests.post(
+            "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
             data={
                 'grant_type': 'authorization_code',
                 'code': code,
                 'redirect_uri': settings.QUICKBOOKS_REDIRECT_URI,
             },
             auth=(settings.QUICKBOOKS_CLIENT_ID, settings.QUICKBOOKS_CLIENT_SECRET),
-            timeout=30
+            timeout=30,
         )
     except requests.RequestException as e:
-        logger.error(f"QB token exchange request failed: {e}")
+        logger.error(f"QB token exchange failed: {e}")
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=token_exchange_failed")
-    
-    if response.status_code != 200:
-        logger.error(f"QB token exchange failed: {response.status_code} - {response.text}")
+
+    if resp.status_code != 200:
+        logger.error(f"QB token exchange {resp.status_code}: {resp.text}")
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=token_exchange_failed")
-    
-    tokens = response.json()
-    
-    # Save tokens with expiration
+
+    tokens = resp.json()
     integration.access_token = tokens['access_token']
     integration.refresh_token = tokens['refresh_token']
     integration.realm_id = realm_id
     integration.is_connected = True
-    integration.oauth_state = ''  # Clear state after use
-    # QB access tokens expire in 1 hour
+    integration.oauth_state = ''
     integration.token_expires_at = timezone.now() + timedelta(seconds=tokens.get('expires_in', 3600))
     integration.save()
-    
-    logger.info(f"QuickBooks connected for org {integration.organization_id}, realm {realm_id}")
-    
-    return HttpResponse(f"""
-            <!DOCTYPE html>
-            <html>
-            <head><title>Connected!</title></head>
-            <body>
-            <script>
-                const message = {{
-                    type: 'oauth_callback',
-                    integration: 'quickbooks',
-                    success: true
-                }};
-                
-                if (window.opener && !window.opener.closed) {{
-                    window.opener.postMessage(message, '{settings.FRONTEND_URL}');
-                    window.close();
-                }} else {{
-                    // Fallback: redirect to frontend
-                    window.location.href = '{settings.FRONTEND_URL}/settings?qb_connected=true';
-                }}
-            </script>
-            <p>Connected successfully! Redirecting...</p>
-            <p>If not redirected, <a href="{settings.FRONTEND_URL}/settings">click here</a>.</p>
-            </body>
-            </html>
-        """)
+    logger.info(f"QuickBooks connected for org {integration.organization_id}")
+    return _oauth_success_response('quickbooks')
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def quickbooks_status(request):
-    """Check QuickBooks connection status."""
     org = get_user_org(request.user)
-    if not org:
+    integration, _ = get_integration(org, 'quickbooks', connected_only=False)
+    if not integration:
         return Response({'connected': False})
-    
-    try:
-        integration = Integration.objects.get(organization=org, provider='quickbooks')
-        return Response({
-            'connected': integration.is_connected,
-            'realm_id': integration.realm_id if integration.is_connected else None,
-        })
-    except Integration.DoesNotExist:
-        return Response({'connected': False})
+    return Response({
+        'connected': integration.is_connected,
+        'realm_id': integration.realm_id if integration.is_connected else None,
+    })
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def quickbooks_disconnect(request):
-    """Disconnect QuickBooks integration."""
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
+        return error_response('No organization', 404)
     try:
-        integration = Integration.objects.get(organization=org, provider='quickbooks')
-        integration.is_connected = False
-        integration.access_token = ''
-        integration.refresh_token = ''
-        integration.realm_id = ''
-        integration.token_expires_at = None
-        integration.save()
-        return Response({'success': True})
+        i = Integration.objects.get(organization=org, provider='quickbooks')
+        i.is_connected = False
+        i.access_token = ''
+        i.refresh_token = ''
+        i.realm_id = ''
+        i.token_expires_at = None
+        i.save()
     except Integration.DoesNotExist:
-        return Response({'success': True})
+        pass
+    return Response({'success': True})
 
+
+# ============================================================================
+# QuickBooks: Client Import (PULL clients)
+# ============================================================================
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def quickbooks_customers(request):
     """Fetch customers from QuickBooks (preview before import)."""
     org = get_user_org(request.user)
-    if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
-    try:
-        integration = Integration.objects.get(organization=org, provider='quickbooks', is_connected=True)
-    except Integration.DoesNotExist:
-        return Response({'error': 'Not connected to QuickBooks'}, status=400)
-    
-    # Refresh token if needed
-    if not refresh_quickbooks_token(integration):
-        return Response({'error': 'Token refresh failed. Please reconnect QuickBooks.'}, status=401)
-    
-    # Fetch customers from QuickBooks API
-    api_url = f"{QB_API_BASE}/v3/company/{integration.realm_id}/query"
+    integration, err = get_integration(org, 'quickbooks')
+    if err:
+        return err
 
-    
-    headers = {
-        'Authorization': f'Bearer {integration.access_token}',
-        'Accept': 'application/json',
-    }
-    
-    # Get active customers, ordered by name
     query = "SELECT * FROM Customer WHERE Active = true ORDERBY DisplayName MAXRESULTS 1000"
-    
-    try:
-        response = requests.get(
-            api_url,
-            params={'query': query},
-            headers=headers,
-            timeout=30
-        )
-    except requests.RequestException as e:
-        logger.error(f"QB API request failed: {e}")
-        return Response({'error': 'Failed to connect to QuickBooks'}, status=500)
-    
-    if response.status_code == 401:
-        # Token might have expired, try refresh
-        if refresh_quickbooks_token(integration):
-            headers['Authorization'] = f'Bearer {integration.access_token}'
-            response = requests.get(api_url, params={'query': query}, headers=headers, timeout=30)
-        else:
-            return Response({'error': 'Authentication failed. Please reconnect QuickBooks.'}, status=401)
-    
-    if response.status_code != 200:
-        logger.error(f"QB customers fetch failed: {response.status_code} - {response.text}")
-        return Response({'error': 'Failed to fetch customers from QuickBooks'}, status=500)
-    
-    data = response.json()
+    data, err = qb_api_call(integration, 'GET', '/query', params={'query': query})
+    if err:
+        return err
+
     customers = data.get('QueryResponse', {}).get('Customer', [])
-    
-    # Get existing QB IDs to mark already-imported clients
     existing_qb_ids = set(
         Client.objects.filter(org=org, quickbooks_id__isnull=False)
         .values_list('quickbooks_id', flat=True)
     )
-    
+
     clients = [{
         'id': c['Id'],
         'name': c.get('DisplayName') or c.get('CompanyName') or c.get('FullyQualifiedName', 'Unknown'),
         'company_name': c.get('CompanyName', ''),
-        'email': c.get('PrimaryEmailAddr', {}).get('Address') if c.get('PrimaryEmailAddr') else '',
-        'phone': c.get('PrimaryPhone', {}).get('FreeFormNumber') if c.get('PrimaryPhone') else '',
+        'email': c.get('PrimaryEmailAddr', {}).get('Address', '') if c.get('PrimaryEmailAddr') else '',
+        'phone': c.get('PrimaryPhone', {}).get('FreeFormNumber', '') if c.get('PrimaryPhone') else '',
         'balance': float(c.get('Balance', 0)),
         'already_imported': c['Id'] in existing_qb_ids,
     } for c in customers]
-    
+
     return Response({
         'customers': clients,
         'total': len(clients),
@@ -412,334 +449,497 @@ def quickbooks_customers(request):
 def quickbooks_import(request):
     """Import selected customers from QuickBooks as Clients."""
     org = get_user_org(request.user)
-    if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
-    try:
-        integration = Integration.objects.get(organization=org, provider='quickbooks', is_connected=True)
-    except Integration.DoesNotExist:
-        return Response({'error': 'Not connected to QuickBooks'}, status=400)
-    
-    # Get customer IDs to import
+    integration, err = get_integration(org, 'quickbooks')
+    if err:
+        return err
+
     customer_ids = request.data.get('customer_ids', [])
     if not customer_ids:
-        return Response({'error': 'No customers selected'}, status=400)
-    
-    # Refresh token
-    if not refresh_quickbooks_token(integration):
-        return Response({'error': 'Token refresh failed. Please reconnect QuickBooks.'}, status=401)
-    
-    # Fetch specific customers from QuickBooks
-    api_url = f"{QB_API_BASE}/v3/company/{integration.realm_id}/query"
+        return error_response('No customers selected')
 
-    
-    headers = {
-        'Authorization': f'Bearer {integration.access_token}',
-        'Accept': 'application/json',
-    }
-    
-    # Build query for specific IDs
-    id_list = "', '".join(str(id) for id in customer_ids)
+    id_list = "', '".join(str(cid) for cid in customer_ids)
     query = f"SELECT * FROM Customer WHERE Id IN ('{id_list}')"
-    
-    try:
-        response = requests.get(api_url, params={'query': query}, headers=headers, timeout=30)
-    except requests.RequestException as e:
-        logger.error(f"QB API request failed: {e}")
-        return Response({'error': 'Failed to connect to QuickBooks'}, status=500)
-    
-    if response.status_code != 200:
-        return Response({'error': 'Failed to fetch customers'}, status=500)
-    
-    data = response.json()
+    data, err = qb_api_call(integration, 'GET', '/query', params={'query': query})
+    if err:
+        return err
+
     customers = data.get('QueryResponse', {}).get('Customer', [])
-    
-    # Import customers as clients
-    imported = []
-    skipped = []
-    errors = []
-    
+    imported, skipped, errors = [], [], []
+
     for customer in customers:
         qb_id = customer['Id']
-        name = customer.get('DisplayName') or customer.get('CompanyName') or customer.get('FullyQualifiedName', 'Unknown')
-        
-        # Check if already exists
-        existing = Client.objects.filter(org=org, quickbooks_id=qb_id).first()
-        if existing:
+        name = customer.get('DisplayName') or customer.get('CompanyName') or 'Unknown'
+
+        if Client.objects.filter(org=org, quickbooks_id=qb_id).exists():
             skipped.append({'id': qb_id, 'name': name, 'reason': 'Already imported'})
             continue
-        
-        # Also check by name to avoid duplicates
+
         name_match = Client.objects.filter(org=org, name__iexact=name).first()
         if name_match:
-            # Link existing client to QB instead of creating duplicate
             name_match.quickbooks_id = qb_id
             name_match.imported_from = 'quickbooks'
             name_match.save(update_fields=['quickbooks_id', 'imported_from'])
-            imported.append({
-                'id': name_match.id,
-                'name': name,
-                'quickbooks_id': qb_id,
-                'linked_existing': True,
-            })
+            imported.append({'id': name_match.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': True})
             continue
-        
+
         try:
-            # Create new client
             client = Client.objects.create(
-                org=org,
-                name=name,
-                quickbooks_id=qb_id,
-                imported_from='quickbooks',
-                is_active=True,
+                org=org, name=name, quickbooks_id=qb_id,
+                imported_from='quickbooks', is_active=True,
             )
-            imported.append({
-                'id': client.id,
-                'name': client.name,
-                'quickbooks_id': qb_id,
-                'linked_existing': False,
-            })
+            imported.append({'id': client.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': False})
         except Exception as e:
             logger.error(f"Failed to create client from QB {qb_id}: {e}")
             errors.append({'id': qb_id, 'name': name, 'error': str(e)})
-    
+
     return Response({
-        'imported': imported,
-        'skipped': skipped,
-        'errors': errors,
+        'imported': imported, 'skipped': skipped, 'errors': errors,
         'summary': {
             'imported_count': len(imported),
             'skipped_count': len(skipped),
             'error_count': len(errors),
-        }
+        },
     })
 
 
 # ============================================================================
-# Xero
+# QuickBooks: PUSH Time Entries
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def quickbooks_push_time(request):
+    """
+    Push categorized time entries to QuickBooks as TimeActivity records.
+
+    Body: {
+        "start_date": "2026-02-10",
+        "end_date": "2026-02-14",
+        "client_ids": [1, 2, 3],   // optional filter
+        "dry_run": false            // preview without pushing
+    }
+
+    Each categorized Block → one QBO TimeActivity with:
+    - CustomerRef (from client.quickbooks_id)
+    - Hours/Minutes
+    - Description (category + notes)
+    - TxnDate (block date)
+
+    NOTE: You need to add a `qb_time_activity_id` CharField to Block model
+    to track which blocks have already been pushed. See migration below.
+    """
+    org = get_user_org(request.user)
+    integration, err = get_integration(org, 'quickbooks')
+    if err:
+        return err
+
+    start_date = request.data.get('start_date')
+    end_date = request.data.get('end_date')
+    client_ids = request.data.get('client_ids', [])
+    dry_run = request.data.get('dry_run', False)
+
+    if not start_date or not end_date:
+        return error_response('start_date and end_date are required')
+
+    try:
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+    except ValueError:
+        return error_response('Invalid date format. Use YYYY-MM-DD')
+
+    if (end_dt - start_dt).days > 31:
+        return error_response('Date range cannot exceed 31 days')
+
+    # Build UTC range for the date span
+    tz = timezone.get_current_timezone()
+    start_aware = timezone.make_aware(datetime.combine(start_dt, datetime.min.time()), tz)
+    end_aware = timezone.make_aware(datetime.combine(end_dt + timedelta(days=1), datetime.min.time()), tz)
+
+    # Get categorized blocks that have QB-linked clients and haven't been pushed yet
+    blocks_qs = Block.objects.filter(
+        org=org,
+        is_categorized=True,
+        start__gte=start_aware,
+        start__lt=end_aware,
+        client__isnull=False,
+        client__quickbooks_id__isnull=False,
+    ).select_related('client', 'user')
+
+    # Exclude already-pushed blocks
+    if hasattr(Block, 'qb_time_activity_id'):
+        blocks_qs = blocks_qs.filter(
+            Q(qb_time_activity_id__isnull=True) | Q(qb_time_activity_id='')
+        )
+
+    if client_ids:
+        blocks_qs = blocks_qs.filter(client_id__in=client_ids)
+
+    blocks = list(blocks_qs.order_by('start'))
+
+    if not blocks:
+        return Response({
+            'message': 'No unpushed categorized time entries found for this period',
+            'entries': [],
+            'summary': {'total_entries': 0, 'total_hours': 0},
+        })
+
+    # Build TimeActivity entries
+    entries = []
+    for block in blocks:
+        total_minutes = block.minutes or 0
+        if total_minutes <= 0 and block.end and block.start:
+            total_minutes = int((block.end - block.start).total_seconds() / 60)
+        if total_minutes <= 0:
+            continue
+
+        hours = total_minutes // 60
+        mins = total_minutes % 60
+
+        cats = block.category_hours or {}
+        cat_names = ', '.join(cats.keys()) if cats else 'General'
+        description = cat_names
+        if block.notes:
+            description += f" — {block.notes}"
+
+        block_date = timezone.localtime(block.start).strftime('%Y-%m-%d')
+
+        payload = {
+            'TxnDate': block_date,
+            'NameOf': 'Employee',
+            'Hours': hours,
+            'Minutes': mins,
+            'Description': description[:4000],
+            'CustomerRef': {'value': block.client.quickbooks_id},
+        }
+
+        # Map user → QBO employee if available
+        qb_emp_id = getattr(block.user, 'quickbooks_employee_id', None)
+        if qb_emp_id:
+            payload['EmployeeRef'] = {'value': qb_emp_id}
+
+        entries.append({
+            'block_id': block.id,
+            'block': block,
+            'payload': payload,
+            'client_name': block.client.name,
+            'hours': round(total_minutes / 60, 2),
+            'date': block_date,
+            'category': cat_names,
+        })
+
+    # --- DRY RUN ---
+    if dry_run:
+        return Response({
+            'dry_run': True,
+            'entries': [{
+                'block_id': e['block_id'],
+                'client': e['client_name'],
+                'date': e['date'],
+                'hours': e['hours'],
+                'category': e['category'],
+            } for e in entries],
+            'summary': {
+                'total_entries': len(entries),
+                'total_hours': round(sum(e['hours'] for e in entries), 2),
+                'clients': list(set(e['client_name'] for e in entries)),
+            },
+        })
+
+    # --- PUSH ---
+    pushed, push_errors = [], []
+
+    for entry in entries:
+        data, err = qb_api_call(integration, 'POST', '/timeactivity', json=entry['payload'])
+        if err:
+            push_errors.append({
+                'block_id': entry['block_id'], 'client': entry['client_name'],
+                'error': 'API call failed',
+            })
+            continue
+
+        qb_id = data.get('TimeActivity', {}).get('Id', '')
+        # Save reference back to block
+        if qb_id and hasattr(entry['block'], 'qb_time_activity_id'):
+            try:
+                entry['block'].qb_time_activity_id = str(qb_id)
+                entry['block'].save(update_fields=['qb_time_activity_id'])
+            except Exception as e:
+                logger.warning(f"Pushed OK but failed to save ref on block: {e}")
+
+        pushed.append({
+            'block_id': entry['block_id'], 'client': entry['client_name'],
+            'date': entry['date'], 'hours': entry['hours'],
+            'qb_time_activity_id': qb_id,
+        })
+
+    return Response({
+        'pushed': pushed,
+        'errors': push_errors,
+        'summary': {
+            'pushed_count': len(pushed),
+            'error_count': len(push_errors),
+            'total_hours': round(sum(p['hours'] for p in pushed), 2),
+        },
+    })
+
+
+# ============================================================================
+# QuickBooks: PULL Invoices (for profitability)
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def quickbooks_pull_invoices(request):
+    """
+    Pull invoice data from QuickBooks for profitability comparison.
+
+    Query params: start_date, end_date (YYYY-MM-DD, required), client_id (optional)
+
+    Returns billed revenue by client for:
+    - Tracked hours × rate = expected revenue
+    - QBO invoiced = actual billed
+    - Delta = realization rate
+    """
+    org = get_user_org(request.user)
+    integration, err = get_integration(org, 'quickbooks')
+    if err:
+        return err
+
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+
+    if not start_date or not end_date:
+        return error_response('start_date and end_date are required')
+
+    query = (
+        f"SELECT * FROM Invoice WHERE TxnDate >= '{start_date}' "
+        f"AND TxnDate <= '{end_date}'"
+    )
+
+    client_id = request.GET.get('client_id')
+    if client_id:
+        try:
+            client = Client.objects.get(id=client_id, org=org)
+            if client.quickbooks_id:
+                query += f" AND CustomerRef = '{client.quickbooks_id}'"
+        except Client.DoesNotExist:
+            pass
+
+    query += " ORDERBY TxnDate MAXRESULTS 1000"
+    data, err = qb_api_call(integration, 'GET', '/query', params={'query': query})
+    if err:
+        return err
+
+    invoices = data.get('QueryResponse', {}).get('Invoice', [])
+
+    # Aggregate by customer
+    by_customer = {}
+    for inv in invoices:
+        cust = inv.get('CustomerRef', {})
+        cid = cust.get('value', 'unknown')
+        if cid not in by_customer:
+            by_customer[cid] = {
+                'qb_customer_id': cid,
+                'customer_name': cust.get('name', 'Unknown'),
+                'invoice_count': 0,
+                'total_billed': 0.0,
+                'total_paid': 0.0,
+                'total_balance': 0.0,
+                'invoices': [],
+            }
+        total = float(inv.get('TotalAmt', 0))
+        balance = float(inv.get('Balance', 0))
+        by_customer[cid]['invoice_count'] += 1
+        by_customer[cid]['total_billed'] += total
+        by_customer[cid]['total_paid'] += total - balance
+        by_customer[cid]['total_balance'] += balance
+        by_customer[cid]['invoices'].append({
+            'id': inv.get('Id'),
+            'doc_number': inv.get('DocNumber', ''),
+            'date': inv.get('TxnDate', ''),
+            'due_date': inv.get('DueDate', ''),
+            'total': total,
+            'balance': balance,
+            'status': 'Paid' if balance == 0 else 'Open',
+        })
+
+    # Match QBO customers → TimeTracker clients
+    qb_map = {c.quickbooks_id: c for c in Client.objects.filter(org=org, quickbooks_id__isnull=False)}
+    results = []
+    for cid, d in by_customer.items():
+        tt = qb_map.get(cid)
+        results.append({
+            **d,
+            'timetracker_client_id': tt.id if tt else None,
+            'timetracker_client_name': tt.name if tt else None,
+            'matched': tt is not None,
+            'total_billed': round(d['total_billed'], 2),
+            'total_paid': round(d['total_paid'], 2),
+            'total_balance': round(d['total_balance'], 2),
+        })
+    results.sort(key=lambda x: x['total_billed'], reverse=True)
+
+    return Response({
+        'period': {'start': start_date, 'end': end_date},
+        'customers': results,
+        'totals': {
+            'total_billed': round(sum(r['total_billed'] for r in results), 2),
+            'total_paid': round(sum(r['total_paid'] for r in results), 2),
+            'total_balance': round(sum(r['total_balance'] for r in results), 2),
+            'invoice_count': sum(r['invoice_count'] for r in results),
+        },
+    })
+
+
+# ============================================================================
+# Xero OAuth
 # ============================================================================
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def xero_connect(request):
-    """Start Xero OAuth flow."""
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
+        return error_response('No organization', 404)
+
     import secrets
     state = secrets.token_urlsafe(32)
-    
     Integration.objects.update_or_create(
-        organization=org,
-        provider='xero',
-        defaults={'oauth_state': state}
+        organization=org, provider='xero',
+        defaults={'oauth_state': state},
     )
-    
     params = {
         'response_type': 'code',
         'client_id': settings.XERO_CLIENT_ID,
         'redirect_uri': settings.XERO_REDIRECT_URI,
-        'scope': 'openid profile email accounting.contacts.read offline_access',  # Added offline_access for refresh tokens
+        'scope': (
+            'openid profile email '
+            'accounting.contacts.read accounting.transactions.read '
+            'accounting.settings.read offline_access'
+        ),
         'state': state,
     }
-    
     auth_url = f"https://login.xero.com/identity/connect/authorize?{urlencode(params)}"
-    
     return Response({'auth_url': auth_url})
 
 
 @api_view(['GET'])
 def xero_callback(request):
-    """Handle Xero OAuth callback."""
     code = request.GET.get('code')
     state = request.GET.get('state')
     error = request.GET.get('error')
-    
+
     if error:
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error={error}")
-    
+
     try:
         integration = Integration.objects.get(oauth_state=state, provider='xero')
     except Integration.DoesNotExist:
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=invalid_state")
-    
-    # Exchange code for tokens
-    token_url = "https://identity.xero.com/connect/token"
-    
+
     try:
-        response = requests.post(
-            token_url,
+        resp = requests.post(
+            "https://identity.xero.com/connect/token",
             data={
                 'grant_type': 'authorization_code',
                 'code': code,
                 'redirect_uri': settings.XERO_REDIRECT_URI,
             },
             auth=(settings.XERO_CLIENT_ID, settings.XERO_CLIENT_SECRET),
-            timeout=30
+            timeout=30,
         )
     except requests.RequestException as e:
-        logger.error(f"Xero token exchange request failed: {e}")
+        logger.error(f"Xero token exchange failed: {e}")
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=token_exchange_failed")
-    
-    if response.status_code != 200:
-        logger.error(f"Xero token exchange failed: {response.status_code} - {response.text}")
+
+    if resp.status_code != 200:
+        logger.error(f"Xero token exchange {resp.status_code}: {resp.text}")
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=token_exchange_failed")
-    
-    tokens = response.json()
-    
+
+    tokens = resp.json()
     integration.access_token = tokens['access_token']
     integration.refresh_token = tokens.get('refresh_token', '')
-    integration.oauth_state = ''  # Clear state after use
-    # Xero tokens expire in 30 minutes
+    integration.oauth_state = ''
     integration.token_expires_at = timezone.now() + timedelta(seconds=tokens.get('expires_in', 1800))
     integration.save()
-    
-    # Fetch tenant ID (required for Xero API calls)
+
     if not fetch_xero_tenant_id(integration):
         return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=tenant_fetch_failed")
-    
+
     integration.is_connected = True
     integration.save(update_fields=['is_connected'])
-    
-    logger.info(f"Xero connected for org {integration.organization_id}, tenant {integration.tenant_id}")
-    
-    return HttpResponse(f"""
-            <!DOCTYPE html>
-            <html>
-            <head><title>Connected!</title></head>
-            <body>
-            <script>
-                const message = {{
-                    type: 'oauth_callback',
-                    integration: 'xero',
-                    success: true
-                }};
-                
-                if (window.opener && !window.opener.closed) {{
-                    window.opener.postMessage(message, '{settings.FRONTEND_URL}');
-                    window.close();
-                }} else {{
-                    // Fallback: redirect to frontend
-                    window.location.href = '{settings.FRONTEND_URL}/settings?xero_connected=true';
-                }}
-            </script>
-            <p>Connected successfully! Redirecting...</p>
-            <p>If not redirected, <a href="{settings.FRONTEND_URL}/settings">click here</a>.</p>
-            </body>
-            </html>
-        """)
+    logger.info(f"Xero connected for org {integration.organization_id}")
+    return _oauth_success_response('xero')
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def xero_status(request):
-    """Check Xero connection status."""
     org = get_user_org(request.user)
-    if not org:
+    integration, _ = get_integration(org, 'xero', connected_only=False)
+    if not integration:
         return Response({'connected': False})
-    
-    try:
-        integration = Integration.objects.get(organization=org, provider='xero')
-        return Response({
-            'connected': integration.is_connected,
-            'tenant_id': integration.tenant_id if integration.is_connected else None,
-        })
-    except Integration.DoesNotExist:
-        return Response({'connected': False})
+    return Response({
+        'connected': integration.is_connected,
+        'tenant_id': integration.tenant_id if integration.is_connected else None,
+    })
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def xero_disconnect(request):
-    """Disconnect Xero integration."""
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
+        return error_response('No organization', 404)
     try:
-        integration = Integration.objects.get(organization=org, provider='xero')
-        integration.is_connected = False
-        integration.access_token = ''
-        integration.refresh_token = ''
-        integration.tenant_id = ''
-        integration.token_expires_at = None
-        integration.save()
-        return Response({'success': True})
+        i = Integration.objects.get(organization=org, provider='xero')
+        i.is_connected = False
+        i.access_token = ''
+        i.refresh_token = ''
+        i.tenant_id = ''
+        i.token_expires_at = None
+        i.save()
     except Integration.DoesNotExist:
-        return Response({'success': True})
+        pass
+    return Response({'success': True})
 
+
+# ============================================================================
+# Xero: Client Import — FIXED (batch fetch, no N+1)
+# ============================================================================
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def xero_contacts(request):
-    """Fetch contacts from Xero (preview before import)."""
+    """Fetch contacts from Xero — single API call, no N+1."""
     org = get_user_org(request.user)
-    if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
-    try:
-        integration = Integration.objects.get(organization=org, provider='xero', is_connected=True)
-    except Integration.DoesNotExist:
-        return Response({'error': 'Not connected to Xero'}, status=400)
-    
+    integration, err = get_integration(org, 'xero')
+    if err:
+        return err
     if not integration.tenant_id:
-        return Response({'error': 'Xero tenant ID not found. Please reconnect.'}, status=400)
-    
-    # Refresh token if needed
-    if not refresh_xero_token(integration):
-        return Response({'error': 'Token refresh failed. Please reconnect Xero.'}, status=401)
-    
-    # Fetch contacts from Xero API (only customers)
-    api_url = "https://api.xero.com/api.xro/2.0/Contacts"
-    
-    headers = {
-        'Authorization': f'Bearer {integration.access_token}',
-        'Accept': 'application/json',
-        'Xero-tenant-id': integration.tenant_id,
-    }
-    
-    params = {
-        'where': 'IsCustomer==true',
-        'order': 'Name ASC',
-    }
-    
-    try:
-        response = requests.get(api_url, headers=headers, params=params, timeout=30)
-    except requests.RequestException as e:
-        logger.error(f"Xero API request failed: {e}")
-        return Response({'error': 'Failed to connect to Xero'}, status=500)
-    
-    if response.status_code == 401:
-        if refresh_xero_token(integration):
-            headers['Authorization'] = f'Bearer {integration.access_token}'
-            response = requests.get(api_url, headers=headers, params=params, timeout=30)
-        else:
-            return Response({'error': 'Authentication failed. Please reconnect Xero.'}, status=401)
-    
-    if response.status_code != 200:
-        logger.error(f"Xero contacts fetch failed: {response.status_code} - {response.text}")
-        return Response({'error': 'Failed to fetch contacts from Xero'}, status=500)
-    
-    data = response.json()
+        return error_response('Xero tenant ID missing. Please reconnect.', 400)
+
+    data, err = xero_api_call(
+        integration, 'GET', '/Contacts',
+        params={'where': 'IsCustomer==true', 'order': 'Name ASC'},
+    )
+    if err:
+        return err
+
     contacts = data.get('Contacts', [])
-    
-    # Get existing Xero IDs
     existing_xero_ids = set(
         Client.objects.filter(org=org, xero_id__isnull=False)
         .values_list('xero_id', flat=True)
     )
-    
+
     clients = [{
         'id': c['ContactID'],
         'name': c.get('Name', 'Unknown'),
         'email': c.get('EmailAddress', ''),
         'phone': c.get('Phones', [{}])[0].get('PhoneNumber', '') if c.get('Phones') else '',
-        'is_customer': c.get('IsCustomer', False),
-        'is_supplier': c.get('IsSupplier', False),
         'already_imported': c['ContactID'] in existing_xero_ids,
     } for c in contacts if c.get('IsCustomer', False)]
-    
+
     return Response({
         'contacts': clients,
         'total': len(clients),
@@ -750,152 +950,373 @@ def xero_contacts(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def xero_import(request):
-    """Import selected contacts from Xero as Clients."""
+    """Import contacts from Xero — batch fetch, filter client-side."""
     org = get_user_org(request.user)
-    if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
-    try:
-        integration = Integration.objects.get(organization=org, provider='xero', is_connected=True)
-    except Integration.DoesNotExist:
-        return Response({'error': 'Not connected to Xero'}, status=400)
-    
+    integration, err = get_integration(org, 'xero')
+    if err:
+        return err
+
     contact_ids = request.data.get('contact_ids', [])
     if not contact_ids:
-        return Response({'error': 'No contacts selected'}, status=400)
-    
-    if not refresh_xero_token(integration):
-        return Response({'error': 'Token refresh failed. Please reconnect Xero.'}, status=401)
-    
-    # Fetch specific contacts
-    headers = {
-        'Authorization': f'Bearer {integration.access_token}',
-        'Accept': 'application/json',
-        'Xero-tenant-id': integration.tenant_id,
-    }
-    
-    imported = []
-    skipped = []
-    errors = []
-    
-    # Xero doesn't support IN queries easily, so we fetch each contact
-    # For large imports, consider fetching all and filtering
-    for contact_id in contact_ids:
-        api_url = f"https://api.xero.com/api.xro/2.0/Contacts/{contact_id}"
-        
+        return error_response('No contacts selected')
+
+    # Single fetch for all contacts
+    data, err = xero_api_call(
+        integration, 'GET', '/Contacts',
+        params={'where': 'IsCustomer==true'},
+    )
+    if err:
+        return err
+
+    lookup = {c['ContactID']: c for c in data.get('Contacts', [])}
+    imported, skipped, errors = [], [], []
+
+    for cid in contact_ids:
+        contact = lookup.get(cid)
+        if not contact:
+            errors.append({'id': cid, 'error': 'Not found in Xero'})
+            continue
+
+        xero_id = contact['ContactID']
+        name = contact.get('Name', 'Unknown')
+
+        if Client.objects.filter(org=org, xero_id=xero_id).exists():
+            skipped.append({'id': xero_id, 'name': name, 'reason': 'Already imported'})
+            continue
+
+        name_match = Client.objects.filter(org=org, name__iexact=name).first()
+        if name_match:
+            name_match.xero_id = xero_id
+            name_match.imported_from = 'xero'
+            name_match.save(update_fields=['xero_id', 'imported_from'])
+            imported.append({'id': name_match.id, 'name': name, 'xero_id': xero_id, 'linked_existing': True})
+            continue
+
         try:
-            response = requests.get(api_url, headers=headers, timeout=30)
-            
-            if response.status_code != 200:
-                errors.append({'id': contact_id, 'error': 'Failed to fetch from Xero'})
-                continue
-            
-            data = response.json()
-            contacts = data.get('Contacts', [])
-            
-            if not contacts:
-                errors.append({'id': contact_id, 'error': 'Contact not found'})
-                continue
-            
-            contact = contacts[0]
-            xero_id = contact['ContactID']
-            name = contact.get('Name', 'Unknown')
-            
-            # Check if already exists
-            existing = Client.objects.filter(org=org, xero_id=xero_id).first()
-            if existing:
-                skipped.append({'id': xero_id, 'name': name, 'reason': 'Already imported'})
-                continue
-            
-            # Check by name
-            name_match = Client.objects.filter(org=org, name__iexact=name).first()
-            if name_match:
-                name_match.xero_id = xero_id
-                name_match.imported_from = 'xero'
-                name_match.save(update_fields=['xero_id', 'imported_from'])
-                imported.append({
-                    'id': name_match.id,
-                    'name': name,
-                    'xero_id': xero_id,
-                    'linked_existing': True,
-                })
-                continue
-            
-            # Create new client
             client = Client.objects.create(
-                org=org,
-                name=name,
-                xero_id=xero_id,
-                imported_from='xero',
-                is_active=True,
+                org=org, name=name, xero_id=xero_id,
+                imported_from='xero', is_active=True,
             )
-            imported.append({
-                'id': client.id,
-                'name': client.name,
-                'xero_id': xero_id,
-                'linked_existing': False,
-            })
-            
+            imported.append({'id': client.id, 'name': name, 'xero_id': xero_id, 'linked_existing': False})
         except Exception as e:
-            logger.error(f"Failed to import Xero contact {contact_id}: {e}")
-            errors.append({'id': contact_id, 'error': str(e)})
-    
+            errors.append({'id': cid, 'error': str(e)})
+
     return Response({
-        'imported': imported,
-        'skipped': skipped,
-        'errors': errors,
+        'imported': imported, 'skipped': skipped, 'errors': errors,
         'summary': {
             'imported_count': len(imported),
             'skipped_count': len(skipped),
             'error_count': len(errors),
-        }
+        },
     })
 
 
 # ============================================================================
-# Combined Status Endpoint
+# Xero: PUSH Time as Draft Invoices
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def xero_push_time(request):
+    """
+    Push categorized time to Xero as DRAFT invoices.
+    One invoice per client, line items grouped by category.
+
+    Body: {
+        "start_date": "2026-02-10",
+        "end_date": "2026-02-14",
+        "client_ids": [],       // optional
+        "dry_run": false
+    }
+
+    NOTE: You need `xero_invoice_id` CharField on Block model.
+    """
+    org = get_user_org(request.user)
+    integration, err = get_integration(org, 'xero')
+    if err:
+        return err
+
+    start_date = request.data.get('start_date')
+    end_date = request.data.get('end_date')
+    client_ids = request.data.get('client_ids', [])
+    dry_run = request.data.get('dry_run', False)
+
+    if not start_date or not end_date:
+        return error_response('start_date and end_date are required')
+
+    try:
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+    except ValueError:
+        return error_response('Invalid date format')
+
+    tz = timezone.get_current_timezone()
+    start_aware = timezone.make_aware(datetime.combine(start_dt, datetime.min.time()), tz)
+    end_aware = timezone.make_aware(datetime.combine(end_dt + timedelta(days=1), datetime.min.time()), tz)
+
+    blocks_qs = Block.objects.filter(
+        org=org,
+        is_categorized=True,
+        start__gte=start_aware,
+        start__lt=end_aware,
+        client__isnull=False,
+        client__xero_id__isnull=False,
+    ).select_related('client', 'user')
+
+    if hasattr(Block, 'xero_invoice_id'):
+        blocks_qs = blocks_qs.filter(
+            Q(xero_invoice_id__isnull=True) | Q(xero_invoice_id='')
+        )
+
+    if client_ids:
+        blocks_qs = blocks_qs.filter(client_id__in=client_ids)
+
+    blocks = list(blocks_qs.order_by('client__name', 'start'))
+
+    if not blocks:
+        return Response({
+            'message': 'No unpushed time entries found',
+            'invoices': [],
+            'summary': {'total_invoices': 0, 'total_hours': 0, 'total_amount': 0},
+        })
+
+    # Group by client → category
+    client_groups = defaultdict(list)
+    for b in blocks:
+        client_groups[b.client_id].append(b)
+
+    invoices_preview = []
+    for cid, cblocks in client_groups.items():
+        client = cblocks[0].client
+
+        # Get billing rate
+        billing_rate = Decimal('150.00')
+        try:
+            rate_obj = BillingRate.objects.filter(org=org, client=client).first()
+            if rate_obj:
+                billing_rate = rate_obj.rate
+            elif hasattr(org, 'billing_rate_default') and org.billing_rate_default:
+                billing_rate = org.billing_rate_default
+        except Exception:
+            pass
+
+        # Aggregate by category
+        cat_totals = defaultdict(lambda: {'minutes': 0, 'block_ids': []})
+        for b in cblocks:
+            cats = b.category_hours or {}
+            primary = list(cats.keys())[0] if cats else 'General'
+            cat_totals[primary]['minutes'] += b.minutes or 0
+            cat_totals[primary]['block_ids'].append(b.id)
+
+        line_items = []
+        total_hours = Decimal('0')
+        all_block_ids = []
+
+        for cat, cdata in cat_totals.items():
+            hours = Decimal(str(round(cdata['minutes'] / 60.0, 2)))
+            total_hours += hours
+            all_block_ids.extend(cdata['block_ids'])
+            line_items.append({
+                'Description': f"{cat} — {start_date} to {end_date} ({hours}h @ ${billing_rate}/hr)",
+                'Quantity': str(hours),
+                'UnitAmount': str(billing_rate),
+                'AccountCode': '200',
+                'TaxType': 'NONE',
+            })
+
+        payload = {
+            'Type': 'ACCREC',
+            'Contact': {'ContactID': client.xero_id},
+            'Date': end_date,
+            'DueDate': (end_dt + timedelta(days=30)).strftime('%Y-%m-%d'),
+            'LineAmountTypes': 'Exclusive',
+            'Status': 'DRAFT',
+            'Reference': f"TimeTracker {start_date} to {end_date}",
+            'LineItems': line_items,
+        }
+
+        invoices_preview.append({
+            'client_id': cid,
+            'client_name': client.name,
+            'total_hours': float(total_hours),
+            'total_amount': float(total_hours * billing_rate),
+            'block_ids': all_block_ids,
+            'payload': payload,
+        })
+
+    if dry_run:
+        return Response({
+            'dry_run': True,
+            'invoices': [{
+                'client': inv['client_name'],
+                'hours': inv['total_hours'],
+                'amount': inv['total_amount'],
+                'blocks': len(inv['block_ids']),
+            } for inv in invoices_preview],
+            'summary': {
+                'total_invoices': len(invoices_preview),
+                'total_hours': round(sum(i['total_hours'] for i in invoices_preview), 2),
+                'total_amount': round(sum(i['total_amount'] for i in invoices_preview), 2),
+            },
+        })
+
+    # Push
+    pushed, push_errors = [], []
+    for inv in invoices_preview:
+        data, err = xero_api_call(integration, 'POST', '/Invoices', json=inv['payload'])
+        if err:
+            push_errors.append({'client': inv['client_name'], 'error': 'API call failed'})
+            continue
+
+        xero_inv = data.get('Invoices', [{}])[0]
+        xero_inv_id = xero_inv.get('InvoiceID', '')
+
+        if xero_inv_id and hasattr(Block, 'xero_invoice_id'):
+            Block.objects.filter(id__in=inv['block_ids']).update(xero_invoice_id=xero_inv_id)
+
+        pushed.append({
+            'client': inv['client_name'],
+            'hours': inv['total_hours'],
+            'amount': inv['total_amount'],
+            'xero_invoice_id': xero_inv_id,
+            'xero_invoice_number': xero_inv.get('InvoiceNumber', ''),
+        })
+
+    return Response({
+        'pushed': pushed,
+        'errors': push_errors,
+        'summary': {
+            'invoices_created': len(pushed),
+            'error_count': len(push_errors),
+            'total_hours': round(sum(p['hours'] for p in pushed), 2),
+            'total_amount': round(sum(p['amount'] for p in pushed), 2),
+        },
+    })
+
+
+# ============================================================================
+# Xero: PULL Invoices
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def xero_pull_invoices(request):
+    """Pull invoices from Xero for profitability comparison."""
+    org = get_user_org(request.user)
+    integration, err = get_integration(org, 'xero')
+    if err:
+        return err
+
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    if not start_date or not end_date:
+        return error_response('start_date and end_date are required')
+
+    # Xero date filter format
+    where = (
+        f'Date >= DateTime({start_date.replace("-", ",")}) '
+        f'&& Date <= DateTime({end_date.replace("-", ",")})'
+    )
+    client_id = request.GET.get('client_id')
+    if client_id:
+        try:
+            c = Client.objects.get(id=client_id, org=org)
+            if c.xero_id:
+                where += f' && Contact.ContactID==Guid("{c.xero_id}")'
+        except Client.DoesNotExist:
+            pass
+
+    data, err = xero_api_call(
+        integration, 'GET', '/Invoices',
+        params={'where': where, 'order': 'Date ASC'},
+    )
+    if err:
+        return err
+
+    invoices = [i for i in data.get('Invoices', []) if i.get('Type') == 'ACCREC']
+    by_contact = {}
+    for inv in invoices:
+        contact = inv.get('Contact', {})
+        cid = contact.get('ContactID', 'unknown')
+        if cid not in by_contact:
+            by_contact[cid] = {
+                'xero_contact_id': cid,
+                'contact_name': contact.get('Name', 'Unknown'),
+                'invoice_count': 0, 'total_billed': 0.0,
+                'total_paid': 0.0, 'total_due': 0.0, 'invoices': [],
+            }
+        total = float(inv.get('Total', 0))
+        due = float(inv.get('AmountDue', 0))
+        by_contact[cid]['invoice_count'] += 1
+        by_contact[cid]['total_billed'] += total
+        by_contact[cid]['total_paid'] += total - due
+        by_contact[cid]['total_due'] += due
+        by_contact[cid]['invoices'].append({
+            'id': inv.get('InvoiceID'), 'number': inv.get('InvoiceNumber', ''),
+            'date': inv.get('Date', ''), 'total': total, 'amount_due': due,
+            'status': inv.get('Status', ''),
+        })
+
+    xero_map = {c.xero_id: c for c in Client.objects.filter(org=org, xero_id__isnull=False)}
+    results = []
+    for cid, d in by_contact.items():
+        tt = xero_map.get(cid)
+        results.append({
+            **d,
+            'timetracker_client_id': tt.id if tt else None,
+            'timetracker_client_name': tt.name if tt else None,
+            'matched': tt is not None,
+            'total_billed': round(d['total_billed'], 2),
+            'total_paid': round(d['total_paid'], 2),
+            'total_due': round(d['total_due'], 2),
+        })
+    results.sort(key=lambda x: x['total_billed'], reverse=True)
+
+    return Response({
+        'period': {'start': start_date, 'end': end_date},
+        'contacts': results,
+        'totals': {
+            'total_billed': round(sum(r['total_billed'] for r in results), 2),
+            'total_paid': round(sum(r['total_paid'] for r in results), 2),
+            'total_due': round(sum(r['total_due'] for r in results), 2),
+            'invoice_count': sum(r['invoice_count'] for r in results),
+        },
+    })
+
+
+# ============================================================================
+# Combined Status
 # ============================================================================
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def integrations_status(request):
-    """Get status of all integrations for the org."""
+    """All integration statuses + client import counts."""
     org = get_user_org(request.user)
     if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
+        return error_response('No organization found', 404)
+
     integrations = {}
-    
-    # QuickBooks
-    try:
-        qb = Integration.objects.get(organization=org, provider='quickbooks')
-        integrations['quickbooks'] = {
-            'connected': qb.is_connected,
-            'realm_id': qb.realm_id if qb.is_connected else None,
-            'last_synced': qb.updated_at.isoformat() if qb.is_connected else None,
-        }
-    except Integration.DoesNotExist:
-        integrations['quickbooks'] = {'connected': False}
-    
-    # Xero
-    try:
-        xero = Integration.objects.get(organization=org, provider='xero')
-        integrations['xero'] = {
-            'connected': xero.is_connected,
-            'tenant_id': xero.tenant_id if xero.is_connected else None,
-            'last_synced': xero.updated_at.isoformat() if xero.is_connected else None,
-        }
-    except Integration.DoesNotExist:
-        integrations['xero'] = {'connected': False}
-    
-    # Count imported clients
+    for provider in ('quickbooks', 'xero'):
+        try:
+            i = Integration.objects.get(organization=org, provider=provider)
+            integrations[provider] = {
+                'connected': i.is_connected,
+                'last_synced': i.updated_at.isoformat() if i.is_connected else None,
+            }
+            if provider == 'quickbooks':
+                integrations[provider]['realm_id'] = i.realm_id if i.is_connected else None
+            elif provider == 'xero':
+                integrations[provider]['tenant_id'] = i.tenant_id if i.is_connected else None
+        except Integration.DoesNotExist:
+            integrations[provider] = {'connected': False}
+
     client_stats = {
         'from_quickbooks': Client.objects.filter(org=org, imported_from='quickbooks').count(),
         'from_xero': Client.objects.filter(org=org, imported_from='xero').count(),
-        'manual': Client.objects.filter(org=org, imported_from='').count(),
+        'manual': Client.objects.filter(org=org).filter(
+            Q(imported_from='') | Q(imported_from__isnull=True)
+        ).count(),
     }
-    
-    return Response({
-        'integrations': integrations,
-        'client_stats': client_stats,
-    })
+
+    return Response({'integrations': integrations, 'client_stats': client_stats})

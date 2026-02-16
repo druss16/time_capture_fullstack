@@ -30,6 +30,9 @@ import {
   Send,
 } from 'lucide-react';
 
+import IntegrationStatusBanner from '@/components/IntegrationStatusBanner';
+
+
 // ===============================
 // TYPES
 // ===============================
@@ -205,11 +208,9 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, data, dateRa
 
   useEffect(() => {
     if (isOpen) {
-      // Check QB connection
-      safeFetchJson<{ integrations: Integration[] }>(`${API_BASE}/integrations/`)
+      safeFetchJson<any>(`${API_BASE}/integrations/status/`)
         .then(res => {
-          const qb = res.integrations?.find(i => i.provider === 'quickbooks');
-          setQbConnected(qb?.is_connected || false);
+          setQbConnected(res.integrations?.quickbooks?.connected || false);
         })
         .catch(() => {});
     }
@@ -298,7 +299,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, data, dateRa
     setExporting(true);
     try {
       // This would sync time entries to QuickBooks
-      await safeFetchJson(`${API_BASE}/billing/quickbooks/sync-time/`, {
+      await safeFetchJson(`${API_BASE}/integrations/quickbooks/push-time/`, {
         method: 'POST',
         body: JSON.stringify({
           start_date: dateRange.start,
@@ -458,7 +459,7 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
   const checkIntegrations = async () => {
     try {
       const data = await safeFetchJson<{ integrations: Integration[] }>(
-        `${API_BASE}/integrations/`
+        `${API_BASE}/integrations/status/`
       );
       const qb = data.integrations?.find(i => i.provider === 'quickbooks');
       if (qb?.is_connected) {
@@ -519,7 +520,7 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
         end_date: dateRange.end,
       });
       const data = await safeFetchJson<{ invoices: QBInvoice[]; total: number }>(
-        `${API_BASE}/billing/quickbooks/invoices/?${params}`
+        `${API_BASE}/integrations/quickbooks/invoices/?${params}`
       );
       setQbInvoices(data.invoices || []);
       
@@ -539,7 +540,7 @@ const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, onSuccess, d
     setError(null);
     
     try {
-      const data = await safeFetchJson<any>(`${API_BASE}/billing/quickbooks/import/`, {
+      const data = await safeFetchJson<any>(`${API_BASE}/integrations/quickbooks/import/`, {
         method: 'POST',
         body: JSON.stringify({
           invoice_ids: Array.from(selectedQbInvoices),
@@ -1181,7 +1182,7 @@ const ClientProfitability: React.FC = () => {
   // Save edited billed hours/amount
   const handleSaveBilled = async (clientId: number, hours: number, amount: number) => {
     try {
-      await safeFetchJson(`${API_BASE}/billing/client-billed/`, {
+      await safeFetchJson(`${API_BASE}/billing/clients/update-billed/`, {
         method: 'POST',
         body: JSON.stringify({
           client_id: clientId,
@@ -1310,6 +1311,12 @@ const ClientProfitability: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Integration Status */}
+      <IntegrationStatusBanner
+        context="profitability"
+        onDataRefresh={() => { fetchData(); fetchInvoices(); }}
+      />
 
       {/* Tabs */}
       <div className="flex gap-1 p-1 bg-slate-100 rounded-lg w-fit">

@@ -5182,7 +5182,6 @@ def bulk_categorize(request):
 
 
     industry_type = getattr(org, 'industry_type', 'general') or 'general'
-    valid_categories = get_categories_for_industry(industry_type)
     
     results = {
         'success_count': 0,
@@ -5206,18 +5205,21 @@ def bulk_categorize(request):
             )
             
             # Set client
+            client = None
             client_id = item.get('client_id')
             if client_id:
                 client = Client.objects.get(id=client_id, org=org)
                 block.client = client
             
-            # Set category
+            # Set category (validate against client-aware category list)
             category = item.get('category', '').strip()
             if not category:
                 results['errors'].append({'block_id': block_id, 'error': 'category missing'})
                 results['error_count'] += 1
                 continue
 
+            client_code = client.code if client else None
+            valid_categories = get_categories_for_industry(industry_type, client_code=client_code)
             if category not in valid_categories:
                 results['errors'].append({'block_id': block_id, 'error': f'invalid category: {category}'})
                 results['error_count'] += 1

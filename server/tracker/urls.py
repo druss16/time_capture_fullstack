@@ -224,9 +224,9 @@ urlpatterns = [
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
 
-        # QuickBooks
+    # ── Integrations ──
     path('integrations/status/', views_integrations.integrations_status, name='integrations-status'),
-    
+
     # QuickBooks
     path('integrations/quickbooks/connect/', views_integrations.quickbooks_connect, name='quickbooks-connect'),
     path('integrations/quickbooks/callback/', views_integrations.quickbooks_callback, name='quickbooks-callback'),
@@ -234,9 +234,9 @@ urlpatterns = [
     path('integrations/quickbooks/disconnect/', views_integrations.quickbooks_disconnect, name='quickbooks-disconnect'),
     path('integrations/quickbooks/customers/', views_integrations.quickbooks_customers, name='quickbooks-customers'),
     path('integrations/quickbooks/import/', views_integrations.quickbooks_import, name='quickbooks-import'),
-    path('integrations/quickbooks/invoices/', views_billing.quickbooks_invoices, name='qb_invoices'),
-    path('integrations/quickbooks/invoices/import/', views_billing.quickbooks_import_invoices, name='qb_import_invoices'),
-    
+    path('integrations/quickbooks/push-time/', views_integrations.quickbooks_push_time, name='quickbooks-push-time'),
+    path('integrations/quickbooks/invoices/', views_integrations.quickbooks_pull_invoices, name='quickbooks-invoices'),
+
     # Xero
     path('integrations/xero/connect/', views_integrations.xero_connect, name='xero-connect'),
     path('integrations/xero/callback/', views_integrations.xero_callback, name='xero-callback'),
@@ -244,7 +244,8 @@ urlpatterns = [
     path('integrations/xero/disconnect/', views_integrations.xero_disconnect, name='xero-disconnect'),
     path('integrations/xero/contacts/', views_integrations.xero_contacts, name='xero-contacts'),
     path('integrations/xero/import/', views_integrations.xero_import, name='xero-import'),
-
+    path('integrations/xero/push-time/', views_integrations.xero_push_time, name='xero-push-time'),
+    path('integrations/xero/invoices/', views_integrations.xero_pull_invoices, name='xero-invoices'),
     path('clients/bulk-assign/', views_bulk_assignments.bulk_assign_clients, name='bulk-assign-clients'),
     path('clients/bulk-unassign/', views_bulk_assignments.bulk_unassign_clients, name='bulk-unassign-clients'),
     path('clients/copy-assignments/', views_bulk_assignments.copy_assignments, name='copy-assignments'),

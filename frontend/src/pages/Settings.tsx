@@ -48,6 +48,7 @@ import {
   ChevronDown,
   Calendar,
   Folder,
+  Link2,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -55,6 +56,9 @@ import { safeFetchJson } from "@/lib/api";
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
 import ClientImportWizard from '@/components/ClientImportWizard';
 import ClientGroupManager from '@/components/ClientGroupManager';  // ← ADD THIS
+
+import IntegrationsTab from '@/components/IntegrationsTab';
+
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -140,8 +144,8 @@ type EmployeeCostRate = {
   end_date: string | null;
 };
 
-type Tab = 'organization' | 'team' | 'clients' | 'assignments' | 'groups' | 'billing' | 'costs' | 'devices' | 'token';
-//                                                              
+type Tab = 'organization' | 'team' | 'clients' | 'assignments' | 'groups' | 'integrations' | 'billing' | 'costs' | 'devices' | 'token';                                                             
+
 // Define which plans can access which features
 const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive'];
 const EXECUTIVE_PLANS: PlanType[] = ['executive'];
@@ -362,6 +366,10 @@ export default function Settings() {
           const token = await safeFetchJson<InstallToken>(`${API_BASE}/settings/install-token/`);
           setInstallToken(token);
           break;
+
+        case 'integrations':
+          // IntegrationsTab handles its own data loading
+          break;
       }
     } catch (err: any) {
       showError(err?.message || 'Failed to load data');
@@ -380,6 +388,7 @@ export default function Settings() {
   { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
   { id: 'assignments', label: 'Client Access', icon: <Shield className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },
   { id: 'groups', label: 'Client Groups', icon: <Folder className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },  // ← ADD THIS
+  { id: 'integrations', label: 'Integrations', icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner', 'admin'] },
   { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
   { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
   { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
@@ -514,14 +523,14 @@ export default function Settings() {
                       {activeTab === 'assignments' && (
                         <ClientAssignmentManager users={teamMembers} clients={clients} onSuccess={showSuccess} onError={showError} />
                       )}
-                      {activeTab === 'assignments' && (
-                        <ClientAssignmentManager users={teamMembers} clients={clients} onSuccess={showSuccess} onError={showError} />
-                      )}
                       {activeTab === 'groups' && (
                         <ClientGroupManager users={teamMembers} clients={clients} onSuccess={showSuccess} onError={showError} />
                       )}
                       {activeTab === 'token' && (
                         <TokenTab token={installToken} onRefresh={() => loadTabData('token')} onSuccess={showSuccess} onError={showError} />
+                      )}
+                      {activeTab === 'integrations' && (
+                        <IntegrationsTab onSuccess={showSuccess} onError={showError} />
                       )}
                     </>
                   )}

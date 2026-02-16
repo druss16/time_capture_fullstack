@@ -11,6 +11,8 @@ import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
 import ClientProfitability from '@/components/ClientProfitability';
 import TimesheetHistory from '@/components/TimesheetHistory';
+import IntegrationPushPanel from '@/components/IntegrationPushPanel';
+import IntegrationInvoicePanel from '@/components/IntegrationInvoicePanel';
 import {
   Clock,
   CheckSquare,
@@ -475,8 +477,18 @@ const BillingPage: React.FC = () => {
                 <>
                   {activeTab === 'timesheet' && <WeeklyTimesheet />}
                   {activeTab === 'approvals' && <ApprovalQueue />}
-                  {activeTab === 'billing' && <ClientSummary />}
-                  {activeTab === 'profitability' && <ClientProfitability />}
+                  {activeTab === 'billing' && (
+                    <div className="space-y-6">
+                      <ClientSummary />
+                      <IntegrationPushPanel />
+                    </div>
+                  )}
+                  {activeTab === 'profitability' && (
+                    <div className="space-y-6">
+                      <ClientProfitability />
+                      <IntegrationInvoicePanel />
+                    </div>
+                  )}
                   {activeTab === 'history' && <TimesheetHistory />}
                 </>
               );

@@ -627,7 +627,10 @@ def quickbooks_push_time(request):
 
         # EmployeeRef is REQUIRED when NameOf=Employee
         # EmployeeRef required when NameOf=Employee
-        qb_emp_id = getattr(block.user, 'quickbooks_employee_id', None) or default_emp_id
+        membership = OrganizationMembership.objects.filter(
+            user=block.user, organization=org
+        ).first()
+        qb_emp_id = getattr(membership, 'quickbooks_employee_id', None) or default_emp_id
         if qb_emp_id:
             payload['EmployeeRef'] = {'value': str(qb_emp_id)}
         else:

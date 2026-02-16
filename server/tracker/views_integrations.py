@@ -587,9 +587,13 @@ def quickbooks_push_time(request):
     entries = []
 
     # Get default QBO employee for unmapped users
+    # Get default QBO employee for unmapped users
     try:
-        emp_resp = qb_api_call(integration, 'GET', f'/v3/company/{integration.realm_id}/query?query=SELECT Id FROM Employee MAXRESULTS 1&minorversion=65')
-        default_emp_id = emp_resp.json().get('QueryResponse', {}).get('Employee', [{}])[0].get('Id')
+        emp_data, emp_err = qb_api_call(integration, 'GET', '/query', params={'query': 'SELECT Id FROM Employee MAXRESULTS 1', 'minorversion': '65'})
+        if emp_data and not emp_err:
+            default_emp_id = emp_data.get('QueryResponse', {}).get('Employee', [{}])[0].get('Id')
+        else:
+            default_emp_id = None
     except Exception:
         default_emp_id = None
 

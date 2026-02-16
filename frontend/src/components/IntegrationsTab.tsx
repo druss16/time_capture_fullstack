@@ -612,12 +612,8 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
         const width = 600;
         const height = 700;
         const left = window.screenX + (window.outerWidth - width) / 2;
-        const top = window.screenY + (window.outerHeight - height) / 2;
-        window.open(
-          data.auth_url,
-          `${provider}_oauth`,
-          `width=${width},height=${height},left=${left},top=${top}`
-        );
+        // NEW: full-page redirect
+        window.location.href = data.auth_url;
       }
     } catch (err: any) {
       onError(err?.message || `Failed to initiate ${provider} connection`);

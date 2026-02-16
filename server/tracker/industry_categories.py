@@ -224,6 +224,26 @@ AI_CONSULTING_CATEGORIES = [
     "Sales/Business Dev",
 ]
 
+# =============================================================================
+# INTERNAL CLIENT CATEGORIES (same for all industries)
+# =============================================================================
+
+INTERNAL_CATEGORIES = [
+    *UNIVERSAL_SYSTEM_CATEGORIES,
+    "Administration",
+    "Team Meetings",
+    "Training/Professional Development",
+    "Business Development/Sales",
+    "Hiring/HR",
+    "Company Planning",
+    "Internal Projects",
+    "Marketing (Own Firm)",
+    "IT/Tech Support",
+    "Finance/Accounting (Own Firm)",
+    "PTO/Time Off",
+    "Email/Communication",
+]
+
 AI_CONSULTING_TOOL_DETECTION = {
     "vscode": {
         "keywords": ["visual studio code", "vscode", "vs code", "code - ", ".py - ", ".js - ", ".tsx - "],
@@ -543,8 +563,11 @@ GENERAL_TASK_TYPES = [
 # HELPER FUNCTIONS
 # =============================================================================
 
-def get_categories_for_industry(industry_type: str) -> list:
-    """Get category list for a specific industry type."""
+def get_categories_for_industry(industry_type: str, client_code: str = None) -> list:
+    """Get category list. Returns internal categories if client is Internal."""
+    if client_code == 'INTERNAL':
+        return INTERNAL_CATEGORIES
+    
     mapping = {
         'cpa': CPA_CATEGORIES,
         'ai_consulting': AI_CONSULTING_CATEGORIES,

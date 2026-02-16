@@ -5061,6 +5061,7 @@ def save_categorization(request):
             )
 
     # Validate category using industry-specific list
+    # Validate category using industry-specific list
     category = data.get('category', '').strip()
     if not category:
         return Response(
@@ -5068,8 +5069,9 @@ def save_categorization(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
+    client_code = client.code if client else None
     industry_type = getattr(org, 'industry_type', 'general') or 'general'
-    valid_categories = get_categories_for_industry(industry_type)
+    valid_categories = get_categories_for_industry(industry_type, client_code=client_code)
     
     if category not in valid_categories:
         return Response(

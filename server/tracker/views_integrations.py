@@ -585,6 +585,14 @@ def quickbooks_push_time(request):
 
     # Build TimeActivity entries
     entries = []
+
+    # Get default QBO employee for unmapped users
+    try:
+        emp_resp = qb_api_call(integration, 'GET', f'/v3/company/{integration.realm_id}/query?query=SELECT Id FROM Employee MAXRESULTS 1&minorversion=65')
+        default_emp_id = emp_resp.json().get('QueryResponse', {}).get('Employee', [{}])[0].get('Id')
+    except Exception:
+        default_emp_id = None
+
     for block in blocks:
         total_minutes = block.minutes or 0
         if total_minutes <= 0 and block.end and block.start:
@@ -612,10 +620,13 @@ def quickbooks_push_time(request):
             'CustomerRef': {'value': block.client.quickbooks_id},
         }
 
-        # Map user → QBO employee if available
-        qb_emp_id = getattr(block.user, 'quickbooks_employee_id', None)
+        # EmployeeRef is REQUIRED when NameOf=Employee
+        # EmployeeRef required when NameOf=Employee
+        qb_emp_id = getattr(block.user, 'quickbooks_employee_id', None) or default_emp_id
         if qb_emp_id:
-            payload['EmployeeRef'] = {'value': qb_emp_id}
+            payload['EmployeeRef'] = {'value': str(qb_emp_id)}
+        else:
+            payload['NameOf'] = 'Vendor'
 
         entries.append({
             'block_id': block.id,

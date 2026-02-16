@@ -84,11 +84,11 @@ const IntegrationPushPanel: React.FC = () => {
   const fetchStatus = useCallback(async () => {
     try {
       const resp = await safeFetchJson<any>(`${API_BASE}/integrations/status/`);
-      setStatus(resp.integrations || resp);
+      const integrations = resp.integrations || resp;
+      setStatus(integrations);
 
-      // Auto-select connected provider
-      if (data.quickbooks?.connected) setActiveProvider('quickbooks');
-      else if (data.xero?.connected) setActiveProvider('xero');
+      if (integrations.quickbooks?.connected) setActiveProvider('quickbooks');
+      else if (integrations.xero?.connected) setActiveProvider('xero');
     } catch (err) {
       console.error('Failed to fetch integration status:', err);
     } finally {

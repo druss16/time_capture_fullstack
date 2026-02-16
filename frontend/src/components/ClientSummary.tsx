@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import IntegrationStatusBanner from '@/components/IntegrationStatusBanner';
+import IntegrationPushPanel from '@/components/IntegrationPushPanel';
 
 
 // ===============================
@@ -420,6 +421,9 @@ const ClientSummary: React.FC<ClientSummaryProps> = () => {
         context="billing"
         onDataRefresh={fetchSummary}
       />
+
+      {/* Push Time to QBO/Xero */}
+      <IntegrationPushPanel />
 
       {/* Error Display */}
       {error && (

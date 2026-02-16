@@ -416,12 +416,6 @@ const ClientSummary: React.FC<ClientSummaryProps> = () => {
         </div>
       </div>
 
-      {/* Integration Status */}
-      <IntegrationStatusBanner
-        context="billing"
-        onDataRefresh={fetchSummary}
-      />
-
       {/* Push Time to QBO/Xero */}
       <IntegrationPushPanel />
 

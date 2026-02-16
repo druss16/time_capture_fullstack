@@ -83,8 +83,8 @@ const IntegrationPushPanel: React.FC = () => {
   // Fetch integration status
   const fetchStatus = useCallback(async () => {
     try {
-      const data = await safeFetchJson<IntegrationStatus>(`${API_BASE}/integrations/status/`);
-      setStatus(data);
+      const resp = await safeFetchJson<any>(`${API_BASE}/integrations/status/`);
+      setStatus(resp.integrations || resp);
 
       // Auto-select connected provider
       if (data.quickbooks?.connected) setActiveProvider('quickbooks');

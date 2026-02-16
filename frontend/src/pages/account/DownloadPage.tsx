@@ -1,20 +1,12 @@
 // src/pages/account/DownloadPage.tsx
 /**
  * Download page for desktop agent installers
+ * Uses shared PairDeviceCard component for device pairing
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Download, 
-  Apple, 
-  Monitor, 
-  Copy, 
-  Check, 
-  CheckCircle2,
-  Smartphone
-} from 'lucide-react';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+import { Download, Apple, Monitor } from 'lucide-react';
+import PairDeviceCard from '@/components/PairDeviceCard';
 
 const DOWNLOAD_URLS = {
   macos: 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker.pkg',
@@ -23,43 +15,13 @@ const DOWNLOAD_URLS = {
 
 export default function DownloadPage() {
   const [platform, setPlatform] = useState<'macos' | 'windows'>('macos');
-  const [copied, setCopied] = useState(false);
-  const [installToken, setInstallToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Detect platform
     const userAgent = navigator.userAgent.toLowerCase();
     if (userAgent.includes('win')) {
       setPlatform('windows');
     }
-    loadInstallToken();
   }, []);
-
-  const loadInstallToken = async () => {
-    try {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE}/settings/install-token/`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      const data = await response.json();
-      if (data.token) {
-        setInstallToken(data.token);
-      }
-    } catch (err) {
-      console.error('Failed to load install token:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCopyToken = () => {
-    if (installToken) {
-      navigator.clipboard.writeText(installToken);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
 
   const handleDownload = (os: 'macos' | 'windows') => {
     window.open(DOWNLOAD_URLS[os], '_blank');
@@ -131,50 +93,8 @@ export default function DownloadPage() {
         </div>
       </div>
 
-      {/* Pairing Code Card */}
-      <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">
-        <div className="flex items-center gap-4 mb-6">
-          <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center">
-            <Smartphone className="w-7 h-7 text-amber-600" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-slate-900">Pairing Code</h3>
-            <p className="text-slate-500 font-medium">Enter this code in the desktop app to connect</p>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="animate-pulse">
-            <div className="h-12 bg-slate-100 rounded-xl"></div>
-          </div>
-        ) : installToken ? (
-          <div className="flex items-center gap-3">
-            <code className="flex-1 bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-lg text-slate-700 tracking-wider">
-              {installToken}
-            </code>
-            <button
-              onClick={handleCopyToken}
-              className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all"
-              title="Copy to clipboard"
-            >
-              {copied ? (
-                <Check className="w-6 h-6 text-emerald-600" />
-              ) : (
-                <Copy className="w-6 h-6 text-slate-500" />
-              )}
-            </button>
-          </div>
-        ) : (
-          <p className="text-slate-500 font-medium">Unable to load pairing code. Please refresh the page.</p>
-        )}
-
-        {copied && (
-          <p className="mt-3 text-sm text-emerald-600 font-medium flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4" />
-            Copied to clipboard!
-          </p>
-        )}
-      </div>
+      {/* Pair Device Card - shared component */}
+      <PairDeviceCard />
 
       {/* Installation Steps */}
       <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 p-8">

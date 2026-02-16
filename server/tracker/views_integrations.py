@@ -777,6 +777,53 @@ def quickbooks_pull_invoices(request):
             'total_paid': round(d['total_paid'], 2),
             'total_balance': round(d['total_balance'], 2),
         })
+
+    # ── Save pulled invoices to local Invoice model ──
+    from .models import Invoice as InvoiceModel
+
+    saved_count = 0
+    for cust_data in results:
+        # Only save for matched clients
+        if not cust_data.get('matched') or not cust_data.get('timetracker_client_id'):
+            continue
+
+        for inv in cust_data.get('invoices', []):
+            qb_invoice_id = str(inv.get('id', ''))
+            doc_number = inv.get('doc_number', '') or f"QBO-{qb_invoice_id}"
+            inv_date = inv.get('date', end_date)
+            total = Decimal(str(inv.get('total', 0)))
+            
+            # Estimate hours from amount ÷ default rate
+            default_rate = Decimal('150.00')
+            try:
+                if hasattr(org, 'billing_rate_default') and org.billing_rate_default:
+                    default_rate = Decimal(str(org.billing_rate_default))
+            except Exception:
+                pass
+            
+            estimated_hours = (total / default_rate).quantize(Decimal('0.01')) if default_rate > 0 else Decimal('0')
+
+            try:
+                InvoiceModel.objects.update_or_create(
+                    org=org,
+                    invoice_number=doc_number,
+                    defaults={
+                        'client_id': cust_data['timetracker_client_id'],
+                        'client_name': cust_data.get('customer_name', ''),
+                        'invoice_date': inv_date,
+                        'amount': total,
+                        'hours_billed': estimated_hours,
+                        'source': 'quickbooks',
+                        'external_id': qb_invoice_id,
+                        'created_by': request.user,
+                    }
+                )
+                saved_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to save QBO invoice {doc_number}: {e}")
+
+    logger.info(f"Saved {saved_count} QBO invoices for org {org.id}")
+
     results.sort(key=lambda x: x['total_billed'], reverse=True)
 
     return Response({

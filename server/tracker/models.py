@@ -1840,8 +1840,17 @@ class Timesheet(models.Model):
         
         self.save()
         
+        # Auto-approve owner timesheets — no one above them to review
+        membership = OrganizationMembership.objects.filter(
+            user=self.user, organization=self.org
+        ).first()
+        if membership and membership.role == 'owner':
+            self.approve(approved_by=self.user, notes='Auto-approved (owner)')
+            return
+        
         # Lock associated blocks
         self.blocks.update(approved=False)  # Mark as pending approval
+
     
     def approve(self, approved_by, notes=''):
         """Approve the timesheet"""

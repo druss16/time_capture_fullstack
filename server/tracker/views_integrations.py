@@ -547,8 +547,8 @@ def quickbooks_push_time(request):
     except ValueError:
         return error_response('Invalid date format. Use YYYY-MM-DD')
 
-    if (end_dt - start_dt).days > 31:
-        return error_response('Date range cannot exceed 31 days')
+    if (end_dt - start_dt).days > 366:
+        return error_response('Date range cannot exceed 1 year')
 
     # Build UTC range for the date span
     tz = timezone.get_current_timezone()

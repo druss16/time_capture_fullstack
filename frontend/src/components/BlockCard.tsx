@@ -50,6 +50,7 @@ interface BlockCardProps {
   block: Block;
   clients: Client[];
   categories: string[];
+  internalCategories?: string[];  // ← ADD THIS
   onCategorize: (
     blockId: number, 
     blockIds: number[], 
@@ -59,7 +60,7 @@ interface BlockCardProps {
   ) => Promise<any>;
 }
 
-const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps) => {
+const BlockCard = ({ block, clients, categories, internalCategories, onCategorize }: BlockCardProps) => {
   const [isEditing, setIsEditing] = useState(false);
   const [selectedClient, setSelectedClient] = useState<string>(
     block.current_client_id?.toString() || ''
@@ -68,6 +69,10 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
   const [notes, setNotes] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const selectedClientObj = clients.find(c => c.id.toString() === selectedClient);
+  const activeCategories = (selectedClientObj?.name === 'Internal' && internalCategories)
+    ? internalCategories
+    : categories;
 
   const blockIds = block.block_ids || [block.id];
   const isMerged = (block.block_count || 1) > 1;
@@ -379,7 +384,7 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
                   "
                 >
                   <option value="">Select category...</option>
-                  {categories.map((category) => (
+                  {activeCategories.map((category) => (
                     <option key={category} value={category}>
                       {category}
                     </option>
@@ -479,7 +484,7 @@ const BlockCard = ({ block, clients, categories, onCategorize }: BlockCardProps)
                   "
                 >
                   <option value="">Select category...</option>
-                  {categories.map((category) => (
+                  {activeCategories.map((category) => (
                     <option key={category} value={category}>
                       {category}
                     </option>

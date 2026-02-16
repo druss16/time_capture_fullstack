@@ -95,6 +95,14 @@ export default function DailyReview() {
     date: todayIso(),
   });
 
+  const INTERNAL_CATEGORIES = [
+  "Idle", "Personal/Non-Billable",
+  "Administration", "Team Meetings", "Training/Professional Development",
+  "Business Development/Sales", "Hiring/HR", "Company Planning",
+  "Internal Projects", "Marketing (Own Firm)", "IT/Tech Support",
+  "Finance/Accounting (Own Firm)", "PTO/Time Off", "Email/Communication",
+];
+
 
   useEffect(() => { if (!user && whoami) setUser(whoami); }, [whoami, user]);
   useEffect(() => { (async () => { try { await primeCsrf(API_BASE); } catch {} })(); }, []);
@@ -482,7 +490,10 @@ export default function DailyReview() {
                                                   {availableClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                                 </select>
                                                 <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className={DESIGN_SYSTEM.components.inputCompact}>
-                                                  {dynamicCategories.map(n => <option key={n} value={n}>{n}</option>)}
+                                                  {(availableClients.find(c => c.id === selectedClientId)?.name === 'Internal'
+                                                    ? INTERNAL_CATEGORIES
+                                                    : dynamicCategories
+                                                  ).map(n => <option key={n} value={n}>{n}</option>)}
                                                 </select>
                                                 <button onClick={handleSaveCategory} disabled={isUpdating} className="p-1.5 bg-success text-success-foreground rounded-lg"><Check className="w-4 h-4" /></button>
                                                 <button onClick={handleCancelEdit} className="p-1.5 bg-muted rounded-lg"><X className="w-4 h-4" /></button>

@@ -12,6 +12,14 @@ import { safeFetchJson } from "@/lib/api";
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
+const INTERNAL_CATEGORIES = [
+  "Idle", "Personal/Non-Billable",
+  "Administration", "Team Meetings", "Training/Professional Development",
+  "Business Development/Sales", "Hiring/HR", "Company Planning",
+  "Internal Projects", "Marketing (Own Firm)", "IT/Tech Support",
+  "Finance/Accounting (Own Firm)", "PTO/Time Off", "Email/Communication",
+];
+
 interface Suggestion {
   client: string;
   category: string;
@@ -280,6 +288,7 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
               block={block}
               clients={clients}
               categories={categories}
+              internalCategories={INTERNAL_CATEGORIES}
               onCategorize={categorizeBlock}
             />
           ))}

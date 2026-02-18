@@ -465,6 +465,7 @@ const IntegrationPushPanel: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
           {pushProgress && (
               <div className="mt-4 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
                 <div className="flex items-center justify-between text-sm text-slate-600 mb-2">

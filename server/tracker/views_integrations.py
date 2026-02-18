@@ -506,26 +506,18 @@ def quickbooks_import(request):
 # QuickBooks: PUSH Time Entries
 # ============================================================================
 
+# ============================================================================
+# REPLACE quickbooks_push_time in views_integrations.py
+# AND ADD quickbooks_push_status below it
+# ============================================================================
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def quickbooks_push_time(request):
     """
     Push categorized time entries to QuickBooks as TimeActivity records.
-
-    Body: {
-        "start_date": "2026-02-10",
-        "end_date": "2026-02-14",
-        "client_ids": [1, 2, 3],   // optional filter
-        "dry_run": false            // preview without pushing
-    }
-
-    Each categorized Block → one QBO TimeActivity with:
-    - CustomerRef (from client.quickbooks_id)
-    - EmployeeRef (from membership.quickbooks_employee_id)
-    - Hours/Minutes
-    - Description (category + notes)
-    - TxnDate (block date)
-    - BillableStatus
+    - dry_run=True: returns preview synchronously
+    - dry_run=False: kicks off Celery background task, returns task_id
     """
     org = get_user_org(request.user)
     integration, err = get_integration(org, 'quickbooks')
@@ -583,7 +575,7 @@ def quickbooks_push_time(request):
             'summary': {'total_entries': 0, 'total_hours': 0},
         })
 
-    # Pre-cache user → QBO employee mappings (1 query instead of N)
+    # Pre-cache user → QBO employee mappings for preview
     user_ids = set(b.user_id for b in blocks)
     memberships = {
         m.user_id: m.quickbooks_employee_id
@@ -593,23 +585,8 @@ def quickbooks_push_time(request):
         if m.quickbooks_employee_id
     }
 
-    # Get default QBO employee for unmapped users
-    default_emp_id = None
-    try:
-        emp_data, emp_err = qb_api_call(
-            integration, 'GET', '/query',
-            params={'query': 'SELECT Id FROM Employee MAXRESULTS 1', 'minorversion': '65'}
-        )
-        if emp_data and not emp_err:
-            employees = emp_data.get('QueryResponse', {}).get('Employee', [])
-            if employees:
-                default_emp_id = employees[0].get('Id')
-    except Exception:
-        pass
-
-    # Build TimeActivity entries
+    # Build preview entries (used for both dry_run and push response)
     entries = []
-
     for block in blocks:
         total_minutes = block.minutes or 0
         if total_minutes <= 0 and block.end and block.start:
@@ -617,108 +594,80 @@ def quickbooks_push_time(request):
         if total_minutes <= 0:
             continue
 
-        hours = total_minutes // 60
-        mins = total_minutes % 60
-
         cats = block.category_hours or {}
         cat_names = ', '.join(cats.keys()) if cats else 'General'
-        description = cat_names
-        if block.notes:
-            description += f" — {block.notes}"
-
-        block_date = timezone.localtime(block.start).strftime('%Y-%m-%d')
-
-        payload = {
-            'TxnDate': block_date,
-            'NameOf': 'Employee',
-            'Hours': hours,
-            'Minutes': mins,
-            'Description': description[:4000],
-            'CustomerRef': {'value': block.client.quickbooks_id},
-            'BillableStatus': 'Billable' if block.is_billable else 'NotBillable',
-        }
-
-        # EmployeeRef is REQUIRED when NameOf=Employee
-        qb_emp_id = memberships.get(block.user_id) or default_emp_id
-        if qb_emp_id:
-            payload['EmployeeRef'] = {'value': str(qb_emp_id)}
-        else:
-            payload['NameOf'] = 'Vendor'
 
         entries.append({
             'block_id': block.id,
-            'block': block,
-            'payload': payload,
-            'client_name': block.client.name,
+            'client': block.client.name,
+            'client_id': block.client_id,
+            'date': timezone.localtime(block.start).strftime('%Y-%m-%d'),
             'hours': round(total_minutes / 60, 2),
-            'date': block_date,
             'category': cat_names,
+            'notes': block.notes or '',
         })
 
     # --- DRY RUN ---
     if dry_run:
         return Response({
             'dry_run': True,
-            'entries': [{
-                'block_id': e['block_id'],
-                'client': e['client_name'],
-                'date': e['date'],
-                'hours': e['hours'],
-                'category': e['category'],
-            } for e in entries],
+            'entries': entries,
             'summary': {
                 'total_entries': len(entries),
                 'total_hours': round(sum(e['hours'] for e in entries), 2),
-                'clients': list(set(e['client_name'] for e in entries)),
+                'clients': list(set(e['client'] for e in entries)),
             },
         })
 
-    # --- PUSH ---
-    pushed, push_errors = [], []
+    # --- PUSH (background task) ---
+    from tracker.tasks import push_time_to_quickbooks
 
-    for entry in entries:
-        try:
-            data, err = qb_api_call(integration, 'POST', '/timeactivity', json=entry['payload'])
-            if err:
-                push_errors.append({
-                    'block_id': entry['block_id'],
-                    'client': entry['client_name'],
-                    'error': f'API call failed: {err}',
-                })
-                continue
-
-            qb_id = data.get('TimeActivity', {}).get('Id', '')
-
-            # Save reference back to block (prevent re-push)
-            if qb_id:
-                Block.objects.filter(id=entry['block_id']).update(
-                    qb_time_activity_id=str(qb_id)
-                )
-
-            pushed.append({
-                'block_id': entry['block_id'],
-                'client': entry['client_name'],
-                'date': entry['date'],
-                'hours': entry['hours'],
-                'qb_time_activity_id': qb_id,
-            })
-        except Exception as e:
-            logger.error(f"Push failed for block {entry['block_id']}: {e}")
-            push_errors.append({
-                'block_id': entry['block_id'],
-                'client': entry['client_name'],
-                'error': str(e),
-            })
+    task = push_time_to_quickbooks.delay(
+        org.id,
+        request.user.id,
+        start_date,
+        end_date,
+        client_ids or None,
+    )
 
     return Response({
-        'pushed': pushed,
-        'errors': push_errors,
-        'summary': {
-            'pushed_count': len(pushed),
-            'error_count': len(push_errors),
-            'total_hours': round(sum(p['hours'] for p in pushed), 2),
-        },
+        'status': 'started',
+        'task_id': task.id,
+        'total_entries': len(entries),
+        'total_hours': round(sum(e['hours'] for e in entries), 2),
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def quickbooks_push_status(request, task_id):
+    """
+    Poll for push task progress.
+    Returns: {status: 'PROGRESS'|'complete'|'error', current, total, pushed, errors}
+    """
+    from celery.result import AsyncResult
+
+    result = AsyncResult(task_id)
+
+    if result.state == 'PROGRESS':
+        return Response({
+            'status': 'processing',
+            **result.info,
+        })
+    elif result.state == 'SUCCESS':
+        return Response(result.result)
+    elif result.state == 'FAILURE':
+        return Response({
+            'status': 'error',
+            'error': str(result.result),
+        }, status=500)
+    else:
+        # PENDING — task hasn't started yet
+        return Response({
+            'status': 'pending',
+            'current': 0,
+            'total': 0,
+        })
 
 
 # ============================================================================
@@ -874,6 +823,7 @@ def quickbooks_pull_invoices(request):
             'invoice_count': sum(r['invoice_count'] for r in results),
         },
     })
+
 
 
 # ============================================================================

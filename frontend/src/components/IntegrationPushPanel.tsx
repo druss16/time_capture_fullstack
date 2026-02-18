@@ -138,11 +138,14 @@ const IntegrationPushPanel: React.FC = () => {
     }
   };
 
+  const [pushProgress, setPushProgress] = useState<{current: number; total: number} | null>(null);
+
   // Actual push
   const handlePush = async () => {
     if (!activeProvider) return;
     setError(null);
     setPushing(true);
+    setPushProgress(null);
 
     try {
       const endpoint =
@@ -150,7 +153,7 @@ const IntegrationPushPanel: React.FC = () => {
           ? `${API_BASE}/integrations/quickbooks/push-time/`
           : `${API_BASE}/integrations/xero/push-time/`;
 
-      const data = await safeFetchJson<PushResult>(endpoint, {
+      const data = await safeFetchJson<any>(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -159,12 +162,59 @@ const IntegrationPushPanel: React.FC = () => {
           dry_run: false,
         }),
       });
-      setPushResult(data);
-      setPreview(null);
+
+      // If we got a task_id, poll for status
+      if (data.task_id) {
+        const taskId = data.task_id;
+        setPushProgress({ current: 0, total: data.total_entries || 0 });
+
+        const pollInterval = setInterval(async () => {
+          try {
+            const status = await safeFetchJson<any>(
+              `${API_BASE}/integrations/quickbooks/push-status/${taskId}/`
+            );
+
+            if (status.status === 'processing') {
+              setPushProgress({
+                current: status.current || 0,
+                total: status.total || 0,
+              });
+            } else if (status.status === 'complete') {
+              clearInterval(pollInterval);
+              setPushResult({
+                pushed: status.pushed || [],
+                errors: status.errors || [],
+                summary: {
+                  pushed_count: status.pushed_count,
+                  total_hours: status.total_hours,
+                },
+              });
+              setPreview(null);
+              setPushing(false);
+              setPushProgress(null);
+            } else if (status.status === 'error') {
+              clearInterval(pollInterval);
+              setError(status.error || 'Push failed');
+              setPushing(false);
+              setPushProgress(null);
+            }
+          } catch (err) {
+            clearInterval(pollInterval);
+            setError('Failed to check push status');
+            setPushing(false);
+            setPushProgress(null);
+          }
+        }, 2000); // Poll every 2 seconds
+      } else {
+        // Synchronous response (small batch or error)
+        setPushResult(data);
+        setPreview(null);
+        setPushing(false);
+      }
     } catch (err: any) {
       setError(err?.message || 'Push failed. Please try again.');
-    } finally {
       setPushing(false);
+      setPushProgress(null);
     }
   };
 
@@ -415,6 +465,19 @@ const IntegrationPushPanel: React.FC = () => {
               </div>
             </div>
           </div>
+          {pushProgress && (
+              <div className="mt-4 p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
+                <div className="flex items-center justify-between text-sm text-slate-600 mb-2">
+                  <span className="font-bold">Pushing {pushProgress.current} of {pushProgress.total}...</span>
+                  <span className="font-bold">{Math.round((pushProgress.current / Math.max(pushProgress.total, 1)) * 100)}%</span>
+                </div>
+                <div className="w-full bg-slate-200 rounded-full h-2.5">
+                  <div
+                    className="bg-emerald-500 h-2.5 rounded-full transition-all duration-300"
+                    style={{ width: `${(pushProgress.current / Math.max(pushProgress.total, 1)) * 100}%` }}
+                  />
+                </div>
+              </div>
         )}
 
         {/* Empty preview */}

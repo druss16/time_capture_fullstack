@@ -1265,3 +1265,172 @@ def batch_classify_all(user_id=None, limit=500):
     except Exception as e:
         logger.error(f"[BATCH] Failed: {e}", exc_info=True)
         raise
+
+# ============================================================================
+# ADD THIS TO tracker/tasks.py
+# ============================================================================
+
+@shared_task(name='tracker.push_time_to_quickbooks', bind=True)
+def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_ids=None):
+    """
+    Background push of time entries to QuickBooks.
+    Called from the push-time endpoint when dry_run=False.
+    """
+    from tracker.models import Organization, Block, OrganizationMembership, Integration
+    from tracker.views_integrations import qb_api_call, get_integration_for_org, refresh_quickbooks_token
+    from django.db.models import Q
+    from datetime import datetime, timedelta
+    from django.utils import timezone
+    import logging
+
+    logger = logging.getLogger('tracker.tasks')
+    logger.info(f"[QBO-PUSH] Starting push for org={org_id}, dates={start_date} to {end_date}")
+
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return {'status': 'error', 'error': 'Organization not found'}
+
+    # Get integration
+    try:
+        integration = Integration.objects.get(organization=org, provider='quickbooks', is_connected=True)
+    except Integration.DoesNotExist:
+        return {'status': 'error', 'error': 'QuickBooks not connected'}
+
+    # Parse dates
+    start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+    end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+    tz = timezone.get_current_timezone()
+    start_aware = timezone.make_aware(datetime.combine(start_dt, datetime.min.time()), tz)
+    end_aware = timezone.make_aware(datetime.combine(end_dt + timedelta(days=1), datetime.min.time()), tz)
+
+    # Get blocks
+    blocks_qs = Block.objects.filter(
+        org=org,
+        is_categorized=True,
+        start__gte=start_aware,
+        start__lt=end_aware,
+        client__isnull=False,
+        client__quickbooks_id__isnull=False,
+    ).exclude(
+        client__quickbooks_id=''
+    ).filter(
+        Q(qb_time_activity_id__isnull=True) | Q(qb_time_activity_id='')
+    ).select_related('client', 'user')
+
+    if client_ids:
+        blocks_qs = blocks_qs.filter(client_id__in=client_ids)
+
+    blocks = list(blocks_qs.order_by('start'))
+    total = len(blocks)
+
+    if not blocks:
+        return {
+            'status': 'complete',
+            'pushed_count': 0,
+            'error_count': 0,
+            'total_hours': 0,
+            'message': 'No entries to push',
+        }
+
+    # Pre-cache user → QBO employee mappings
+    user_ids = set(b.user_id for b in blocks)
+    memberships = {
+        m.user_id: m.quickbooks_employee_id
+        for m in OrganizationMembership.objects.filter(
+            organization=org, user_id__in=user_ids
+        )
+        if m.quickbooks_employee_id
+    }
+
+    # Get default QBO employee
+    default_emp_id = None
+    try:
+        emp_data, emp_err = qb_api_call(
+            integration, 'GET', '/query',
+            params={'query': 'SELECT Id FROM Employee MAXRESULTS 1', 'minorversion': '65'}
+        )
+        if emp_data and not emp_err:
+            employees = emp_data.get('QueryResponse', {}).get('Employee', [])
+            if employees:
+                default_emp_id = employees[0].get('Id')
+    except Exception:
+        pass
+
+    # Push entries one at a time, updating progress
+    pushed = []
+    errors = []
+
+    for i, block in enumerate(blocks):
+        # Update task progress for polling
+        self.update_state(state='PROGRESS', meta={
+            'current': i + 1,
+            'total': total,
+            'pushed': len(pushed),
+            'errors': len(errors),
+        })
+
+        total_minutes = block.minutes or 0
+        if total_minutes <= 0 and block.end and block.start:
+            total_minutes = int((block.end - block.start).total_seconds() / 60)
+        if total_minutes <= 0:
+            continue
+
+        hours = total_minutes // 60
+        mins = total_minutes % 60
+
+        cats = block.category_hours or {}
+        cat_names = ', '.join(cats.keys()) if cats else 'General'
+        description = cat_names
+        if block.notes:
+            description += f" — {block.notes}"
+
+        block_date = timezone.localtime(block.start).strftime('%Y-%m-%d')
+
+        payload = {
+            'TxnDate': block_date,
+            'NameOf': 'Employee',
+            'Hours': hours,
+            'Minutes': mins,
+            'Description': description[:4000],
+            'CustomerRef': {'value': block.client.quickbooks_id},
+            'BillableStatus': 'Billable' if block.is_billable else 'NotBillable',
+        }
+
+        qb_emp_id = memberships.get(block.user_id) or default_emp_id
+        if qb_emp_id:
+            payload['EmployeeRef'] = {'value': str(qb_emp_id)}
+        else:
+            payload['NameOf'] = 'Vendor'
+
+        try:
+            data, err = qb_api_call(integration, 'POST', '/timeactivity', json=payload)
+            if err:
+                errors.append({'block_id': block.id, 'error': str(err)})
+                continue
+
+            qb_id = data.get('TimeActivity', {}).get('Id', '')
+            if qb_id:
+                Block.objects.filter(id=block.id).update(qb_time_activity_id=str(qb_id))
+
+            pushed.append({
+                'block_id': block.id,
+                'client': block.client.name,
+                'hours': round(total_minutes / 60, 2),
+                'qb_id': qb_id,
+            })
+        except Exception as e:
+            logger.error(f"[QBO-PUSH] Block {block.id} failed: {e}")
+            errors.append({'block_id': block.id, 'error': str(e)})
+
+    logger.info(f"[QBO-PUSH] Complete: {len(pushed)} pushed, {len(errors)} errors")
+
+    return {
+        'status': 'complete',
+        'pushed_count': len(pushed),
+        'error_count': len(errors),
+        'total_hours': round(sum(p['hours'] for p in pushed), 2),
+        'pushed': pushed,
+        'errors': errors,
+    }

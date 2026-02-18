@@ -1359,8 +1359,10 @@ def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_
         pass
 
     # Push entries one at a time, updating progress
+    # Push entries one at a time, updating progress
     pushed = []
     errors = []
+    consecutive_errors = 0
 
     for i, block in enumerate(blocks):
         # Update task progress for polling
@@ -1370,6 +1372,13 @@ def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_
             'pushed': len(pushed),
             'errors': len(errors),
         })
+
+        # Bail early if 3+ consecutive failures (auth is broken)
+        if consecutive_errors >= 3:
+            for b in blocks[i:]:
+                errors.append({'block_id': b.id, 'error': 'Skipped — auth failed'})
+            logger.error(f"[QBO-PUSH] Bailing after {consecutive_errors} consecutive errors")
+            break
 
         total_minutes = block.minutes or 0
         if total_minutes <= 0 and block.end and block.start:
@@ -1408,7 +1417,10 @@ def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_
             data, err = qb_api_call(integration, 'POST', '/timeactivity', json=payload)
             if err:
                 errors.append({'block_id': block.id, 'error': str(err)})
+                consecutive_errors += 1
                 continue
+
+            consecutive_errors = 0  # Reset on success
 
             qb_id = data.get('TimeActivity', {}).get('Id', '')
             if qb_id:
@@ -1423,6 +1435,7 @@ def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_
         except Exception as e:
             logger.error(f"[QBO-PUSH] Block {block.id} failed: {e}")
             errors.append({'block_id': block.id, 'error': str(e)})
+            consecutive_errors += 1
 
     logger.info(f"[QBO-PUSH] Complete: {len(pushed)} pushed, {len(errors)} errors")
 

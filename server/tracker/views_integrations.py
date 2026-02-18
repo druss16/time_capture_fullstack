@@ -641,34 +641,29 @@ def quickbooks_push_time(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def quickbooks_push_status(request, task_id):
-    """
-    Poll for push task progress.
-    Returns: {status: 'PROGRESS'|'complete'|'error', current, total, pushed, errors}
-    """
     from celery.result import AsyncResult
 
     result = AsyncResult(task_id)
 
     if result.state == 'PROGRESS':
+        info = result.info if isinstance(result.info, dict) else {}
         return Response({
             'status': 'processing',
-            **result.info,
+            **info,
         })
     elif result.state == 'SUCCESS':
         return Response(result.result)
     elif result.state == 'FAILURE':
         return Response({
             'status': 'error',
-            'error': str(result.result),
+            'error': str(result.info),
         }, status=500)
     else:
-        # PENDING — task hasn't started yet
         return Response({
             'status': 'pending',
             'current': 0,
             'total': 0,
         })
-
 
 # ============================================================================
 # QuickBooks: PULL Invoices (for profitability)

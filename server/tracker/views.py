@@ -300,268 +300,6 @@ def extract_domain_from_url(url: str) -> str:
 # CONFIGURATION: Available Categories
 # ============================================================================
 
-# ============================================================================
-# UPDATED: Categories for both CPA and Consulting work
-# ============================================================================
-
-CPA_CATEGORIES = [
-    # Core Tax Services
-    "Tax Preparation",
-    "Tax Planning",
-    "Tax Research",
-    "Tax Compliance",
-    "Idle",  # ✅ Add this at the top
-    
-    # Accounting Services
-    "Accounting/Bookkeeping",
-    "Financial Statement Prep",
-    "Audit/Assurance",
-    "Payroll Services",
-    
-    # Advisory Services
-    "Advisory/Financial Planning",
-    "Valuation/Advisory",
-    "Forensic/Fraud Investigation",
-    
-    # Compliance & Regulatory
-    "SEC/Regulatory Compliance",
-    "Employee Benefits/ERISA",
-    
-    # Specialized Industry
-    "Real Estate/Property",
-    "Nonprofit/Form 990",
-    "Healthcare/Medical Practice",
-    "Construction/Contractors",
-    
-    # ✅ NEW: Consulting/Tech categories
-    "Software Development",
-    "Web Development",
-    "Research/AI Assistance",
-    "Design/Creative",
-    "Documentation",
-    
-    # Administrative
-    "Email/Communication",
-    "Meetings",
-    "Administration",
-    "Document Management",
-    "Review",
-]
-
-
-# ============================================================================
-# UPDATED: Tool detection for both CPA and Consulting work
-# ============================================================================
-
-CPA_TOOL_DETECTION = {
-    # ========================================================================
-    # CPA PROFESSIONAL TOOLS
-    # ========================================================================
-    
-    "ultratax": {
-        "keywords": ["ultratax", "cch axcess", "proseries", "drake", "lacerte", "atx"],
-        "domains": ["cchaxcess.com", "cchtaxoffice.com", "proseries.com"],
-        "urls": [],
-        "category": "Tax Preparation",
-        "confidence": 0.95
-    },
-    
-    "quickbooks": {
-        "keywords": ["quickbooks", "qbo", "quickbooks online"],
-        "domains": ["quickbooks.intuit.com", "qbo.intuit.com"],
-        "urls": ["app.quickbooks.com"],
-        "category": "Accounting/Bookkeeping",
-        "confidence": 0.93
-    },
-    
-    "xero": {
-        "keywords": ["xero"],
-        "domains": ["xero.com", "go.xero.com"],
-        "urls": [],
-        "category": "Accounting/Bookkeeping",
-        "confidence": 0.93
-    },
-    
-    "sage": {
-        "keywords": ["sage", "sage 50", "sage intacct"],
-        "domains": ["sage.com", "intacct.com"],
-        "urls": [],
-        "category": "Accounting/Bookkeeping",
-        "confidence": 0.92
-    },
-    
-    # ========================================================================
-    # DEVELOPMENT TOOLS (High Priority - Check First)
-    # ========================================================================
-    
-    "vscode": {
-        "keywords": [
-            "visual studio code", "vscode", "vs code",
-            "code - ", "● ", "  - visual studio code",  # VSCode window title patterns
-            ".py - ", ".js - ", ".tsx - ", ".jsx - ",  # Code file extensions
-            "tasks.py", "views.py", "models.py", "settings.py",  # Django files
-            "index.tsx", "app.tsx", "component",  # React files
-        ],
-        "domains": [],
-        "urls": [],
-        "category": "Software Development",
-        "confidence": 0.95
-    },
-    
-    "terminal": {
-        "keywords": [
-            "terminal", "iterm", "iterm2",
-            "zsh", "bash", "shell",
-            "docker compose", "python manage.py", "npm run",
-            "git ", "celery -A"
-        ],
-        "domains": [],
-        "urls": [],
-        "category": "Software Development",
-        "confidence": 0.90
-    },
-    
-    "github": {
-        "keywords": ["github", "pull request", "commit", "repository"],
-        "domains": ["github.com"],
-        "urls": [],
-        "category": "Software Development",
-        "confidence": 0.92
-    },
-    
-    "localhost": {
-        "keywords": [
-            "localhost", "127.0.0.1",
-            "localhost:5173", "localhost:7123", "localhost:3000", "localhost:8000",
-            "react", "django", "vite",
-            "hot module replacement", "hmr",
-        ],
-        "domains": ["localhost", "127.0.0.1"],
-        "urls": [],
-        "category": "Software Development",
-        "confidence": 0.88
-    },
-    
-    "deployment": {
-        "keywords": [
-            "deploying", "deployment", "render.com", "vercel", "heroku",
-            "docker", "kubernetes", "aws", "neon.tech",
-            "build", "compile", "bundle"
-        ],
-        "domains": ["render.com", "dashboard.render.com", "vercel.com", "console.neon.tech"],
-        "urls": [],
-        "category": "Software Development",
-        "confidence": 0.90
-    },
-    
-    # ========================================================================
-    # AI & RESEARCH TOOLS
-    # ========================================================================
-    
-    "claude": {
-        "keywords": [
-            "claude", "claude.ai", "anthropic",
-            "ai classification", "prompt", "llm",
-            "document revision", "code review",
-        ],
-        "domains": ["claude.ai"],
-        "urls": [],
-        "category": "Research/AI Assistance",
-        "confidence": 0.92
-    },
-    
-    "chatgpt": {
-        "keywords": ["chatgpt", "openai", "gpt-4", "gpt-3.5"],
-        "domains": ["chat.openai.com", "chatgpt.com"],
-        "urls": [],
-        "category": "Research/AI Assistance",
-        "confidence": 0.92
-    },
-    
-    "stackoverflow": {
-        "keywords": ["stack overflow", "stackoverflow"],
-        "domains": ["stackoverflow.com"],
-        "urls": [],
-        "category": "Research/AI Assistance",
-        "confidence": 0.85
-    },
-    
-    "documentation": {
-        "keywords": [
-            "documentation", "docs", "api reference",
-            "django docs", "react docs", "python docs",
-            "mdn web docs", "developer.mozilla.org"
-        ],
-        "domains": ["docs.python.org", "reactjs.org", "docs.djangoproject.com", "developer.mozilla.org"],
-        "urls": [],
-        "category": "Research/AI Assistance",
-        "confidence": 0.85
-    },
-    
-    # ========================================================================
-    # DESIGN & CREATIVE TOOLS
-    # ========================================================================
-    
-    "figma": {
-        "keywords": ["figma"],
-        "domains": ["figma.com"],
-        "urls": [],
-        "category": "Design/Creative",
-        "confidence": 0.93
-    },
-    
-    "canva": {
-        "keywords": ["canva"],
-        "domains": ["canva.com"],
-        "urls": [],
-        "category": "Design/Creative",
-        "confidence": 0.90
-    },
-    
-    # ========================================================================
-    # COMMUNICATION TOOLS
-    # ========================================================================
-    
-    "zoom": {
-        "keywords": ["zoom", "zoom meeting"],
-        "domains": ["zoom.us", "zoom.com"],
-        "urls": [],
-        "category": "Meetings",
-        "confidence": 0.95
-    },
-    
-    "teams": {
-        "keywords": ["microsoft teams", "teams"],
-        "domains": ["teams.microsoft.com"],
-        "urls": [],
-        "category": "Meetings",
-        "confidence": 0.95
-    },
-    
-    "gmail": {
-        "keywords": ["gmail", "google mail", "inbox"],
-        "domains": ["mail.google.com"],
-        "urls": [],
-        "category": "Email/Communication",
-        "confidence": 0.92
-    },
-    
-    "outlook": {
-        "keywords": ["outlook", "office 365 mail"],
-        "domains": ["outlook.office.com", "outlook.live.com"],
-        "urls": [],
-        "category": "Email/Communication",
-        "confidence": 0.92
-    },
-    
-    "slack": {
-        "keywords": ["slack"],
-        "domains": ["slack.com", "app.slack.com"],
-        "urls": [],
-        "category": "Email/Communication",
-        "confidence": 0.90
-    },
-}
 # -------------------------------------------------------------------
 # Config / constants
 # -------------------------------------------------------------------
@@ -1005,34 +743,17 @@ def _round_up_minutes(n: int, granularity: int) -> int:
 
 
 def build_classification_prompt(text_blocks: list, org_context: str) -> str:
-    """Context-aware AI prompt for block classification."""
-    return f"""You are a time-tracking AI assistant. Your job is to classify computer activity blocks into client work, projects, and time categories.
+    """
+    Build the USER PROMPT for AI classification.
+    
+    Delegates to industry_categories.build_classification_user_prompt()
+    which ONLY sends block data — categories/rules are in the system prompt.
+    
+    Kept as a wrapper for backward compatibility with callers.
+    """
+    from tracker.industry_categories import build_classification_user_prompt
+    return build_classification_user_prompt(text_blocks, org_context)
 
-
-{org_context if org_context else ""}
-
-CLASSIFICATION RULES:
-1) Client identification: match against KNOWN CLIENTS (including aliases). Mark internal work appropriately.
-2) Project identification: infer from context; link to parent client if relevant.
-3) Categories (hours in decimal): Meeting, Development, Research, Planning, Administration. Non-billable breaks should be 0 billable.
-4) Time allocation: split multi-topic blocks; round to nearest 0.25h; include confidence (0.0–1.0).
-5) Special cases: multiple clients -> pick dominant; unclear -> needs_review true with low confidence.
-
-Return a JSON array with objects shaped like:
-{{
-  "client": "Acme Corp" | null,
-  "project": "Q4 Strategy" | null,
-  "categories": {{"Meeting": 1.0}},
-  "confidence": 0.92,
-  "needs_review": false,
-  "reasoning": "why"
-}}
-
-NOW CLASSIFY THESE BLOCKS:
-{text_blocks}
-
-Return ONLY a JSON array. No markdown.
-"""
 
 
 def build_ai_context(org) -> str:
@@ -1779,136 +1500,6 @@ def pre_classify_obvious_categories(block, industry_type='general') -> dict:
     
     return {}
 
-# tracker/views.py - REPLACE YOUR EXISTING get_seasonal_context
-
-def get_seasonal_context() -> str:
-    """
-    Provide enhanced seasonal context with specific deadlines and patterns.
-    CPAs have VERY different work patterns by season.
-    """
-    from datetime import datetime
-    now = datetime.now()
-    month = now.month
-    day = now.day
-    
-    # Tax Season (January - April 15)
-    if month in (1, 2, 3) or (month == 4 and day <= 15):
-        if month == 1:
-            return (
-                "\n**SEASON: EARLY TAX SEASON (January)**\n"
-                "Tax season just started. Most work will be:\n"
-                "- Organizing client documents and tax organizers\n"
-                "- Early individual returns (1040) for eager clients\n"
-                "- Business returns with fiscal year-ends\n"
-                "- Setting up tax software for the season\n"
-                "- Heavy Email/Communication with clients requesting documents\n"
-                "- Default to 'Tax Preparation' if context unclear\n"
-            )
-        elif month == 2:
-            return (
-                "\n**SEASON: MID TAX SEASON (February)**\n"
-                "Tax season ramping up significantly. Expect:\n"
-                "- Heavy individual tax prep (Form 1040)\n"
-                "- Partnership returns (1065) due 3/15\n"
-                "- S-Corp returns (1120S) due 3/15\n"
-                "- Extension planning for complex returns\n"
-                "- Client meetings about tax situations\n"
-                "- Default to 'Tax Preparation' if context unclear\n"
-            )
-        elif month == 3:
-            return (
-                "\n**SEASON: PEAK TAX SEASON (March)**\n"
-                "Absolute peak of tax season. Expect:\n"
-                "- Maximum volume individual returns (1040)\n"
-                "- Rush on partnership/S-Corp returns (due 3/15)\n"
-                "- Extension filings starting for complex returns\n"
-                "- Partner review backlog\n"
-                "- Long hours, high stress patterns\n"
-                "- Meetings compressed to essentials\n"
-                "- Default to 'Tax Preparation' for almost anything\n"
-            )
-        else:  # April 1-15
-            return (
-                "\n**SEASON: TAX SEASON FINALE (April 1-15)**\n"
-                "Final push to 4/15 deadline. Expect:\n"
-                "- Individual returns (1040) due 4/15\n"
-                "- C-Corp returns (1120) due 4/15\n"
-                "- Last-minute extension filings\n"
-                "- High volume of Email/Communication\n"
-                "- Review and quality control rush\n"
-                "- Default to 'Tax Preparation' or 'Review'\n"
-            )
-    
-    # Post-Tax Season Recovery (April 16-30)
-    elif month == 4 and day > 15:
-        return (
-            "\n**SEASON: POST-TAX SEASON RECOVERY (Late April)**\n"
-            "Tax deadline passed, recovery period. Expect:\n"
-            "- Catching up on correspondence\n"
-            "- Filing extended returns for stragglers\n"
-            "- Administration and cleanup\n"
-            "- Staff time off / vacation\n"
-            "- Planning for extension season\n"
-        )
-    
-    # Quiet Season (May-August)
-    elif month in (5, 6, 7, 8):
-        return (
-            "\n**SEASON: QUIET SEASON (May-Aug)**\n"
-            "Off-season work mix. Expect:\n"
-            "- Advisory and consulting services\n"
-            "- Business accounting/bookkeeping catch-up\n"
-            "- Audit and assurance work\n"
-            "- Tax planning for high-net-worth clients\n"
-            "- Training and CPE\n"
-            "- Practice management and systems work\n"
-        )
-    
-    # Extension Season (September-October 15)
-    elif month in (9) or (month == 10 and day <= 15):
-        return (
-            "\n**SEASON: EXTENSION SEASON (Sep-Oct 15)**\n"
-            "Extended return deadline approaching. Expect:\n"
-            "- Individual extended returns (due 10/15)\n"
-            "- Partnership extensions (due 9/15)\n"
-            "- S-Corp extensions (due 9/15)\n"
-            "- Tax Compliance work\n"
-            "- Client follow-ups for missing documents\n"
-            "- Moderate urgency (not as intense as spring)\n"
-        )
-    
-    # Year-End Planning (November-December)
-    elif month in (11, 12):
-        if month == 11:
-            return (
-                "\n**SEASON: YEAR-END PLANNING BEGINS (November)**\n"
-                "Preparing for year-end. Expect:\n"
-                "- Year-end tax planning meetings\n"
-                "- Estimated tax payment calculations (due 1/15)\n"
-                "- Business year-end close planning\n"
-                "- Advisory services for year-end strategies\n"
-                "- IRA and retirement plan contributions\n"
-            )
-        else:  # December
-            return (
-                "\n**SEASON: YEAR-END CLOSE (December)**\n"
-                "Critical year-end window. Expect:\n"
-                "- Tax Planning for current year strategies\n"
-                "- Financial Statement Prep for calendar-year entities\n"
-                "- Accounting/Bookkeeping year-end close\n"
-                "- Last-minute tax moves (donations, deductions)\n"
-                "- Strategic advisory meetings\n"
-                "- Holiday schedules (reduced availability)\n"
-            )
-    
-    # Fallback
-    return (
-        "\n**SEASON: REGULAR SEASON**\n"
-        "Typical CPA firm work mix:\n"
-        "- Mix of tax, accounting, and advisory services\n"
-        "- Client meetings and consultations\n"
-        "- Regular correspondence and admin\n"
-    )
 
 from tracker.services.pattern_learning import PatternLearningService
 
@@ -2083,7 +1674,7 @@ def ai_suggestions_today(request):
 
     # Build comprehensive context for AI
     org_context = build_ai_context(org) or ""
-    seasonal_context = get_seasonal_context()
+    #seasonal_context = get_seasonal_context()
     
     # Add learned user patterns
     pattern_context = ""
@@ -2185,20 +1776,25 @@ def ai_suggestions_today(request):
     client = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
 
     # =========================================================
-    # ✅ DYNAMIC: Use industry-specific prompt
+    # Build AI prompts — single source of truth
     # =========================================================
-    from tracker.industry_categories import build_ai_prompt_for_industry
-    
-    # Get org's industry type (defaults to 'cpa' for backwards compatibility)
-    industry_type = getattr(org, 'industry_type', 'cpa') or 'cpa'
-    
-    # Build industry-specific prompt (CPA, Marketing, AI Consulting, Legal, etc.)
+    from tracker.industry_categories import (
+        build_ai_prompt_for_industry,
+        build_classification_user_prompt,
+    )
+
+    industry_type = getattr(org, 'industry_type', 'general') or 'general'
+
+    # System prompt: categories + rules + seasonal (all from industry_categories.py)
     system_msg = build_ai_prompt_for_industry(industry_type)
-    
-    # Add org-specific context
-    system_msg += "\n\n=== ORGANIZATION CONTEXT ===\n" + org_context
-    system_msg += "\n\n" + seasonal_context
-    system_msg += "\n\n" + pattern_context
+
+    # Append org-specific context (clients, aliases, training examples)
+    if org_context:
+        system_msg += "\n\n=== ORGANIZATION CONTEXT ===\n" + org_context
+
+    # Append learned user patterns (from PatternLearningService)
+    if pattern_context:
+        system_msg += "\n\n=== LEARNED PATTERNS ===\n" + pattern_context
 
     last_text = None
     ai_suggestions = []
@@ -2280,7 +1876,7 @@ def ai_suggestions_today(request):
             sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
             
             # Try pre-classification first (CPA tools, emails, meetings)
-            pre_class = pre_classify_obvious_categories(b)
+            pre_class = pre_classify_obvious_categories(b, industry_type)
             if pre_class:
                 sug["categories"] = pre_class.get("categories", sug.get("categories", {}))
                 sug["confidence"] = max(float(sug.get("confidence", 0)), pre_class.get("confidence", 0))

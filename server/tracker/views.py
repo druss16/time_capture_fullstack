@@ -742,15 +742,7 @@ def _round_up_minutes(n: int, granularity: int) -> int:
     return n if n % granularity == 0 else n + (granularity - (n % granularity))
 
 
-def build_classification_prompt(text_blocks: list, org_context: str) -> str:
-    """
-    Build the USER PROMPT for AI classification.
-    
-    Delegates to industry_categories.build_classification_user_prompt()
-    which ONLY sends block data — categories/rules are in the system prompt.
-    
-    Kept as a wrapper for backward compatibility with callers.
-    """
+def build_classification_prompt(text_blocks, org_context):
     from tracker.industry_categories import build_classification_user_prompt
     return build_classification_user_prompt(text_blocks, org_context)
 
@@ -1687,7 +1679,7 @@ def ai_suggestions_today(request):
             "count": len(trimmed),
             "sample": trimmed[:3],
             "org_context": org_context[:1200] if org_context else "",
-            "seasonal_context": seasonal_context[:500],
+            "seasonal_context": get_seasonal_context_for_industry(industry_type)[:500],
             "pattern_context": pattern_context[:500],
             "already_categorized": len(already_categorized),
             "needs_ai": len(blocks_needing_ai),

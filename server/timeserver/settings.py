@@ -81,8 +81,14 @@ MIDDLEWARE = [
 # -----------------------------------------------------
 # Celery config
 # -----------------------------------------------------
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
+_redis_url = os.getenv("REDIS_URL", os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"))
+
+# Append ssl_cert_reqs for rediss:// URLs (required by Celery Redis backend)
+if _redis_url.startswith("rediss://") and "ssl_cert_reqs" not in _redis_url:
+    _redis_url += "?ssl_cert_reqs=CERT_NONE" if "?" not in _redis_url else "&ssl_cert_reqs=CERT_NONE"
+
+CELERY_BROKER_URL = _redis_url
+CELERY_RESULT_BACKEND = _redis_url
 CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "False").lower() == "true"
 CELERY_TASK_TIME_LIMIT = 60 * 3
 CELERY_ACKS_LATE = True

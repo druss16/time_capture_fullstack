@@ -910,13 +910,25 @@ You MUST use one of these EXACT names. Any other name is an error.
   0.50-0.69 → Ambiguous, set needs_review: true
   <0.50 → Unknown, set needs_review: true, consider null client
 
-=== CLIENT IDENTIFICATION ===
-1. Check window titles for client names — often in parentheses or after "-"
-2. Check URLs for client-specific domains or subdomains
-3. Check file paths for client folder names (e.g., /Clients/Aurelia/)
-4. If multiple clients appear in one block, assign to the DOMINANT one
-5. If no client can be identified, set client: null (not "Unknown")
+=== CLIENT VALIDATION ===
+Each block has an "assigned_client" field set by the desktop agent.
+This is usually correct. However, users sometimes forget to switch clients.
 
+Your job:
+1. If the activity CLEARLY matches the assigned client → keep it, set client = assigned_client
+2. If the activity CLEARLY belongs to a DIFFERENT known client → suggest the correct one
+   - ONLY suggest clients from the ORGANIZATION CONTEXT list below
+   - Set needs_review: true and explain why in reasoning
+   - Example: assigned_client="Aurelia" but block shows VS Code editing 
+     timetracker code on localhost:5173 → client should be "MavOps" or "Internal"
+3. If unsure → keep the assigned client, do NOT change it
+4. NEVER invent client names. Only use clients from the known list or null.
+
+Signals of a client mismatch:
+  - localhost/dev tools when assigned to a non-tech client
+  - Google Ads for "Client A" but assigned to "Client B" 
+  - File paths containing a different client's folder name
+  - Window title showing a different client's portal
 === READING WINDOW TITLES ===
 Window titles often follow: "App - Context (ClientName)"
   "Chrome - Ads (Dauphin & Fantacone)" → Marketing/Advertising, client=Dauphin & Fantacone
@@ -1274,6 +1286,79 @@ def get_combined_tool_detection(industry_type: str) -> dict:
 
     return combined
 
+def validate_and_fix_ai_response(ai_results: list, industry_type: str) -> list:
+    """
+    Validate AI classification output. Fix common errors before saving.
+    This is the safety net that catches prompt failures.
+    """
+    import difflib
+    
+    valid_categories = set(get_categories_for_industry(industry_type))
+    valid_categories.add("Idle")
+    
+    # Common AI mistakes → correct names
+    KNOWN_FIXES = {
+        "tax prep": "Tax Preparation",
+        "tax preparation/research": "Tax Preparation",
+        "email": "Email/Communication",
+        "emails": "Email/Communication",
+        "meeting": "Meetings",
+        "admin": "Administration",
+        "personal": "Personal/Non-Billable",
+        "idle": "Idle",
+        "development": "Software Development",
+        "dev": "Software Development",
+        "research": "Research/AI Assistance",
+        "bookkeeping": "Accounting/Bookkeeping",
+        "quickbooks": "Accounting/Bookkeeping",
+        "design": "Graphic Design",
+        "ads": "Marketing/Advertising",
+        "seo": "SEO/Analytics",
+        "tax research/preparation": "Tax Research",
+        "communication": "Email/Communication",
+        "meetings/calls": "Meetings",
+        "non-billable": "Personal/Non-Billable",
+        "software dev": "Software Development",
+        "code review/development": "Code Review",
+        "web development": "Website/Web Development",
+        "advertising": "Marketing/Advertising",
+    }
+    
+    for result in ai_results:
+        if not isinstance(result, dict) or 'categories' not in result:
+            continue
+            
+        fixed_categories = {}
+        for cat_name, hours in result['categories'].items():
+            # Already valid?
+            if cat_name in valid_categories:
+                fixed_categories[cat_name] = hours
+                continue
+            
+            # Known fix?
+            lower = cat_name.lower().strip()
+            if lower in KNOWN_FIXES:
+                fixed_categories[KNOWN_FIXES[lower]] = hours
+                result['_fixed'] = f"{cat_name} → {KNOWN_FIXES[lower]}"
+                continue
+            
+            # Fuzzy match (>0.75 similarity)
+            matches = difflib.get_close_matches(
+                cat_name, valid_categories, n=1, cutoff=0.75
+            )
+            if matches:
+                fixed_categories[matches[0]] = hours
+                result['_fixed'] = f"{cat_name} → {matches[0]}"
+                result['needs_review'] = True
+            else:
+                # Can't fix — keep original but flag it
+                fixed_categories[cat_name] = hours
+                result['needs_review'] = True
+                result['_invalid_category'] = cat_name
+        
+        result['categories'] = fixed_categories
+    
+    return ai_results
 
 # =============================================================================
 # INTERNAL CLIENT HELPER

@@ -521,12 +521,11 @@ def quickbooks_push_time(request):
 
     Each categorized Block → one QBO TimeActivity with:
     - CustomerRef (from client.quickbooks_id)
+    - EmployeeRef (from membership.quickbooks_employee_id)
     - Hours/Minutes
     - Description (category + notes)
     - TxnDate (block date)
-
-    NOTE: You need to add a `qb_time_activity_id` CharField to Block model
-    to track which blocks have already been pushed. See migration below.
+    - BillableStatus
     """
     org = get_user_org(request.user)
     integration, err = get_integration(org, 'quickbooks')
@@ -563,13 +562,14 @@ def quickbooks_push_time(request):
         start__lt=end_aware,
         client__isnull=False,
         client__quickbooks_id__isnull=False,
+    ).exclude(
+        client__quickbooks_id=''
     ).select_related('client', 'user')
 
     # Exclude already-pushed blocks
-    if hasattr(Block, 'qb_time_activity_id'):
-        blocks_qs = blocks_qs.filter(
-            Q(qb_time_activity_id__isnull=True) | Q(qb_time_activity_id='')
-        )
+    blocks_qs = blocks_qs.filter(
+        Q(qb_time_activity_id__isnull=True) | Q(qb_time_activity_id='')
+    )
 
     if client_ids:
         blocks_qs = blocks_qs.filter(client_id__in=client_ids)
@@ -583,19 +583,32 @@ def quickbooks_push_time(request):
             'summary': {'total_entries': 0, 'total_hours': 0},
         })
 
-    # Build TimeActivity entries
-    entries = []
+    # Pre-cache user → QBO employee mappings (1 query instead of N)
+    user_ids = set(b.user_id for b in blocks)
+    memberships = {
+        m.user_id: m.quickbooks_employee_id
+        for m in OrganizationMembership.objects.filter(
+            organization=org, user_id__in=user_ids
+        )
+        if m.quickbooks_employee_id
+    }
 
     # Get default QBO employee for unmapped users
-    # Get default QBO employee for unmapped users
+    default_emp_id = None
     try:
-        emp_data, emp_err = qb_api_call(integration, 'GET', '/query', params={'query': 'SELECT Id FROM Employee MAXRESULTS 1', 'minorversion': '65'})
+        emp_data, emp_err = qb_api_call(
+            integration, 'GET', '/query',
+            params={'query': 'SELECT Id FROM Employee MAXRESULTS 1', 'minorversion': '65'}
+        )
         if emp_data and not emp_err:
-            default_emp_id = emp_data.get('QueryResponse', {}).get('Employee', [{}])[0].get('Id')
-        else:
-            default_emp_id = None
+            employees = emp_data.get('QueryResponse', {}).get('Employee', [])
+            if employees:
+                default_emp_id = employees[0].get('Id')
     except Exception:
-        default_emp_id = None
+        pass
+
+    # Build TimeActivity entries
+    entries = []
 
     for block in blocks:
         total_minutes = block.minutes or 0
@@ -626,11 +639,7 @@ def quickbooks_push_time(request):
         }
 
         # EmployeeRef is REQUIRED when NameOf=Employee
-        # EmployeeRef required when NameOf=Employee
-        membership = OrganizationMembership.objects.filter(
-            user=block.user, organization=org
-        ).first()
-        qb_emp_id = getattr(membership, 'quickbooks_employee_id', None) or default_emp_id
+        qb_emp_id = memberships.get(block.user_id) or default_emp_id
         if qb_emp_id:
             payload['EmployeeRef'] = {'value': str(qb_emp_id)}
         else:
@@ -668,28 +677,38 @@ def quickbooks_push_time(request):
     pushed, push_errors = [], []
 
     for entry in entries:
-        data, err = qb_api_call(integration, 'POST', '/timeactivity', json=entry['payload'])
-        if err:
-            push_errors.append({
-                'block_id': entry['block_id'], 'client': entry['client_name'],
-                'error': 'API call failed',
+        try:
+            data, err = qb_api_call(integration, 'POST', '/timeactivity', json=entry['payload'])
+            if err:
+                push_errors.append({
+                    'block_id': entry['block_id'],
+                    'client': entry['client_name'],
+                    'error': f'API call failed: {err}',
+                })
+                continue
+
+            qb_id = data.get('TimeActivity', {}).get('Id', '')
+
+            # Save reference back to block (prevent re-push)
+            if qb_id:
+                Block.objects.filter(id=entry['block_id']).update(
+                    qb_time_activity_id=str(qb_id)
+                )
+
+            pushed.append({
+                'block_id': entry['block_id'],
+                'client': entry['client_name'],
+                'date': entry['date'],
+                'hours': entry['hours'],
+                'qb_time_activity_id': qb_id,
             })
-            continue
-
-        qb_id = data.get('TimeActivity', {}).get('Id', '')
-        # Save reference back to block
-        if qb_id and hasattr(entry['block'], 'qb_time_activity_id'):
-            try:
-                entry['block'].qb_time_activity_id = str(qb_id)
-                entry['block'].save(update_fields=['qb_time_activity_id'])
-            except Exception as e:
-                logger.warning(f"Pushed OK but failed to save ref on block: {e}")
-
-        pushed.append({
-            'block_id': entry['block_id'], 'client': entry['client_name'],
-            'date': entry['date'], 'hours': entry['hours'],
-            'qb_time_activity_id': qb_id,
-        })
+        except Exception as e:
+            logger.error(f"Push failed for block {entry['block_id']}: {e}")
+            push_errors.append({
+                'block_id': entry['block_id'],
+                'client': entry['client_name'],
+                'error': str(e),
+            })
 
     return Response({
         'pushed': pushed,

@@ -850,13 +850,13 @@ def classify_block_task(self, block_id: int):
         dict with classification result
     """
     try:
-        from tracker.models import Block
+        from tracker.models import Block, Client
         from tracker.views import pre_classify_obvious_categories
         from tracker.services.pattern_learning import PatternLearningService
         
         # Get block
         try:
-            block = Block.objects.select_related('client', 'user').get(id=block_id)
+            block = Block.objects.select_related('client', 'user', 'org').get(id=block_id)
         except Block.DoesNotExist:
             logger.warning(f"[CLASSIFY] Block {block_id} not found")
             return {"status": "not_found", "block_id": block_id}
@@ -865,8 +865,12 @@ def classify_block_task(self, block_id: int):
         if block.is_categorized:
             return {"status": "already_categorized", "block_id": block_id}
         
+        # ✅ FIX: Get org and industry_type upfront
+        org = getattr(block, 'org', None)
+        industry_type = getattr(org, 'industry_type', 'general') or 'general'
+        
         # Step 1: Try obvious patterns (CPA tools, meetings, email)
-        pre_class = pre_classify_obvious_categories(block)
+        pre_class = pre_classify_obvious_categories(block, industry_type=industry_type)
         
         if pre_class and pre_class.get('confidence', 0) >= 0.75:
             categories = pre_class.get('categories', {})
@@ -899,20 +903,17 @@ def classify_block_task(self, block_id: int):
                 client_name, category, confidence = learned[0]
                 
                 if confidence >= 0.75 and (client_name or category):
-                    # Apply learned pattern
-                    if client_name and not block.client:
-                        from tracker.models import Client
-                        org = block.user.groups.first()
-                        if org:
-                            try:
-                                client, _ = Client.objects.get_or_create(
-                                    org=org,
-                                    name=client_name,
-                                    defaults={'is_active': True}
-                                )
-                                block.client = client
-                            except Exception:
-                                pass
+                    # ✅ FIX: Client LOOKUP only — never create phantom clients
+                    if client_name and not block.client and org:
+                        try:
+                            client = Client.objects.get(
+                                org=org,
+                                name__iexact=client_name,
+                                is_active=True,
+                            )
+                            block.client = client
+                        except (Client.DoesNotExist, Client.MultipleObjectsReturned):
+                            pass  # Don't create phantom clients
                     
                     if category:
                         hours = round(block.minutes / 60.0, 2) if block.minutes else 0.1
@@ -995,7 +996,7 @@ def ai_classify_uncategorized_blocks(limit=100):
     3. Pattern learning happens continuously
     """
     try:
-        from tracker.models import Block
+        from tracker.models import Block, Client
         from tracker.services.pattern_learning import PatternLearningService
         from django.contrib.auth import get_user_model
         import os
@@ -1013,7 +1014,7 @@ def ai_classify_uncategorized_blocks(limit=100):
         blocks = Block.objects.filter(
             is_categorized=False,
             start__gte=cutoff
-        ).select_related('user', 'client').order_by('-start')[:limit]
+        ).select_related('user', 'client', 'org').order_by('-start')[:limit]
         
         if not blocks:
             logger.info("[CELERY] No uncategorized blocks to classify")
@@ -1049,17 +1050,19 @@ def ai_classify_uncategorized_blocks(limit=100):
                             client_name, category, confidence = learned_patterns[0]
                             
                             if confidence >= 0.75:
-                                # Auto-apply pattern
+                                # ✅ FIX: Client LOOKUP only — never create phantom clients
                                 if client_name and not block.client:
-                                    from tracker.models import Client
-                                    try:
-                                        client = Client.objects.get(
-                                            org=user.groups.first(),
-                                            name=client_name
-                                        )
-                                        block.client = client
-                                    except Client.DoesNotExist:
-                                        pass
+                                    org = getattr(block, 'org', None)
+                                    if org:
+                                        try:
+                                            client = Client.objects.get(
+                                                org=org,
+                                                name__iexact=client_name,
+                                                is_active=True,
+                                            )
+                                            block.client = client
+                                        except (Client.DoesNotExist, Client.MultipleObjectsReturned):
+                                            pass  # Don't create phantom clients
                                 
                                 if category:
                                     block.category_hours = {category: round(block.minutes / 60.0, 2)}

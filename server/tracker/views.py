@@ -1662,6 +1662,8 @@ def ai_suggestions_today(request):
             "description": _shorten(getattr(b, 'description', ''), 220),
             "hints": hints,
             "learned_patterns": pattern_hints,
+            "assigned_client": getattr(b.client, "name", None),  # ← what the agent set
+
         })
 
     # Build comprehensive context for AI
@@ -1790,22 +1792,34 @@ def ai_suggestions_today(request):
 
     last_text = None
     ai_suggestions = []
-    
+
+    # Scale model params to batch size
+    if len(trimmed) <= 3:
+        model = "gpt-4o-mini"
+        max_tokens = 1000
+    else:
+        model = "gpt-4o-mini"
+        max_tokens = 4000
+
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,              # ← was hardcoded "gpt-4o-mini"
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            max_tokens=4000,
+            max_tokens=max_tokens,    # ← was hardcoded 4000
         )
         last_text = (resp.choices[0].message.content or "").strip()
         raw_json = _extract_json(last_text)
         ai_suggestions = _json_loads_loose(raw_json)
         if not isinstance(ai_suggestions, list):
             raise ValueError("Model did not return a JSON array.")
+
+        # ✅ Fix AI category name mistakes before saving
+        from tracker.industry_categories import validate_and_fix_ai_response
+        ai_suggestions = validate_and_fix_ai_response(ai_suggestions, industry_type)
     except Exception as e:
         log(f"[AI] OpenAI error: {e}")
         if fallback_mode == "rule":
@@ -1867,13 +1881,6 @@ def ai_suggestions_today(request):
             b = blocks[i]
             sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
             
-            # Try pre-classification first (CPA tools, emails, meetings)
-            pre_class = pre_classify_obvious_categories(b, industry_type)
-            if pre_class:
-                sug["categories"] = pre_class.get("categories", sug.get("categories", {}))
-                sug["confidence"] = max(float(sug.get("confidence", 0)), pre_class.get("confidence", 0))
-                if pre_class.get("reasoning"):
-                    sug["reasoning"] = pre_class["reasoning"]
             
             confidence = float(sug.get("confidence", 0.0))
             needs_review = sug.get("needs_review", True)
@@ -1890,14 +1897,29 @@ def ai_suggestions_today(request):
                     fresh_block = Block.objects.select_for_update().get(id=b.id)
                     
                     if not fresh_block.is_categorized:
-                        # Create/get client if provided
-                        if client_name and not fresh_block.client:
-                            client_obj, _ = Client.objects.get_or_create(
-                                org=org,
-                                name=client_name,
-                                defaults={"is_active": True}
-                            )
-                            fresh_block.client = client_obj
+                        # Client CORRECTION only — never create new clients
+                        suggested_client = (sug.get("client") or "").strip()
+                        current_client_name = getattr(fresh_block.client, "name", None)
+
+                        if suggested_client and suggested_client != current_client_name:
+                            # AI thinks agent's client is wrong — only accept known clients
+                            try:
+                                correct_client = Client.objects.get(
+                                    org=org,
+                                    name__iexact=suggested_client,
+                                    is_active=True,
+                                )
+                                fresh_block.client = correct_client
+                                sug["needs_review"] = True  # Always flag corrections for user review
+                                log(f"[AI] 🔄 Client correction: {current_client_name} → {suggested_client} (block {b.id})")
+                            except Client.MultipleObjectsReturned:
+                                # Multiple clients with same name — don't guess
+                                log(f"[AI] ⚠️ Multiple clients match '{suggested_client}' — skipping correction")
+                                sug["client"] = current_client_name
+                            except Client.DoesNotExist:
+                                # AI hallucinated a client name — ignore silently
+                                log(f"[AI] ⚠️ Ignoring unknown client suggestion: '{suggested_client}'")
+                                sug["client"] = current_client_name  # Reset to agent's client
                         
                         # Save categories
                         if categories and isinstance(categories, dict):

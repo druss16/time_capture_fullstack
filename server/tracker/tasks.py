@@ -1434,3 +1434,45 @@ def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_
         'pushed': pushed,
         'errors': errors,
     }
+
+
+@shared_task(name='tracker.refresh_integration_tokens')
+def refresh_integration_tokens():
+    """
+    Proactively refresh OAuth tokens expiring within 15 minutes.
+    Runs every 45 min to prevent mid-request token expiration.
+    """
+    from tracker.models import Integration
+    from tracker.views_integrations import refresh_quickbooks_token, refresh_xero_token
+    from django.utils import timezone
+    from datetime import timedelta
+
+    logger = logging.getLogger('tracker.tasks')
+    threshold = timezone.now() + timedelta(minutes=15)
+
+    integrations = Integration.objects.filter(
+        is_connected=True,
+        token_expires_at__lt=threshold,
+    )
+
+    refreshed = 0
+    failed = 0
+
+    for integration in integrations:
+        if integration.provider == 'quickbooks':
+            success = refresh_quickbooks_token(integration)
+        elif integration.provider == 'xero':
+            success = refresh_xero_token(integration)
+        else:
+            continue
+
+        if success:
+            refreshed += 1
+            logger.info(f"[TOKEN-REFRESH] Refreshed {integration.provider} for org {integration.organization_id}")
+        else:
+            failed += 1
+            logger.error(f"[TOKEN-REFRESH] Failed {integration.provider} for org {integration.organization_id}")
+            # TODO: Send email to org owner to reconnect
+
+    logger.info(f"[TOKEN-REFRESH] Done: {refreshed} refreshed, {failed} failed")
+    return {'refreshed': refreshed, 'failed': failed}

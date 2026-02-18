@@ -156,6 +156,12 @@ app.conf.beat_schedule = {
             'expires': 3600,
         }
     },
+    
+    'refresh-integration-tokens': {
+        'task': 'tracker.refresh_integration_tokens',
+        'schedule': crontab(minute='*/45'),
+        'options': {'expires': 2700},
+    },
 }
 
 # ============================================================================

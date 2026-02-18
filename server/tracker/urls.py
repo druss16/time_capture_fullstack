@@ -235,7 +235,9 @@ urlpatterns = [
     path('integrations/quickbooks/customers/', views_integrations.quickbooks_customers, name='quickbooks-customers'),
     path('integrations/quickbooks/import/', views_integrations.quickbooks_import, name='quickbooks-import'),
     path('integrations/quickbooks/push-time/', views_integrations.quickbooks_push_time, name='quickbooks-push-time'),
+    path('integrations/quickbooks/push-status/<str:task_id>/', views_integrations.quickbooks_push_status, name='quickbooks-push-status'),
     path('integrations/quickbooks/invoices/', views_integrations.quickbooks_pull_invoices, name='quickbooks-invoices'),
+
 
     # Xero
     path('integrations/xero/connect/', views_integrations.xero_connect, name='xero-connect'),

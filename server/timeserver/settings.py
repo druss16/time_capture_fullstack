@@ -97,10 +97,10 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
 }
 
 CELERY_BROKER_USE_SSL = {
-    'ssl_cert_reqs': ssl.CERT_REQUIRED
+    'ssl_cert_reqs': ssl.CERT_NONE
 }
 CELERY_RESULT_BACKEND_USE_SSL = {
-    'ssl_cert_reqs': ssl.CERT_REQUIRED
+    'ssl_cert_reqs': ssl.CERT_NONE
 }
 
 # -----------------------------------------------------

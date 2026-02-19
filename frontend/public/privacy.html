@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy — TimeTracker by MavOps</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --ink: #1a1a2e;
+            --body: #3d3d5c;
+            --muted: #6b6b8a;
+            --border: #e2e2ea;
+            --surface: #f8f8fc;
+            --white: #ffffff;
+            --accent: #10b981;
+            --accent-bg: #ecfdf5;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'DM Sans', -apple-system, sans-serif;
+            color: var(--body);
+            background: var(--surface);
+            line-height: 1.7;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .header {
+            background: var(--white);
+            border-bottom: 1px solid var(--border);
+            padding: 20px 0;
+        }
+
+        .header-inner {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-family: 'DM Serif Display', serif;
+            font-size: 22px;
+            color: var(--ink);
+            text-decoration: none;
+        }
+
+        .logo span { color: var(--accent); }
+
+        .badge {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            background: var(--accent-bg);
+            padding: 4px 12px;
+            border-radius: 100px;
+            letter-spacing: 0.03em;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 48px 24px 80px;
+        }
+
+        h1 {
+            font-family: 'DM Serif Display', serif;
+            font-size: 36px;
+            color: var(--ink);
+            margin-bottom: 8px;
+            line-height: 1.2;
+        }
+
+        .effective-date {
+            color: var(--muted);
+            font-size: 14px;
+            margin-bottom: 40px;
+        }
+
+        .card {
+            background: var(--white);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px;
+            margin-bottom: 24px;
+        }
+
+        h2 {
+            font-family: 'DM Serif Display', serif;
+            font-size: 22px;
+            color: var(--ink);
+            margin-bottom: 16px;
+        }
+
+        h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--ink);
+            margin-top: 20px;
+            margin-bottom: 8px;
+        }
+
+        p { margin-bottom: 14px; }
+        p:last-child { margin-bottom: 0; }
+
+        ul {
+            padding-left: 24px;
+            margin-bottom: 14px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover { text-decoration: underline; }
+
+        .highlight-box {
+            background: var(--accent-bg);
+            border-left: 4px solid var(--accent);
+            padding: 16px 20px;
+            border-radius: 0 8px 8px 0;
+            margin: 16px 0;
+            font-size: 15px;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 32px 24px;
+            color: var(--muted);
+            font-size: 13px;
+            border-top: 1px solid var(--border);
+        }
+
+        @media (max-width: 600px) {
+            h1 { font-size: 28px; }
+            .card { padding: 24px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-inner">
+        <a href="https://timetracker.mavops.ai" class="logo">Time<span>Tracker</span></a>
+        <span class="badge">LEGAL</span>
+    </div>
+</div>
+
+<div class="container">
+    <h1>Privacy Policy</h1>
+    <p class="effective-date">Effective Date: February 19, 2026</p>
+
+    <div class="card">
+        <h2>1. Introduction</h2>
+        <p>MavOps LLC ("Company," "we," "us," "our") operates the TimeTracker platform ("Service"), a time tracking and billing solution for professional services firms. This Privacy Policy describes how we collect, use, store, and protect your personal information when you use our Service.</p>
+        <div class="highlight-box">
+            We are committed to protecting your privacy. We collect only what is necessary to provide the Service, and we never sell your personal data to third parties.
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>2. Information We Collect</h2>
+
+        <h3>2.1 Account Information</h3>
+        <p>When you create an account, we collect:</p>
+        <ul>
+            <li>Name and email address</li>
+            <li>Organization name</li>
+            <li>Password (stored in encrypted/hashed form)</li>
+            <li>Billing information (processed securely via Stripe)</li>
+        </ul>
+
+        <h3>2.2 Time Tracking Data</h3>
+        <p>In the course of using the Service, we collect:</p>
+        <ul>
+            <li>Application usage data from the desktop agent (active window titles, application names, timestamps)</li>
+            <li>Time entries, categories, and client assignments</li>
+            <li>Notes and descriptions you add to time entries</li>
+        </ul>
+
+        <h3>2.3 Integration Data</h3>
+        <p>When you connect third-party integrations (such as QuickBooks Online or Xero), we collect and store:</p>
+        <ul>
+            <li>OAuth access tokens and refresh tokens (encrypted at rest)</li>
+            <li>Account identifiers required for the integration to function</li>
+            <li>Data synchronized between the Service and the third-party platform (e.g., client lists, invoice data, time activities)</li>
+        </ul>
+
+        <h3>2.4 Automatically Collected Information</h3>
+        <ul>
+            <li>IP address and approximate location</li>
+            <li>Browser type and device information</li>
+            <li>Usage analytics (pages visited, features used)</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>3. How We Use Your Information</h2>
+        <p>We use the information we collect to:</p>
+        <ul>
+            <li>Provide, maintain, and improve the Service</li>
+            <li>Process time entries and generate billing reports</li>
+            <li>Synchronize data with connected third-party integrations</li>
+            <li>Send transactional notifications (timesheet reminders, approval notifications, weekly summaries)</li>
+            <li>Provide customer support</li>
+            <li>Detect and prevent fraud, abuse, and security incidents</li>
+            <li>Comply with legal obligations</li>
+        </ul>
+        <div class="highlight-box">
+            We use AI-powered classification to help categorize your time entries. This processing is done on our servers and your data is not shared with third-party AI providers for training purposes.
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>4. Third-Party Integrations</h2>
+        <p>The Service offers integrations with third-party platforms. When you authorize an integration:</p>
+        <ul>
+            <li>We access only the data scopes you explicitly authorize</li>
+            <li>OAuth tokens are stored securely and refreshed automatically</li>
+            <li>Data is transmitted to third-party APIs only when you initiate an action (e.g., pushing time entries, importing clients)</li>
+            <li>You may disconnect any integration at any time from the Service settings</li>
+        </ul>
+        <p>We encourage you to review the privacy policies of any third-party services you connect:</p>
+        <ul>
+            <li><a href="https://www.intuit.com/privacy/" target="_blank" rel="noopener">Intuit (QuickBooks) Privacy Policy</a></li>
+            <li><a href="https://www.xero.com/us/about/terms/privacy/" target="_blank" rel="noopener">Xero Privacy Policy</a></li>
+            <li><a href="https://stripe.com/privacy" target="_blank" rel="noopener">Stripe Privacy Policy</a></li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>5. Data Storage &amp; Security</h2>
+        <p>We implement industry-standard security measures to protect your data:</p>
+        <ul>
+            <li>All data is transmitted over HTTPS/TLS encryption</li>
+            <li>Passwords are hashed using industry-standard algorithms</li>
+            <li>OAuth tokens are stored securely with encryption at rest</li>
+            <li>Our infrastructure is hosted on reputable cloud providers with SOC 2 compliance</li>
+            <li>Database connections use SSL/TLS encryption</li>
+            <li>Access to production systems is restricted to authorized personnel</li>
+        </ul>
+        <p>While we take reasonable measures to protect your data, no method of electronic transmission or storage is 100% secure. We cannot guarantee absolute security.</p>
+    </div>
+
+    <div class="card">
+        <h2>6. Data Retention</h2>
+        <p>We retain your data for as long as your account is active or as needed to provide the Service. Specifically:</p>
+        <ul>
+            <li><strong>Account data:</strong> Retained for the life of your account</li>
+            <li><strong>Time tracking data:</strong> Retained for the life of your account</li>
+            <li><strong>Raw activity events:</strong> Automatically deleted after 30 days</li>
+            <li><strong>Integration tokens:</strong> Deleted immediately upon disconnection</li>
+        </ul>
+        <p>Upon account termination, you may request an export of your data within 30 days. After this period, your data will be permanently deleted from our active systems within 90 days. Backup copies may persist for up to an additional 90 days before being purged.</p>
+    </div>
+
+    <div class="card">
+        <h2>7. Data Sharing</h2>
+        <p>We do not sell, rent, or trade your personal information. We may share your data only in the following limited circumstances:</p>
+        <ul>
+            <li><strong>With your consent:</strong> When you explicitly authorize a third-party integration</li>
+            <li><strong>Service providers:</strong> Trusted vendors who help us operate the Service (hosting, email delivery, payment processing), bound by confidentiality agreements</li>
+            <li><strong>Legal requirements:</strong> When required by law, regulation, legal process, or governmental request</li>
+            <li><strong>Business transfers:</strong> In connection with a merger, acquisition, or sale of assets, with notice to affected users</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>8. Your Rights</h2>
+        <p>Depending on your jurisdiction, you may have the right to:</p>
+        <ul>
+            <li><strong>Access</strong> the personal data we hold about you</li>
+            <li><strong>Correct</strong> inaccurate or incomplete data</li>
+            <li><strong>Delete</strong> your personal data ("right to be forgotten")</li>
+            <li><strong>Export</strong> your data in a portable format</li>
+            <li><strong>Opt out</strong> of non-essential communications</li>
+            <li><strong>Withdraw consent</strong> for data processing at any time</li>
+        </ul>
+        <p>To exercise any of these rights, contact us at <a href="mailto:privacy@mavops.ai">privacy@mavops.ai</a>. We will respond within 30 days.</p>
+    </div>
+
+    <div class="card">
+        <h2>9. Cookies &amp; Tracking</h2>
+        <p>We use cookies and similar technologies for:</p>
+        <ul>
+            <li><strong>Essential cookies:</strong> Authentication and session management (required for the Service to function)</li>
+            <li><strong>Analytics:</strong> Understanding how the Service is used to improve it</li>
+        </ul>
+        <p>We do not use cookies for advertising or cross-site tracking. You may configure your browser to reject cookies, but some features of the Service may not function properly.</p>
+    </div>
+
+    <div class="card">
+        <h2>10. Desktop Agent</h2>
+        <p>The TimeTracker desktop agent captures application usage data to automate time tracking. Important details:</p>
+        <ul>
+            <li>The agent captures active window titles and application names only</li>
+            <li>No screenshots, keystrokes, webcam, or microphone data is captured</li>
+            <li>Raw activity data is automatically deleted from our servers after 30 days</li>
+            <li>You can pause or disable the agent at any time</li>
+            <li>All data transmission is encrypted</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>11. Children's Privacy</h2>
+        <p>The Service is not intended for use by individuals under the age of 16. We do not knowingly collect personal information from children. If we become aware that we have collected data from a child under 16, we will take steps to delete it promptly.</p>
+    </div>
+
+    <div class="card">
+        <h2>12. International Data Transfers</h2>
+        <p>Your data may be processed and stored in the United States. If you are accessing the Service from outside the United States, your data will be transferred to and processed in the United States, where data protection laws may differ from those of your jurisdiction.</p>
+    </div>
+
+    <div class="card">
+        <h2>13. Changes to This Policy</h2>
+        <p>We may update this Privacy Policy from time to time. We will notify you of material changes by posting the updated policy on this page, updating the effective date, and (where appropriate) sending an email notification. Continued use of the Service after changes constitutes acceptance of the revised policy.</p>
+    </div>
+
+    <div class="card">
+        <h2>14. Contact Us</h2>
+        <p>If you have questions or concerns about this Privacy Policy or our data practices, contact us at:</p>
+        <p>
+            <strong>MavOps LLC</strong><br>
+            Email: <a href="mailto:privacy@mavops.ai">privacy@mavops.ai</a><br>
+            Support: <a href="mailto:support@mavops.ai">support@mavops.ai</a><br>
+            Web: <a href="https://timetracker.mavops.ai">timetracker.mavops.ai</a>
+        </p>
+    </div>
+</div>
+
+<div class="footer">
+    &copy; 2026 MavOps LLC. All rights reserved.
+</div>
+
+</body>
+</html>

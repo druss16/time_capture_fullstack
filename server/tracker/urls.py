@@ -2,6 +2,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
+from django.views.generic import TemplateView
 from . import views
 from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications  # ✅ ADD THIS IMPORT
 
@@ -21,6 +22,9 @@ urlpatterns = [
     # Basic / Health
     # -------------------------------
     path("ping/", views.ping, name="ping"),
+
+    path('eula/', TemplateView.as_view(template_name='legal/eula.html'), name='eula'),
+    path('privacy/', TemplateView.as_view(template_name='legal/privacy.html'), name='privacy'),
 
     # -------------------------------
     # Agent Pairing & Communication

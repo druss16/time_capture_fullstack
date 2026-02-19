@@ -13,6 +13,8 @@ Includes:
 import os
 from celery import Celery
 from celery.schedules import crontab
+import warnings
+warnings.filterwarnings('ignore', message='.*ssl_cert_reqs.*')
 
 # Set Django settings module
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'timeserver.settings')
@@ -156,7 +158,7 @@ app.conf.beat_schedule = {
             'expires': 3600,
         }
     },
-    
+
     'refresh-integration-tokens': {
         'task': 'tracker.refresh_integration_tokens',
         'schedule': crontab(minute='*/45'),

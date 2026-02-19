@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt  # ← Add this
+from django.views.generic import TemplateView
 from tracker import views as tracker_views
 
 urlpatterns = [
@@ -17,4 +18,7 @@ urlpatterns = [
     path("api/whoami/",      tracker_views.whoami,      name="whoami"),
     path('api/onboarding/', include('tracker.urls_onboarding')),
     path('api/billing/', include('tracker.urls_billing')),
+
+    path('eula/', TemplateView.as_view(template_name='legal/eula.html'), name='eula'),
+    path('privacy/', TemplateView.as_view(template_name='legal/privacy.html'), name='privacy'),
 ]

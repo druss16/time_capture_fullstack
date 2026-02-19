@@ -23,9 +23,6 @@ urlpatterns = [
     # -------------------------------
     path("ping/", views.ping, name="ping"),
 
-    path('eula/', TemplateView.as_view(template_name='legal/eula.html'), name='eula'),
-    path('privacy/', TemplateView.as_view(template_name='legal/privacy.html'), name='privacy'),
-
     # -------------------------------
     # Agent Pairing & Communication
     # -------------------------------

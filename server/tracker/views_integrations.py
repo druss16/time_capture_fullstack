@@ -308,6 +308,10 @@ def quickbooks_connect(request):
     if not org:
         return error_response('No organization', 404)
 
+    membership = request.user.memberships.filter(organization=org).first()
+    if not membership or membership.role not in ('owner', 'admin'):
+        return error_response('Only owners and admins can manage integrations', 403)
+
     import secrets
     state = secrets.token_urlsafe(32)
     Integration.objects.update_or_create(
@@ -390,6 +394,9 @@ def quickbooks_disconnect(request):
     org = get_user_org(request.user)
     if not org:
         return error_response('No organization', 404)
+    membership = request.user.memberships.filter(organization=org).first()
+    if not membership or membership.role not in ('owner', 'admin'):
+        return error_response('Only owners and admins can manage integrations', 403)
     try:
         i = Integration.objects.get(organization=org, provider='quickbooks')
         i.is_connected = False

@@ -1268,6 +1268,8 @@ def _merge_ctx(cur: dict, e: RawEvent):
 
 # tracker/utils.py (or wherever your compact function lives)
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 @transaction.atomic
 def blocks_today(request):
     date_str  = request.GET.get("date") or None
@@ -2319,7 +2321,7 @@ def timecards_summary_day(request):
     out_rows.sort(key=lambda r: (r["client"].lower(), (r["project"] or "~zzz").lower()))
 
     return Response({
-        "date": (parse_date(date_str) or localtime(timezone.now()).date()).isoformat(),
+        "date": (parse_date(date_str) if date_str else localtime(timezone.now()).date()).isoformat(),
         "user": user_param or "",
         "total_hours": round(active_union_minutes / 60.0, 2),  # ACTIVE only
         "buckets": out_rows,                                   # per-bucket union

@@ -319,6 +319,18 @@ class AgentDevice(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
 
+    # MDM deployment tracking
+    claimed_via_token = models.ForeignKey(
+        'OrgDeploymentToken',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='claimed_devices'
+    )
+    auto_matched = models.BooleanField(
+        default=False,
+        help_text="True if user was auto-matched by email, False if manually selected"
+    )
+
     def rotate_key(self):
         import secrets
         self.api_key = secrets.token_hex(16)
@@ -2161,3 +2173,78 @@ class UserPreference(models.Model):
     def __str__(self):
         return f"Preferences for {self.user.username}"
 
+
+"""
+OrgDeploymentToken model and related helpers.
+
+Add to server/tracker/models.py (or create as a new file and import).
+Then run: python manage.py makemigrations && python manage.py migrate
+"""
+import secrets
+import string
+from django.db import models
+from django.conf import settings
+from django.utils import timezone
+
+
+def generate_org_token():
+    """Generate a readable org deployment token like ODT-XKCD-9F3A."""
+    chars = string.ascii_uppercase + string.digits
+    part1 = ''.join(secrets.choice(chars) for _ in range(4))
+    part2 = ''.join(secrets.choice(chars) for _ in range(4))
+    return f"ODT-{part1}-{part2}"
+
+
+class OrgDeploymentToken(models.Model):
+    """
+    A token that allows bulk device enrollment for an organization.
+    IT admins bake this into MSI installs for MDM (Intune) deployment.
+    """
+    organization = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='deployment_tokens'
+    )
+    token = models.CharField(
+        max_length=20,
+        unique=True,
+        default=generate_org_token,
+        db_index=True
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_deployment_tokens'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    max_devices = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Max devices that can claim this token. Null = unlimited."
+    )
+    devices_claimed = models.PositiveIntegerField(default=0)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.token} ({self.organization.name})"
+
+    @property
+    def is_valid(self):
+        """Check if token can still be used to claim devices."""
+        if not self.is_active:
+            return False
+        if self.expires_at and timezone.now() > self.expires_at:
+            return False
+        if self.max_devices and self.devices_claimed >= self.max_devices:
+            return False
+        return True
+
+    def claim(self):
+        """Increment claim count. Call after successful device registration."""
+        self.devices_claimed = models.F('devices_claimed') + 1
+        self.save(update_fields=['devices_claimed'])

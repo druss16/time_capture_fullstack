@@ -1496,6 +1496,17 @@ def run_agent():
     write_pid()
     
     key = config.get("api_key") or API_KEY
+    # ── MDM/Intune org token claim ──
+    if not key:
+        org_token = config.get("org_token")
+        if org_token:
+            from mdm_deploy import do_org_token_claim
+            key = do_org_token_claim(config, save_config, API_BASE, APP_VERSION)
+            if key:
+                API_KEY = key
+                log("[MDM] ✅ Device claimed via org token")
+            else:
+                log("[MDM] ⚠️ Org token claim failed — falling back to manual pairing")
     if not key:
         gui_launched = False
         

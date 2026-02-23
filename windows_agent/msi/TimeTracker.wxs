@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TimeTracker Windows MSI Installer — WiX v4 Template
+
+  BUILD INSTRUCTIONS:
+  1. Install WiX Toolset v4: dotnet tool install -g wix
+  2. Build: wix build TimeTracker.wxs -o TimeTracker.msi
+  3. To embed org token at build time:
+     wix build TimeTracker.wxs -d OrgToken=ODT-XKCD-9F3A -o TimeTracker.msi
+
+  INSTALL COMMANDS (for Intune):
+    Silent with org token:
+      msiexec /i TimeTracker.msi /quiet ORG_TOKEN=ODT-XKCD-9F3A
+
+    Silent with custom API base:
+      msiexec /i TimeTracker.msi /quiet ORG_TOKEN=ODT-XKCD-9F3A API_BASE=https://custom.api.com/api
+
+    Uninstall:
+      msiexec /x {YOUR-PRODUCT-GUID} /quiet
+
+  NOTES:
+    - The installer copies PyInstaller output from dist\TimeTracker\ and dist\TimeTrackerAgent\
+    - Writes config.json with ORG_TOKEN to %APPDATA%\TimeTracker\
+    - Registers Task Scheduler startup task
+    - Launches the agent after install
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!-- Public properties (settable from command line) -->
+  <Property Id="ORG_TOKEN" Value="" Secure="yes" />
+  <Property Id="API_BASE" Value="https://timetracker-api-k375.onrender.com/api" Secure="yes" />
+
+  <Package
+    Name="TimeTracker"
+    Manufacturer="MavOps"
+    Version="1.0.0"
+    UpgradeCode="PUT-YOUR-GUID-HERE"
+    Compressed="yes"
+    InstallerVersion="500"
+    Scope="perMachine">
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of TimeTracker is already installed."
+      AllowSameVersionUpgrades="yes" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Install directory structure -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="TimeTracker">
+        <!-- All files from PyInstaller dist go here -->
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Main feature -->
+    <Feature Id="MainFeature" Title="TimeTracker" Level="1">
+      <ComponentGroupRef Id="AgentFiles" />
+      <ComponentGroupRef Id="GUIFiles" />
+      <ComponentRef Id="ConfigWriter" />
+      <ComponentRef Id="StartupTask" />
+    </Feature>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- Component: Write config.json with org token     -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <StandardDirectory Id="AppDataFolder">
+      <Directory Id="TimeTrackerAppData" Name="TimeTracker">
+        <Component Id="ConfigWriter" Guid="PUT-GUID-1-HERE">
+          <!--
+            Creates config.json with the org token.
+            Uses XmlConfig or a custom action. For simplicity,
+            we use a custom action (see below).
+          -->
+          <RemoveFile Id="RemoveConfig" Name="config.json" On="uninstall" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- Custom Action: Write config.json after install  -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <SetProperty
+      Id="WriteConfigAction"
+      Before="WriteConfigAction"
+      Sequence="execute"
+      Value="[AppDataFolder]TimeTracker\config.json|[ORG_TOKEN]|[API_BASE]" />
+
+    <CustomAction
+      Id="WriteConfigAction"
+      Directory="TimeTrackerAppData"
+      ExeCommand='cmd.exe /c "echo {&quot;org_token&quot;: &quot;[ORG_TOKEN]&quot;, &quot;api_base&quot;: &quot;[API_BASE]&quot;} > &quot;[AppDataFolder]TimeTracker\config.json&quot;"'
+      Execute="deferred"
+      Return="ignore"
+      Impersonate="yes" />
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- Custom Action: Register startup scheduled task  -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <CustomAction
+      Id="RegisterStartupTask"
+      Directory="INSTALLFOLDER"
+      ExeCommand='schtasks /Create /TN "TimeTrackerAgent" /TR "&quot;[INSTALLFOLDER]TimeTrackerAgent.exe&quot;" /SC ONLOGON /RL LIMITED /F'
+      Execute="deferred"
+      Return="ignore"
+      Impersonate="no" />
+
+    <!-- Remove scheduled task on uninstall -->
+    <CustomAction
+      Id="RemoveStartupTask"
+      Directory="INSTALLFOLDER"
+      ExeCommand='schtasks /Delete /TN "TimeTrackerAgent" /F'
+      Execute="deferred"
+      Return="ignore"
+      Impersonate="no" />
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- Custom Action: Launch agent after install       -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <CustomAction
+      Id="LaunchAgent"
+      Directory="INSTALLFOLDER"
+      ExeCommand='"[INSTALLFOLDER]TimeTrackerAgent.exe"'
+      Execute="deferred"
+      Return="asyncNoWait"
+      Impersonate="yes" />
+
+    <!-- Schedule custom actions -->
+    <InstallExecuteSequence>
+      <Custom Action="WriteConfigAction" After="InstallFiles" Condition="NOT REMOVE" />
+      <Custom Action="RegisterStartupTask" After="WriteConfigAction" Condition="NOT REMOVE" />
+      <Custom Action="LaunchAgent" After="RegisterStartupTask" Condition="NOT REMOVE" />
+      <Custom Action="RemoveStartupTask" Before="RemoveFiles" Condition="REMOVE" />
+    </InstallExecuteSequence>
+
+  </Package>
+
+</Wix>
+
+<!--
+  ═══════════════════════════════════════════════════════════
+  ALTERNATIVE: PowerShell-based config writer (more reliable)
+  ═══════════════════════════════════════════════════════════
+
+  If the cmd.exe echo approach is unreliable, use a small
+  PowerShell script instead. Save as write_config.ps1 and
+  include it in the MSI:
+
+  write_config.ps1:
+  ─────────────────
+  param(
+      [string]$OrgToken,
+      [string]$ApiBase = "https://timetracker-api-k375.onrender.com/api"
+  )
+
+  $configDir = Join-Path $env:APPDATA "TimeTracker"
+  if (-not (Test-Path $configDir)) {
+      New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+  }
+
+  $config = @{
+      org_token = $OrgToken
+      api_base  = $ApiBase
+  }
+
+  $configPath = Join-Path $configDir "config.json"
+  $config | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
+
+  Write-Host "Config written to $configPath"
+
+  Then the custom action becomes:
+  <CustomAction
+    Id="WriteConfigAction"
+    Directory="INSTALLFOLDER"
+    ExeCommand='powershell.exe -ExecutionPolicy Bypass -File "[INSTALLFOLDER]write_config.ps1" -OrgToken "[ORG_TOKEN]" -ApiBase "[API_BASE]"'
+    Execute="deferred"
+    Return="check"
+    Impersonate="yes" />
+-->

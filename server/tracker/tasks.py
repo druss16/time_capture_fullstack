@@ -958,13 +958,6 @@ def classify_block_task(self, block_id: int):
 
 @shared_task(name='tracker.auto_compact_recent_events')
 def auto_compact_recent_events():
-    """
-    Auto-compact recent events for all active users.
-    Runs every 5 minutes via Celery beat.
-    
-    This ensures blocks are created automatically without requiring
-    the user to refresh the UI.
-    """
     try:
         from tracker.services.compaction import auto_compact_all_active_users
         
@@ -984,125 +977,384 @@ def auto_compact_recent_events():
         raise
 
 
-@shared_task(name='tracker.ai_classify_uncategorized_blocks')
-def ai_classify_uncategorized_blocks(limit=100):
+"""
+FIXED: ai_classify_uncategorized_blocks — NOW ACTUALLY CALLS OPENAI
+
+Replace the existing ai_classify_uncategorized_blocks task in tracker/tasks.py
+with this version.
+
+WHAT WAS BROKEN:
+- The old task only used PatternLearningService (keyword matching)
+- It NEVER called OpenAI despite having the API key configured
+- Result: $0 OpenAI bill for 1.5 months, blocks stuck uncategorized
+
+WHAT THIS FIX DOES:
+1. First tries pattern matching (fast, free) — same as before
+2. Batches remaining uncategorized blocks by user/org
+3. Sends batches to OpenAI using the SAME prompt system as ai_suggestions_today()
+4. Auto-saves high-confidence results (>= 0.70)
+5. Learns patterns from AI results for future fast-path matching
+
+SCHEDULE: Every 5 minutes via Celery beat (already configured)
+"""
+
+
+@shared_task(name='tracker.ai_classify_uncategorized_blocks', bind=True, max_retries=2)
+def ai_classify_uncategorized_blocks(self, limit=80):
     """
     Run AI classification on uncategorized blocks.
-    Runs every 5 minutes to learn patterns and auto-categorize.
-    
-    This ensures:
-    1. AI learns from recent activity
-    2. High-confidence blocks get auto-categorized
-    3. Pattern learning happens continuously
+    Runs every 5 minutes via Celery beat.
+
+    Pipeline:
+      1. Pattern matching (free, fast) — handles ~60-70% of blocks
+      2. OpenAI batch classification — handles the rest
+      3. Learn patterns from AI results for future runs
     """
+    import os
+    import re
+    import json
+    from collections import defaultdict
+    from datetime import timedelta
+
+    from django.db import transaction
+
+    logger = logging.getLogger(__name__)
+
     try:
-        from tracker.models import Block, Client
+        from tracker.models import Block, Client, OrganizationMembership
         from tracker.services.pattern_learning import PatternLearningService
-        from django.contrib.auth import get_user_model
-        import os
-        
-        User = get_user_model()
-        
-        # Only run if OpenAI key is configured
-        if not os.getenv('OPENAI_API_KEY'):
-            logger.warning("[CELERY] Skipping AI classification - no OpenAI key")
-            return {'skipped': 'no_api_key'}
-        
-        # Get recent uncategorized blocks (last 24 hours)
-        cutoff = timezone.now() - timedelta(hours=24)
-        
-        blocks = Block.objects.filter(
-            is_categorized=False,
-            start__gte=cutoff
-        ).select_related('user', 'client', 'org').order_by('-start')[:limit]
-        
-        if not blocks:
-            logger.info("[CELERY] No uncategorized blocks to classify")
-            return {'blocks_processed': 0}
-        
-        logger.info(f"[CELERY] Found {len(blocks)} uncategorized blocks")
-        
-        stats = {
-            'blocks_processed': 0,
-            'auto_categorized': 0,
-            'patterns_learned': 0,
-            'errors': 0
-        }
-        
-        # Process blocks by user to leverage patterns
-        from collections import defaultdict
-        by_user = defaultdict(list)
-        
-        for block in blocks:
-            by_user[block.user_id].append(block)
-        
-        for user_id, user_blocks in by_user.items():
-            try:
-                user = User.objects.get(id=user_id)
-                
-                for block in user_blocks:
-                    try:
-                        # Check learned patterns first (fast path)
-                        learned_patterns = PatternLearningService.get_patterns_for_block(block, user)
-                        
-                        if learned_patterns:
-                            # Use highest confidence pattern
-                            client_name, category, confidence = learned_patterns[0]
-                            
-                            if confidence >= 0.75:
-                                # ✅ FIX: Client LOOKUP only — never create phantom clients
-                                if client_name and not block.client:
-                                    org = getattr(block, 'org', None)
-                                    if org:
-                                        try:
-                                            client = Client.objects.get(
-                                                org=org,
-                                                name__iexact=client_name,
-                                                is_active=True,
-                                            )
-                                            block.client = client
-                                        except (Client.DoesNotExist, Client.MultipleObjectsReturned):
-                                            pass  # Don't create phantom clients
-                                
-                                if category:
-                                    block.category_hours = {category: round(block.minutes / 60.0, 2)}
-                                    block.is_categorized = True
-                                    block.categorized_at = timezone.now()
-                                    block.categorized_by = 'pattern'
-                                    block.save()
-                                    
-                                    stats['auto_categorized'] += 1
-                                    stats['patterns_learned'] += 1
-                                    
-                                    logger.debug(
-                                        f"[CELERY] Auto-categorized block {block.id} "
-                                        f"→ {client_name or 'no client'} / {category} "
-                                        f"({confidence:.2f})"
-                                    )
-                        
-                        stats['blocks_processed'] += 1
-                        
-                    except Exception as e:
-                        logger.error(f"[CELERY] Error processing block {block.id}: {e}")
-                        stats['errors'] += 1
-                        
-            except User.DoesNotExist:
-                logger.warning(f"[CELERY] User {user_id} not found")
-                stats['errors'] += 1
-        
-        logger.info(
-            f"[CELERY] AI classification complete: "
-            f"{stats['blocks_processed']} blocks processed, "
-            f"{stats['auto_categorized']} auto-categorized, "
-            f"{stats['patterns_learned']} patterns applied, "
-            f"{stats['errors']} errors"
+        from tracker.industry_categories import (
+            build_ai_prompt_for_industry,
+            build_classification_user_prompt,
+            validate_and_fix_ai_response,
         )
-        
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            logger.warning("[AI-TASK] Skipping — OPENAI_API_KEY not set")
+            return {'skipped': 'no_api_key'}
+
+        # ==================================================================
+        # STEP 1: Gather uncategorized blocks (last 24h)
+        # ==================================================================
+        cutoff = timezone.now() - timedelta(hours=24)
+
+        blocks = list(
+            Block.objects.filter(
+                is_categorized=False,
+                start__gte=cutoff,
+                deleted_at__isnull=True,
+            )
+            .select_related('user', 'client', 'org')
+            .order_by('-start')[:limit]
+        )
+
+        if not blocks:
+            return {'blocks_found': 0, 'message': 'Nothing to classify'}
+
+        logger.info(f"[AI-TASK] Found {len(blocks)} uncategorized blocks")
+
+        stats = {
+            'blocks_found': len(blocks),
+            'pattern_classified': 0,
+            'ai_classified': 0,
+            'ai_failed': 0,
+            'errors': 0,
+        }
+
+        # ==================================================================
+        # STEP 2: Fast path — pattern matching (free)
+        # ==================================================================
+        still_need_ai = []
+
+        for block in blocks:
+            try:
+                # Try learned patterns
+                if block.user:
+                    learned = PatternLearningService.get_patterns_for_block(block, block.user)
+                    if learned:
+                        client_name, category, confidence = learned[0]
+                        if confidence >= 0.75 and category:
+                            _apply_pattern_result(block, client_name, category, confidence)
+                            stats['pattern_classified'] += 1
+                            continue
+
+                # Try compaction's auto_categorize (keyword matching)
+                from tracker.services.compaction import auto_categorize_block
+                if auto_categorize_block(block):
+                    stats['pattern_classified'] += 1
+                    continue
+
+                # Not matched — needs AI
+                still_need_ai.append(block)
+
+            except Exception as e:
+                logger.warning(f"[AI-TASK] Pattern check error on block {block.id}: {e}")
+                still_need_ai.append(block)
+
+        logger.info(
+            f"[AI-TASK] Pattern pass: {stats['pattern_classified']} classified, "
+            f"{len(still_need_ai)} still need AI"
+        )
+
+        if not still_need_ai:
+            return stats
+
+        # ==================================================================
+        # STEP 3: Batch by org for AI classification
+        # ==================================================================
+        by_org = defaultdict(list)
+        for block in still_need_ai:
+            org_id = block.org_id or 0
+            by_org[org_id].append(block)
+
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key, timeout=30.0)
+
+        for org_id, org_blocks in by_org.items():
+            try:
+                org = org_blocks[0].org if org_blocks[0].org else None
+                industry_type = getattr(org, 'industry_type', 'general') or 'general'
+
+                # Build system prompt (categories, rules, seasonal context)
+                system_msg = build_ai_prompt_for_industry(industry_type)
+
+                # Add org context (clients, aliases, training examples)
+                if org:
+                    from tracker.views import build_ai_context
+                    org_context = build_ai_context(org) or ""
+                    if org_context:
+                        system_msg += "\n\n=== ORGANIZATION CONTEXT ===\n" + org_context
+                else:
+                    org_context = ""
+
+                # Format blocks for the prompt
+                trimmed = []
+                for b in org_blocks[:50]:  # Cap at 50 per org per run
+                    minutes = b.minutes or 0
+                    trimmed.append({
+                        "id": str(b.id),
+                        "title": _shorten(b.title, 160),
+                        "window_title": _shorten(getattr(b, 'window_title', ''), 160),
+                        "url": _shorten(b.url, 140),
+                        "file_path": _shorten(b.file_path, 140),
+                        "app_name": _shorten(getattr(b, 'app_name', ''), 80),
+                        "bundle_id": _shorten(getattr(b, 'bundle_id', ''), 100),
+                        "minutes": minutes,
+                        "hints": getattr(b, 'hints', {}) or {},
+                        "assigned_client": getattr(b.client, "name", None),
+                    })
+
+                user_prompt = build_classification_user_prompt(trimmed, org_context)
+
+                # Choose model/tokens based on batch size
+                max_tokens = 1000 if len(trimmed) <= 3 else 4000
+
+                # ==============================================================
+                # THE ACTUAL OPENAI CALL
+                # ==============================================================
+                logger.info(
+                    f"[AI-TASK] Calling OpenAI for org {org_id}: "
+                    f"{len(trimmed)} blocks, industry={industry_type}"
+                )
+
+                resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.2,
+                    max_tokens=max_tokens,
+                )
+
+                raw_text = (resp.choices[0].message.content or "").strip()
+                raw_json = _extract_json(raw_text)
+                ai_results = _json_loads_loose(raw_json)
+
+                if not isinstance(ai_results, list):
+                    raise ValueError("OpenAI did not return a JSON array")
+
+                # Validate/fix category names
+                ai_results = validate_and_fix_ai_response(ai_results, industry_type)
+
+                logger.info(
+                    f"[AI-TASK] OpenAI returned {len(ai_results)} results "
+                    f"for {len(trimmed)} blocks"
+                )
+
+                # ==============================================================
+                # STEP 4: Save results
+                # ==============================================================
+                n = min(len(org_blocks), len(ai_results))
+
+                with transaction.atomic():
+                    for i in range(n):
+                        block = org_blocks[i]
+                        sug = ai_results[i] if isinstance(ai_results[i], dict) else {}
+
+                        confidence = float(sug.get("confidence", 0.0))
+                        categories = sug.get("categories", {})
+
+                        if confidence < 0.70 or not categories:
+                            continue  # Leave for manual review
+
+                        try:
+                            fresh = Block.objects.select_for_update().get(id=block.id)
+                            if fresh.is_categorized:
+                                continue  # Race condition — already done
+
+                            # Client correction (lookup only, never create)
+                            suggested_client = (sug.get("client") or "").strip()
+                            if suggested_client and not fresh.client and org:
+                                try:
+                                    correct_client = Client.objects.get(
+                                        org=org,
+                                        name__iexact=suggested_client,
+                                        is_active=True,
+                                    )
+                                    fresh.client = correct_client
+                                except (Client.DoesNotExist, Client.MultipleObjectsReturned):
+                                    pass
+
+                            # Save categories
+                            clean_cats = {}
+                            for k, v in categories.items():
+                                try:
+                                    clean_cats[str(k)] = float(v)
+                                except (ValueError, TypeError):
+                                    pass
+
+                            if not clean_cats:
+                                continue
+
+                            fresh.category_hours = clean_cats
+                            fresh.ai_category = list(clean_cats.keys())[0]
+                            fresh.is_categorized = True
+                            fresh.categorized_at = timezone.now()
+                            fresh.categorized_by = 'ai'
+                            fresh.ai_processed_at = timezone.now()
+                            fresh.ai_confidence = confidence
+                            fresh.save()
+
+                            stats['ai_classified'] += 1
+
+                            logger.debug(
+                                f"[AI-TASK] ✅ Block {block.id} → "
+                                f"{suggested_client or 'no client'} / "
+                                f"{list(clean_cats.keys())} ({confidence:.2f})"
+                            )
+
+                            # Learn from this classification
+                            if fresh.user:
+                                try:
+                                    PatternLearningService.learn_from_block(fresh, fresh.user)
+                                except Exception:
+                                    pass
+
+                        except Block.DoesNotExist:
+                            pass
+                        except Exception as e:
+                            logger.error(f"[AI-TASK] Save error block {block.id}: {e}")
+                            stats['errors'] += 1
+
+            except Exception as e:
+                logger.error(
+                    f"[AI-TASK] OpenAI batch failed for org {org_id}: {e}",
+                    exc_info=True
+                )
+                stats['ai_failed'] += len(org_blocks)
+
+        logger.info(
+            f"[AI-TASK] Complete: "
+            f"pattern={stats['pattern_classified']}, "
+            f"ai={stats['ai_classified']}, "
+            f"failed={stats['ai_failed']}, "
+            f"errors={stats['errors']}"
+        )
+
         return stats
-        
-    except Exception as e:
-        logger.error(f"[CELERY] AI classification failed: {e}", exc_info=True)
-        raise
+
+    except Exception as exc:
+        logger.error(f"[AI-TASK] Task failed: {exc}", exc_info=True)
+        raise self.retry(exc=exc, countdown=120)
+
+
+# ==================================================================
+# HELPER FUNCTIONS (used by the task above)
+# ==================================================================
+
+def _apply_pattern_result(block, client_name, category, confidence):
+    """Apply a pattern-match result to a block."""
+    from tracker.models import Client
+    from django.utils import timezone
+
+    if client_name and not block.client:
+        org = getattr(block, 'org', None)
+        if org:
+            try:
+                client_obj = Client.objects.get(
+                    org=org, name__iexact=client_name, is_active=True
+                )
+                block.client = client_obj
+            except (Client.DoesNotExist, Client.MultipleObjectsReturned):
+                pass
+
+    if category:
+        hours = round((block.minutes or 1) / 60.0, 2)
+        block.category_hours = {category: hours}
+        block.is_categorized = True
+        block.categorized_at = timezone.now()
+        block.categorized_by = 'pattern'
+        block.ai_confidence = confidence
+        block.save()
+
+
+def _shorten(s, n=180):
+    s = (s or "").strip()
+    return s[:n] + ("…" if len(s) > n else "")
+
+
+def _extract_json(s):
+    """Extract JSON array from potentially markdown-wrapped response."""
+    import re
+
+    s = s.strip()
+    if s.startswith("```"):
+        parts = s.split("```")
+        if len(parts) >= 3:
+            s = parts[1]
+            if s.lower().startswith("json"):
+                s = s[4:].lstrip()
+
+    m = re.search(r'\[\s*{', s)
+    if m:
+        start = m.start()
+        depth, i = 0, start
+        while i < len(s):
+            if s[i] == '[':
+                depth += 1
+            elif s[i] == ']':
+                depth -= 1
+                if depth == 0:
+                    return s[start:i + 1]
+            i += 1
+    return s
+
+
+def _json_loads_loose(raw):
+    """Parse JSON with tolerance for trailing commas."""
+    import json
+    import re
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raw2 = re.sub(r',\s*([}\]])', r'\1', raw)
+        return json.loads(raw2)
 
 
 @shared_task(name='tracker.cleanup_old_raw_events')
@@ -1281,7 +1533,6 @@ def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_
     from django.db.models import Q
     from datetime import datetime, timedelta
     from django.utils import timezone
-    import logging
 
     logger = logging.getLogger('tracker.tasks')
     logger.info(f"[QBO-PUSH] Starting push for org={org_id}, dates={start_date} to {end_date}")

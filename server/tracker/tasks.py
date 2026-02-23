@@ -1231,6 +1231,16 @@ def ai_classify_uncategorized_blocks(self, limit=80):
                             if not clean_cats:
                                 continue
 
+                            # ✅ Normalize category_hours to actual block duration
+                            actual_hours = round((fresh.minutes or 0) / 60.0, 2)
+                            cat_total = sum(clean_cats.values())
+                            if cat_total > 0 and actual_hours > 0:
+                                ratio = actual_hours / cat_total
+                                clean_cats = {k: round(v * ratio, 2) for k, v in clean_cats.items()}
+                            elif actual_hours > 0 and len(clean_cats) > 0:
+                                per_cat = round(actual_hours / len(clean_cats), 2)
+                                clean_cats = {k: per_cat for k in clean_cats}
+
                             fresh.category_hours = clean_cats
                             fresh.ai_category = list(clean_cats.keys())[0]
                             fresh.is_categorized = True

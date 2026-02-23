@@ -298,6 +298,7 @@ class AgentDevice(models.Model):
         related_name="agent_devices",
         null=True, blank=True,
     )
+    os_username = models.CharField(max_length=255, blank=True, default="")
     device_id = models.CharField(
         max_length=64,
         unique=True,

@@ -1,15 +1,12 @@
 """
 Deployment views for MDM/Intune support.
-
-Add to server/tracker/views_deployment.py
-Wire up in urls.py:
-    path('api/deploy/', include('tracker.urls_deployment')),
 """
 import json
+import uuid
 import secrets
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST, require_GET, require_http_methods
+from django.views.decorators.http import require_POST, require_GET
 from django.utils import timezone
 from django.db.models import Q
 
@@ -122,7 +119,7 @@ def revoke_deployment_token(request, token_id):
 
 def _generate_device_key():
     """Generate a secure per-device API key."""
-    return secrets.token_urlsafe(48)
+    return secrets.token_hex(16)
 
 
 def _match_user_by_email(org, os_username):
@@ -130,10 +127,7 @@ def _match_user_by_email(org, os_username):
     Try to match os_username to an org member.
 
     On AAD-joined machines, os_username is the UPN (e.g., jsmith@cpafirm.com).
-    We also try common variations:
-      - Exact email match
-      - Username part before @ (in case stored differently)
-      - Case-insensitive match
+    We also try common variations.
     """
     email = os_username.strip().lower()
 
@@ -215,10 +209,12 @@ def deploy_claim(request):
     org = token.organization
 
     # Check if this hostname is already registered for this org
-    existing_device = Device.objects.filter(
-        organization=org,
-        hostname=hostname
-    ).first()
+    # AgentDevice links to org through user → memberships
+    existing_device = AgentDevice.objects.filter(
+        hostname=hostname,
+        user__memberships__organization=org
+    ).select_related('user').first()
+
     if existing_device and existing_device.api_key:
         # Already claimed — return existing credentials
         return JsonResponse({
@@ -238,12 +234,14 @@ def deploy_claim(request):
         device_key = _generate_device_key()
         device = AgentDevice.objects.create(
             user=membership.user,
-            organization=org,
+            device_id=str(uuid.uuid4()),
             hostname=hostname,
             platform=platform_str,
             app_version=version,
             api_key=device_key,
             os_username=os_username,
+            is_active=True,
+            last_seen_at=timezone.now(),
             claimed_via_token=token,
             auto_matched=True,
         )
@@ -330,17 +328,19 @@ def deploy_confirm_user(request):
             "message": "User is not a member of this organization"
         }, status=404)
 
-    # Check for existing device
+    # Check for existing device by hostname in this org
     existing_device = AgentDevice.objects.filter(
-        organization=org,
-        hostname=hostname
-    ).first()
+        hostname=hostname,
+        user__memberships__organization=org
+    ).select_related('user').first()
+
     if existing_device:
         # Update existing device with new user
         existing_device.user = membership.user
         existing_device.os_username = os_username
         existing_device.auto_matched = False
         existing_device.claimed_via_token = token
+        existing_device.last_seen_at = timezone.now()
         existing_device.save()
         device_key = existing_device.api_key
         device = existing_device
@@ -349,12 +349,14 @@ def deploy_confirm_user(request):
         device_key = _generate_device_key()
         device = AgentDevice.objects.create(
             user=membership.user,
-            organization=org,
+            device_id=str(uuid.uuid4()),
             hostname=hostname,
             platform=platform_str,
             app_version=version,
             api_key=device_key,
             os_username=os_username,
+            is_active=True,
+            last_seen_at=timezone.now(),
             claimed_via_token=token,
             auto_matched=False,
         )

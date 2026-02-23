@@ -31,6 +31,7 @@ import getpass
 import ctypes
 import traceback
 import logging
+import socket
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Tuple, List
@@ -194,6 +195,14 @@ notif_manager = None
 notif_worker = None
 gui_menu_bar = None  # Global reference
 
+# Network health state — used to skip blocking network calls when offline
+_network_ok = True
+_network_ok_lock = threading.Lock()
+_last_successful_post = 0.0
+_wake_timestamp = 0.0  # When we last woke from sleep
+_health_monitor_running = False
+NETWORK_GRACE_PERIOD = 30  # Seconds after wake to skip network calls
+
 # ---------------- Logging Setup ----------------
 LOG_DIR = os.path.join(APPDATA, "TimeTracker", "Logs")
 LOG_FILE = os.path.join(LOG_DIR, "agent.log")
@@ -268,6 +277,74 @@ def log_error(msg: str, exc_info=True):
         _logger.error(msg, exc_info=exc_info)
 
 
+# ---------------- Network Health Helpers ----------------
+def is_network_ok() -> bool:
+    """Thread-safe check if network is healthy."""
+    with _network_ok_lock:
+        return _network_ok
+
+def set_network_ok(ok: bool):
+    """Thread-safe set network health."""
+    global _network_ok
+    with _network_ok_lock:
+        _network_ok = ok
+
+def check_dns() -> bool:
+    """Quick DNS check against our API host."""
+    try:
+        host = urlparse(API_BASE).hostname
+        socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
+        return True
+    except Exception:
+        return False
+
+def _start_health_monitor():
+    """Background thread that checks connectivity every 30s until restored."""
+    global _health_monitor_running
+
+    if _health_monitor_running:
+        return
+    _health_monitor_running = True
+
+    def _monitor():
+        global _health_monitor_running
+        log("[HEALTH] Starting network health monitor (checking every 30s)")
+        while True:
+            time.sleep(30)
+            if is_network_ok():
+                log("[HEALTH] Network already restored — monitor exiting")
+                _health_monitor_running = False
+                return
+
+            try:
+                if not check_dns():
+                    log("[HEALTH] Still offline (DNS failed)")
+                    continue
+
+                # DNS works — try actual hello
+                api_key_val = config.get("api_key") or API_KEY
+                if api_key_val:
+                    os_user = get_os_username()
+                    hostname = platform.node()
+                    device_id = get_device_id()
+                    headers = api_headers(os_user, hostname)
+                    payload = {
+                        "hostname": hostname,
+                        "app_version": APP_VERSION,
+                        "device_id": device_id,
+                        "os_username": os_user,
+                    }
+                    http_post_json(HELLO_URL, payload, headers, timeout=5)
+                    set_network_ok(True)
+                    log("[HEALTH] ✅ Network restored — resuming normal operation")
+                    _health_monitor_running = False
+                    return
+            except Exception as e:
+                log(f"[HEALTH] Still offline: {e}")
+
+    threading.Thread(target=_monitor, daemon=True).start()
+
+
 # ---------------- Error Reporting ----------------
 _error_report_cache = {}  # Prevent spamming same error
 ERROR_REPORT_COOLDOWN = 300  # 5 minutes between same errors
@@ -283,6 +360,10 @@ def report_error_to_backend(
     """
     api_key = config.get("api_key") or API_KEY
     if not api_key or not API_BASE:
+        return False
+    
+    # Don't try to report errors when network is down
+    if not is_network_ok():
         return False
     
     # Rate limit - don't spam same error
@@ -694,6 +775,11 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
     if now - _last_control_check < CONTROL_POLL_S:
         return False
     _last_control_check = now
+
+    # Skip network call when offline — don't block the tracking loop
+    if not is_network_ok():
+        return False
+
     qs = f"?host={host}"
     headers = api_headers(user, host)
     try:
@@ -712,7 +798,7 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
     """
     Register for Windows power state changes (sleep/wake/resume).
     Creates a hidden window on a background thread to receive WM_POWERBROADCAST messages.
-    On wake: resets control timer and reconnects to backend with backoff.
+    On wake: marks network unhealthy, resets control timer, reconnects with backoff.
     """
     if not WIN_API_AVAILABLE:
         log("[POWER] pywin32 not available — sleep/wake detection disabled")
@@ -727,15 +813,19 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
         PBT_APMSUSPEND = 0x0004           # Going to sleep
 
         def _on_wake():
-            global _last_control_check
+            global _last_control_check, _wake_timestamp
             log("[WAKE] System resumed from sleep — resetting connections")
             _last_control_check = 0.0  # Force control check on next loop
+            _wake_timestamp = time.time()
+
+            # Mark network as unhealthy until proven otherwise
+            set_network_ok(False)
 
             def _reconnect():
-                for attempt in range(5):
+                for attempt in range(10):  # 10 attempts over ~2.5 minutes
+                    wait = min(5 * (attempt + 1), 30)  # 5s, 10s, 15s... max 30s
+                    time.sleep(wait)
                     try:
-                        wait = 3 * (attempt + 1)  # 3s, 6s, 9s, 12s, 15s
-                        time.sleep(wait)
                         api_key_val = config.get("api_key") or API_KEY
                         if api_key_val and API_BASE:
                             headers = api_headers(os_user, hostname)
@@ -746,11 +836,15 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
                                 "os_username": os_user,
                             }
                             http_post_json(HELLO_URL, payload, headers, timeout=5)
+                            set_network_ok(True)
                             log(f"[WAKE] ✅ Reconnected to server (attempt {attempt + 1})")
                             return
                     except Exception as e:
-                        log(f"[WAKE] Reconnect attempt {attempt + 1}/5 failed: {e}")
-                log("[WAKE] ⚠️ All reconnect attempts failed — will retry on next event post")
+                        log(f"[WAKE] Reconnect attempt {attempt + 1}/10 failed: {e}")
+
+                # After all retries failed, start slower health monitor
+                log("[WAKE] ⚠️ All reconnect attempts failed — starting health monitor")
+                _start_health_monitor()
 
             threading.Thread(target=_reconnect, daemon=True).start()
 
@@ -790,6 +884,46 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
     log("[POWER] Started power notification listener thread")
 
 
+# ---------------- Startup Task Registration ----------------
+def register_startup_task():
+    """Register a Windows Task Scheduler task to ensure agent starts on logon."""
+    try:
+        task_name = "TimeTrackerAgent"
+
+        # Get the path to the current executable
+        if getattr(sys, 'frozen', False):
+            exe_path = f'"{sys.executable}"'
+        else:
+            exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+
+        # Check if task already exists
+        check = subprocess.run(
+            ["schtasks", "/Query", "/TN", task_name],
+            capture_output=True, text=True
+        )
+        if check.returncode == 0:
+            log(f"[STARTUP] Task '{task_name}' already registered")
+            return
+
+        # Create task triggered on logon
+        result = subprocess.run([
+            "schtasks", "/Create",
+            "/TN", task_name,
+            "/TR", exe_path,
+            "/SC", "ONLOGON",
+            "/RL", "LIMITED",
+            "/F"  # Force overwrite
+        ], capture_output=True, text=True)
+
+        if result.returncode == 0:
+            log(f"[STARTUP] ✅ Registered startup task: {task_name}")
+        else:
+            log(f"[STARTUP] ⚠️ Failed to register task: {result.stderr}")
+
+    except Exception as e:
+        log(f"[STARTUP] Failed to register startup task: {e}")
+
+
 # ---------------- Event Posting ----------------
 _consecutive_auth_failures = 0  # Track consecutive 401/403 errors
 
@@ -808,6 +942,8 @@ def post_event_async(event: dict, user: str, host: str):
                 _ = resp.read()
             log(f"[POSTED] {POST_URL}")
             _consecutive_auth_failures = 0  # Reset on success
+            # Successful post confirms network is up
+            set_network_ok(True)
         except urllib.error.HTTPError as e:
             body = ""
             try:
@@ -821,8 +957,15 @@ def post_event_async(event: dict, user: str, host: str):
                 # DON'T drop key on transient failures. Render cold starts
                 # and brief server restarts can cause spurious 401/403s.
                 # The key is almost certainly still valid.
+            else:
+                # Got an HTTP response = network is up, just a server error
+                set_network_ok(True)
         except Exception as e:
             log(f"[POST ERROR] {e}")
+            # Network-level error — mark as unhealthy if not already being monitored
+            if is_network_ok():
+                set_network_ok(False)
+                _start_health_monitor()
     
     threading.Thread(target=_run, daemon=True).start()
 
@@ -847,23 +990,15 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
     current_client_id = None
     current_client_name = None
     
-    # ── FIX: Retry client fetch with backoff (handles DNS failure after wake) ──
-    if api_key and API_BASE:
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                current = get_current_client_from_backend(API_BASE, api_key)
-                if current and current.get("client_id"):
-                    current_client_id = current["client_id"]
-                    current_client_name = current.get("client_name")
-                break  # success, stop retrying
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    wait = 2 * (attempt + 1)  # 2s, 4s
-                    log(f"[CLIENT] Fetch failed (attempt {attempt + 1}/{max_retries}), retrying in {wait}s: {e}")
-                    time.sleep(wait)
-                else:
-                    log(f"[CLIENT] Failed to fetch current client after {max_retries} attempts: {e}")
+    # ── Only attempt client fetch if network is healthy ──
+    if api_key and API_BASE and is_network_ok():
+        try:
+            current = get_current_client_from_backend(API_BASE, api_key)
+            if current and current.get("client_id"):
+                current_client_id = current["client_id"]
+                current_client_name = current.get("client_name")
+        except Exception as e:
+            log(f"[CLIENT] Failed to fetch current client: {e}")
     
     if notif_manager:
         notif_manager.set_current_client(current_client_id, current_client_name)
@@ -890,31 +1025,19 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
         if tool_host:
             payload["tool_host"] = tool_host
     
-    # ── FIX: Retry post with backoff (handles DNS failure after wake) ──
-    max_retries = 3
-    posted = False
-    for attempt in range(max_retries):
-        try:
-            post_event_async(payload, user, hostname)
-            posted = True
-            break  # success, stop retrying
-        except Exception as e:
-            if attempt < max_retries - 1:
-                wait = 2 * (attempt + 1)  # 2s, 4s
-                log(f"[POST] Failed (attempt {attempt + 1}/{max_retries}), retrying in {wait}s: {e}")
-                time.sleep(wait)
-            else:
-                log(f"[POST] Failed after {max_retries} attempts: {e}. Event saved locally.")
+    # ── Post event (async, non-blocking) ──
+    # post_event_async handles network state internally
+    post_event_async(payload, user, hostname)
     
+    network_status = "" if is_network_ok() else " [OFFLINE - saved locally]"
     client_msg = f" → {current_client_name}" if current_client_name else ""
-    post_status = "" if posted else " [OFFLINE - saved locally]"
     log(
         f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} "
         f"• url={url or '-'} • path={fpath or '-'}"
         + (f" • toolish({tool_reason})" if toolish else "")
         + client_msg
         + f" at {ts_iso}"
-        + post_status
+        + network_status
     )
 
 # ---------------- Client Sync Helpers ----------------
@@ -1464,6 +1587,9 @@ def run_agent():
     
     # === SLEEP/WAKE RECOVERY ===
     register_power_notifications(os_user, hostname, device_id)
+
+    # === AUTO-START ON LOGON ===
+    register_startup_task()
 
     # === TRACKING LOOP WITH ERROR HANDLING ===
     def tracking_loop():

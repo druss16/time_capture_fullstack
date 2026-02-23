@@ -35,7 +35,7 @@
     Name="TimeTracker"
     Manufacturer="MavOps"
     Version="1.0.0"
-    UpgradeCode="PUT-YOUR-GUID-HERE"
+    UpgradeCode="79fa60ea-d322-4fa0-8d45-c2d6f98b3cb3"
     Compressed="yes"
     InstallerVersion="500"
     Scope="perMachine">
@@ -66,7 +66,7 @@
     <!-- ═══════════════════════════════════════════════ -->
     <StandardDirectory Id="AppDataFolder">
       <Directory Id="TimeTrackerAppData" Name="TimeTracker">
-        <Component Id="ConfigWriter" Guid="PUT-GUID-1-HERE">
+        <Component Id="ConfigWriter" Guid="2606582e-d6b3-4ace-a5bc-1b81dc27ac2e">
           <!--
             Creates config.json with the org token.
             Uses XmlConfig or a custom action. For simplicity,

@@ -58,6 +58,7 @@ import ClientImportWizard from '@/components/ClientImportWizard';
 import ClientGroupManager from '@/components/ClientGroupManager';  // ← ADD THIS
 
 import IntegrationsTab from '@/components/IntegrationsTab';
+import DeploymentTab from '@/components/DeploymentTab';
 
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -144,7 +145,7 @@ type EmployeeCostRate = {
   end_date: string | null;
 };
 
-type Tab = 'organization' | 'team' | 'clients' | 'assignments' | 'groups' | 'integrations' | 'billing' | 'costs' | 'devices' | 'token';                                                             
+type Tab = 'organization' | 'team' | 'clients' | 'assignments' | 'groups' | 'integrations' | 'billing' | 'costs' | 'devices' | 'token' | 'deployment';
 
 // Define which plans can access which features
 const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive'];
@@ -235,7 +236,7 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>(() => {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get('tab');
-  const validTabs: Tab[] = ['organization', 'team', 'clients', 'assignments', 'groups', 'integrations', 'billing', 'costs', 'devices', 'token'];
+  const validTabs: Tab[] = ['organization', 'team', 'clients', 'assignments', 'groups', 'integrations', 'billing', 'costs', 'devices', 'token', 'deployment'];
   return validTabs.includes(tab as Tab) ? (tab as Tab) : 'organization';
   });
   const [loading, setLoading] = useState(false);
@@ -398,6 +399,7 @@ export default function Settings() {
   { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
   { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
   { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
+  { id: 'deployment', label: 'MDM Deploy', icon: <Monitor className="w-4 h-4" />, requiredRole: ['owner', 'admin'] },
 ];
 
   const isTabLocked = (tab: TabConfig): boolean => {
@@ -536,6 +538,9 @@ export default function Settings() {
                       )}
                       {activeTab === 'integrations' && (
                         <IntegrationsTab onSuccess={showSuccess} onError={showError} />
+                      )}
+                      {activeTab === 'deployment' && (
+                        <DeploymentTab apiBase={API_BASE} />
                       )}
                     </>
                   )}

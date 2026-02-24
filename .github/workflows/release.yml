@@ -312,7 +312,7 @@ jobs:
         working-directory: windows_agent
         run: |
           python -m PyInstaller --onedir --windowed --name "TimeTracker" --collect-all customtkinter --collect-all CTkMessagebox --hidden-import=customtkinter --hidden-import=CTkMessagebox gui.py
-          python -m PyInstaller --onedir --noconsole --name "TimeTrackerAgent" --hidden-import=timetracker_gui --add-data "timetracker_gui.py;." main.py
+          python -m PyInstaller --onedir --noconsole --name "TimeTrackerAgent" --hidden-import=timetracker_gui --hidden-import=mdm_deploy --add-data "timetracker_gui.py;." --add-data "mdm_deploy.py;." main.py
       
       - name: List dist contents
         working-directory: windows_agent
@@ -366,11 +366,46 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
       
+      - name: Package for Intune
+        working-directory: windows_agent
+        run: |
+          # Download IntuneWinAppUtil
+          Invoke-WebRequest -Uri "https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/master/IntuneWinAppUtil.exe" -OutFile IntuneWinAppUtil.exe
+
+          # Create packaging folder
+          New-Item -ItemType Directory -Force -Path intune-package
+          Copy-Item "Output\TimeTracker-Windows-Setup.exe" "intune-package\"
+
+          # Write the install wrapper script
+          @'
+          param([string]$OrgToken = "")
+          if ($OrgToken) {
+              $dir = Join-Path $env:APPDATA "TimeTracker"
+              if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+              $cfg = @{}
+              $cfgPath = Join-Path $dir "config.json"
+              if (Test-Path $cfgPath) { try { $cfg = Get-Content $cfgPath | ConvertFrom-Json -AsHashtable } catch {} }
+              $cfg["org_token"] = $OrgToken
+              $cfg["api_base"] = "https://timetracker-api-k375.onrender.com/api"
+              $cfg | ConvertTo-Json | Set-Content -Path $cfgPath -Encoding UTF8
+          }
+          Start-Process -FilePath (Join-Path $PSScriptRoot "TimeTracker-Windows-Setup.exe") -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -NoNewWindow
+          '@ | Set-Content "intune-package\install_timetracker.ps1"
+
+          # Wrap for Intune
+          .\IntuneWinAppUtil.exe -c intune-package -s install_timetracker.ps1 -o Output -q
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           path: windows_agent/Output/*.exe
+
+      - name: Upload Intune artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: intune-package
+          path: windows_agent/Output/*.intunewin
 
   release:
     needs: [build-mac, build-windows]
@@ -387,6 +422,12 @@ jobs:
         with:
           name: windows-installer
           path: ./windows
+
+      - name: Download Intune artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: intune-package
+          path: ./intune
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -395,6 +436,7 @@ jobs:
           files: |
             ./mac/TimeTracker.pkg
             ./windows/TimeTracker-Windows-Setup.exe
+            ./intune/install_timetracker.intunewin
           tag_name: ${{ github.ref_name }}
           token: ${{ secrets.RELEASES_PAT }}
           make_latest: true

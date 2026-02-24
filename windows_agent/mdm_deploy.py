@@ -359,28 +359,3 @@ def _get_aad_username() -> str:
 
     # Method 4: Fall back to getpass
     return getpass.getuser()
-
-
-# ─────────────────────────────────────────────
-# Integration with main.py
-# ─────────────────────────────────────────────
-#
-# In run_agent(), replace the "no api_key" section with:
-#
-#     key = config.get("api_key") or API_KEY
-#     if not key:
-#         # Try org token (MDM deployment) first
-#         org_token = config.get("org_token")
-#         if org_token:
-#             from mdm_deploy import do_org_token_claim
-#             key = do_org_token_claim(config, save_config, API_BASE, APP_VERSION)
-#             if key:
-#                 API_KEY = key
-#                 # Continue to normal startup (hello, tracking, etc.)
-#             else:
-#                 print("[AGENT] MDM claim failed — falling back to manual pairing")
-#                 # Fall through to existing GUI/interactive pairing
-#
-#         if not key:
-#             # Existing GUI launch / interactive pairing code...
-#             ...

@@ -37,7 +37,7 @@ def _get_admin_org(request):
 
     return membership.organization, None
 
-
+@csrf_exempt
 @require_POST
 def create_deployment_token(request):
     """Create a new org deployment token for MDM distribution."""
@@ -69,6 +69,7 @@ def create_deployment_token(request):
     }, status=201)
 
 
+@csrf_exempt
 @require_GET
 def list_deployment_tokens(request):
     """List all deployment tokens for the admin's org."""
@@ -95,6 +96,7 @@ def list_deployment_tokens(request):
     return JsonResponse({"tokens": data})
 
 
+@csrf_exempt
 @require_POST
 def revoke_deployment_token(request, token_id):
     """Revoke a deployment token. Existing devices keep working."""

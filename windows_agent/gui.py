@@ -1023,14 +1023,44 @@ class ModernConfigGUI:
 
 
 def main():
+    # If already paired, auto-start agent and skip the GUI entirely
+    config = load_config()
+    if config.get("api_key"):
+        if not is_agent_running():
+            agent_path = get_agent_script_path()
+            if agent_path:
+                if IS_WINDOWS:
+                    if agent_path.endswith('.exe'):
+                        CREATE_NEW_PROCESS_GROUP = 0x00000200
+                        DETACHED_PROCESS = 0x00000008
+                        subprocess.Popen(
+                            [agent_path, "start"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL,
+                            creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+                        )
+                    else:
+                        subprocess.Popen(
+                            f'start /b "" "{sys.executable}" "{agent_path}" start',
+                            shell=True
+                        )
+                else:
+                    subprocess.Popen(
+                        [sys.executable, agent_path, "start"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+        # Either way, agent is running — no GUI needed
+        return
+
+    # Not paired yet — show the config GUI
     if MODERN_UI:
         app = ModernConfigGUI()
         app.run()
     else:
-        # Fallback to original tkinter version
         print("CustomTkinter not installed. Run: pip install customtkinter CTkMessagebox")
-        if IS_WINDOWS:
-            print("Also install: pip install psutil")
         sys.exit(1)
 
 

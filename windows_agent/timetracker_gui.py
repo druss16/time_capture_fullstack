@@ -965,6 +965,7 @@ class TimeTrackerSystemTray:
         
         self._last_picker_time = 0
         self._picker_lock = threading.Lock()
+        self._picker_open = False
     
     def _create_image(self):
         """Create system tray icon"""
@@ -1182,65 +1183,67 @@ class TimeTrackerSystemTray:
         root.mainloop()
         print("[GUI] Repair dialog closed")
 
-\
+
     def _show_client_picker(self):
-        """Show searchable client picker - instant open"""
+        """Show searchable client picker - with double-open guard"""
         
-        now = _time.time() * 1000
         with self._picker_lock:
-            if now - self._last_picker_time < 1000:
-                print("[GUI] Client picker debounced")
+            if self._picker_open:
+                print("[GUI] Client picker already open - ignoring")
                 return
-            self._last_picker_time = now
+            self._picker_open = True
         
         def run_picker():
-            selected_id = None
-            selected_name = None
-            
-            def on_select(cid, cname):
-                nonlocal selected_id, selected_name
-                selected_id = cid
-                selected_name = cname
-            
-            # Refresh client list in background BEFORE showing picker
-            # so cached data is fresh, but don't block on it
             try:
-                if hasattr(self, 'fetch_clients') and self.fetch_clients:
-                    def _bg_refresh():
-                        try:
-                            fresh = self.fetch_clients()
-                            if fresh:
-                                self.client_mgr.clients = fresh
-                                self.client_mgr.save()
-                        except:
-                            pass
-                    threading.Thread(target=_bg_refresh, daemon=True).start()
-            except:
-                pass
-            
-            parent = None
-            if self.floating_widget and self.floating_widget.root:
+                selected_id = None
+                selected_name = None
+                
+                def on_select(cid, cname):
+                    nonlocal selected_id, selected_name
+                    selected_id = cid
+                    selected_name = cname
+                
+                # Refresh client list in background
                 try:
-                    if self.floating_widget.root.winfo_exists():
-                        parent = self.floating_widget.root
-                except Exception:
-                    parent = None
-            
-            picker = ClientPickerWindow(
-                self.client_mgr,
-                on_select,
-                current_id=self.state.current_client_id,
-                parent_root=parent
-            )
-            picker.show()
-            
-            if selected_id is not None or selected_name == "No Client":
-                self._switch_client(selected_id or 0, selected_name)
+                    if self.fetch_clients_callback:
+                        def _bg_refresh():
+                            try:
+                                fresh = self.fetch_clients_callback()
+                                if fresh:
+                                    self.client_mgr.clients = fresh
+                                    self.client_mgr.save()
+                            except:
+                                pass
+                        threading.Thread(target=_bg_refresh, daemon=True).start()
+                except:
+                    pass
+                
+                parent = None
+                if self.floating_widget and self.floating_widget.root:
+                    try:
+                        if self.floating_widget.root.winfo_exists():
+                            parent = self.floating_widget.root
+                    except Exception:
+                        parent = None
+                
+                picker = ClientPickerWindow(
+                    self.client_mgr,
+                    on_select,
+                    current_id=self.state.current_client_id,
+                    parent_root=parent
+                )
+                picker.show()
+                
+                if selected_id is not None or selected_name == "No Client":
+                    self._switch_client(selected_id or 0, selected_name)
+            finally:
+                with self._picker_lock:
+                    self._picker_open = False
         
         if self.floating_widget and self.floating_widget.root:
             try:
                 if self.floating_widget.root.winfo_exists():
-                    self.floating_widget.root.after(0, run_picker)  # was 10, use 0
+                    self.floating_widget.root.after(0, run_picker)
                     return
             except Exception:
                 pass

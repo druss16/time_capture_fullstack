@@ -1435,6 +1435,15 @@ def run_agent():
                 sync=sync,
             )
             log("[GUI] System tray initialized")
+
+            import atexit
+            def _cleanup_tray():
+                try:
+                    if gui_menu_bar and gui_menu_bar.icon:
+                        gui_menu_bar.icon.stop()
+                except:
+                    pass
+            atexit.register(_cleanup_tray)
             
             if sync and gui_menu_bar:
                 sync.gui_menu_bar = gui_menu_bar
@@ -1447,13 +1456,16 @@ def run_agent():
                 try:
                     import keyboard
                     
+                    _hotkey_lock = threading.Lock()
                     _hotkey_last = [0]
                     
                     def on_hotkey_pressed():
-                        now = time.time() * 1000
-                        if now - _hotkey_last[0] < 1000:
-                            return
-                        _hotkey_last[0] = now
+                        with _hotkey_lock:
+                            now = time.time() * 1000
+                            if now - _hotkey_last[0] < 1500:
+                                return
+                            _hotkey_last[0] = now
+                        
                         log("[HOTKEY] Alt+Ctrl+T pressed!")
                         
                         try:
@@ -1464,10 +1476,9 @@ def run_agent():
                             pass
                         time.sleep(0.02)
                         
-                        # Route through the tray method (which schedules on main thread)
                         gui_menu_bar._show_client_picker()
 
-                    keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed)
+                    keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed, suppress=True)
                     log("[QUICK] Ready - Alt+Ctrl+T")
                     
                 except ImportError:

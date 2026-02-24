@@ -87,6 +87,9 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
+register_hotkey = None
+
+
 # ---------------- Client Sync ----------------
 def get_current_client_from_backend(api_base, api_key):
     """Fetch current client from Django API via HTTP"""
@@ -815,15 +818,13 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
         def _on_wake():
             global _last_control_check, _wake_timestamp
             log("[WAKE] System resumed from sleep — resetting connections")
-            _last_control_check = 0.0  # Force control check on next loop
+            _last_control_check = 0.0
             _wake_timestamp = time.time()
-
-            # Mark network as unhealthy until proven otherwise
             set_network_ok(False)
 
             def _reconnect():
-                for attempt in range(10):  # 10 attempts over ~2.5 minutes
-                    wait = min(5 * (attempt + 1), 30)  # 5s, 10s, 15s... max 30s
+                for attempt in range(10):
+                    wait = min(5 * (attempt + 1), 30)
                     time.sleep(wait)
                     try:
                         api_key_val = config.get("api_key") or API_KEY
@@ -837,12 +838,21 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
                             }
                             http_post_json(HELLO_URL, payload, headers, timeout=5)
                             set_network_ok(True)
-                            log(f"[WAKE] ✅ Reconnected to server (attempt {attempt + 1})")
+                            log(f"[WAKE] ✅ Reconnected (attempt {attempt + 1})")
+                            
+                            # Re-register hotkey — Windows may have 
+                            # killed the low-level hook during sleep
+                            if register_hotkey:
+                                try:
+                                    register_hotkey()
+                                    log("[WAKE] ✅ Hotkey re-registered")
+                                except Exception as e:
+                                    log(f"[WAKE] ⚠️ Hotkey re-register failed: {e}")
+                            
                             return
                     except Exception as e:
                         log(f"[WAKE] Reconnect attempt {attempt + 1}/10 failed: {e}")
 
-                # After all retries failed, start slower health monitor
                 log("[WAKE] ⚠️ All reconnect attempts failed — starting health monitor")
                 _start_health_monitor()
 
@@ -1478,15 +1488,25 @@ def run_agent():
                         
                         gui_menu_bar._show_client_picker()
 
-                    keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed, suppress=True)
-                    log("[QUICK] Ready - Alt+Ctrl+T")
+                    global register_hotkey
+
+                    def register_hotkey():
+                        """Register (or re-register) the global hotkey."""
+                        try:
+                            keyboard.unhook_all()
+                        except:
+                            pass
+                        keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed, suppress=True)
+                        log("[QUICK] Hotkey registered - Alt+Ctrl+T")
+                    
+                    register_hotkey()
                     
                 except ImportError:
-                    log("[QUICK] keyboard module not installed - pip install keyboard")
+                    log("[QUICK] keyboard module not installed")
+                    register_hotkey = None
                 except Exception as e:
                     log(f"[QUICK] Failed to setup hotkey: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    register_hotkey = None
                     
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")

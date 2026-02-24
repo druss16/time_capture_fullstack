@@ -316,6 +316,7 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
   return (
     <div className="space-y-6">
       {/* Header */}
+      {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <h3 className="text-lg font-semibold text-gray-900">MDM Deployment</h3>
@@ -324,16 +325,17 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
             Generate a token, bake it into the installer, and devices auto-register with your organization.
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg text-white hover:opacity-90 transition-colors shadow-sm"
-          style={{ backgroundColor: '#0d9488' }}
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Generate Token
-        </button>
+        {activeTokens.length > 0 && !showCreate && (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            New Token
+          </button>
+        )}
       </div>
 
       {/* Error */}

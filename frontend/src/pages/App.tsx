@@ -42,7 +42,7 @@ const Login = lazy(() => import("./Login"));
 const NotFound = lazy(() => import("./NotFound"));
 const TimeReview = lazy(() => import("./TimeReview"));
 const BillingPage = lazy(() => import("./BillingPage"));
-const WhiteGloveOnboarding = lazy(() => import("./pages/settings/WhiteGloveOnboarding"));
+const WhiteGloveOnboarding = lazy(() => import("./settings/WhiteGloveOnboarding"));
 
 
 import { safeFetchJson, API_BASE } from "@/lib/api";

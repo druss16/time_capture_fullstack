@@ -46,9 +46,10 @@ def send_daily_timesheet_reminders_task(self):
         
         # Get all users with time tracked yesterday
         from tracker.models import OrganizationMembership
+        active_user_ids = OrganizationMembership.objects.values_list('user_id', flat=True)
         users_with_time = User.objects.filter(
             is_active=True,
-            memberships__is_active=True,
+            id__in=active_user_ids,
         ).exclude(email='').exclude(email__isnull=True).distinct()
 
         sent_count = 0

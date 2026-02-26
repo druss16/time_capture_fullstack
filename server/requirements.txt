@@ -19,4 +19,4 @@ whitenoise
 flower>=2.0.0,<3.0.0
 
 stripe==7.0.0
-sendgrid
+sendgrid==6.11.0

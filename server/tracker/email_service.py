@@ -49,7 +49,7 @@ def send_email(
     plain_text = plain_content or _strip_html(html_content)
 
     message = Mail(
-        from_email=(from_email, from_name),
+        from_email=from_email,
         to_emails=to_email,
         subject=subject,
         plain_text_content=plain_text,

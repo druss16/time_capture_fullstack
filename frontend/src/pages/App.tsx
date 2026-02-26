@@ -16,6 +16,7 @@ import Navigation from "@/components/Navigation";
 import ProtectedRoute from "@/routes/ProtectedRoute";
 
 
+
 // Onboarding
 import OnboardingWizard from '@/components/onboarding/OnboardingWizard';
 
@@ -41,6 +42,7 @@ const Login = lazy(() => import("./Login"));
 const NotFound = lazy(() => import("./NotFound"));
 const TimeReview = lazy(() => import("./TimeReview"));
 const BillingPage = lazy(() => import("./BillingPage"));
+const WhiteGloveOnboarding = lazy(() => import("./pages/settings/WhiteGloveOnboarding"));
 
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -328,6 +330,19 @@ export default function App() {
                       <AdminRoute>
                         <AppLayout>
                           <OrgAdminSettings />
+                        </AppLayout>
+                      </AdminRoute>
+                    </MaybeProtected>
+                  }
+                />
+
+                <Route
+                  path="/settings/onboarding"
+                  element={
+                    <MaybeProtected>
+                      <AdminRoute>
+                        <AppLayout>
+                          <WhiteGloveOnboarding />
                         </AppLayout>
                       </AdminRoute>
                     </MaybeProtected>

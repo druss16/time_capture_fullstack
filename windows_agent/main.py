@@ -203,6 +203,8 @@ _network_ok = True
 _network_ok_lock = threading.Lock()
 _last_successful_post = 0.0
 _wake_timestamp = 0.0  # When we last woke from sleep
+_wake_event = threading.Event()   # Signal tracking loop to reset after sleep/wake
+_wake_handled = False     
 _health_monitor_running = False
 NETWORK_GRACE_PERIOD = 30  # Seconds after wake to skip network calls
 
@@ -816,13 +818,26 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
         PBT_APMSUSPEND = 0x0004           # Going to sleep
 
         def _on_wake():
-            global _last_control_check, _wake_timestamp
+            global _last_control_check, _wake_timestamp, _wake_handled
+            
+            # Prevent duplicate wake handling
+            # (both PBT_APMRESUMESUSPEND and PBT_APMRESUMEAUTOMATIC fire)
+            now = time.time()
+            if _wake_handled and (now - _wake_timestamp) < 10:
+                log("[WAKE] Duplicate wake event — skipping")
+                return
+            _wake_handled = True
+            
             log("[WAKE] System resumed from sleep — resetting connections")
             _last_control_check = 0.0
-            _wake_timestamp = time.time()
+            _wake_timestamp = now
             set_network_ok(False)
+            
+            # >>> KEY FIX: Signal the tracking loop to reset <<<
+            _wake_event.set()
 
             def _reconnect():
+                global _wake_handled
                 for attempt in range(10):
                     wait = min(5 * (attempt + 1), 30)
                     time.sleep(wait)
@@ -840,7 +855,7 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
                             set_network_ok(True)
                             log(f"[WAKE] ✅ Reconnected (attempt {attempt + 1})")
                             
-                            # Re-register hotkey — Windows may have 
+                            # Re-register hotkey — Windows may have
                             # killed the low-level hook during sleep
                             if register_hotkey:
                                 try:
@@ -849,11 +864,13 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
                                 except Exception as e:
                                     log(f"[WAKE] ⚠️ Hotkey re-register failed: {e}")
                             
+                            _wake_handled = False  # Allow future wake events
                             return
                     except Exception as e:
                         log(f"[WAKE] Reconnect attempt {attempt + 1}/10 failed: {e}")
 
                 log("[WAKE] ⚠️ All reconnect attempts failed — starting health monitor")
+                _wake_handled = False
                 _start_health_monitor()
 
             threading.Thread(target=_reconnect, daemon=True).start()
@@ -1656,6 +1673,38 @@ def run_agent():
         try:
             while True:
                 try:
+                    # ── WAKE RECOVERY: Reset tracking state after sleep/wake ──
+                    if _wake_event.is_set():
+                        _wake_event.clear()
+                        log("[TRACKING] 🔄 Wake detected — resetting tracking state")
+                        
+                        # Flush current dwell if any
+                        if current_sig and dwell_start and current_sig != IDLE_SIG:
+                            dwell = time.time() - dwell_start
+                            if dwell >= MIN_DWELL_SECONDS:
+                                try:
+                                    write_event(conn, cur, os_user, hostname, current_sig)
+                                    log(f"[TRACKING] Flushed pre-sleep dwell ({int(dwell)}s)")
+                                except Exception as e:
+                                    log(f"[TRACKING] Failed to flush pre-sleep dwell: {e}")
+                        
+                        # Reset state completely — start fresh
+                        current_sig = None
+                        dwell_start = None
+                        
+                        # Give network a moment to come back (reconnect thread is working)
+                        log("[TRACKING] Waiting for network reconnect...")
+                        for _ in range(60):  # Up to 30 seconds
+                            if is_network_ok():
+                                break
+                            time.sleep(0.5)
+                        
+                        if is_network_ok():
+                            log("[TRACKING] ✅ Network restored — resuming capture")
+                        else:
+                            log("[TRACKING] ⚠️ Network still down — resuming capture anyway (offline mode)")
+                        
+                        continue  # Re-enter loop with clean state
                     if should_stop(CONTROL_URL, os_user, hostname):
                         log("[CTRL] Stopping agent per admin request.")
                         break
@@ -1733,6 +1782,13 @@ def run_agent():
                         # Reuse the peek we already did (avoid double call)
                         front = front_peek
                         if not front:
+                            # Log periodically so we can diagnose silent failures
+                            _now = time.time()
+                            if not hasattr(tracking_loop, '_last_no_front_log'):
+                                tracking_loop._last_no_front_log = 0.0
+                            if _now - tracking_loop._last_no_front_log > 60:
+                                log("[TRACKING] ⚠️ No foreground window detected (win32 may need reset after sleep)")
+                                tracking_loop._last_no_front_log = _now
                             time.sleep(POLL_SECONDS)
                             consecutive_errors = 0
                             continue

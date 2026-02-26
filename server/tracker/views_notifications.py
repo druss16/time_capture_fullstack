@@ -354,8 +354,8 @@ def send_daily_timesheet_reminders():
                 total_hours=total_hours,
                 client_breakdown=client_breakdown,
                 unassigned_count=unassigned_count,
+                date_iso=yesterday.isoformat(),
             )
-            
             sent_count += 1
             
         except Exception as e:

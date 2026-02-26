@@ -286,12 +286,17 @@ def send_timesheet_reminder(
     client_breakdown: list,
     unassigned_count: int = 0,
     review_url: str = None,
+    date_iso: str = None,
 ):
     """
     Send daily timesheet review reminder.
     """
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
-    review_url = review_url or f'{frontend_url}/timesheet'
+    if not review_url:
+        if date_iso:
+            review_url = f'{frontend_url}/daily?date={date_iso}'
+        else:
+            review_url = f'{frontend_url}/daily'
 
     client_rows = ''.join([
         f'<tr><td style="padding:8px 0;border-bottom:1px solid #e2e8f0;">{name}</td>'

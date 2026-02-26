@@ -35,8 +35,6 @@ def send_email(
     """
     import requests as req
 
-    logger.info("[EMAIL] >>> USING V2 SEND_EMAIL <<<")
-
     api_key = getattr(settings, 'SENDGRID_API_KEY', None)
     if not api_key:
         logger.error("[EMAIL] SENDGRID_API_KEY not configured")
@@ -149,10 +147,10 @@ def send_team_invitation(
             <p style="margin:0;color:#1e293b;font-size:15px;"><strong>Temporary Password:</strong> {temp_password}</p>
         </div>
         <p style="color:#94a3b8;font-size:13px;">Please change your password after logging in.</p>
-        {_btn(login_url, "#3b82f6 0%,#1d4ed8 100%", "Log In to TimeTracker &rarr;")}
+        {_btn(login_url, "#2B9D90 0%,#237F74 100%", "Log In to TimeTracker &rarr;")}
         <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">TimeTracker by MavOps</p>'''
 
-    html = _wrap_html("#3b82f6 0%,#1d4ed8 100%", "🎉", "You're Invited!", body)
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "🎉", "You're Invited!", body)
 
     plain = f"""Hi!
 
@@ -216,7 +214,7 @@ Questions? Visit {help_url} or reply to this email.
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;">
 <tr><td align="center" style="padding:40px 20px;">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 6px rgba(0,0,0,0.05);">
-    <tr><td style="background:linear-gradient(135deg,#14b8a6 0%,#0d9488 100%);padding:40px 40px 30px;text-align:center;">
+    <tr><td style="background:linear-gradient(135deg,#2B9D90 0%,#237F74 100%);padding:40px 40px 30px;text-align:center;">
         <div style="width:60px;height:60px;background:rgba(255,255,255,0.2);border-radius:16px;margin:0 auto 20px;line-height:60px;"><span style="font-size:28px;">⏱️</span></div>
         <h1 style="margin:0;color:#fff;font-size:28px;font-weight:700;">Welcome to TimeTracker!</h1>
         <p style="margin:12px 0 0;color:rgba(255,255,255,0.9);font-size:16px;">{f"{invited_by} has invited you to join" if invited_by else "You've been invited to join"}</p>
@@ -225,7 +223,7 @@ Questions? Visit {help_url} or reply to this email.
     <tr><td style="padding:40px;">
         <p style="margin:0 0 30px;color:#475569;font-size:16px;line-height:1.6;">TimeTracker automatically captures your billable time so you never forget to log hours again. Get started in just 2 minutes.</p>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;"><tr>
-            <td width="44" valign="top"><div style="width:36px;height:36px;background:#ccfbf1;border-radius:50%;text-align:center;line-height:36px;color:#0d9488;font-weight:700;font-size:16px;">1</div></td>
+            <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">1</div></td>
             <td valign="top" style="padding-left:12px;">
                 <h3 style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:600;">Download the Desktop App</h3>
                 <table role="presentation" cellspacing="0" cellpadding="0"><tr>
@@ -235,7 +233,7 @@ Questions? Visit {help_url} or reply to this email.
             </td>
         </tr></table>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;"><tr>
-            <td width="44" valign="top"><div style="width:36px;height:36px;background:#ccfbf1;border-radius:50%;text-align:center;line-height:36px;color:#0d9488;font-weight:700;font-size:16px;">2</div></td>
+            <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">2</div></td>
             <td valign="top" style="padding-left:12px;">
                 <h3 style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:600;">Sign in with these credentials</h3>
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;"><tr><td style="padding:16px;">
@@ -247,7 +245,7 @@ Questions? Visit {help_url} or reply to this email.
             </td>
         </tr></table>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:32px;"><tr>
-            <td width="44" valign="top"><div style="width:36px;height:36px;background:#ccfbf1;border-radius:50%;text-align:center;line-height:36px;color:#0d9488;font-weight:700;font-size:16px;">3</div></td>
+            <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">3</div></td>
             <td valign="top" style="padding-left:12px;">
                 <h3 style="margin:0 0 8px;color:#1e293b;font-size:16px;font-weight:600;">You're done! 🎉</h3>
                 <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">The app runs quietly in the background and captures your billable time automatically.</p>
@@ -256,13 +254,13 @@ Questions? Visit {help_url} or reply to this email.
         <hr style="border:none;border-top:1px solid #e2e8f0;margin:32px 0;">
         <h3 style="margin:0 0 16px;color:#1e293b;font-size:16px;font-weight:600;">What happens next?</h3>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#14b8a6;margin-right:8px;">✓</span> Your time is automatically categorized by client and task</td></tr>
-            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#14b8a6;margin-right:8px;">✓</span> Review and submit your timesheet each week</td></tr>
-            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#14b8a6;margin-right:8px;">✓</span> No more forgetting to log hours!</td></tr>
+            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#2B9D90;margin-right:8px;">✓</span> Your time is automatically categorized by client and task</td></tr>
+            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#2B9D90;margin-right:8px;">✓</span> Review and submit your timesheet each week</td></tr>
+            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#2B9D90;margin-right:8px;">✓</span> No more forgetting to log hours!</td></tr>
         </table>
     </td></tr>
     <tr><td style="background:#f8fafc;padding:24px 40px;border-top:1px solid #e2e8f0;">
-        <p style="margin:0;color:#64748b;font-size:14px;text-align:center;">Questions? <a href="{help_url}" style="color:#14b8a6;text-decoration:none;font-weight:500;">Visit our Help Center</a> or reply to this email.</p>
+        <p style="margin:0;color:#64748b;font-size:14px;text-align:center;">Questions? <a href="{help_url}" style="color:#2B9D90;text-decoration:none;font-weight:500;">Visit our Help Center</a> or reply to this email.</p>
     </td></tr>
 </table>
 <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;text-align:center;">&copy; 2026 TimeTracker by MavOps</p>
@@ -308,16 +306,16 @@ def send_timesheet_reminder(
     body = f'''
         <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
         <p style="color:#475569;font-size:16px;line-height:1.5;">
-            You tracked <strong style="color:#ea580c;">{total_hours:.1f} hours</strong> on {date_str} that need review:
+            You tracked <strong style="color:#2B9D90;">{total_hours:.1f} hours</strong> on {date_str} that need review:
         </p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;">{client_rows}</table>
         {unassigned_html}
-        {_btn(review_url, "#f59e0b 0%,#ea580c 100%", "Review Timesheet &rarr;")}
+        {_btn(review_url, "#2B9D90 0%,#237F74 100%", "Review Timesheet &rarr;")}
         <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">
             <a href="{frontend_url}/settings" style="color:#94a3b8;">Manage notification preferences</a>
         </p>'''
 
-    html = _wrap_html("#f59e0b 0%,#ea580c 100%", "⏰", "Review Your Time", body)
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Review Your Time", body)
 
     plain = f"""Hi {user_name},
 
@@ -398,9 +396,9 @@ def send_submission_reminder(
         <div style="background:#fef3c7;border:1px solid #fcd34d;padding:12px 16px;border-radius:8px;margin:16px 0;">
             <p style="margin:0;color:#92400e;font-size:14px;">⚠️ If not submitted by end of day, it will be <strong>auto-submitted Tuesday 9am</strong>.</p>
         </div>
-        {_btn(frontend_url + "/timesheet", "#8b5cf6 0%,#7c3aed 100%", "Review &amp; Submit &rarr;")}'''
+        {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "Review &amp; Submit &rarr;")}'''
 
-    html = _wrap_html("#8b5cf6 0%,#7c3aed 100%", "⏰", "Submit Your Timesheet", body)
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Submit Your Timesheet", body)
 
     plain = f"""Hi {user_name},
 
@@ -449,9 +447,9 @@ def send_auto_submit_notification(
             <p style="margin:0;color:#1e293b;font-size:15px;">Amount: <strong>${total_amount}</strong></p>
         </div>
         <p style="color:#64748b;font-size:14px;">Your manager will review shortly. Need changes? Ask your manager to send it back.</p>
-        {_btn(frontend_url + "/timesheet", "#06b6d4 0%,#0891b2 100%", "View Timesheet &rarr;")}'''
+        {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
 
-    html = _wrap_html("#06b6d4 0%,#0891b2 100%", "✅", "Timesheet Auto-Submitted", body)
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Auto-Submitted", body)
 
     plain = f"""Hi {user_name},
 
@@ -493,8 +491,8 @@ def send_approval_notification(
             <p style="color:#475569;font-size:16px;line-height:1.5;">
                 Your timesheet for <strong>{period_str}</strong> ({total_hours:.1f} hours) has been approved.
             </p>
-            {_btn(frontend_url + "/timesheet", "#10b981 0%,#059669 100%", "View Timesheet &rarr;")}'''
-        html = _wrap_html("#10b981 0%,#059669 100%", "✅", "Timesheet Approved", body)
+            {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
+        html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Approved", body)
         subject = f"✅ Timesheet Approved: {period_str}"
         plain = f"Hi {user_name},\n\nYour timesheet for {period_str} ({total_hours:.1f} hours) has been approved.\n\n- TimeTracker"
     else:
@@ -542,9 +540,9 @@ def send_manager_pending_approvals(
             <strong>{timesheet_count} timesheets</strong> are pending approval for the week of <strong>{week_start_str}</strong> ({total_hours:.1f} total hours).
         </p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8fafc;border-radius:8px;">{rows_html}</table>
-        {_btn(frontend_url + "/approvals", "#6366f1 0%,#4f46e5 100%", "Review Timesheets &rarr;")}'''
+        {_btn(frontend_url + "/approvals", "#2B9D90 0%,#237F74 100%", "Review Timesheets &rarr;")}'''
 
-    html = _wrap_html("#6366f1 0%,#4f46e5 100%", "📋", "Approvals Pending", body)
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "📋", "Approvals Pending", body)
 
     plain = f"""Hi {manager_name},
 
@@ -614,9 +612,9 @@ def send_timesheet_approved(
         <p style="color:#475569;font-size:16px;line-height:1.5;">
             Your timesheet for <strong>{week_str}</strong> ({total_hours:.1f} hours) has been approved by {approved_by}.
         </p>
-        {_btn(frontend_url + "/timesheet", "#10b981 0%,#059669 100%", "View Timesheet &rarr;")}'''
+        {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
 
-    html = _wrap_html("#10b981 0%,#059669 100%", "✅", "Timesheet Approved", body)
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Approved", body)
 
     return send_email(
         to_email=to_email,

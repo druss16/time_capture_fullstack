@@ -308,7 +308,19 @@ def send_timesheet_reminder(
         <p style="margin:0;color:#92400e;font-size:14px;">⚠️ <strong>{unassigned_count} block{"s" if unassigned_count != 1 else ""}</strong> need client assignment</p>
     </div>''' if unassigned_count else ''
 
-    body = f'''
+    if total_hours < 0.1:
+        body = f'''
+        <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
+        <div style="background:#fef3c7;border:1px solid #fcd34d;padding:16px;border-radius:8px;margin:16px 0;">
+            <p style="margin:0;color:#92400e;font-size:16px;font-weight:bold;">⚠️ No time was tracked on {date_str}</p>
+            <p style="margin:8px 0 0;color:#92400e;font-size:14px;">If you worked yesterday, please check that your desktop agent is running.</p>
+        </div>
+        {_btn(review_url, "#2B9D90 0%,#237F74 100%", "Check Timesheet &rarr;")}
+        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">
+            <a href="{frontend_url}/settings" style="color:#94a3b8;">Manage notification preferences</a>
+        </p>'''
+    else:
+        body = f'''
         <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
         <p style="color:#475569;font-size:16px;line-height:1.5;">
             You tracked <strong style="color:#2B9D90;">{total_hours:.1f} hours</strong> on {date_str} that need review:
@@ -320,9 +332,20 @@ def send_timesheet_reminder(
             <a href="{frontend_url}/settings" style="color:#94a3b8;">Manage notification preferences</a>
         </p>'''
 
+    subj = f"⚠️ No time tracked on {date_str}" if total_hours < 0.1 else f"⏰ Review your time for {date_str}"
+
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Review Your Time", body)
 
-    plain = f"""Hi {user_name},
+    if total_hours < 0.1:
+        plain = f"""Hi {user_name},
+
+No time was tracked on {date_str}. If you worked yesterday, please check that your desktop agent is running.
+
+Check your timesheet: {review_url}
+
+- TimeTracker"""
+    else:
+        plain = f"""Hi {user_name},
 
 You tracked {total_hours:.1f} hours on {date_str} that need review:
 
@@ -335,7 +358,7 @@ Review your timesheet: {review_url}
 
     return send_email(
         to_email=to_email,
-        subject=f"⏰ Review your time for {date_str}",
+        subject=subj,
         html_content=html,
         plain_content=plain,
         categories=["timesheet_reminder", "daily"],

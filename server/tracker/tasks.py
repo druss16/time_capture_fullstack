@@ -45,20 +45,18 @@ def send_daily_timesheet_reminders_task(self):
         yesterday = timezone.localdate() - timedelta(days=1)
         
         # Get all users with time tracked yesterday
+        from tracker.models import OrganizationMembership
         users_with_time = User.objects.filter(
-            block__day=yesterday
-        ).distinct()
-        
+            is_active=True,
+            memberships__is_active=True,
+        ).exclude(email='').exclude(email__isnull=True).distinct()
+
         sent_count = 0
         skipped_count = 0
         errors = []
         
         for user in users_with_time:
             try:
-                # Skip if no email
-                if not user.email:
-                    skipped_count += 1
-                    continue
                 
                 # Check user preference for email notifications
                 try:
@@ -73,10 +71,8 @@ def send_daily_timesheet_reminders_task(self):
                 blocks = Block.objects.filter(user=user, day=yesterday)
                 total_minutes = sum(b.minutes or 0 for b in blocks)
                 total_hours = total_minutes / 60
-                
-                if total_hours < 0.5:
-                    skipped_count += 1
-                    continue  # Skip if minimal time
+
+                # Send even if 0 hours — user should know if nothing was tracked
                 
                 unassigned_count = blocks.filter(client__isnull=True).count()
                 

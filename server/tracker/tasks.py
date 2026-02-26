@@ -36,7 +36,7 @@ def send_daily_timesheet_reminders_task(self):
     Schedule: crontab(hour=9, minute=0, day_of_week='1-5')  # Mon-Fri 9am
     """
     try:
-        from tracker.models import Block, TimesheetSubmission, UserPreference
+        from tracker.models import Block, Timesheet, UserPreference
         from django.core.mail import send_mail
         from django.conf import settings
         from django.contrib.auth import get_user_model

@@ -286,7 +286,6 @@ def send_daily_timesheet_reminders():
     
     Returns: dict with 'sent' count and 'errors' list
     """
-    from django.core.mail import send_mail
     from django.conf import settings
     from django.contrib.auth import get_user_model
     from .models import Block, Timesheet, UserPreference
@@ -346,89 +345,15 @@ def send_daily_timesheet_reminders():
             # Build email
             user_name = user.first_name or user.username
             date_str = yesterday.strftime('%A, %b %d')
-            frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
-            review_url = f'{frontend_url}/timesheet?date={yesterday.isoformat()}'
             
-            # Plain text version
-            client_lines = '\n'.join([f'  • {name}: {hrs:.1f}h' for name, hrs in client_breakdown])
-            if not client_lines:
-                client_lines = '  • No clients assigned yet'
-            
-            unassigned_warning = f'\n⚠️ {unassigned_count} blocks need client assignment.\n' if unassigned_count else ''
-            
-            plain_message = f"""Hi {user_name},
-
-You tracked {total_hours:.1f} hours on {date_str} that need review:
-
-{client_lines}
-{unassigned_warning}
-Review your timesheet: {review_url}
-
-—
-TimeTracker
-
-Manage notification preferences: {frontend_url}/settings"""
-            
-            # HTML version
-            client_rows = ''.join([
-                f'<tr><td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;">{name}</td>'
-                f'<td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold;">{hrs:.1f}h</td></tr>'
-                for name, hrs in client_breakdown
-            ])
-            if not client_rows:
-                client_rows = '<tr><td colspan="2" style="padding: 8px 0; color: #94a3b8;">No clients assigned yet</td></tr>'
-            
-            unassigned_html = f'''
-            <div style="background: #fef3c7; border: 1px solid #fcd34d; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
-                <p style="margin: 0; color: #92400e; font-size: 14px;">
-                    ⚠️ <strong>{unassigned_count} block{"s" if unassigned_count != 1 else ""}</strong> need client assignment
-                </p>
-            </div>
-            ''' if unassigned_count else ''
-            
-            html_message = f'''<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-    <div style="max-width: 500px; margin: 0 auto; padding: 20px;">
-        <div style="background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); padding: 24px; border-radius: 16px 16px 0 0; text-align: center;">
-            <h1 style="margin: 0; color: white; font-size: 24px;">⏰ Timesheet Reminder</h1>
-        </div>
-        <div style="background: white; padding: 24px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-            <p style="color: #475569; font-size: 16px; line-height: 1.5; margin-top: 0;">
-                Hi {user_name},
-            </p>
-            <p style="color: #475569; font-size: 16px; line-height: 1.5;">
-                You tracked <strong style="color: #ea580c;">{total_hours:.1f} hours</strong> on {date_str} that need review:
-            </p>
-            <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-                {client_rows}
-            </table>
-            {unassigned_html}
-            <div style="text-align: center; margin: 24px 0;">
-                <a href="{review_url}" 
-                   style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: white; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 16px;">
-                    Review Timesheet →
-                </a>
-            </div>
-            <p style="color: #94a3b8; font-size: 12px; margin-bottom: 0; text-align: center;">
-                <a href="{frontend_url}/settings" style="color: #94a3b8;">Manage notification preferences</a>
-            </p>
-        </div>
-    </div>
-</body>
-</html>'''
-            
-            send_mail(
-                subject=f'⏰ Review your timesheet for {date_str}',
-                message=plain_message,
-                from_email=f'TimeTracker <{settings.DEFAULT_FROM_EMAIL}>',
-                recipient_list=[user.email],
-                html_message=html_message,
-                fail_silently=False,
+            from tracker.email_service import send_timesheet_reminder
+            send_timesheet_reminder(
+                to_email=user.email,
+                user_name=user_name,
+                date_str=date_str,
+                total_hours=total_hours,
+                client_breakdown=client_breakdown,
+                unassigned_count=unassigned_count,
             )
             
             sent_count += 1
@@ -447,7 +372,6 @@ def send_weekly_summary():
     Send weekly summary email every Monday morning.
     Shows last week's time breakdown by client.
     """
-    from django.core.mail import send_mail
     from django.conf import settings
     from django.contrib.auth import get_user_model
     from .models import Block, UserPreference
@@ -512,29 +436,14 @@ def send_weekly_summary():
             week_str = f"{last_monday.strftime('%b %d')} - {last_sunday.strftime('%b %d')}"
             frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
             
-            # Build email
-            client_lines = '\n'.join([f'  • {name}: {hrs:.1f}h' for name, hrs in client_breakdown[:10]])
             
-            plain_message = f"""Hi {user_name},
-
-Here's your weekly time summary for {week_str}:
-
-Total: {total_hours:.1f} hours
-
-By Client:
-{client_lines}
-
-View detailed report: {frontend_url}/reports
-
-—
-TimeTracker"""
-            
-            send_mail(
-                subject=f'📊 Your weekly summary: {total_hours:.1f} hours tracked',
-                message=plain_message,
-                from_email=f'TimeTracker <{settings.DEFAULT_FROM_EMAIL}>',
-                recipient_list=[user.email],
-                fail_silently=False,
+            from tracker.email_service import send_weekly_summary_email
+            send_weekly_summary_email(
+                to_email=user.email,
+                user_name=user_name,
+                week_str=week_str,
+                total_hours=total_hours,
+                client_breakdown=client_breakdown,
             )
             
             sent_count += 1

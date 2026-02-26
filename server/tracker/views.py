@@ -88,7 +88,6 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db import transaction
 
 from django.contrib.auth.models import User
-from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -5830,7 +5829,6 @@ def register_agent(request):
 
 
 from django.contrib.auth.models import User, Group
-from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -6052,24 +6050,13 @@ def settings_team_invite(request):
     error_message = None
     
     try:
-        result = send_mail(
-            subject=f"You've been invited to {org.name} on TimeTracker",
-            message=f"""
-Hi!
-
-You've been invited to join {org.name} on TimeTracker.
-
-Login at: https://timetracker.mavops.ai/login
-Username: {username}
-Temporary Password: {temp_password}
-
-Please change your password after logging in.
-
-- The TimeTracker Team
-            """,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-            fail_silently=False,
+        from tracker.email_service import send_team_invitation
+        email_sent = send_team_invitation(
+            to_email=email,
+            org_name=org.name,
+            username=username,
+            temp_password=temp_password,
+            invited_by=request.user.get_full_name() or request.user.username,
         )
         logger.info(f"[INVITE] ✅ Email sent successfully! Result: {result}")
         email_sent = True
@@ -6873,7 +6860,6 @@ def agent_error_resolve(request, error_id):
     return Response({"ok": True})
 
 
-from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
@@ -6895,23 +6881,15 @@ def maybe_send_alert(error):
     if recent > 1:
         return  # Already alerted
     
-    send_mail(
-        subject=f"[TimeTracker] Critical Agent Error: {error.error_type}",
-        message=f'''
-Critical error from agent:
-
-User: {error.user.username if error.user else 'Unknown'}
-Host: {error.hostname}
-Device: {error.device_id}
-Version: {error.app_version}
-
-Error: {error.error_message}
-
-View details: https://timetracker-api-k375.onrender.com/admin/tracker/agenterror/{error.id}/
-        ''',
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=['dan@mavops.ai'],
-        fail_silently=True,
+    from tracker.email_service import send_critical_error_alert
+    send_critical_error_alert(
+        error_type=error.error_type,
+        username=error.user.username if error.user else 'Unknown',
+        hostname=error.hostname,
+        device_id=error.device_id,
+        app_version=error.app_version,
+        error_message=error.error_message,
+        error_id=error.id,
     )
 
 

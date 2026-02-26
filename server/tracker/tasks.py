@@ -96,93 +96,15 @@ def send_daily_timesheet_reminders_task(self):
                 # Build email
                 user_name = user.first_name or user.username
                 date_str = yesterday.strftime('%A, %b %d')
-                
-                # Client lines for email
-                client_lines = '\n'.join([f'  • {name}: {hrs:.1f}h' for name, hrs in client_breakdown])
-                if not client_lines:
-                    client_lines = '  • No clients assigned yet'
-                
-                unassigned_warning = f'\n⚠️ {unassigned_count} blocks need client assignment.\n' if unassigned_count else ''
-                
-                frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
-                
-                plain_message = f"""
-Hi {user_name},
-
-You tracked {total_hours:.1f} hours on {date_str} that need review:
-
-{client_lines}
-{unassigned_warning}
-Review your timesheet: {frontend_url}/timesheet
-
-—
-TimeTracker
-
-Manage notification preferences: {frontend_url}/settings
-                """.strip()
-                
-                # HTML version
-                client_rows = ''.join([
-                    f'<tr><td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;">{name}</td>'
-                    f'<td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold;">{hrs:.1f}h</td></tr>'
-                    for name, hrs in client_breakdown
-                ])
-                if not client_rows:
-                    client_rows = '<tr><td colspan="2" style="padding: 8px 0; color: #94a3b8;">No clients assigned yet</td></tr>'
-                
-                unassigned_html = f'''
-                <div style="background: #fef3c7; border: 1px solid #fcd34d; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
-                    <p style="margin: 0; color: #92400e; font-size: 14px;">
-                        ⚠️ <strong>{unassigned_count} block{"s" if unassigned_count != 1 else ""}</strong> need client assignment
-                    </p>
-                </div>
-                ''' if unassigned_count else ''
-                
-                html_message = f'''
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-    <div style="max-width: 500px; margin: 0 auto; padding: 20px;">
-        <div style="background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); padding: 24px; border-radius: 16px 16px 0 0; text-align: center;">
-            <h1 style="margin: 0; color: white; font-size: 24px;">⏰ Review Your Time</h1>
-        </div>
-        <div style="background: white; padding: 24px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-            <p style="color: #475569; font-size: 16px; line-height: 1.5; margin-top: 0;">
-                Hi {user_name},
-            </p>
-            <p style="color: #475569; font-size: 16px; line-height: 1.5;">
-                You tracked <strong style="color: #ea580c;">{total_hours:.1f} hours</strong> on {date_str}:
-            </p>
-            <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-                {client_rows}
-            </table>
-            {unassigned_html}
-            <div style="text-align: center; margin: 24px 0;">
-                <a href="{frontend_url}/timesheet" 
-                   style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: white; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 16px;">
-                    Review Timesheet →
-                </a>
-            </div>
-            <p style="color: #94a3b8; font-size: 12px; margin-bottom: 0; text-align: center;">
-                <a href="{frontend_url}/settings" style="color: #94a3b8;">Manage notification preferences</a>
-            </p>
-        </div>
-    </div>
-</body>
-</html>
-                '''
-                
-                send_mail(
-                    subject=f'⏰ Review your time for {date_str}',
-                    message=plain_message,
-                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
-                    recipient_list=[user.email],
-                    html_message=html_message,
-                    fail_silently=False,
+                                                
+                from tracker.email_service import send_timesheet_reminder
+                send_timesheet_reminder(
+                    to_email=user.email,
+                    user_name=user_name,
+                    date_str=date_str,
+                    total_hours=total_hours,
+                    client_breakdown=client_breakdown,
+                    unassigned_count=unassigned_count,
                 )
                 
                 sent_count += 1
@@ -295,37 +217,13 @@ def send_weekly_summary_task(self):
                 user_name = user.first_name or user.username
                 week_str = f"{last_monday.strftime('%b %d')} - {last_sunday.strftime('%b %d')}"
                 
-                # Build email
-                client_lines = '\n'.join([f'  • {name}: {hrs:.1f}h' for name, hrs in client_breakdown[:10]])
-                daily_lines = ' | '.join([f'{day}: {daily_hours.get(day, 0):.1f}h' for day in day_names[:5]])
-                
-                frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
-                
-                plain_message = f"""
-Hi {user_name},
-
-Here's your weekly time summary for {week_str}:
-
-📊 Total: {total_hours:.1f} hours
-
-By Day:
-  {daily_lines}
-
-By Client:
-{client_lines}
-
-View detailed report: {frontend_url}/reports
-
-—
-TimeTracker
-                """.strip()
-                
-                send_mail(
-                    subject=f'📊 Weekly Summary: {total_hours:.1f} hours ({week_str})',
-                    message=plain_message,
-                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
-                    recipient_list=[user.email],
-                    fail_silently=False,
+                from tracker.email_service import send_weekly_summary_email
+                send_weekly_summary_email(
+                    to_email=user.email,
+                    user_name=user_name,
+                    week_str=week_str,
+                    total_hours=total_hours,
+                    client_breakdown=client_breakdown,
                 )
                 
                 sent_count += 1
@@ -411,46 +309,14 @@ def send_approval_notification_task(user_id: int, timesheet_id: int, status: str
         period = f"{timesheet.period_start.strftime('%b %d')} - {timesheet.period_end.strftime('%b %d')}"
         frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
         
-        if status == 'approved':
-            subject = f"✅ Timesheet Approved: {period}"
-            message = f"""
-Hi {user.first_name or user.username},
-
-Great news! Your timesheet for {period} has been approved.
-
-Total hours: {timesheet.total_hours:.1f}
-
-View details: {frontend_url}/timesheet
-
-—
-TimeTracker
-            """.strip()
-            
-        elif status == 'rejected':
-            notes = getattr(timesheet, 'reviewer_notes', '') or ''
-            feedback = f"\nFeedback: {notes}" if notes else "\nPlease review and resubmit."
-            
-            subject = f"❌ Timesheet Needs Revision: {period}"
-            message = f"""
-Hi {user.first_name or user.username},
-
-Your timesheet for {period} needs revision.
-{feedback}
-
-Edit timesheet: {frontend_url}/timesheet
-
-—
-TimeTracker
-            """.strip()
-        else:
-            return {'skipped': 'invalid status'}
-        
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
-            recipient_list=[user.email],
-            fail_silently=False,
+        from tracker.email_service import send_approval_notification
+        send_approval_notification(
+            to_email=user.email,
+            user_name=user.first_name or user.username,
+            period_str=period,
+            status=status,
+            total_hours=float(timesheet.total_hours),
+            reviewer_notes=getattr(timesheet, 'reviewer_notes', '') or '',
         )
         
         logger.info(f"[APPROVAL] Sent {status} notification to {user.email}")
@@ -520,32 +386,14 @@ def send_timesheet_reminders():
         # Send reminder email
         if user.email:
             try:
-                send_mail(
-                    subject=f'⏰ Timesheet Reminder: Week of {last_monday.strftime("%b %d")}',
-                    message=f"""Hi {user.first_name or user.username},
-
-Your timesheet for the week of {last_monday.strftime('%B %d')} - {last_sunday.strftime('%B %d, %Y')} has not been submitted yet.
-
-📊 Summary:
-• {total_hours} hours tracked
-• {block_count} time blocks
-
-Please review and submit your timesheet by end of day today. 
-
-⚠️ If not submitted, it will be automatically submitted tomorrow morning (Tuesday 9am).
-
-To submit:
-1. Go to Timecards
-2. Select the week of {last_monday.strftime('%b %d')}
-3. Review your time entries
-4. Click "Submit for Approval"
-
-Thanks,
-TimeTracker
-""",
-                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
-                    recipient_list=[user.email],
-                    fail_silently=True,
+                from tracker.email_service import send_submission_reminder
+                send_submission_reminder(
+                    to_email=user.email,
+                    user_name=user.first_name or user.username,
+                    week_start_str=last_monday.strftime("%b %d"),
+                    week_end_str=last_sunday.strftime("%b %d, %Y"),
+                    total_hours=total_hours,
+                    block_count=block_count,
                 )
                 reminders_sent += 1
                 logger.info(f"[TIMESHEET] Reminder sent to {user.email} for week {last_monday}")
@@ -634,27 +482,15 @@ def auto_submit_timesheets():
             # Notify the user
             if user.email:
                 try:
-                    send_mail(
-                        subject=f'✅ Timesheet Auto-Submitted: Week of {last_monday.strftime("%b %d")}',
-                        message=f"""Hi {user.first_name or user.username},
-
-Your timesheet for the week of {last_monday.strftime('%B %d')} - {last_sunday.strftime('%B %d, %Y')} was automatically submitted.
-
-📊 Summary:
-• Total hours: {timesheet.total_hours}
-• Billable hours: {timesheet.billable_hours}
-• Amount: ${timesheet.total_amount}
-
-Your manager will review and approve it shortly. 
-
-Need to make changes? Contact your manager to reject the timesheet so you can edit and resubmit.
-
-Thanks,
-TimeTracker
-""",
-                        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
-                        recipient_list=[user.email],
-                        fail_silently=True,
+                    from tracker.email_service import send_auto_submit_notification
+                    send_auto_submit_notification(
+                        to_email=user.email,
+                        user_name=user.first_name or user.username,
+                        week_start_str=last_monday.strftime("%b %d"),
+                        week_end_str=last_sunday.strftime("%b %d, %Y"),
+                        total_hours=timesheet.total_hours,
+                        billable_hours=timesheet.billable_hours,
+                        total_amount=timesheet.total_amount,
                     )
                 except Exception as e:
                     logger.warning(f"[TIMESHEET] Failed to notify {user.email}: {e}")
@@ -798,25 +634,14 @@ def notify_managers_pending_approvals():
                 total_hours += float(ts.total_hours)
             
             try:
-                send_mail(
-                    subject=f'📋 {len(timesheets)} Timesheets Pending Approval - Week of {last_monday.strftime("%b %d")}',
-                    message=f"""Hi {manager.first_name or manager.username},
-
-There are {len(timesheets)} timesheets pending your approval for the week of {last_monday.strftime('%B %d')}.
-
-📊 Summary ({total_hours:.1f} total hours):
-{chr(10).join(summary_lines)}
-
-Please review and approve/reject these timesheets at your earliest convenience.
-
-→ Go to Approvals in TimeTracker to review.
-
-Thanks,
-TimeTracker
-""",
-                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@timetracker.local'),
-                    recipient_list=[manager.email],
-                    fail_silently=True,
+                from tracker.email_service import send_manager_pending_approvals
+                send_manager_pending_approvals(
+                    to_email=manager.email,
+                    manager_name=manager.first_name or manager.username,
+                    week_start_str=last_monday.strftime("%b %d"),
+                    timesheet_count=len(timesheets),
+                    total_hours=total_hours,
+                    summary_lines=summary_lines,
                 )
                 notifications_sent += 1
                 logger.info(f"[TIMESHEET] Notified manager {manager.email} of {len(timesheets)} pending")

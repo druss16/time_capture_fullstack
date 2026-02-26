@@ -276,13 +276,13 @@ CSRF_EXEMPT_URLS = ["/tracker/raw-events/"]
 
 # Email configuration (for sending invites)
 # Email Configuration
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.environ.get('EMAIL_USER')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASSWORD')
-DEFAULT_FROM_EMAIL = os.environ.get('EMAIL_USER')
+# EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# EMAIL_HOST = 'smtp.gmail.com'
+# EMAIL_PORT = 587
+# EMAIL_USE_TLS = True
+# EMAIL_HOST_USER = os.environ.get('EMAIL_USER')
+# EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+# DEFAULT_FROM_EMAIL = os.environ.get('EMAIL_USER')
 
 # -----------------------------------------------------
 # Django REST Framework
@@ -312,13 +312,21 @@ REST_FRAMEWORK = {
 }
 
 # -----------------------------------------------------
+# SendGrid
+# -----------------------------------------------------
+
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+DEFAULT_FROM_EMAIL = 'noreply@mavops.ai'
+DEFAULT_REPLY_TO_EMAIL = 'dan@mavops.ai'
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://timetracker.mavops.ai')
+
+# -----------------------------------------------------
 # Stripe
 # -----------------------------------------------------
 
 STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY')
 STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
-FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://timetracker.mavops.ai')
 
 STRIPE_PRICE_PROFESSIONAL_MONTHLY = os.environ.get("STRIPE_PRICE_PROFESSIONAL_MONTHLY")
 STRIPE_PRICE_PROFESSIONAL_YEARLY  = os.environ.get("STRIPE_PRICE_PROFESSIONAL_YEARLY")

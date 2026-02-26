@@ -46,7 +46,7 @@ def send_daily_timesheet_reminders_task(self):
         
         # Get all users with time tracked yesterday
         users_with_time = User.objects.filter(
-            blocks__day=yesterday
+            block__day=yesterday
         ).distinct()
         
         sent_count = 0

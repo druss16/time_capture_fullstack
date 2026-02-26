@@ -1,25 +1,20 @@
 # tracker/email_service.py
 """
-Central email service using SendGrid SDK.
+Central email service using SendGrid REST API (raw HTTP, no SDK).
 All transactional emails go through here.
 
 Setup:
-  1. pip install sendgrid (add to requirements.txt)
-  2. Set SENDGRID_API_KEY in .env
-  3. Set DEFAULT_FROM_EMAIL in settings.py (e.g., "noreply@mavops.ai")
+  1. Set SENDGRID_API_KEY in .env
+  2. Set DEFAULT_FROM_EMAIL in settings.py (e.g., "noreply@mavops.ai")
 """
 
 import logging
 from django.conf import settings
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import (
-    Mail, ReplyTo
-)
 
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# CORE SEND FUNCTION
+# CORE SEND FUNCTION (raw HTTP - no SDK needed)
 # ============================================================================
 
 def send_email(
@@ -33,41 +28,54 @@ def send_email(
     categories: list = None,
 ):
     """
-    Send a transactional email via SendGrid.
+    Send a transactional email via SendGrid REST API.
     
     Returns:
         True if sent successfully, False otherwise
     """
+    import requests as req
+
+    logger.info("[EMAIL] >>> USING V2 SEND_EMAIL <<<")
+
     api_key = getattr(settings, 'SENDGRID_API_KEY', None)
     if not api_key:
-        logger.error("[EMAIL] SENDGRID_API_KEY not configured - email not sent")
+        logger.error("[EMAIL] SENDGRID_API_KEY not configured")
         return False
 
     from_email = from_email or getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@mavops.ai')
     reply_to = reply_to or getattr(settings, 'DEFAULT_REPLY_TO_EMAIL', 'dan@mavops.ai')
-
     plain_text = plain_content or _strip_html(html_content)
 
-    message = Mail(
-        from_email=from_email,
-        to_emails=to_email,
-        subject=subject,
-        plain_text_content=plain_text,
-        html_content=html_content,
-    )
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {"email": from_email, "name": from_name},
+        "subject": subject,
+        "content": [
+            {"type": "text/plain", "value": plain_text},
+            {"type": "text/html", "value": html_content},
+        ],
+    }
 
     if reply_to:
-        message.reply_to = ReplyTo(reply_to)
+        payload["reply_to"] = {"email": reply_to}
 
     if categories:
-        for cat in categories:
-            message.add_category(cat)
+        payload["categories"] = categories
 
     try:
-        sg = SendGridAPIClient(api_key)
-        response = sg.send(message)
-        logger.info(f"[EMAIL] Sent to {to_email} - status: {response.status_code} - subject: {subject[:50]}")
-        return response.status_code in (200, 201, 202)
+        resp = req.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        logger.info(f"[EMAIL] Sent to {to_email} - status: {resp.status_code} - subject: {subject[:50]}")
+        if resp.status_code not in (200, 201, 202):
+            logger.error(f"[EMAIL] SendGrid error: {resp.text}")
+        return resp.status_code in (200, 201, 202)
     except Exception as e:
         logger.error(f"[EMAIL] Failed to send to {to_email}: {e}")
         return False
@@ -216,7 +224,6 @@ Questions? Visit {help_url} or reply to this email.
     </td></tr>
     <tr><td style="padding:40px;">
         <p style="margin:0 0 30px;color:#475569;font-size:16px;line-height:1.6;">TimeTracker automatically captures your billable time so you never forget to log hours again. Get started in just 2 minutes.</p>
-        <!-- Step 1 -->
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;"><tr>
             <td width="44" valign="top"><div style="width:36px;height:36px;background:#ccfbf1;border-radius:50%;text-align:center;line-height:36px;color:#0d9488;font-weight:700;font-size:16px;">1</div></td>
             <td valign="top" style="padding-left:12px;">
@@ -227,7 +234,6 @@ Questions? Visit {help_url} or reply to this email.
                 </tr></table>
             </td>
         </tr></table>
-        <!-- Step 2 -->
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;"><tr>
             <td width="44" valign="top"><div style="width:36px;height:36px;background:#ccfbf1;border-radius:50%;text-align:center;line-height:36px;color:#0d9488;font-weight:700;font-size:16px;">2</div></td>
             <td valign="top" style="padding-left:12px;">
@@ -240,7 +246,6 @@ Questions? Visit {help_url} or reply to this email.
                 </td></tr></table>
             </td>
         </tr></table>
-        <!-- Step 3 -->
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:32px;"><tr>
             <td width="44" valign="top"><div style="width:36px;height:36px;background:#ccfbf1;border-radius:50%;text-align:center;line-height:36px;color:#0d9488;font-weight:700;font-size:16px;">3</div></td>
             <td valign="top" style="padding-left:12px;">
@@ -286,8 +291,6 @@ def send_timesheet_reminder(
 ):
     """
     Send daily timesheet review reminder.
-    Used by: tasks.py send_daily_timesheet_reminders_task
-             views_notifications.py send_daily_timesheet_reminders
     """
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
     review_url = review_url or f'{frontend_url}/timesheet'
@@ -345,11 +348,7 @@ def send_weekly_summary_email(
     total_hours: float,
     client_breakdown: list,
 ):
-    """
-    Send weekly time summary email.
-    Used by: tasks.py send_weekly_summary_task
-             views_notifications.py send_weekly_summary
-    """
+    """Send weekly time summary email."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
     client_lines = '\n'.join([f'  - {name}: {hrs:.1f}h' for name, hrs in client_breakdown[:10]])
 
@@ -385,10 +384,7 @@ def send_submission_reminder(
     total_hours: float,
     block_count: int,
 ):
-    """
-    Monday reminder to submit last week's timesheet.
-    Used by: tasks.py send_timesheet_reminders
-    """
+    """Monday reminder to submit last week's timesheet."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
 
     body = f'''
@@ -439,10 +435,7 @@ def send_auto_submit_notification(
     billable_hours,
     total_amount,
 ):
-    """
-    Notify user their timesheet was auto-submitted.
-    Used by: tasks.py auto_submit_timesheets
-    """
+    """Notify user their timesheet was auto-submitted."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
 
     body = f'''
@@ -491,10 +484,7 @@ def send_approval_notification(
     total_hours: float = 0,
     reviewer_notes: str = "",
 ):
-    """
-    Send approved/rejected notification.
-    Used by: tasks.py send_approval_notification_task
-    """
+    """Send approved/rejected notification."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
 
     if status == 'approved':
@@ -538,10 +528,7 @@ def send_manager_pending_approvals(
     total_hours: float,
     summary_lines: list,
 ):
-    """
-    Notify managers of pending approvals.
-    Used by: tasks.py notify_managers_pending_approvals
-    """
+    """Notify managers of pending approvals."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
 
     rows_html = ''.join([

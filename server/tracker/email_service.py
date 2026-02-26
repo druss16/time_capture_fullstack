@@ -13,7 +13,7 @@ import logging
 from django.conf import settings
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import (
-    Mail, Email, To, Content, ReplyTo
+    Mail, ReplyTo
 )
 
 logger = logging.getLogger(__name__)
@@ -46,16 +46,15 @@ def send_email(
     from_email = from_email or getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@mavops.ai')
     reply_to = reply_to or getattr(settings, 'DEFAULT_REPLY_TO_EMAIL', 'dan@mavops.ai')
 
-    message = Mail(
-        from_email=Email(from_email, from_name),
-        to_emails=To(to_email),
-        subject=subject,
-    )
+    plain_text = plain_content or _strip_html(html_content)
 
-    message.content = [
-        Content("text/plain", plain_content or _strip_html(html_content)),
-        Content("text/html", html_content),
-    ]
+    message = Mail(
+        from_email=(from_email, from_name),
+        to_emails=to_email,
+        subject=subject,
+        plain_text_content=plain_text,
+        html_content=html_content,
+    )
 
     if reply_to:
         message.reply_to = ReplyTo(reply_to)

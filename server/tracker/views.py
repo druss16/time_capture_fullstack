@@ -6083,22 +6083,33 @@ def settings_team_remove(request, user_id):
     if not org:
         return Response({"error": "No organization found"}, status=404)
     
-    # Can't remove yourself
     if user_id == request.user.id:
         return Response({"error": "Cannot remove yourself"}, status=400)
     
     try:
-        member = User.objects.get(id=user_id, groups=org)
-    except User.DoesNotExist:
-        return Response({"error": "User not found"}, status=404)
-    
-    # Remove from org
-    member.groups.remove(org)
-    
-    return Response({
-        "success": True,
-        "message": f"Removed {member.username} from team",
-    })
+        membership = OrganizationMembership.objects.get(
+            user_id=user_id,
+            organization=org
+        )
+        
+        if membership.role == 'owner':
+            return Response({"error": "Cannot remove owner. Transfer ownership first."}, status=400)
+        
+        username = membership.user.username
+        
+        # Deactivate the user account so they can't log in
+        membership.user.is_active = False
+        membership.user.save(update_fields=['is_active'])
+        
+        membership.delete()
+        
+        return Response({
+            "success": True,
+            "message": f"Removed {username} from team",
+        })
+        
+    except OrganizationMembership.DoesNotExist:
+        return Response({"error": "User not found in this organization"}, status=404)
 
 
 # ============================================================================

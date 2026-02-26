@@ -6058,7 +6058,7 @@ def settings_team_invite(request):
             temp_password=temp_password,
             invited_by=request.user.get_full_name() or request.user.username,
         )
-        logger.info(f"[INVITE] ✅ Email sent successfully! Result: {result}")
+        logger.info(f"[INVITE] ✅ Email sent successfully! Result: {email_sent}")
         email_sent = True
     except Exception as e:
         error_message = str(e)

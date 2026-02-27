@@ -424,7 +424,7 @@ def send_submission_reminder(
         <div style="background:#fef3c7;border:1px solid #fcd34d;padding:12px 16px;border-radius:8px;margin:16px 0;">
             <p style="margin:0;color:#92400e;font-size:14px;">⚠️ If not submitted by end of day, it will be <strong>auto-submitted Tuesday 9am</strong>.</p>
         </div>
-        {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "Review &amp; Submit &rarr;")}'''
+        {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "Review &amp; Submit &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Submit Your Timesheet", body)
 
@@ -475,7 +475,7 @@ def send_auto_submit_notification(
             <p style="margin:0;color:#1e293b;font-size:15px;">Amount: <strong>${total_amount}</strong></p>
         </div>
         <p style="color:#64748b;font-size:14px;">Your manager will review shortly. Need changes? Ask your manager to send it back.</p>
-        {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
+        {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Auto-Submitted", body)
 
@@ -519,7 +519,7 @@ def send_approval_notification(
             <p style="color:#475569;font-size:16px;line-height:1.5;">
                 Your timesheet for <strong>{period_str}</strong> ({total_hours:.1f} hours) has been approved.
             </p>
-            {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
+            {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
         html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Approved", body)
         subject = f"✅ Timesheet Approved: {period_str}"
         plain = f"Hi {user_name},\n\nYour timesheet for {period_str} ({total_hours:.1f} hours) has been approved.\n\n- TimeTracker"
@@ -530,7 +530,7 @@ def send_approval_notification(
             <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
             <p style="color:#475569;font-size:16px;line-height:1.5;">Your timesheet for <strong>{period_str}</strong> needs revision.</p>
             {reason_html}
-            {_btn(frontend_url + "/timesheet", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
+            {_btn(frontend_url + "/billing", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
         html = _wrap_html("#ef4444 0%,#dc2626 100%", "⚠️", "Timesheet Needs Revision", body)
         subject = f"❌ Timesheet Needs Revision: {period_str}"
         plain = f"Hi {user_name},\n\nYour timesheet for {period_str} needs revision.{feedback}\n\nEdit: {frontend_url}/timesheet\n\n- TimeTracker"
@@ -640,7 +640,7 @@ def send_timesheet_approved(
         <p style="color:#475569;font-size:16px;line-height:1.5;">
             Your timesheet for <strong>{week_str}</strong> ({total_hours:.1f} hours) has been approved by {approved_by}.
         </p>
-        {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
+        {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Approved", body)
 
@@ -671,7 +671,7 @@ def send_timesheet_rejected(
             Your timesheet for <strong>{week_str}</strong> was sent back by {rejected_by}.
         </p>
         {reason_html}
-        {_btn(frontend_url + "/timesheet", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
+        {_btn(frontend_url + "/billing", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
 
     html = _wrap_html("#ef4444 0%,#dc2626 100%", "⚠️", "Timesheet Needs Revision", body)
 

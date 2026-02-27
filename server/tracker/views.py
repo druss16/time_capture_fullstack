@@ -2825,6 +2825,7 @@ def whoami(request):
     
     # Helper to get org info AND role
     def get_user_info(user):
+        from tracker.models import OrgDeploymentToken
         org = get_user_org(user)
         
         # Get the user's role from OrganizationMembership
@@ -2837,18 +2838,27 @@ def whoami(request):
             if membership:
                 role = membership.role
         
+        # Check if org uses MDM deployment
+        mdm_managed = False
+        if org:
+            mdm_managed = OrgDeploymentToken.objects.filter(
+                organization=org,
+                is_active=True
+            ).exists()
+        
         return {
             "is_authenticated": True,
             "username": user.username,
             "user_id": user.id,
             "email": user.email or "",
-            "first_name": user.first_name or "",   # ✅ NEW
-            "last_name": user.last_name or "",     # ✅ NEW
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser,
-            "role": role,  # ← 'owner', 'admin', 'manager', or 'member'
+            "role": role,
             "org_id": org.id if org else None,
             "org_name": org.name if org else None,
+            "mdm_managed": mdm_managed,
         }
     
     # 1) Check Authorization header (Bearer token)
@@ -2901,8 +2911,8 @@ def whoami(request):
         "username": "",
         "user_id": None,
         "email": "",
-        "first_name": "",   # ✅ NEW
-        "last_name": "",    # ✅ NEW
+        "first_name": "",
+        "last_name": "",
         "is_staff": False,
         "is_superuser": False,
         "role": None,
@@ -2910,6 +2920,7 @@ def whoami(request):
         "org_name": None,
         "host": None,
         "device_id": None,
+        "mdm_managed": False,
     })
 
 from rest_framework.decorators import api_view, permission_classes

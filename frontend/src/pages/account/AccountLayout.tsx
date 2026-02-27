@@ -18,6 +18,7 @@ import {
 
 interface AccountLayoutProps {
   role: 'owner' | 'admin' | 'manager' | 'member';
+  mdmManaged?: boolean;
 }
 
 interface NavItem {
@@ -28,7 +29,7 @@ interface NavItem {
   exact?: boolean;
 }
 
-export default function AccountLayout({ role }: AccountLayoutProps) {
+export default function AccountLayout({ role, mdmManaged }: AccountLayoutProps) {
   const location = useLocation();
 
   const navItems: NavItem[] = [
@@ -68,7 +69,13 @@ export default function AccountLayout({ role }: AccountLayoutProps) {
           },
         ]
       : []),
-  ];
+  ].filter(item => {
+    // Hide Desktop Agent for non-admin users in MDM-managed orgs
+    if (item.path === '/account/download' && mdmManaged && role !== 'owner' && role !== 'admin') {
+      return false;
+    }
+    return true;
+  });
 
   return (
     <div className="bg-slate-50 min-h-0">

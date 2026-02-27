@@ -315,7 +315,7 @@ def send_timesheet_reminder(
             <p style="margin:0;color:#92400e;font-size:16px;font-weight:bold;">⚠️ No time was tracked on {date_str}</p>
             <p style="margin:8px 0 0;color:#92400e;font-size:14px;">If you worked yesterday, please check that your desktop agent is running.</p>
         </div>
-        {_btn(review_url, "#2B9D90 0%,#237F74 100%", "Check Timesheet &rarr;")}
+        {_btn(review_url, "#2B9D90 0%,#237F74 100%", "Review Timesheet &rarr;")}
         <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">
             <a href="{frontend_url}/settings" style="color:#94a3b8;">Manage notification preferences</a>
         </p>'''

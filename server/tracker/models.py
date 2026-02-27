@@ -2258,18 +2258,6 @@ class OrgDeploymentToken(models.Model):
         self.save(update_fields=['devices_claimed'])
 
 
-"""
-tracker/models_provisioning.py
-
-White-glove provisioning models for enterprise MSI deployment.
-Add to INSTALLED_APPS or import from tracker/models.py:
-    from tracker.models_provisioning import *
-
-Then run:
-    python manage.py makemigrations tracker
-    python manage.py migrate
-"""
-
 import secrets
 from django.db import models
 from django.conf import settings

@@ -1,7 +1,8 @@
 # tracker/admin.py
 from django.contrib import admin
 from django.contrib.admin.sites import NotRegistered
-from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OrgInstallToken, AgentRegistration
+from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OrgInstallToken, AgentRegistration, OnboardingBatch, DeviceProvisioningMap
+
 
 # ---- Helpers to be idempotent ----
 def _unregister(model):
@@ -223,8 +224,6 @@ Import in your admin.py:
 """
 
 from django.contrib import admin
-from tracker.models_provisioning import OnboardingBatch, DeviceProvisioningMap
-
 
 class DeviceProvisioningMapInline(admin.TabularInline):
     model = DeviceProvisioningMap

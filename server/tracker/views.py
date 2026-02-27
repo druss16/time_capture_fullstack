@@ -6215,29 +6215,37 @@ def settings_client_detail(request, client_id):
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_devices(request):
     """List all registered devices/agents for the organization"""
+    from tracker.models import AgentDevice, OrganizationMembership
+    
     org = get_user_org(request.user)
     if not org:
         return Response({"error": "No organization found"}, status=404)
     
-    devices = AgentRegistration.objects.filter(org=org).select_related("user").order_by("-last_seen")
+    # Get all user IDs in this org
+    org_user_ids = OrganizationMembership.objects.filter(
+        organization=org
+    ).values_list('user_id', flat=True)
+    
+    devices = AgentDevice.objects.filter(
+        user_id__in=org_user_ids
+    ).select_related("user").order_by("-last_seen_at")
     
     result = []
     for device in devices:
         result.append({
             "id": device.id,
-            "user": device.user.username,
-            "user_id": device.user.id,
-            "machine_name": device.machine_name,
-            "os": device.os,
-            "os_version": device.os_version or "",
-            "agent_version": device.agent_version or "",
-            "first_seen": device.first_seen.isoformat() if device.first_seen else "",
-            "last_seen": device.last_seen.isoformat() if device.last_seen else "",
+            "user": device.user.username if device.user else "Unassigned",
+            "user_id": device.user.id if device.user else None,
+            "machine_name": device.hostname or device.device_id,
+            "os": device.platform or "",
+            "os_version": "",
+            "agent_version": device.app_version or "",
+            "first_seen": device.created_at.isoformat() if device.created_at else "",
+            "last_seen": device.last_seen_at.isoformat() if device.last_seen_at else "",
             "is_active": device.is_active,
         })
     
     return Response(result)
-
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])

@@ -1735,9 +1735,52 @@ def run_agent():
                             time.sleep(30)
                             continue
                     # ── WAKE RECOVERY: Reset tracking state after sleep/wake ──
-                    if _wake_event.is_set():
+                    # ── SUSPEND RECOVERY: Detect time gaps (Modern Standby + real sleep) ──
+                    if not hasattr(tracking_loop, '_last_iter_time'):
+                        tracking_loop._last_iter_time = time.time()
+                    
+                    now_t = time.time()
+                    iter_gap = now_t - tracking_loop._last_iter_time
+                    tracking_loop._last_iter_time = now_t
+                    
+                    # If >60s passed between iterations, thread was frozen
+                    _suspended = iter_gap > 60
+                    
+                    if _wake_event.is_set() or _suspended:
                         _wake_event.clear()
-                        log("[TRACKING] 🔄 Wake detected — resetting tracking state")
+                        
+                        if _suspended:
+                            log(f"[TRACKING] ⏰ Thread was suspended for {int(iter_gap)}s (Modern Standby or sleep)")
+                        else:
+                            log("[TRACKING] 🔄 Wake event detected — resetting tracking state")
+                        
+                        # Flush current dwell if any
+                        if current_sig and dwell_start and current_sig != IDLE_SIG:
+                            dwell = now_t - dwell_start
+                            if dwell >= MIN_DWELL_SECONDS:
+                                try:
+                                    write_event(conn, cur, os_user, hostname, current_sig)
+                                    log(f"[TRACKING] Flushed pre-suspend dwell ({int(dwell)}s)")
+                                except Exception as e:
+                                    log(f"[TRACKING] Failed to flush dwell: {e}")
+                        
+                        # Reset state completely
+                        current_sig = None
+                        dwell_start = None
+                        
+                        # Brief wait for network (don't block long)
+                        for _i in range(6):  # Up to 15s
+                            if is_network_ok():
+                                break
+                            time.sleep(2.5)
+                        
+                        if is_network_ok():
+                            log("[TRACKING] ✅ Network OK — resuming capture")
+                        else:
+                            log("[TRACKING] ⚠️ Network still down — resuming in offline mode")
+                            _start_health_monitor()
+                        
+                        continue
                         
                         # Flush current dwell if any
                         if current_sig and dwell_start and current_sig != IDLE_SIG:

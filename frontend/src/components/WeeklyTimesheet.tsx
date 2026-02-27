@@ -236,6 +236,11 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [weekStart, setWeekStart] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const weekParam = params.get('week');
+    if (weekParam && /^\d{4}-\d{2}-\d{2}$/.test(weekParam)) {
+        return weekParam;
+    }
     const monday = getMonday(new Date());
     return monday.toISOString().split('T')[0];
   });

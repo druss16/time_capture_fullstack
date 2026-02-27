@@ -392,6 +392,7 @@ def send_timesheet_reminders():
                     week_end_str=last_sunday.strftime("%b %d, %Y"),
                     total_hours=total_hours,
                     block_count=block_count,
+                    week_start_iso=last_monday.isoformat(),
                 )
                 reminders_sent += 1
                 logger.info(f"[TIMESHEET] Reminder sent to {user.email} for week {last_monday}")

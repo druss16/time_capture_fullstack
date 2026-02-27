@@ -409,6 +409,7 @@ def send_submission_reminder(
     week_end_str: str,
     total_hours: float,
     block_count: int,
+    week_start_iso: str = None,
 ):
     """Monday reminder to submit last week's timesheet."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
@@ -424,7 +425,7 @@ def send_submission_reminder(
         <div style="background:#fef3c7;border:1px solid #fcd34d;padding:12px 16px;border-radius:8px;margin:16px 0;">
             <p style="margin:0;color:#92400e;font-size:14px;">⚠️ If not submitted by end of day, it will be <strong>auto-submitted Tuesday 9am</strong>.</p>
         </div>
-        {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "Review &amp; Submit &rarr;")}'''
+        {_btn(frontend_url + "/billing?tab=timesheet" + (f"&week={week_start_iso}" if week_start_iso else ""), "#2B9D90 0%,#237F74 100%", "Review &amp; Submit &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Submit Your Timesheet", body)
 

@@ -65,7 +65,7 @@ app.conf.beat_schedule = {
     # "You have 6.5 hours from yesterday to review"
     'daily-timesheet-review-reminder': {
         'task': 'tracker.tasks.send_daily_timesheet_reminders_task',
-        'schedule': crontab(hour=19, minute=2, day_of_week='1-5'),  # Mon-Fri 9am
+        'schedule': crontab(hour=8, minute=0, day_of_week='1-5'),  # Mon-Fri 9am
         'options': {
             'expires': 3600,
         }

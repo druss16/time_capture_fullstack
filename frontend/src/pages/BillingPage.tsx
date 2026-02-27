@@ -26,6 +26,7 @@ import {
   CreditCard,
 } from 'lucide-react';
 import { cn, getRoleColor, SKELETON } from '@/lib/design-system';
+import { useSearchParams } from 'react-router-dom';
 
 type UserRole = 'owner' | 'admin' | 'manager' | 'member';
 type PlanType = 'professional' | 'executive' | 'none';
@@ -212,7 +213,8 @@ const UpgradePrompt: React.FC<{ featureName: string }> = ({ featureName }) => (
 );
 
 const BillingPage: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<string>('timesheet');
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<string>(searchParams.get('tab') || 'timesheet');
   const [userInfo, setUserInfo] = useState<WhoamiResponse | null>(null);
   const [orgPlan, setOrgPlan] = useState<PlanType>('none');
   const [loading, setLoading] = useState(true);

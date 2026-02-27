@@ -1946,20 +1946,25 @@ def handle_subscription_updated(subscription):
             
             if item:
                 price_id = item['price']['id']
-                quantity = item['quantity']  # ✅ Get updated seat count
+                quantity = item['quantity']
                 
                 if price_id in [STRIPE_PRICES.get('executive_monthly'), STRIPE_PRICES.get('executive_yearly')]:
                     plan = 'executive'
                 else:
                     plan = 'professional'
                 
-                # ✅ Update plan AND seat count
                 org.plan = plan
-                org.seat_count = quantity
                 org.stripe_subscription_id = subscription['id']
+                
+                # Only update seat_count if Stripe quantity is higher,
+                # or if org has no seats yet. This prevents plan switches
+                # from resetting seats to 1.
+                if quantity > org.seat_count or org.seat_count == 0:
+                    org.seat_count = quantity
+                
                 org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id'])
                 
-                print(f"[Stripe] Updated {org.name}: {plan} plan, {quantity} seats")
+                print(f"[Stripe] Updated {org.name}: {plan} plan, {org.seat_count} seats (Stripe qty: {quantity})")
         
     except Organization.DoesNotExist:
         print(f"[Stripe] Organization not found for customer {customer_id}")

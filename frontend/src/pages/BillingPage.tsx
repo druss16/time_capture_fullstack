@@ -284,10 +284,11 @@ const BillingPage: React.FC = () => {
 
   // Prevent landing on a locked tab (e.g. deep link / stale state)
   useEffect(() => {
+    if (loading) return; // Don't check locks until plan is loaded
     const tab = ALL_TABS.find((t) => t.id === activeTab);
     if (tab && isTabLocked(tab)) setActiveTab('timesheet');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgPlan]);
+  }, [orgPlan, loading]);
 
   const getLockedFeatureName = (tabId: string): string => {
     switch (tabId) {

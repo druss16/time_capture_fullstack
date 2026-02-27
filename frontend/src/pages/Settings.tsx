@@ -398,7 +398,6 @@ export default function Settings() {
   { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
   { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
   { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
-  { id: 'token', label: 'Install Token', icon: <Key className="w-4 h-4" /> },
   { id: 'deployment', label: 'MDM Deploy', icon: <Monitor className="w-4 h-4" />, requiredRole: ['owner', 'admin'] },
 ];
 

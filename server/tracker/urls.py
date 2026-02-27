@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment  # ✅ ADD THIS IMPORT
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_autopair
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -301,5 +301,12 @@ urlpatterns = [
     path('agent/version-check/', views.agent_version_check),
 
     path("user/preferences/", views.user_preferences, name="user_preferences"),
+
+    path('devices/auto-pair/', views_autopair.auto_pair_device, name='auto-pair-device'),
+
+    path('admin/provisioning/<slug:org_slug>/status/', views_autopair.provisioning_status, name='provisioning-status'),
+
+    path('devices/auto-pair/', views_autopair.auto_pair_device, name='auto-pair-device'),
+
 
 ]

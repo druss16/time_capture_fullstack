@@ -2256,3 +2256,235 @@ class OrgDeploymentToken(models.Model):
         """Increment claim count. Call after successful device registration."""
         self.devices_claimed = models.F('devices_claimed') + 1
         self.save(update_fields=['devices_claimed'])
+
+
+"""
+tracker/models_provisioning.py
+
+White-glove provisioning models for enterprise MSI deployment.
+Add to INSTALLED_APPS or import from tracker/models.py:
+    from tracker.models_provisioning import *
+
+Then run:
+    python manage.py makemigrations tracker
+    python manage.py migrate
+"""
+
+import secrets
+from django.db import models
+from django.conf import settings
+from django.utils import timezone
+
+
+class OnboardingBatch(models.Model):
+    """
+    Tracks a white-glove onboarding job for a firm.
+    One batch = one firm onboarding. Links all provisioning records together.
+    """
+    organization = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='onboarding_batches'
+    )
+    
+    STATUS_CHOICES = [
+        ('draft', 'Draft - Data collected, not yet imported'),
+        ('imported', 'Imported - Users/clients/devices loaded'),
+        ('msi_built', 'MSI Built - Installer ready for IT'),
+        ('deployed', 'Deployed - MSI pushed to machines'),
+        ('active', 'Active - Devices pairing'),
+        ('complete', 'Complete - All devices paired'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    
+    # Link to the deployment token used for this batch
+    deployment_token = models.ForeignKey(
+        'OrgDeploymentToken',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='onboarding_batch'
+    )
+    
+    # Stats (updated as provisioning progresses)
+    total_users = models.IntegerField(default=0)
+    total_devices = models.IntegerField(default=0)
+    total_clients = models.IntegerField(default=0)
+    devices_paired = models.IntegerField(default=0)
+    
+    # Who ran this onboarding
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='onboarding_batches_created'
+    )
+    
+    notes = models.TextField(blank=True, default='')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Onboarding Batch'
+        verbose_name_plural = 'Onboarding Batches'
+    
+    def __str__(self):
+        return f"{self.organization.name} - {self.status} ({self.devices_paired}/{self.total_devices} paired)"
+    
+    def refresh_stats(self):
+        """Recalculate stats from provisioning map."""
+        maps = self.provisioning_maps.all()
+        self.total_devices = maps.count()
+        self.total_users = maps.values('email').distinct().count()
+        self.devices_paired = maps.filter(status='paired').count()
+        self.save(update_fields=['total_devices', 'total_users', 'devices_paired', 'updated_at'])
+        
+        # Auto-complete if all devices paired
+        if self.total_devices > 0 and self.devices_paired >= self.total_devices:
+            self.status = 'complete'
+            self.completed_at = timezone.now()
+            self.save(update_fields=['status', 'completed_at'])
+    
+    @property
+    def pair_percentage(self):
+        if self.total_devices == 0:
+            return 0
+        return round((self.devices_paired / self.total_devices) * 100, 1)
+
+
+class DeviceProvisioningMap(models.Model):
+    """
+    Pre-provisioned mapping of machine hostname / Windows username to a user email.
+    
+    Created BEFORE MSI deployment so the agent can auto-pair on first boot.
+    
+    Flow:
+    1. MavOps imports CSV with hostname + windows_username + email
+    2. IT Admin pushes MSI with org token to all machines
+    3. Agent starts, sends org_token + hostname + windows_username to API
+    4. API matches against this table → auto-pairs device to user
+    """
+    organization = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='provisioning_maps'
+    )
+    batch = models.ForeignKey(
+        OnboardingBatch,
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='provisioning_maps'
+    )
+    
+    # ─── Matching fields (what the agent sends) ───
+    machine_hostname = models.CharField(
+        max_length=255,
+        db_index=True,
+        help_text="Machine hostname from Intune/AD export (e.g., FIRM-PC-101)"
+    )
+    windows_username = models.CharField(
+        max_length=255,
+        blank=True, default='',
+        db_index=True,
+        help_text="DOMAIN\\username from AD (e.g., FIRMNAME\\jsmith)"
+    )
+    
+    # ─── Target user ───
+    email = models.EmailField(
+        db_index=True,
+        help_text="User email to pair this device to"
+    )
+    display_name = models.CharField(max_length=255, blank=True, default='')
+    
+    # ─── Role & rate (used when creating user accounts) ───
+    role = models.CharField(
+        max_length=20,
+        choices=[
+            ('owner', 'Owner'),
+            ('admin', 'Admin'),
+            ('manager', 'Manager'),
+            ('member', 'Member'),
+        ],
+        default='member'
+    )
+    billing_rate = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        null=True, blank=True,
+        help_text="Hourly billing rate for this user"
+    )
+    cost_rate = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        null=True, blank=True,
+        help_text="Hourly cost rate for this user"
+    )
+    
+    # ─── Pairing status ───
+    STATUS_CHOICES = [
+        ('pending', 'Pending - Waiting for agent to connect'),
+        ('paired', 'Paired - Device matched and linked'),
+        ('failed', 'Failed - Agent connected but match failed'),
+        ('manual', 'Manual - Fell back to manual pairing'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    
+    # ─── Result tracking ───
+    paired_device = models.ForeignKey(
+        'AgentDevice',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='provisioning_map'
+    )
+    paired_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='provisioned_devices'
+    )
+    paired_at = models.DateTimeField(null=True, blank=True)
+    match_method = models.CharField(
+        max_length=20,
+        blank=True, default='',
+        help_text="How the match was made: hostname, windows_username, or manual"
+    )
+    error_message = models.TextField(blank=True, default='')
+    
+    # ─── Timestamps ───
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['organization', 'machine_hostname']),
+            models.Index(fields=['organization', 'windows_username']),
+            models.Index(fields=['organization', 'email']),
+            models.Index(fields=['status', 'organization']),
+        ]
+        # Same hostname shouldn't be provisioned twice for same org
+        unique_together = ['organization', 'machine_hostname']
+        verbose_name = 'Device Provisioning Map'
+        verbose_name_plural = 'Device Provisioning Maps'
+    
+    def __str__(self):
+        status_icon = {'pending': '⏳', 'paired': '✅', 'failed': '❌', 'manual': '🔧'}.get(self.status, '?')
+        return f"{status_icon} {self.machine_hostname} → {self.email} ({self.status})"
+    
+    def mark_paired(self, device, user, method='hostname'):
+        """Mark this provisioning entry as successfully paired."""
+        self.status = 'paired'
+        self.paired_device = device
+        self.paired_user = user
+        self.paired_at = timezone.now()
+        self.match_method = method
+        self.save()
+        
+        # Update batch stats
+        if self.batch:
+            self.batch.refresh_stats()
+    
+    def mark_failed(self, error=''):
+        """Mark as failed match."""
+        self.status = 'failed'
+        self.error_message = error
+        self.save()

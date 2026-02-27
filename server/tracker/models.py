@@ -68,6 +68,8 @@ class Organization(models.Model):
     onboarding_completed = models.BooleanField(default=False)
     onboarding_step = models.IntegerField(default=1)
 
+    payment_grace_deadline = models.DateTimeField(null=True, blank=True)
+
     auto_submit_timesheets = models.BooleanField(
     default=False,
     help_text="Auto-submit draft timesheets on Tuesday 9am"

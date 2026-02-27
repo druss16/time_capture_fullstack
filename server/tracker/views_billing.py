@@ -1962,9 +1962,24 @@ def handle_subscription_updated(subscription):
                 if quantity > org.seat_count or org.seat_count == 0:
                     org.seat_count = quantity
                 
-                org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id'])
+                # Clear grace deadline if payment recovered
+                if org.payment_grace_deadline:
+                    org.payment_grace_deadline = None
+                    org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id', 'payment_grace_deadline'])
+                    print(f"[Stripe] Payment recovered for {org.name}, grace period cleared")
+                else:
+                    org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id'])
                 
                 print(f"[Stripe] Updated {org.name}: {plan} plan, {org.seat_count} seats (Stripe qty: {quantity})")
+        
+        # Handle past_due — start 15-day grace period
+        elif subscription['status'] == 'past_due':
+            if not org.payment_grace_deadline:
+                from django.utils import timezone
+                from datetime import timedelta
+                org.payment_grace_deadline = timezone.now() + timedelta(days=15)
+                org.save(update_fields=['payment_grace_deadline'])
+                print(f"[Stripe] Payment past due for {org.name}, grace deadline: {org.payment_grace_deadline}")
         
     except Organization.DoesNotExist:
         print(f"[Stripe] Organization not found for customer {customer_id}")
@@ -1972,6 +1987,8 @@ def handle_subscription_updated(subscription):
 
 def handle_subscription_deleted(subscription):
     """Handle subscription cancellation."""
+    from tracker.models import AgentDevice, OrganizationMembership
+    
     customer_id = subscription.get('customer')
     
     try:
@@ -1981,7 +1998,16 @@ def handle_subscription_deleted(subscription):
         org.stripe_subscription_id = None
         org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id'])
         
-        print(f"[Stripe] Subscription cancelled for {org.name}")
+        # Deactivate all org devices
+        org_user_ids = OrganizationMembership.objects.filter(
+            organization=org
+        ).values_list('user_id', flat=True)
+        
+        deactivated = AgentDevice.objects.filter(
+            user_id__in=org_user_ids, is_active=True
+        ).update(is_active=False)
+        
+        print(f"[Stripe] Subscription cancelled for {org.name}, deactivated {deactivated} devices")
         
     except Organization.DoesNotExist:
         print(f"[Stripe] Organization not found for customer {customer_id}")

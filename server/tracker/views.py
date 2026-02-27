@@ -697,15 +697,20 @@ def _get_user_obj(username: Optional[str]):
         return None
 
 def _get_agent_device(request):
-    """Return the AgentDevice for the given API key, or None."""
+    """Return the AgentDevice for the given API key, or None.
+    Raises PermissionError('subscription_inactive') if device exists but is deactivated.
+    """
     api_key = request.META.get(AGENT_HEADER)
     if not api_key:
         return None
     try:
         return AgentDevice.objects.select_related("user").get(api_key=api_key, is_active=True)
     except AgentDevice.DoesNotExist:
+        # Check if device exists but was deactivated (subscription cancelled/expired)
+        if AgentDevice.objects.filter(api_key=api_key, is_active=False).exists():
+            raise PermissionError("subscription_inactive")
         return None
-
+        
 def _host(url: str) -> str:
     try:
         return urllib.parse.urlparse(url or "").hostname or ""

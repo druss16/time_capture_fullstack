@@ -90,6 +90,45 @@ if sys.platform == 'win32':
 register_hotkey = None
 
 
+# ---------------- Check Active Subscriptions ----------------
+# Near top with other globals
+_subscription_active = True
+_subscription_check_interval = 1800  # Re-check every 30 min
+_last_subscription_check = 0.0
+
+def check_subscription_response(http_error):
+    """Check if a 403 is subscription_inactive. Returns True if subscription is dead."""
+    global _subscription_active
+    if http_error.code != 403:
+        return False
+    try:
+        body = http_error.read().decode("utf-8", errors="ignore")
+        if "subscription_inactive" in body:
+            _subscription_active = False
+            log("[SUB] ⚠️ Subscription inactive — agent paused")
+            show_subscription_inactive_notification()
+            return True
+    except:
+        pass
+    return False
+
+def show_subscription_inactive_notification():
+    """Show Windows toast notification about inactive subscription."""
+    try:
+        from tkinter import Tk, messagebox
+        root = Tk()
+        root.withdraw()
+        messagebox.showwarning(
+            "TimeTracker - Subscription Inactive",
+            "Your organization's TimeTracker subscription is inactive.\n\n"
+            "Time tracking has been paused.\n\n"
+            "Please contact your administrator to reactivate at:\n"
+            "https://timetracker.mavops.ai/account/billing"
+        )
+        root.destroy()
+    except Exception as e:
+        log(f"[SUB] Could not show dialog: {e}")
+
 # ---------------- Client Sync ----------------
 def get_current_client_from_backend(api_base, api_key):
     """Fetch current client from Django API via HTTP"""
@@ -978,14 +1017,16 @@ def post_event_async(event: dict, user: str, host: str):
             except:
                 pass
             log(f"[POST ERROR] HTTP {e.code}: {body[:200]}")
+            if e.code == 403 and "subscription_inactive" in body:
+                global _subscription_active
+                _subscription_active = False
+                log("[SUB] ⚠️ Subscription inactive — agent paused")
+                show_subscription_inactive_notification()
+                return
             if e.code in (401, 403):
                 _consecutive_auth_failures += 1
                 log(f"[AUTH] Got {e.code} posting event (consecutive: {_consecutive_auth_failures}) — will retry next cycle")
-                # DON'T drop key on transient failures. Render cold starts
-                # and brief server restarts can cause spurious 401/403s.
-                # The key is almost certainly still valid.
             else:
-                # Got an HTTP response = network is up, just a server error
                 set_network_ok(True)
         except Exception as e:
             log(f"[POST ERROR] {e}")
@@ -1673,6 +1714,26 @@ def run_agent():
         try:
             while True:
                 try:
+                     # === SUBSCRIPTION CHECK ===
+                    if not _subscription_active:
+                        global _last_subscription_check, _subscription_active
+                        now = time.time()
+                        if now - _last_subscription_check < _subscription_check_interval:
+                            time.sleep(30)
+                            continue
+                        _last_subscription_check = now
+                        try:
+                            hello(HELLO_URL, os_user, hostname, device_id)
+                            _subscription_active = True
+                            log("[SUB] ✅ Subscription reactivated — resuming tracking")
+                        except urllib.error.HTTPError as e:
+                            if e.code == 403:
+                                log("[SUB] Still inactive — checking again in 30 min")
+                            time.sleep(30)
+                            continue
+                        except:
+                            time.sleep(30)
+                            continue
                     # ── WAKE RECOVERY: Reset tracking state after sleep/wake ──
                     if _wake_event.is_set():
                         _wake_event.clear()

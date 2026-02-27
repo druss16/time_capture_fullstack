@@ -1580,3 +1580,36 @@ def refresh_integration_tokens():
 
     logger.info(f"[TOKEN-REFRESH] Done: {refreshed} refreshed, {failed} failed")
     return {'refreshed': refreshed, 'failed': failed}
+
+
+@shared_task(name='tracker.check_payment_grace_periods')
+def check_payment_grace_periods():
+    """Deactivate devices for orgs past their payment grace deadline."""
+    from tracker.models import Organization, AgentDevice, OrganizationMembership
+    
+    now = timezone.now()
+    expired_orgs = Organization.objects.filter(
+        payment_grace_deadline__isnull=False,
+        payment_grace_deadline__lte=now,
+    )
+    
+    total_deactivated = 0
+    for org in expired_orgs:
+        org_user_ids = OrganizationMembership.objects.filter(
+            organization=org
+        ).values_list('user_id', flat=True)
+        
+        deactivated = AgentDevice.objects.filter(
+            user_id__in=org_user_ids, is_active=True
+        ).update(is_active=False)
+        
+        total_deactivated += deactivated
+        
+        org.plan = 'none'
+        org.seat_count = 0
+        org.payment_grace_deadline = None
+        org.save(update_fields=['plan', 'seat_count', 'payment_grace_deadline'])
+        
+        logger.info(f"[GRACE] Expired for {org.name}, deactivated {deactivated} devices")
+    
+    return {'expired_orgs': expired_orgs.count(), 'devices_deactivated': total_deactivated}

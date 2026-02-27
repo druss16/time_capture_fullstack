@@ -124,6 +124,16 @@ app.conf.beat_schedule = {
             'expires': 3600,
         }
     },
+
+    # =========================================================================
+    # STRIPE - CHECK GRACE PERIOD
+    # =========================================================================
+
+    'check-payment-grace-periods': {
+    'task': 'tracker.check_payment_grace_periods',
+    'schedule': crontab(hour=6, minute=0),  # Daily at 6am
+    'options': {'expires': 3600},
+    },
     
     # =========================================================================
     # MAINTENANCE (Daily/Weekly)

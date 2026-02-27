@@ -98,6 +98,54 @@ except ImportError:
     PUSH_NOTIF_AVAILABLE = False
     print("[WARN] notifications.py not found - push notifications disabled")
 
+
+# ---------------- Check Active Subscriptions ----------------
+# Near top with other globals
+_subscription_active = True
+_subscription_check_interval = 1800  # Re-check every 30 min
+_last_subscription_check = 0.0
+
+def check_subscription_response(http_error):
+    """Check if a 403 is subscription_inactive. Returns True if subscription is dead."""
+    global _subscription_active
+    if http_error.code != 403:
+        return False
+    try:
+        body = http_error.read().decode("utf-8", errors="ignore")
+        if "subscription_inactive" in body:
+            _subscription_active = False
+            log("[SUB] ⚠️ Subscription inactive — agent paused")
+            show_subscription_inactive_notification()
+            return True
+    except:
+        pass
+    return False
+
+def show_subscription_inactive_notification():
+    """Show macOS notification about inactive subscription."""
+    if NOTIF_AVAILABLE:
+        try:
+            content = UNMutableNotificationContent.alloc().init()
+            content.setTitle_("TimeTracker - Subscription Inactive")
+            content.setBody_(
+                "Your organization's subscription is inactive. "
+                "Time tracking has been paused. Contact your administrator to reactivate."
+            )
+            content.setSound_(UNNotificationSound.defaultSound())
+            
+            req_id = f"subscription-inactive-{int(time.time())}"
+            request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
+                req_id, content, None
+            )
+            UNUserNotificationCenter.currentNotificationCenter().addNotificationRequest_withCompletionHandler_(
+                request, None
+            )
+        except Exception as e:
+            log(f"[SUB] Notification failed: {e}")
+    # Fallback to AppleScript
+    else:
+        osa(f'display dialog "Your organization\'s TimeTracker subscription is inactive.\\n\\nContact your administrator to reactivate." with title "TimeTracker" buttons {{"OK"}} default button "OK"')
+
 # ---------------- MDM Config ----------------
 MDM_CONFIG_PATH_MAC = "/Library/Application Support/TimeTracker/config.plist"
 MDM_CONFIG_PATH_WIN = r"C:\ProgramData\TimeTracker\config.json"
@@ -2071,12 +2119,14 @@ def post_event_async(event: dict, user: str, host: str):
                 return  # Success
             except urllib.error.HTTPError as e:
                 body = ""
-                try: body = e.read().decode("utf-8", errors="ignore")
-                except: pass
+                try:
+                    body = e.read().decode("utf-8", errors="ignore")
+                except:
+                    pass
                 log(f"[POST ERROR] HTTP {e.code}: {body[:200]}")
-                if e.code in (401, 403):
-                    log("[AUTH] Device key rejected — will re-pair.")
-                return  # Don't retry HTTP errors
+                if e.code == 403 and "subscription_inactive" in body:
+                    check_subscription_response_from_body(body)
+                    return
             except urllib.error.URLError as e:
                 # Network not ready (common after wake from sleep)
                 if attempt < max_retries - 1:
@@ -2858,6 +2908,26 @@ def run_agent():
         try:
             while True:
                 try:
+                    # === SUBSCRIPTION CHECK ===
+                    if not _subscription_active:
+                        global _last_subscription_check, _subscription_active
+                        now = time.time()
+                        if now - _last_subscription_check < _subscription_check_interval:
+                            time.sleep(30)
+                            continue
+                        _last_subscription_check = now
+                        try:
+                            hello(HELLO_URL, os_user, hostname, device_id)
+                            _subscription_active = True
+                            log("[SUB] ✅ Subscription reactivated — resuming tracking")
+                        except urllib.error.HTTPError as e:
+                            if e.code == 403:
+                                log("[SUB] Still inactive — checking again in 30 min")
+                            time.sleep(30)
+                            continue
+                        except:
+                            time.sleep(30)
+                            continue
                     if should_stop(CONTROL_URL, os_user, hostname):
                         log("[CTRL] Stopping agent per admin request.")
                         break

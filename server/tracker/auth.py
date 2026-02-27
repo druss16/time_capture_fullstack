@@ -41,12 +41,11 @@ class AgentKeyAuthentication(BaseAuthentication):
                 key = auth[len("DeviceKey "):].strip()
                 auth_source = "DeviceKey"
             elif auth.startswith("Bearer "):
-                # Check if this Bearer token is actually a device key
                 key = auth[len("Bearer "):].strip()
                 auth_source = "Bearer-as-DeviceKey"
         
         if not key:
-            return None  # Let other authenticators try
+            return None
         
         # Look up in AgentDevice table
         try:
@@ -56,16 +55,35 @@ class AgentKeyAuthentication(BaseAuthentication):
             )
             logger.info(f"[AgentKeyAuth] Found device via {auth_source}: {dev.hostname}")
         except AgentDevice.DoesNotExist:
-            # If it was Bearer prefix and not found in AgentDevice,
-            # return None so BearerTokenAuthentication can try AuthToken table
+            # Check if device exists but was deactivated (subscription cancelled/expired)
+            if auth_source in ("X-Agent-Key", "DeviceKey"):
+                if AgentDevice.objects.filter(api_key=key, is_active=False).exists():
+                    raise AuthenticationFailed(
+                        "subscription_inactive: Your organization's subscription is inactive. "
+                        "Please ask your administrator to reactivate at "
+                        "https://timetracker.mavops.ai/account/billing"
+                    )
+            
             if auth_source == "Bearer-as-DeviceKey":
                 logger.debug(f"[AgentKeyAuth] Bearer token not in AgentDevice, letting BearerTokenAuth try")
                 return None
-            # For DeviceKey/X-Agent-Key, also return None to let other auth try
             return None
         
         if not dev.user_id:
             raise AuthenticationFailed("Unlinked device")
+        
+        # Check org subscription status
+        from tracker.models import OrganizationMembership
+        membership = OrganizationMembership.objects.filter(
+            user=dev.user
+        ).select_related('organization').first()
+        
+        if membership and membership.organization.plan == 'none':
+            raise AuthenticationFailed(
+                "subscription_inactive: Your organization's subscription is inactive. "
+                "Please ask your administrator to reactivate at "
+                "https://timetracker.mavops.ai/account/billing"
+            )
         
         # Touch last_seen_at
         AgentDevice.objects.filter(pk=dev.pk).update(last_seen_at=timezone.now())

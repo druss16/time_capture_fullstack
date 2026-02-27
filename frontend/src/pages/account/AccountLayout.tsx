@@ -71,7 +71,7 @@ export default function AccountLayout({ role, mdmManaged }: AccountLayoutProps) 
       : []),
   ].filter(item => {
     // Hide Desktop Agent for non-admin users in MDM-managed orgs
-    if (item.path === '/account/download' && mdmManaged && role !== 'owner' && role !== 'admin') {
+    if (item.path === '/account/download' && mdmManaged) {
       return false;
     }
     return true;

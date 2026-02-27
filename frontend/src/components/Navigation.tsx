@@ -72,7 +72,7 @@ export default function Navigation() {
   const userRole = userInfo?.role;
   const canAccessSettings = ['owner', 'admin'].includes(userRole || '');
   const isOwner = userRole === 'owner';
-  const mdmManaged = userInfo?.mdm_managed && !['owner', 'admin'].includes(userRole || '');
+  const mdmManaged = userInfo?.mdm_managed || false;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
 
   const handleLogout = async () => {

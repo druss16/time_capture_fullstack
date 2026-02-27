@@ -2883,6 +2883,8 @@ def run_agent():
     # === TRACKING LOOP FUNCTION ===
     # === TRACKING LOOP FUNCTION ===
     def tracking_loop():
+        global _last_subscription_check, _subscription_active
+
         """Main tracking loop - monitors frontmost app and records dwell time"""
         print("[TRACKING] Initializing...")
         
@@ -2910,7 +2912,6 @@ def run_agent():
                 try:
                     # === SUBSCRIPTION CHECK ===
                     if not _subscription_active:
-                        global _last_subscription_check, _subscription_active
                         now = time.time()
                         if now - _last_subscription_check < _subscription_check_interval:
                             time.sleep(30)

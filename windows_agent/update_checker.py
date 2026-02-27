@@ -27,6 +27,54 @@ import urllib.error
 # How often to re-check while agent is running (seconds)
 RECHECK_INTERVAL = 300  # 5 mins
 
+# Add this at the top of update_checker.py, after imports:
+
+def _get_exe_mtime() -> float:
+    """Get modification time of our own exe (frozen builds only)."""
+    if getattr(sys, 'frozen', False):
+        try:
+            return os.path.getmtime(sys.executable)
+        except Exception:
+            pass
+    return 0.0
+
+_startup_exe_mtime = _get_exe_mtime()
+
+
+def _restart_into_new_exe():
+    """Restart the agent using the updated exe on disk."""
+    if not getattr(sys, 'frozen', False):
+        return  # Only for frozen builds
+    
+    exe_path = sys.executable
+    print(f"[UPDATE] Restarting into updated exe: {exe_path}")
+    
+    if sys.platform == "win32":
+        import subprocess, tempfile
+        pid = os.getpid()
+        bat = os.path.join(tempfile.gettempdir(), "tt_restart.bat")
+        
+        with open(bat, "w") as f:
+            f.write(f"""@echo off
+echo Waiting for old agent (PID {pid}) to exit...
+:wait
+tasklist /FI "PID eq {pid}" 2>NUL | find /I "{pid}" >NUL
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >NUL
+    goto wait
+)
+echo Starting updated agent...
+start "" "{exe_path}"
+del "%~f0"
+""")
+        
+        subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)  # CREATE_NO_WINDOW
+        print("[UPDATE] Restart script launched — exiting old process")
+        os._exit(0)
+    
+    else:
+        # macOS: exec replaces the process in-place
+        os.execv(exe_path, [exe_path])
 
 def _nag_file() -> str:
     if sys.platform == "darwin":
@@ -212,6 +260,12 @@ def start_background_checker(api_base: str, current_version: str):
     def _loop():
         while True:
             time.sleep(RECHECK_INTERVAL)
+            # Check if exe on disk was replaced (installer ran while we're running)
+            if _startup_exe_mtime > 0:
+                current_mtime = _get_exe_mtime()
+                if current_mtime > _startup_exe_mtime:
+                    print(f"[UPDATE] Exe on disk changed ({_startup_exe_mtime} → {current_mtime}) — restarting")
+                    _restart_into_new_exe()
             try:
                 data = check_version(api_base, current_version)
                 if data and data.get("force") and data.get("update_available"):

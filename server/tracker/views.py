@@ -6230,8 +6230,14 @@ def settings_devices(request):
         user_id__in=org_user_ids
     ).select_related("user").order_by("-last_seen_at")
     
+    # Deduplicate: keep only the most recent per user+hostname
+    seen = set()
     result = []
     for device in devices:
+        key = (device.user_id, device.hostname)
+        if key in seen:
+            continue
+        seen.add(key)
         result.append({
             "id": device.id,
             "user": device.user.username if device.user else "Unassigned",

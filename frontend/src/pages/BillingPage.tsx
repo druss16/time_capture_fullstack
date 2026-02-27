@@ -213,7 +213,7 @@ const UpgradePrompt: React.FC<{ featureName: string }> = ({ featureName }) => (
 );
 
 const BillingPage: React.FC = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<string>(searchParams.get('tab') || 'timesheet');
   const [userInfo, setUserInfo] = useState<WhoamiResponse | null>(null);
   const [orgPlan, setOrgPlan] = useState<PlanType>('none');
@@ -345,8 +345,9 @@ const BillingPage: React.FC = () => {
                 <button
                   key={tab.id}
                   onClick={() => {
-                    if (locked) return; // prevent switching into locked tab
-                    setActiveTab(tab.id);
+                      if (locked) return;
+                      setActiveTab(tab.id);
+                      setSearchParams({ tab: tab.id });
                   }}
                   className={cn(
                     'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl',

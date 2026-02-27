@@ -1693,6 +1693,7 @@ def run_agent():
 
     # === TRACKING LOOP WITH ERROR HANDLING ===
     def tracking_loop():
+        global _last_subscription_check, _subscription_active
         log("[TRACKING] Initializing...")
         
         try:
@@ -1716,7 +1717,6 @@ def run_agent():
                 try:
                      # === SUBSCRIPTION CHECK ===
                     if not _subscription_active:
-                        global _last_subscription_check, _subscription_active
                         now = time.time()
                         if now - _last_subscription_check < _subscription_check_interval:
                             time.sleep(30)

@@ -95,14 +95,15 @@ def send_daily_timesheet_reminders_task(self):
                 date_str = yesterday.strftime('%A, %b %d')
                                                 
                 from tracker.email_service import send_timesheet_reminder
-                send_timesheet_reminder(
+                send_submission_reminder(
                     to_email=user.email,
-                    user_name=user_name,
-                    date_str=date_str,
+                    user_name=user.first_name or user.username,
+                    week_start_str=last_monday.strftime("%b %d"),
+                    week_end_str=last_sunday.strftime("%b %d, %Y"),
                     total_hours=total_hours,
-                    client_breakdown=client_breakdown,
-                    unassigned_count=unassigned_count,
-                    date_iso=yesterday.isoformat(),
+                    block_count=block_count,
+                    week_start_iso=last_monday.isoformat(),
+                    auto_submit_enabled=getattr(timesheet.org, 'auto_submit_timesheets', False),
                 )
                 
                 sent_count += 1
@@ -449,6 +450,11 @@ def auto_submit_timesheets():
         try:
             user = timesheet.user
             org = timesheet.org
+
+            # Check if org has auto-submit enabled
+            if not getattr(org, 'auto_submit_timesheets', False):
+                skipped_empty += 1
+                continue
             
             # Link blocks to this timesheet
             blocks_updated = Block.objects.filter(

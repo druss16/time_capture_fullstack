@@ -67,6 +67,11 @@ class Organization(models.Model):
     # Onboarding tracking (optional - add if you want to track progress)
     onboarding_completed = models.BooleanField(default=False)
     onboarding_step = models.IntegerField(default=1)
+
+    auto_submit_timesheets = models.BooleanField(
+    default=False,
+    help_text="Auto-submit draft timesheets on Tuesday 9am"
+    ) 
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)

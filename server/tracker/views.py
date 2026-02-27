@@ -5862,30 +5862,27 @@ def settings_org(request):
     """GET/PATCH organization settings including industry_type."""
     from decimal import Decimal
     from tracker.industry_categories import INDUSTRY_CHOICES
-
     membership = OrganizationMembership.objects.filter(
         user=request.user
     ).select_related('organization').first()
-
     if not membership:
         return Response({"error": "No organization found"}, status=404)
-
     org = membership.organization
     is_admin_or_owner = membership.role in ["owner", "admin"]
     profile, _ = OrgProfile.objects.get_or_create(org=org)
-
     if request.method == "GET":
         return Response({
             "id": org.id,
             "name": org.name,
             "slug": getattr(org, "slug", "") or "",
-            "industry_type": getattr(org, 'industry_type', 'general') or 'general',  # ✅ ADD
+            "industry_type": getattr(org, 'industry_type', 'general') or 'general',
             "industry_name": dict(INDUSTRY_CHOICES).get(
                 getattr(org, 'industry_type', 'general'), 
                 'General Professional Services'
-            ),  # ✅ Human-readable
+            ),
             "plan": getattr(org, "plan", "none"),
             "seat_count": getattr(org, "seat_count", 1),
+            "auto_submit_timesheets": getattr(org, "auto_submit_timesheets", False),
             "trial_ends_at": org.trial_ends_at.isoformat() if getattr(org, "trial_ends_at", None) else None,
             "billing_email": profile.billing_email or "",
             "billing_contact": profile.billing_contact or "",
@@ -5895,44 +5892,37 @@ def settings_org(request):
             "can_edit_org": is_admin_or_owner,
             "role": membership.role,
         })
-
     # PATCH
     if not is_admin_or_owner:
         return Response({"error": "Only owner/admin can update"}, status=403)
-
     if "name" in request.data:
         org.name = request.data["name"]
-
-    # ✅ Allow updating industry_type
     if "industry_type" in request.data:
         new_industry = request.data["industry_type"]
         valid_industries = [choice[0] for choice in INDUSTRY_CHOICES]
         if new_industry in valid_industries:
             org.industry_type = new_industry
-
     if "billing_rate_default" in request.data:
         org.billing_rate_default = Decimal(str(request.data["billing_rate_default"]))
-
     if "cost_rate_default" in request.data:
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
-
+    if "auto_submit_timesheets" in request.data:
+        org.auto_submit_timesheets = bool(request.data["auto_submit_timesheets"])
     org.save()
-
     if "billing_email" in request.data:
         profile.billing_email = (request.data.get("billing_email") or "").strip() or None
     if "billing_contact" in request.data:
         profile.billing_contact = (request.data.get("billing_contact") or "").strip()
     profile.save()
-
     return Response({
         "id": org.id,
         "name": org.name,
         "industry_type": getattr(org, 'industry_type', 'general'),
         "industry_name": dict(INDUSTRY_CHOICES).get(getattr(org, 'industry_type', 'general'), 'General'),
         "plan": org.plan,
+        "auto_submit_timesheets": getattr(org, "auto_submit_timesheets", False),
         "message": "Settings updated"
     })
-
 
 # ============================================================================
 # Team Members

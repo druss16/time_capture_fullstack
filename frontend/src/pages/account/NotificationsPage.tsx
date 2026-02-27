@@ -66,6 +66,7 @@ const DESKTOP_PREFS: PrefItem[] = [
   },
 ];
 
+
 // ════════════════════════════════════════
 // Toggle Component
 // ════════════════════════════════════════
@@ -120,6 +121,9 @@ export default function NotificationsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [orgSettings, setOrgSettings] = useState<{ auto_submit_timesheets: boolean } | null>(null);
+  const [userRole, setUserRole] = useState<string>('member');
+  const [savingOrg, setSavingOrg] = useState(false);
 
   useEffect(() => {
     loadPrefs();
@@ -138,20 +142,38 @@ export default function NotificationsPage() {
     try {
       const token = getToken();
       if (!token) return;
-
       const res = await fetch(`${API_BASE}/user/preferences/`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-
       if (res.status === 401 || res.status === 403) {
         window.location.href = '/login';
         return;
       }
-
       if (res.ok) {
         const data = await res.json();
         setPrefs((prev) => ({ ...prev, ...data }));
       }
+
+      // Fetch org settings + role (for owners/admins)
+      try {
+        const whoami = await fetch(`${API_BASE}/whoami/`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (whoami.ok) {
+          const who = await whoami.json();
+          setUserRole(who.role || 'member');
+        }
+        const orgRes = await fetch(`${API_BASE}/settings/org/`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (orgRes.ok) {
+          const orgData = await orgRes.json();
+          setOrgSettings({ auto_submit_timesheets: orgData.auto_submit_timesheets ?? false });
+        }
+      } catch {
+        // Non-admin or endpoint unavailable
+      }
+
     } catch {
       // Endpoint may not exist yet — use defaults
     } finally {
@@ -188,6 +210,28 @@ export default function NotificationsPage() {
       setError('Network error. Please try again.');
     } finally {
       setSaving(null);
+    }
+  };
+
+  const updateOrgSetting = async (key: string, value: boolean) => {
+    const token = getToken();
+    if (!token) return;
+    setSavingOrg(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/org/`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [key]: value }),
+      });
+      if (res.ok) {
+        setOrgSettings((prev) => prev ? { ...prev, [key]: value } : prev);
+      } else {
+        setError('Failed to save org setting.');
+      }
+    } catch {
+      setError('Network error.');
+    } finally {
+      setSavingOrg(false);
     }
   };
 
@@ -270,6 +314,41 @@ export default function NotificationsPage() {
           <div className="divide-y divide-slate-100">{renderGroup(DESKTOP_PREFS)}</div>
         </div>
       </div>
+
+      {/* ── Automation (Owner/Admin only) ── */}
+      {orgSettings && ['owner', 'admin'].includes(userRole) && (
+        <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-200 overflow-hidden">
+          <div className="px-8 py-6 border-b border-slate-100">
+            <div className="flex items-center gap-4">
+              <div className="w-11 h-11 bg-amber-100 rounded-xl flex items-center justify-center">
+                <Clock className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Automation</h3>
+                <p className="text-sm text-slate-500">Organization-wide automation settings</p>
+              </div>
+            </div>
+          </div>
+          <div className="px-8 py-2">
+            <div className="flex items-center justify-between py-4 px-4 -mx-4 rounded-xl hover:bg-slate-50 transition-colors">
+              <div className="flex items-start gap-3 flex-1 mr-4">
+                <span className="mt-0.5 text-slate-400"><CheckCircle2 className="w-[18px] h-[18px]" /></span>
+                <div>
+                  <div className="text-sm font-bold text-slate-800">Auto-submit timesheets</div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Automatically submit draft timesheets on Tuesday at 9am if not manually submitted
+                  </div>
+                </div>
+              </div>
+              <Toggle
+                checked={orgSettings.auto_submit_timesheets}
+                onChange={(val) => updateOrgSetting('auto_submit_timesheets', val)}
+                disabled={savingOrg}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Info Footer ── */}
       <div className="px-4 py-3">

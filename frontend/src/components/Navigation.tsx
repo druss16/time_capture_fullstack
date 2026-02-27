@@ -31,6 +31,7 @@ interface UserInfo {
   role: 'owner' | 'admin' | 'manager' | 'member' | null;
   org_name: string | null;
   is_authenticated: boolean;
+  mdm_managed?: boolean;
 }
 
 export default function Navigation() {
@@ -39,6 +40,7 @@ export default function Navigation() {
   const { logout } = useAuth();
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+
 
   useEffect(() => {
     safeFetchJson(`${API_BASE}/whoami/`)
@@ -70,6 +72,7 @@ export default function Navigation() {
   const userRole = userInfo?.role;
   const canAccessSettings = ['owner', 'admin'].includes(userRole || '');
   const isOwner = userRole === 'owner';
+  const mdmManaged = userInfo?.mdm_managed && !['owner', 'admin'].includes(userRole || '');
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
 
   const handleLogout = async () => {
@@ -98,7 +101,10 @@ export default function Navigation() {
     { path: '/billing', label: 'Billing', icon: Receipt },
     { path: '/devices', label: 'Devices', icon: Monitor },
     { path: '/clients', label: 'Clients', icon: Users },
-  ];
+  ].filter(item => {
+    if (item.path === '/devices' && mdmManaged) return false;
+    return true;
+  });
 
   return (
     <nav className="bg-slate-800 text-white shadow-xl">
@@ -234,15 +240,16 @@ export default function Navigation() {
                     )}
                   </div>
 
-                  {/* Download Agent - ADD THIS */}
-                  <button
-                    onClick={() => handleNavigation('/account/download')}
-                    className="w-full px-4 py-2.5 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
-                  >
-                    <Download className="w-4 h-4 text-slate-400" />
-                    <span className="text-sm font-medium text-slate-700">Download Agent</span>
-                  </button>
-
+                  {/* Download Agent */}
+                  {!mdmManaged && (
+                    <button
+                      onClick={() => handleNavigation('/account/download')}
+                      className="w-full px-4 py-2.5 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
+                    >
+                      <Download className="w-4 h-4 text-slate-400" />
+                      <span className="text-sm font-medium text-slate-700">Download Agent</span>
+                    </button>
+                  )}
                     {/* Logout */}
                     <div className="border-t border-slate-100 pt-2">
                       <button

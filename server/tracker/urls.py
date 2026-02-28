@@ -302,11 +302,5 @@ urlpatterns = [
 
     path("user/preferences/", views.user_preferences, name="user_preferences"),
 
-    path('devices/auto-pair/', views_autopair.auto_pair_device, name='auto-pair-device'),
-
-    path('admin/provisioning/<slug:org_slug>/status/', views_autopair.provisioning_status, name='provisioning-status'),
-
-    path('devices/auto-pair/', views_autopair.auto_pair_device, name='auto-pair-device'),
-
 
 ]

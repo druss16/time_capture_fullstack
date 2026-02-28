@@ -710,7 +710,7 @@ def _get_agent_device(request):
         if AgentDevice.objects.filter(api_key=api_key, is_active=False).exists():
             raise PermissionError("subscription_inactive")
         return None
-        
+
 def _host(url: str) -> str:
     try:
         return urllib.parse.urlparse(url or "").hostname or ""
@@ -7152,7 +7152,7 @@ def agent_version_check(request):
 
     return JsonResponse({
         "update_available": update_needed,
-        "force": update_needed,
+        "force": False,
         "latest_version": latest,
         "download_url": download_url,
     })

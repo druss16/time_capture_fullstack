@@ -284,6 +284,8 @@ PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 
 MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 180))
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
+_wake_event = threading.Event()
+
 
 NUDGE_ENABLED        = bool(_get("nudge_enabled", os.getenv("AGENT_NUDGE_ENABLED") == "1") or True)
 GUESS_POLL_SECONDS   = int(_get("guess_poll_seconds", os.getenv("AGENT_GUESS_POLL_SECONDS") or 10))
@@ -2929,6 +2931,41 @@ def run_agent():
                         except:
                             time.sleep(30)
                             continue
+                    
+                    # ── SUSPEND RECOVERY: Detect time gaps (sleep/Power Nap) ──
+                    if not hasattr(tracking_loop, '_last_iter_time'):
+                        tracking_loop._last_iter_time = time.time()
+                    
+                    now_t = time.time()
+                    iter_gap = now_t - tracking_loop._last_iter_time
+                    tracking_loop._last_iter_time = now_t
+                    
+                    _suspended = iter_gap > 60
+                    
+                    if _wake_event.is_set() or _suspended:
+                        _wake_event.clear()
+                        
+                        if _suspended:
+                            log(f"[TRACKING] ⏰ Thread was suspended for {int(iter_gap)}s (sleep or Power Nap)")
+                        else:
+                            log("[TRACKING] 🔄 Wake event detected — resetting tracking state")
+                        
+                        if current_sig and dwell_start and current_sig != IDLE_SIG:
+                            dwell = now_t - dwell_start
+                            if dwell >= MIN_DWELL_SECONDS:
+                                try:
+                                    write_event(conn, cur, os_user, hostname, current_sig)
+                                    log(f"[TRACKING] Flushed pre-suspend dwell ({int(dwell)}s)")
+                                except Exception as e:
+                                    log(f"[TRACKING] Failed to flush dwell: {e}")
+                        
+                        current_sig = None
+                        dwell_start = None
+                        last_flush_time = None
+                        
+                        time.sleep(10)
+                        continue
+
                     if should_stop(CONTROL_URL, os_user, hostname):
                         log("[CTRL] Stopping agent per admin request.")
                         break

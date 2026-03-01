@@ -1,5 +1,12 @@
 ﻿; TimeTracker Windows Installer Script
 ; Inno Setup 6.x
+;
+; ENTERPRISE DEPLOYMENT:
+;   TimeTracker-Windows-Setup.exe /VERYSILENT /ORG_TOKEN=ODT-XKCD-9F3A
+;
+; IT admins pass the org token as a command-line parameter.
+; The installer writes it to %USERPROFILE%\.timetracker\config.json
+; so the agent auto-pairs on first boot.
 
 #define MyAppName "TimeTracker"
 #ifndef MyAppVersion
@@ -81,14 +88,87 @@ Type: filesandordirs; Name: "{localappdata}\Programs\TimeTracker"
 
 [Code]
 
-// ── Global variables for config backup/restore ──
+// ── Global variables ──
 var
   ConfigBackupPath: String;
   ConfigBackedUp: Boolean;
   DeviceIdBackupPath: String;
   DeviceIdBackedUp: Boolean;
 
-// ── Task Scheduler: auto-start on login + auto-restart on crash ──
+
+// ═══════════════════════════════════════════════════════════════
+// ORG_TOKEN SUPPORT — Enterprise silent deployment
+// ═══════════════════════════════════════════════════════════════
+
+function GetOrgToken(): String;
+var
+  I: Integer;
+  Param: String;
+begin
+  // Check for /ORG_TOKEN=xxx on command line
+  Result := '';
+  for I := 1 to ParamCount do begin
+    Param := ParamStr(I);
+    if (Pos('/ORG_TOKEN=', UpperCase(Param)) = 1) or
+       (Pos('/org_token=', LowerCase(Param)) = 1) then begin
+      Result := Copy(Param, Length('/ORG_TOKEN=') + 1, MaxInt);
+      Log('Found ORG_TOKEN parameter: ' + Result);
+      Break;
+    end;
+  end;
+end;
+
+procedure WriteOrgTokenToConfig();
+var
+  UserProfile: String;
+  ConfigDir: String;
+  ConfigPath: String;
+  OrgToken: String;
+  ConfigContent: String;
+  ExistingContent: AnsiString;
+begin
+  OrgToken := GetOrgToken();
+  if OrgToken = '' then begin
+    Log('No ORG_TOKEN provided — skipping enterprise config');
+    Exit;
+  end;
+
+  UserProfile := GetEnv('USERPROFILE');
+  ConfigDir := UserProfile + '\.timetracker';
+  ConfigPath := ConfigDir + '\config.json';
+
+  // Ensure .timetracker directory exists
+  if not DirExists(ConfigDir) then
+    ForceDirectories(ConfigDir);
+
+  // If config.json already exists and has an api_key, don't overwrite
+  // (device is already paired)
+  if FileExists(ConfigPath) then begin
+    if LoadStringFromFile(ConfigPath, ExistingContent) then begin
+      if Pos('"api_key"', String(ExistingContent)) > 0 then begin
+        Log('config.json already has api_key — device already paired, skipping org_token write');
+        Exit;
+      end;
+    end;
+  end;
+
+  // Write config with org_token for first-boot auto-pair
+  ConfigContent :=
+    '{' + #13#10 +
+    '  "org_token": "' + OrgToken + '",' + #13#10 +
+    '  "api_base": "https://timetracker.mavops.ai"' + #13#10 +
+    '}';
+
+  if SaveStringToFile(ConfigPath, ConfigContent, False) then
+    Log('Wrote org_token to ' + ConfigPath)
+  else
+    Log('WARNING: Failed to write org_token to config.json');
+end;
+
+
+// ═══════════════════════════════════════════════════════════════
+// Task Scheduler: auto-start on login + auto-restart on crash
+// ═══════════════════════════════════════════════════════════════
 
 procedure CreateScheduledTask;
 var
@@ -170,7 +250,9 @@ begin
 end;
 
 
-// ── Config backup: saves config.json and .device_id to temp before any cleanup ──
+// ═══════════════════════════════════════════════════════════════
+// Config backup/restore
+// ═══════════════════════════════════════════════════════════════
 
 procedure BackupUserConfig();
 var
@@ -185,7 +267,6 @@ begin
   ConfigBackedUp := False;
   DeviceIdBackedUp := False;
 
-  // Backup config.json (contains api_key, server_device_id, api_base)
   ConfigPath := UserProfile + '\.timetracker\config.json';
   if FileExists(ConfigPath) then begin
     if FileCopy(ConfigPath, ConfigBackupPath, False) then begin
@@ -196,7 +277,6 @@ begin
   end else
     Log('No config.json found at ' + ConfigPath);
 
-  // Backup .device_id (check both locations)
   DeviceIdPath := UserProfile + '\.timetracker\.device_id';
   AppDataDeviceId := ExpandConstant('{userappdata}') + '\TimeTracker\.device_id';
 
@@ -215,8 +295,6 @@ begin
 end;
 
 
-// ── Config restore: puts config.json and .device_id back after install ──
-
 procedure RestoreUserConfig();
 var
   UserProfile: String;
@@ -224,7 +302,6 @@ var
   ConfigPath: String;
   DeviceIdPath: String;
 begin
-  // Skip restore if user requested clean install
   if IsTaskSelected('cleaninstall') then begin
     Log('Clean install selected - skipping config restore');
     Exit;
@@ -235,11 +312,9 @@ begin
   ConfigPath := ConfigDir + '\config.json';
   DeviceIdPath := ConfigDir + '\.device_id';
 
-  // Ensure directory exists
   if not DirExists(ConfigDir) then
     ForceDirectories(ConfigDir);
 
-  // Restore config.json (only if missing - don't overwrite a fresh pair)
   if ConfigBackedUp then begin
     if not FileExists(ConfigPath) then begin
       if FileCopy(ConfigBackupPath, ConfigPath, False) then
@@ -250,7 +325,6 @@ begin
       Log('config.json already exists - skipping restore');
   end;
 
-  // Restore .device_id
   if DeviceIdBackedUp then begin
     if not FileExists(DeviceIdPath) then begin
       if FileCopy(DeviceIdBackupPath, DeviceIdPath, False) then
@@ -263,7 +337,9 @@ begin
 end;
 
 
-// ── Existing cleanup procedures ──
+// ═══════════════════════════════════════════════════════════════
+// Cleanup procedures
+// ═══════════════════════════════════════════════════════════════
 
 procedure CleanupOldInstalls();
 var
@@ -298,10 +374,7 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
-
-  // ALWAYS backup config BEFORE any cleanup
   BackupUserConfig();
-
   CleanupOldInstalls();
 
   if IsTaskSelected('cleaninstall') then
@@ -319,9 +392,9 @@ begin
     Sleep(500);
   end;
 
-  // ── After install: restore config, then create scheduled task ──
   if CurStep = ssPostInstall then begin
     RestoreUserConfig();
+    WriteOrgTokenToConfig();   // ← NEW: Write org_token if provided
     CreateScheduledTask;
   end;
 end;

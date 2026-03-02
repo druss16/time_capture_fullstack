@@ -27,25 +27,13 @@ logger = logging.getLogger(__name__)
 
 @shared_task(name='tracker.tasks.send_daily_timesheet_reminders_task', bind=True, max_retries=3)
 def send_daily_timesheet_reminders_task(self):
-    """
-    Mon-Fri 9am: Send email reminders to users who have unreviewed hours from yesterday.
-    
-    This is DIFFERENT from the weekly submission reminder - this is for DAILY review
-    of time tracked to ensure accurate categorization before it gets too stale.
-    
-    Schedule: crontab(hour=9, minute=0, day_of_week='1-5')  # Mon-Fri 9am
-    """
     try:
-        from tracker.models import Block, Timesheet, UserPreference
-        from django.core.mail import send_mail
-        from django.conf import settings
+        from tracker.models import Block, UserPreference, OrganizationMembership
         from django.contrib.auth import get_user_model
-        
+
         User = get_user_model()
         yesterday = timezone.localdate() - timedelta(days=1)
-        
-        # Get all users with time tracked yesterday
-        from tracker.models import OrganizationMembership
+
         active_user_ids = OrganizationMembership.objects.values_list('user_id', flat=True)
         users_with_time = User.objects.filter(
             is_active=True,
@@ -55,80 +43,66 @@ def send_daily_timesheet_reminders_task(self):
         sent_count = 0
         skipped_count = 0
         errors = []
-        
+
         for user in users_with_time:
             try:
-                
-                # Check user preference for email notifications
+                # Preference check
                 try:
                     pref = UserPreference.objects.get(user=user)
                     if not getattr(pref, 'email_timesheet_reminders', True):
                         skipped_count += 1
                         continue
                 except UserPreference.DoesNotExist:
-                    pass  # Default to sending
-                
-                # Get their blocks from yesterday
+                    pass
+
                 blocks = Block.objects.filter(user=user, day=yesterday)
                 total_minutes = sum(b.minutes or 0 for b in blocks)
                 total_hours = total_minutes / 60
 
-                # Send even if 0 hours — user should know if nothing was tracked
-                
                 unassigned_count = blocks.filter(client__isnull=True).count()
-                
-                # Get client breakdown
+
                 client_hours = {}
                 for block in blocks.filter(client__isnull=False):
-                    client_name = block.client.name
+                    name = block.client.name
                     hrs = (block.minutes or 0) / 60
-                    client_hours[client_name] = client_hours.get(client_name, 0) + hrs
-                
-                client_breakdown = sorted(
-                    client_hours.items(),
-                    key=lambda x: x[1],
-                    reverse=True
-                )[:5]
-                
-                # Build email
+                    client_hours[name] = client_hours.get(name, 0) + hrs
+
+                client_breakdown = sorted(client_hours.items(), key=lambda x: x[1], reverse=True)[:5]
+
                 user_name = user.first_name or user.username
                 date_str = yesterday.strftime('%A, %b %d')
-                                                
+
                 from tracker.email_service import send_timesheet_reminder
-                send_submission_reminder(
+                send_timesheet_reminder(
                     to_email=user.email,
-                    user_name=user.first_name or user.username,
-                    week_start_str=last_monday.strftime("%b %d"),
-                    week_end_str=last_sunday.strftime("%b %d, %Y"),
-                    total_hours=total_hours,
-                    block_count=block_count,
-                    week_start_iso=last_monday.isoformat(),
-                    auto_submit_enabled=getattr(timesheet.org, 'auto_submit_timesheets', False),
+                    user_name=user_name,
+                    date_str=date_str,
+                    total_hours=round(total_hours, 1),
+                    unassigned_count=unassigned_count,
+                    client_breakdown=client_breakdown,
+                    date_iso=yesterday.isoformat(),  # ✅ add this so the link opens that day
+
                 )
-                
+
                 sent_count += 1
                 logger.info(f"[DAILY-REMINDER] Sent to {user.email}: {total_hours:.1f}h")
-                
+
             except Exception as e:
-                errors.append(f'{user.email}: {str(e)}')
+                errors.append(f"{user.email}: {str(e)}")
                 logger.error(f"[DAILY-REMINDER] Failed for {user.email}: {e}")
-        
-        logger.info(
-            f"[DAILY-REMINDER] Complete: {sent_count} sent, "
-            f"{skipped_count} skipped, {len(errors)} errors"
-        )
-        
+
+        logger.info(f"[DAILY-REMINDER] Complete: {sent_count} sent, {skipped_count} skipped, {len(errors)} errors")
+
         return {
-            'date': yesterday.isoformat(),
-            'sent': sent_count,
-            'skipped': skipped_count,
-            'errors': errors[:10],  # Limit errors in return
+            "date": yesterday.isoformat(),
+            "sent": sent_count,
+            "skipped": skipped_count,
+            "errors": errors[:10],
         }
-        
+
     except Exception as exc:
         logger.error(f"[DAILY-REMINDER] Task failed: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=60 * 5)
-
 
 @shared_task(name='tracker.tasks.send_weekly_summary_task', bind=True, max_retries=3)
 def send_weekly_summary_task(self):

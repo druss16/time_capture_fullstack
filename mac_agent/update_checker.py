@@ -161,7 +161,7 @@ def _auto_update_mac(download_url: str, latest_version: str) -> bool:
         print(f"[UPDATE] 🔧 Installing v{latest_version} (will prompt for password)...")
         subprocess.Popen([
             "osascript", "-e",
-            f'do shell script "installer -pkg \'{pkg_path}\' -target /" with administrator privileges'
+            f'do shell script "installer -pkg \'{pkg_path}\' -target /" with administrator privileges with prompt "TimeTracker needs to install an update (v{latest_version}).\\n\\nEnter your password to continue."'
         ])
         
         print(f"[UPDATE] ✅ Installer launched — update will complete after password entry")

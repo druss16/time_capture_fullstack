@@ -72,7 +72,7 @@ export default function DailyReview() {
   const { categories: dynamicCategories, industryType } = useCategories();
   
 
-  const [editingBlock, setEditingBlock] = useState<{ blockId: number; currentCategory: string; currentClientId: number | null; } | null>(null);
+  const [editingBlock, setEditingBlock] = useState<{ blockId: number; activityKey: string; currentCategory: string; currentClientId: number | null; } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -229,8 +229,8 @@ export default function DailyReview() {
   const handleRefresh = useCallback(() => { loadTimeSummary(); loadUncategorizedCount(); }, [loadTimeSummary, loadUncategorizedCount]);
   const handleCategorizationComplete = useCallback(() => { loadTimeSummary(); loadUncategorizedCount(); }, [loadTimeSummary, loadUncategorizedCount]);
 
-  const handleEditClick = (blockId: number, currentCategory: string, currentClientId: number | null) => {
-    setEditingBlock({ blockId, currentCategory, currentClientId });
+  const handleEditClick = (blockId: number, activityKey: string, currentCategory: string, currentClientId: number | null) => {
+    setEditingBlock({ blockId, activityKey, currentCategory, currentClientId });
     setSelectedCategory(currentCategory);
     setSelectedClientId(currentClientId);
   };
@@ -478,7 +478,8 @@ export default function DailyReview() {
                                     <ul className="space-y-2">
                                       {(isExpanded ? cat.sample_activities : cat.sample_activities.slice(0, 3)).map((activity, idx) => {
                                         const parsed = parseActivity(activity);
-                                        const isEditing = editingBlock?.blockId === parsed.blockId;
+                                        const activityKey = `${client.client_id}-${cat.name}-${idx}`;
+                                        const isEditing = editingBlock?.activityKey === activityKey;
                                         
                                         return (
                                           <li key={idx} className="flex items-center gap-2 group">
@@ -503,7 +504,7 @@ export default function DailyReview() {
                                                 <span className="text-slate-700 font-medium flex-1 truncate">{parsed.title}</span>
                                                 {parsed.blockId && (
                                                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <button onClick={() => handleEditClick(parsed.blockId!, cat.name, client.client_id)} className="p-1.5 hover:bg-primary/10 rounded-lg"><Pencil className="w-3.5 h-3.5 text-primary" /></button>
+                                                    <button onClick={() => handleEditClick(parsed.blockId!, activityKey, cat.name, client.client_id)} className="p-1.5 hover:bg-primary/10 rounded-lg"><Pencil className="w-3.5 h-3.5 text-primary" /></button>
                                                     <button onClick={() => handleDeleteBlock(parsed.blockId!, parsed.title)} disabled={deletingBlockId === parsed.blockId} className="p-1.5 hover:bg-destructive/10 rounded-lg"><Trash2 className="w-3.5 h-3.5 text-destructive" /></button>
                                                   </div>
                                                 )}

@@ -462,6 +462,7 @@ def send_auto_submit_notification(
     total_amount,
 ):
     """Notify user their timesheet was auto-submitted."""
+    total_amount_fmt = f"{float(total_amount):,.2f}"
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
 
     body = f'''
@@ -472,7 +473,7 @@ def send_auto_submit_notification(
         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:16px 0;">
             <p style="margin:0 0 4px;color:#1e293b;font-size:15px;">Total hours: <strong>{total_hours}</strong></p>
             <p style="margin:0 0 4px;color:#1e293b;font-size:15px;">Billable hours: <strong>{billable_hours}</strong></p>
-            <p style="margin:0;color:#1e293b;font-size:15px;">Amount: <strong>${total_amount}</strong></p>
+            <p style="margin:0;color:#1e293b;font-size:15px;">Amount: <strong>${total_amount_fmt}</strong></p>
         </div>
         <p style="color:#64748b;font-size:14px;">Your manager will review shortly. Need changes? Ask your manager to send it back.</p>
         {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
@@ -485,7 +486,7 @@ Your timesheet for {week_start_str} - {week_end_str} was automatically submitted
 
 Total hours: {total_hours}
 Billable hours: {billable_hours}
-Amount: ${total_amount}
+Amount: ${total_amount_fmt}
 
 Your manager will review and approve it shortly.
 

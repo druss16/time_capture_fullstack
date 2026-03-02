@@ -78,10 +78,17 @@ except Exception:
     NOTIF_AVAILABLE = False
 
 
-
+# CORRECT - use print() at module level, or just delete it entirely
+try:
+    from ai_client_switcher import AIClientSwitcher
+except ImportError:
+    AIClientSwitcher = None
+    print("[WARN] ai_client_switcher not found — disabled")
 
 sync = None  # Global sync manager, initialized in run_agent()
 notif_manager = None  # Global notification manager, initialized in run_agent()
+ai_switcher = None          # ← ADD THIS
+
 
 # Push notifications for client reminders
 try:
@@ -2242,6 +2249,10 @@ def handle_client_confirmed(client_id, client_name, prompt_data):
     if notif_manager:
         notif_manager.set_current_client(client_id, client_name)
 
+    # ADD: Inform AI switcher
+    if ai_switcher:
+        ai_switcher.on_manual_switch(client_id, client_name)
+
 
 def handle_client_rejected(prompt_data):
     """Called when user rejects a client via GUI"""
@@ -2309,9 +2320,12 @@ def on_client_switch_from_menu(client_id: int, client_name: str):
     if hasattr(gui_menu_bar, "updateMenu_"):
         gui_menu_bar.updateMenu_(None)
 
-    # Update notification state
     if notif_manager:
         notif_manager.set_current_client(client_id, client_name)
+
+    # === ADD THIS: Tell AI switcher about manual choice ===
+    if ai_switcher:
+        ai_switcher.on_manual_switch(client_id, client_name)
 
 # ---------------- Main loop ----------------
 def run_agent():
@@ -2319,6 +2333,7 @@ def run_agent():
     global API_KEY
     global sync
     global notif_manager
+    global ai_switcher
 
         # === Set macOS activation policy (MUST be in run_agent, never at module level) ===
     if sys.platform == 'darwin':
@@ -2886,7 +2901,56 @@ def run_agent():
     except Exception as e:
         log(f"[NUDGE] failed to start worker: {e}")
 
+    # ... GUI INITIALIZATION section (already exists) ...
+    # ... Restore client state from backend (already exists) ...
+    # ... Startup prompt (already exists) ...
 
+    # === AI CLIENT SWITCHER (must be after GUI + notif_manager are ready) ===
+    ai_switcher = None
+    try:
+        from ai_client_switcher import AIClientSwitcher
+
+        openai_key = os.getenv("OPENAI_API_KEY", "")
+        ai_switcher = AIClientSwitcher(
+            config={
+                "enabled": True,
+                "dwell_seconds_before_switch": 8,
+                "cooldown_seconds": 120,
+                "manual_override_snooze_minutes": 30,
+                "debug": VERBOSE,
+            },
+            api_base=API_BASE,
+            api_key=config.get("api_key") or API_KEY,
+            openai_api_key=openai_key,
+            set_current_client_fn=lambda cid: set_current_client_backend(
+                API_BASE, config.get("api_key") or API_KEY, cid
+            ),
+            gui_menu_bar=gui_menu_bar,       # ← NOW populated
+            notif_manager=notif_manager,      # ← NOW populated
+            sync=sync,
+        )
+
+        # Sync ai_switcher's state with current client
+        if gui_menu_bar and hasattr(gui_menu_bar, "state"):
+            cid = gui_menu_bar.state.current_client_id
+            cname = gui_menu_bar.state.current_client_name
+            if cid:
+                ai_switcher.set_current_client(cid, cname)
+
+        # Keep client list fresh when sync updates
+        if sync:
+            _original_on_sync = sync.on_update
+            def _on_sync_with_switcher():
+                if _original_on_sync:
+                    _original_on_sync()
+                ai_switcher.update_clients(sync.clients)
+            sync.on_update = _on_sync_with_switcher
+
+        log(f"[AI-SWITCH] ✅ Initialized (openai={'yes' if openai_key else 'no'})")
+    except ImportError:
+        log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
+    except Exception as e:
+        log(f"[AI-SWITCH] Init failed: {e}")
 
     # === TRACKING LOOP FUNCTION ===
     # === TRACKING LOOP FUNCTION ===
@@ -3141,7 +3205,19 @@ def run_agent():
                         current_sig = sig
                         dwell_start = time.time()
                         last_flush_time = None  # Reset flush tracker on new sig
-                        
+
+                                                # === AI CLIENT SWITCHER: Check new window ===
+                        if ai_switcher:
+                            _in_mtg = is_in_meeting(bundle_id, url, app_name, title)
+                            ai_switcher.on_window_change(
+                                app_name=app_name,
+                                bundle_id=bundle_id,
+                                title=title or "",
+                                url=url,
+                                file_path=fpath,
+                                in_meeting=_in_mtg,
+                            )
+                        # === END AI SWITCHER ===                        
                         if is_in_meeting(bundle_id, url, app_name, title):
                             log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'} • [MEETING]")
                         else:
@@ -3162,6 +3238,10 @@ def run_agent():
 
                     time.sleep(POLL_SECONDS)
                     consecutive_errors = 0
+
+                    # === AI SWITCHER: Check if pending switch met dwell threshold ===
+                    if ai_switcher:
+                        ai_switcher.on_dwell_tick()
 
                 except Exception as e:
                     consecutive_errors += 1

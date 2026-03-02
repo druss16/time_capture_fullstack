@@ -921,8 +921,16 @@ def ensure_db():
 # ---------------- AppleScript helpers ----------------
 def osa(script: str) -> str:
     try:
-        out = subprocess.check_output(["osascript", "-e", script], text=True, stderr=subprocess.DEVNULL).strip()
+        out = subprocess.check_output(
+            ["osascript", "-e", script], 
+            text=True, 
+            stderr=subprocess.DEVNULL,
+            timeout=5
+        ).strip()
         return out
+    except subprocess.TimeoutExpired:
+        log("[DETECT] ⚠️ osascript timed out (System Events hung after sleep)", "warning")
+        return ""
     except Exception:
         return ""
 

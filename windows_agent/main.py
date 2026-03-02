@@ -248,6 +248,105 @@ _wake_handled = False
 _health_monitor_running = False
 NETWORK_GRACE_PERIOD = 30  # Seconds after wake to skip network calls
 
+# ---------------- Local Client Cache ----------------
+# Eliminates the HTTP round-trip in write_event() every 5 seconds.
+# Updated by _apply_client_switch(). Safety-net refresh every 60s.
+
+_cached_client_id: Optional[int] = None
+_cached_client_name: Optional[str] = None
+_cached_client_updated: float = 0.0
+_CLIENT_CACHE_TTL = 60.0
+_client_cache_lock = threading.Lock()
+
+
+def _set_cached_client(client_id, client_name):
+    """Update the local client cache."""
+    global _cached_client_id, _cached_client_name, _cached_client_updated
+    with _client_cache_lock:
+        _cached_client_id = client_id
+        _cached_client_name = client_name
+        _cached_client_updated = time.time()
+        log(f"[CLIENT-CACHE] Set: {client_name} (id={client_id})")
+
+
+def _get_cached_client():
+    """
+    Get current client from cache. If stale, refresh from backend.
+    Returns (client_id, client_name).
+    """
+    global _cached_client_id, _cached_client_name, _cached_client_updated
+
+    now = time.time()
+    with _client_cache_lock:
+        if (now - _cached_client_updated) < _CLIENT_CACHE_TTL:
+            return _cached_client_id, _cached_client_name
+
+    # Stale — refresh from backend (only if network is up)
+    if not is_network_ok():
+        with _client_cache_lock:
+            return _cached_client_id, _cached_client_name
+
+    api_key = config.get("api_key") or API_KEY
+    if api_key and API_BASE:
+        try:
+            current = get_current_client_from_backend(API_BASE, api_key)
+            if current:
+                cid = current.get("client_id")
+                cname = current.get("client_name")
+                _set_cached_client(cid, cname)
+                return cid, cname
+        except Exception as e:
+            log(f"[CLIENT-CACHE] Backend refresh failed: {e}")
+
+    # Return stale cache rather than nothing
+    with _client_cache_lock:
+        return _cached_client_id, _cached_client_name
+
+
+def _apply_client_switch(client_id: int, client_name: str, source: str = "unknown"):
+    """
+    Single source of truth for all client switches.
+
+    Every code path that changes the current client MUST call this:
+      - System tray menu switch
+      - Notification confirm (toast)
+      - Client picker confirm
+      - AI switcher auto-switch
+      - Nudge/guess confirm
+    """
+    log(f"[CLIENT-SWITCH] → {client_name} (id={client_id}) via {source}")
+
+    # 1. Backend
+    api_key = config.get("api_key") or API_KEY
+    if api_key and API_BASE and is_network_ok():
+        success = set_current_client_backend(API_BASE, api_key, client_id)
+        if not success:
+            log("[CLIENT-SWITCH] ⚠️ Backend update failed")
+
+    # 2. Local cache (so write_event picks it up immediately)
+    _set_cached_client(client_id, client_name)
+
+    # 3. GUI update (tray tooltip, floating widget, state, menu checkmarks)
+    if gui_menu_bar:
+        # _switch_client updates: state + tooltip + widget + menu checkmarks
+        if hasattr(gui_menu_bar, '_switch_client'):
+            gui_menu_bar._switch_client(client_id, client_name)
+        else:
+            # Fallback: update pieces individually
+            if hasattr(gui_menu_bar, 'state'):
+                gui_menu_bar.state.set_client(client_id, client_name)
+            if hasattr(gui_menu_bar, 'refresh_client_menu') and sync and sync.clients:
+                gui_menu_bar.refresh_client_menu(sync.clients)
+
+    # 4. Notification manager
+    if notif_manager:
+        notif_manager.set_current_client(client_id, client_name)
+
+    # 5. AI switcher
+    if ai_switcher:
+        ai_switcher.on_manual_switch(client_id, client_name)
+
+
 # ---------------- Logging Setup ----------------
 LOG_DIR = os.path.join(APPDATA, "TimeTracker", "Logs")
 LOG_FILE = os.path.join(LOG_DIR, "agent.log")
@@ -1055,19 +1154,8 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
     )
     conn.commit()
     
-    api_key = config.get("api_key") or API_KEY
-    current_client_id = None
-    current_client_name = None
-    
-    # ── Only attempt client fetch if network is healthy ──
-    if api_key and API_BASE and is_network_ok():
-        try:
-            current = get_current_client_from_backend(API_BASE, api_key)
-            if current and current.get("client_id"):
-                current_client_id = current["client_id"]
-                current_client_name = current.get("client_name")
-        except Exception as e:
-            log(f"[CLIENT] Failed to fetch current client: {e}")
+    # ── FIX: Use local cache instead of HTTP call every 5 seconds ──
+    current_client_id, current_client_name = _get_cached_client()
     
     if notif_manager:
         notif_manager.set_current_client(current_client_id, current_client_name)
@@ -1095,7 +1183,6 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float = N
             payload["tool_host"] = tool_host
     
     # ── Post event (async, non-blocking) ──
-    # post_event_async handles network state internally
     post_event_async(payload, user, hostname)
     
     network_status = "" if is_network_ok() else " [OFFLINE - saved locally]"
@@ -1389,24 +1476,9 @@ def run_agent():
         
         def on_notif_confirm(client_id, client_name):
             """Handle user confirming client from notification"""
-            log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
-            
-            # Sync to backend
-            api_key = config.get("api_key") or API_KEY
-            if api_key and API_BASE:
-                set_current_client_backend(API_BASE, api_key, client_id)
-            
-            # Update GUI — tray tooltip, floating widget, state, all at once
-            if gui_menu_bar:
-                gui_menu_bar._switch_client(client_id, client_name)
-            
-            # Update notification state
-            if notif_manager:
-                notif_manager.set_current_client(client_id, client_name)
-
-            # >>> ADD THIS
-            if ai_switcher:
-                ai_switcher.on_manual_switch(client_id, client_name)
+            def _do():
+                _apply_client_switch(client_id, client_name, source="notification")
+            threading.Thread(target=_do, daemon=True).start()
         
         def on_notif_switch():
             """Handle user requesting client switch from notification"""
@@ -1500,8 +1572,7 @@ def run_agent():
             
             gui_menu_bar = run_gui_app(
                 on_client_confirmed=lambda cid, cname, data: (
-                    log(f"[GUI] Client confirmed: {cname}"),
-                    ai_switcher.on_manual_switch(cid, cname) if ai_switcher else None,
+                    _apply_client_switch(cid, cname, source="gui_prompt"),
                 ),
                 on_client_rejected=lambda data: log(f"[GUI] Client rejected"),
                 get_today_time=fetch_today_time,
@@ -1707,6 +1778,17 @@ def run_agent():
                     log(f"[CLIENT] Restored from backend: {current['client_name']}")
             except Exception as e:
                 log(f"[CLIENT] Failed to restore client state: {e}")
+
+    # Seed client cache from backend (so write_event has it from the first event)
+    api_key = config.get("api_key") or API_KEY
+    if api_key and API_BASE:
+        try:
+            current = get_current_client_from_backend(API_BASE, api_key)
+            if current and current.get("client_id"):
+                _set_cached_client(current["client_id"], current["client_name"])
+                log(f"[CLIENT-CACHE] Seeded: {current['client_name']}")
+        except Exception as e:
+            log(f"[CLIENT-CACHE] Seed failed: {e}")
 
     # Prompt client selection shortly after startup if no client set
     def _prompt_client_after_startup():

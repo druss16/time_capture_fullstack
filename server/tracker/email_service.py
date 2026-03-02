@@ -372,10 +372,11 @@ def send_weekly_summary_email(
     week_str: str,
     total_hours: float,
     client_breakdown: list,
+    week_start_iso: str = None,
 ):
     """Send weekly time summary email."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
-    report_url = f'{frontend_url}/billing?week={week_start_iso}'
+    report_url = f'{frontend_url}/billing?week={week_start_iso}' if week_start_iso else f'{frontend_url}/billing'
 
     client_rows = ''.join([
         f'<tr><td style="padding:8px 0;border-bottom:1px solid #e2e8f0;">{name}</td>'

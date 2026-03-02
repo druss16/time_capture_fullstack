@@ -33,6 +33,7 @@ AGENT_AUTO_PROVISION = True
 USE_AUTH = False
 
 TIME_ZONE = 'America/New_York'
+CELERY_TIMEZONE = 'America/New_York'
 USE_TZ = True
 
 # -----------------------------------------------------

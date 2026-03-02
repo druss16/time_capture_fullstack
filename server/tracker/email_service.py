@@ -485,7 +485,10 @@ def send_auto_submit_notification(
     total_amount,
 ):
     """Notify user their timesheet was auto-submitted."""
-    total_amount_fmt = f"{float(total_amount):,.2f}"
+    try:
+        total_amount_fmt = f"{float(total_amount):,.2f}"
+    except (TypeError, ValueError):
+        total_amount_fmt = "0.00"
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
 
     body = f'''

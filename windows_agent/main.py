@@ -160,6 +160,28 @@ def load_config():
             print(f"[WARN] Failed to load {CONFIG_FILE}: {e}")
     return {}
 
+def merge_deploy_config(cfg: dict) -> dict:
+    """Read deploy.json from ProgramData (dropped by IT via GPO) and merge into config."""
+    deploy_path = os.path.join(
+        os.environ.get('PROGRAMDATA', 'C:\\ProgramData'),
+        'TimeTracker',
+        'deploy.json'
+    )
+    if os.path.exists(deploy_path):
+        try:
+            with open(deploy_path, 'r') as f:
+                deploy = json.load(f)
+            if deploy.get('org_token') and not cfg.get('api_key'):
+                cfg['org_token'] = deploy['org_token']
+                print(f"[DEPLOY] Found org token from {deploy_path}")
+            if deploy.get('server_url') and not cfg.get('api_base'):
+                cfg['api_base'] = deploy['server_url']
+                print(f"[DEPLOY] Found server URL from {deploy_path}")
+            save_config(cfg)
+        except Exception as e:
+            print(f"[DEPLOY] Failed to read {deploy_path}: {e}")
+    return cfg
+
 def save_config(cfg: dict):
     try:
         os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
@@ -169,6 +191,7 @@ def save_config(cfg: dict):
         print(f"[WARN] Failed to save {CONFIG_FILE}: {e}")
 
 config = load_config()
+config = merge_deploy_config(config)  # ← Add this line
 print(f"[DEBUG] Config loaded: {config}")
 print(f"[DEBUG] server_device_id = {config.get('server_device_id')}")
 

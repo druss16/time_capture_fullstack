@@ -17,6 +17,9 @@ Usage:
     # Dry run (preview without making changes)
     python manage.py provision_firm --org smith-associates --team team.csv --clients clients.csv --dry-run
 
+    # Re-run with updated CSVs (updates existing records)
+    python manage.py provision_firm --org smith-associates --team team.csv --update
+
 CSV Formats:
     team.csv:    email, display_name, role, billing_rate, cost_rate, machine_hostname, windows_username
     clients.csv: client_name, billing_rate, assigned_team (comma-separated emails)
@@ -33,8 +36,6 @@ from django.utils import timezone
 from tracker.models import (
     Organization, OrganizationMembership, Client, ClientAssignment,
     BillingRate, EmployeeCostRate, OrgDeploymentToken, Invitation,
-)
-from tracker.models import (
     OnboardingBatch, DeviceProvisioningMap,
 )
 
@@ -62,6 +63,10 @@ class Command(BaseCommand):
             help='Preview what would be created without making changes'
         )
         parser.add_argument(
+            '--update', action='store_true',
+            help='Update existing records (roles, rates, names) instead of skipping them'
+        )
+        parser.add_argument(
             '--generate-token', action='store_true',
             help='Also generate (or show existing) OrgDeploymentToken for MSI'
         )
@@ -75,6 +80,7 @@ class Command(BaseCommand):
         team_csv = options['team']
         clients_csv = options['clients']
         dry_run = options['dry_run']
+        update = options['update']
         generate_token = options['generate_token']
 
         if not team_csv and not clients_csv:
@@ -86,28 +92,36 @@ class Command(BaseCommand):
         except Organization.DoesNotExist:
             raise CommandError(f'Organization with slug "{org_slug}" not found.')
 
+        mode = 'DRY RUN' if dry_run else ('UPDATE' if update else 'LIVE')
         self.stdout.write(f'\n{"=" * 60}')
         self.stdout.write(f'  PROVISIONING: {org.name}')
-        self.stdout.write(f'  {"DRY RUN" if dry_run else "LIVE"}')
+        self.stdout.write(f'  MODE: {mode}')
         self.stdout.write(f'{"=" * 60}\n')
 
         # ─── Create onboarding batch ───
         batch = None
         if not dry_run:
-            batch = OnboardingBatch.objects.create(
-                organization=org,
-                status='draft',
-                notes=f'Provisioned via CLI on {timezone.now().strftime("%Y-%m-%d %H:%M")}'
-            )
+            # Reuse existing batch if updating, create new if first run
+            if update:
+                batch = OnboardingBatch.objects.filter(
+                    organization=org
+                ).order_by('-created_at').first()
+            
+            if not batch:
+                batch = OnboardingBatch.objects.create(
+                    organization=org,
+                    status='draft',
+                    notes=f'Provisioned via CLI on {timezone.now().strftime("%Y-%m-%d %H:%M")}'
+                )
 
         # ─── Process team CSV ───
         users_created = {}
         if team_csv:
-            users_created = self._import_team(org, team_csv, batch, dry_run)
+            users_created = self._import_team(org, team_csv, batch, dry_run, update)
 
         # ─── Process clients CSV ───
         if clients_csv:
-            self._import_clients(org, clients_csv, users_created, dry_run)
+            self._import_clients(org, clients_csv, users_created, dry_run, update)
 
         # ─── Generate deployment token ───
         if generate_token and not dry_run:
@@ -119,7 +133,7 @@ class Command(BaseCommand):
             batch.total_clients = Client.objects.filter(org=org).count()
             batch.refresh_stats()
             self.stdout.write(self.style.SUCCESS(
-                f'\nBatch #{batch.id} created: '
+                f'\nBatch #{batch.id}: '
                 f'{batch.total_users} users, '
                 f'{batch.total_devices} devices, '
                 f'{batch.total_clients} clients'
@@ -130,10 +144,21 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS('\nProvisioning complete.'))
 
+    def _generate_unique_code(self, org, name):
+        """Generate a unique client code, appending a number if needed."""
+        base = name[:10].upper().replace(' ', '')[:10]
+        code = base
+        counter = 2
+        while Client.objects.filter(org=org, code=code).exists():
+            suffix = str(counter)
+            code = base[:10 - len(suffix)] + suffix
+            counter += 1
+        return code
+
     # ═══════════════════════════════════════════════════════════════
     # TEAM IMPORT
     # ═══════════════════════════════════════════════════════════════
-    def _import_team(self, org, csv_path, batch, dry_run):
+    def _import_team(self, org, csv_path, batch, dry_run, update):
         """
         Import team.csv → creates Users, Memberships, BillingRates, 
         EmployeeCostRates, and DeviceProvisioningMaps.
@@ -148,6 +173,7 @@ class Command(BaseCommand):
 
         users_created = {}
         devices_created = 0
+        users_updated = 0
         
         role_map = {
             'owner': 'owner',
@@ -189,14 +215,28 @@ class Command(BaseCommand):
                         }
                     )
                     if created:
-                        # Set unusable password — they'll set one via invite link
                         user.set_unusable_password()
                         user.save()
                         self.stdout.write(self.style.SUCCESS(f'    ✓ User created'))
+                    elif update:
+                        changed = False
+                        first = display_name.split(' ')[0] if display_name else ''
+                        last = ' '.join(display_name.split(' ')[1:]) if display_name else ''
+                        if first and user.first_name != first:
+                            user.first_name = first
+                            changed = True
+                        if last and user.last_name != last:
+                            user.last_name = last
+                            changed = True
+                        if changed:
+                            user.save(update_fields=['first_name', 'last_name'])
+                            self.stdout.write(self.style.SUCCESS(f'    ✓ User name updated'))
+                        else:
+                            self.stdout.write(f'    → User unchanged')
                     else:
-                        self.stdout.write(f'    → User already exists')
+                        self.stdout.write(f'    → User already exists (use --update to modify)')
 
-                    # ─── Create membership ───
+                    # ─── Create or update membership ───
                     membership, mem_created = OrganizationMembership.objects.get_or_create(
                         user=user,
                         organization=org,
@@ -204,26 +244,50 @@ class Command(BaseCommand):
                     )
                     if mem_created:
                         self.stdout.write(self.style.SUCCESS(f'    ✓ Membership created ({role})'))
+                    elif update and membership.role != role:
+                        old_role = membership.role
+                        membership.role = role
+                        membership.save(update_fields=['role'])
+                        users_updated += 1
+                        self.stdout.write(self.style.SUCCESS(
+                            f'    ✓ Role updated: {old_role} → {role}'
+                        ))
                     else:
                         self.stdout.write(f'    → Membership exists ({membership.role})')
 
                     # ─── Set billing rate ───
                     if billing_rate:
-                        BillingRate.objects.get_or_create(
+                        rate_obj, rate_created = BillingRate.objects.get_or_create(
                             org=org, user=user, client=None, task_type=None,
                             effective_date=timezone.now().date(),
                             defaults={'rate': billing_rate}
                         )
-                        self.stdout.write(f'    ✓ Billing rate: ${billing_rate}/hr')
+                        if rate_created:
+                            self.stdout.write(f'    ✓ Billing rate: ${billing_rate}/hr')
+                        elif update and rate_obj.rate != billing_rate:
+                            old_rate = rate_obj.rate
+                            rate_obj.rate = billing_rate
+                            rate_obj.save(update_fields=['rate'])
+                            self.stdout.write(self.style.SUCCESS(
+                                f'    ✓ Billing rate updated: ${old_rate} → ${billing_rate}/hr'
+                            ))
 
                     # ─── Set cost rate ───
                     if cost_rate:
-                        EmployeeCostRate.objects.get_or_create(
+                        cost_obj, cost_created = EmployeeCostRate.objects.get_or_create(
                             organization=org, user=user,
                             effective_date=timezone.now().date(),
                             defaults={'cost_rate': cost_rate}
                         )
-                        self.stdout.write(f'    ✓ Cost rate: ${cost_rate}/hr')
+                        if cost_created:
+                            self.stdout.write(f'    ✓ Cost rate: ${cost_rate}/hr')
+                        elif update and cost_obj.cost_rate != cost_rate:
+                            old_cost = cost_obj.cost_rate
+                            cost_obj.cost_rate = cost_rate
+                            cost_obj.save(update_fields=['cost_rate'])
+                            self.stdout.write(self.style.SUCCESS(
+                                f'    ✓ Cost rate updated: ${old_cost} → ${cost_rate}/hr'
+                            ))
 
                     users_created[email] = user
                 else:
@@ -234,7 +298,7 @@ class Command(BaseCommand):
             if not dry_run:
                 prov, prov_created = DeviceProvisioningMap.objects.get_or_create(
                     organization=org,
-                    machine_hostname=hostname.upper(),  # Normalize to uppercase
+                    machine_hostname=hostname.upper(),
                     defaults={
                         'batch': batch,
                         'email': email,
@@ -249,16 +313,35 @@ class Command(BaseCommand):
                 if prov_created:
                     devices_created += 1
                     self.stdout.write(self.style.SUCCESS(f'      ✓ Provisioning map created'))
+                elif update:
+                    changed = False
+                    if prov.email != email:
+                        prov.email = email
+                        changed = True
+                    if prov.role != role:
+                        prov.role = role
+                        changed = True
+                    if win_user and prov.windows_username != win_user.upper():
+                        prov.windows_username = win_user.upper()
+                        changed = True
+                    if changed:
+                        prov.save()
+                        self.stdout.write(self.style.SUCCESS(f'      ✓ Provisioning map updated'))
+                    else:
+                        self.stdout.write(f'      → Already provisioned (unchanged)')
                 else:
                     self.stdout.write(f'      → Already provisioned')
 
-        self.stdout.write(f'\n  Team summary: {len(users_created)} users, {devices_created} device maps')
+        summary = f'\n  Team summary: {len(users_created)} users, {devices_created} device maps'
+        if update and users_updated:
+            summary += f', {users_updated} roles updated'
+        self.stdout.write(summary)
         return users_created
 
     # ═══════════════════════════════════════════════════════════════
     # CLIENT IMPORT
     # ═══════════════════════════════════════════════════════════════
-    def _import_clients(self, org, csv_path, users_created, dry_run):
+    def _import_clients(self, org, csv_path, users_created, dry_run, update):
         """
         Import clients.csv → creates Clients and ClientAssignments.
         """
@@ -269,6 +352,7 @@ class Command(BaseCommand):
         self._validate_headers(rows[0].keys(), required, csv_path)
 
         clients_created = 0
+        clients_updated = 0
         assignments_created = 0
 
         for i, row in enumerate(rows, 1):
@@ -280,7 +364,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(f'  Row {i}: Skipping — missing client_name'))
                 continue
 
-            code = name[:10].upper().replace(' ', '')[:10]
+            code = self._generate_unique_code(org, name)
             self.stdout.write(f'  Client: {name} (code: {code})')
 
             if not dry_run:
@@ -295,6 +379,20 @@ class Command(BaseCommand):
                 if created:
                     clients_created += 1
                     self.stdout.write(self.style.SUCCESS(f'    ✓ Client created'))
+                elif update:
+                    changed = False
+                    if client.code != code:
+                        client.code = code
+                        changed = True
+                    if not client.is_active:
+                        client.is_active = True
+                        changed = True
+                    if changed:
+                        client.save()
+                        clients_updated += 1
+                        self.stdout.write(self.style.SUCCESS(f'    ✓ Client updated'))
+                    else:
+                        self.stdout.write(f'    → Client exists (unchanged)')
                 else:
                     self.stdout.write(f'    → Client already exists')
 
@@ -302,7 +400,6 @@ class Command(BaseCommand):
                 if assigned_raw:
                     emails = [e.strip().lower() for e in assigned_raw.split(',') if e.strip()]
                     for email in emails:
-                        # Look up user — first check our import, then DB
                         user = users_created.get(email)
                         if not user:
                             user = User.objects.filter(email=email).first()
@@ -328,7 +425,10 @@ class Command(BaseCommand):
                     emails = [e.strip() for e in assigned_raw.split(',')]
                     self.stdout.write(f'    Assignments: {", ".join(emails)}')
 
-        self.stdout.write(f'\n  Client summary: {clients_created} clients, {assignments_created} assignments')
+        summary = f'\n  Client summary: {clients_created} clients, {assignments_created} assignments'
+        if update and clients_updated:
+            summary += f', {clients_updated} updated'
+        self.stdout.write(summary)
 
     # ═══════════════════════════════════════════════════════════════
     # DEPLOYMENT TOKEN

@@ -2541,7 +2541,6 @@ def run_agent():
         )
         
         def on_notif_confirm(client_id, client_name):
-            """Handle user confirming client from notification"""
             def _do():
                 log(f"[NOTIF] User confirmed: {client_name} (ID: {client_id})")
                 api_key = config.get("api_key") or API_KEY
@@ -2552,8 +2551,16 @@ def run_agent():
                         gui_menu_bar.state.set_client(client_id, client_name)
                     if hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
                         gui_menu_bar.app.title = f"⏱ {client_name}" if client_name else "⏱ None"
+                    # === FIX: Refresh the Switch Client submenu checkmarks ===
+                    if hasattr(gui_menu_bar, 'updateMenu_'):
+                        gui_menu_bar.updateMenu_(None)
+                    elif hasattr(gui_menu_bar, 'refresh_client_menu') and sync and sync.clients:
+                        gui_menu_bar.refresh_client_menu(sync.clients)
                 if notif_manager:
                     notif_manager.set_current_client(client_id, client_name)
+                # === FIX: Tell AI switcher ===
+                if ai_switcher:
+                    ai_switcher.on_manual_switch(client_id, client_name)
             threading.Thread(target=_do, daemon=True).start()
                 
         def on_notif_switch():

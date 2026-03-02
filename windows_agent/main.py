@@ -88,6 +88,7 @@ if sys.platform == 'win32':
         pass
 
 register_hotkey = None
+ai_switcher = None  # Will be initialized after GUI setup
 
 
 # ---------------- Check Active Subscriptions ----------------
@@ -1325,7 +1326,8 @@ def repair_device():
 # ---------------- Main Agent ----------------
 def run_agent():
     """Main agent function with GUI integration"""
-    global API_KEY, notif_manager, notif_worker, sync, gui_menu_bar, SERVER_USER_NAME
+    global API_KEY, notif_manager, notif_worker, sync, gui_menu_bar, SERVER_USER_NAME, ai_switcher
+
 
     # === FORCED UPDATE CHECK ===
     from update_checker import check_for_update_blocking, start_background_checker
@@ -1401,6 +1403,10 @@ def run_agent():
             # Update notification state
             if notif_manager:
                 notif_manager.set_current_client(client_id, client_name)
+
+            # >>> ADD THIS
+            if ai_switcher:
+                ai_switcher.on_manual_switch(client_id, client_name)
         
         def on_notif_switch():
             """Handle user requesting client switch from notification"""
@@ -1493,7 +1499,10 @@ def run_agent():
             api_base = API_BASE
             
             gui_menu_bar = run_gui_app(
-                on_client_confirmed=lambda cid, cname, data: log(f"[GUI] Client confirmed: {cname}"),
+                on_client_confirmed=lambda cid, cname, data: (
+                    log(f"[GUI] Client confirmed: {cname}"),
+                    ai_switcher.on_manual_switch(cid, cname) if ai_switcher else None,
+                ),
                 on_client_rejected=lambda data: log(f"[GUI] Client rejected"),
                 get_today_time=fetch_today_time,
                 fetch_clients=lambda: fetch_clients_from_backend(api_base, api_key),
@@ -1565,11 +1574,44 @@ def run_agent():
                 except Exception as e:
                     log(f"[QUICK] Failed to setup hotkey: {e}")
                     register_hotkey = None
-                    
+
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
             import traceback
             traceback.print_exc()
+
+    # === AI CLIENT AUTO-SWITCHER ===
+    ai_switcher = None
+    try:
+        from ai_client_switcher import AIClientSwitcher
+        
+        openai_key = config.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+        ai_switcher = AIClientSwitcher(
+            api_base=API_BASE,
+            api_key=config.get("api_key") or API_KEY,
+            openai_api_key=openai_key,
+            set_current_client_fn=lambda cid: set_current_client_backend(API_BASE, config.get("api_key") or API_KEY, cid),
+            gui_menu_bar=gui_menu_bar,
+            notif_manager=notif_manager,
+            sync=sync,
+        )
+        
+        # Sync current client state on startup
+        api_key_val = config.get("api_key") or API_KEY
+        if api_key_val and API_BASE:
+            try:
+                current = get_current_client_from_backend(API_BASE, api_key_val)
+                if current and current.get("client_id"):
+                    ai_switcher.set_current_client(current["client_id"], current.get("client_name"))
+            except Exception:
+                pass
+        
+        log("[AI-SWITCH] ✅ Initialized")
+    except ImportError:
+        log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
+    except Exception as e:
+        log(f"[AI-SWITCH] Init failed: {e}")
+                        
 
     log("=== Windows Activity Agent starting… (Ctrl+C to stop) ===")
     log(f"CONFIG={CONFIG_FILE}")
@@ -1782,20 +1824,6 @@ def run_agent():
                         
                         continue
                         
-                        # Flush current dwell if any
-                        if current_sig and dwell_start and current_sig != IDLE_SIG:
-                            dwell = time.time() - dwell_start
-                            if dwell >= MIN_DWELL_SECONDS:
-                                try:
-                                    write_event(conn, cur, os_user, hostname, current_sig)
-                                    log(f"[TRACKING] Flushed pre-sleep dwell ({int(dwell)}s)")
-                                except Exception as e:
-                                    log(f"[TRACKING] Failed to flush pre-sleep dwell: {e}")
-                        
-                        # Reset state completely — start fresh
-                        current_sig = None
-                        dwell_start = None
-                        
                         # Give network a moment to come back (reconnect thread is working)
                         log("[TRACKING] Waiting for network reconnect...")
                         for _ in range(60):  # Up to 30 seconds
@@ -1912,7 +1940,15 @@ def run_agent():
                             current_sig = sig
                             dwell_start = time.time()
                             log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
-                        
+                            
+                            # >>> ADD THIS: Feed focus change to AI switcher
+                            if ai_switcher:
+                                ai_switcher.on_window_change(app_name, exe_name, window_title, url, fpath)
+
+                        # >>> ADD THIS: Check pending dwell switches every tick
+                        if ai_switcher:
+                            ai_switcher.on_dwell_tick()
+
                         time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
 

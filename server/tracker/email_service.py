@@ -366,7 +366,6 @@ Review your timesheet: {review_url}
 
 
 # ---------- 4. Weekly summary ----------
-
 def send_weekly_summary_email(
     to_email: str,
     user_name: str,
@@ -376,7 +375,30 @@ def send_weekly_summary_email(
 ):
     """Send weekly time summary email."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
-    client_lines = '\n'.join([f'  - {name}: {hrs:.1f}h' for name, hrs in client_breakdown[:10]])
+    report_url = f'{frontend_url}/reports'
+
+    client_rows = ''.join([
+        f'<tr><td style="padding:8px 0;border-bottom:1px solid #e2e8f0;">{name}</td>'
+        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">{hrs:.1f}h</td></tr>'
+        for name, hrs in client_breakdown[:10]
+    ]) or '<tr><td colspan="2" style="padding:8px 0;color:#94a3b8;">No clients tracked this week</td></tr>'
+
+    body = f'''
+    <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
+    <p style="color:#475569;font-size:16px;line-height:1.5;">
+        Here's your weekly summary for <strong>{week_str}</strong>:
+    </p>
+    <div style="background:#f0fdfa;border:1px solid #99f6e4;padding:16px;border-radius:8px;margin:16px 0;text-align:center;">
+        <p style="margin:0;color:#0f766e;font-size:14px;">Total Hours</p>
+        <p style="margin:4px 0 0;color:#2B9D90;font-size:32px;font-weight:bold;">{total_hours:.1f}h</p>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;">{client_rows}</table>
+    {_btn(report_url, "#2B9D90 0%,#237F74 100%", "View Full Report &rarr;")}
+    <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">
+        <a href="{frontend_url}/settings" style="color:#94a3b8;">Manage notification preferences</a>
+    </p>'''
+
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "📊", "Weekly Summary", body)
 
     plain = f"""Hi {user_name},
 
@@ -385,16 +407,16 @@ Weekly time summary for {week_str}:
 Total: {total_hours:.1f} hours
 
 By Client:
-{client_lines}
+{chr(10).join([f'  - {name}: {hrs:.1f}h' for name, hrs in client_breakdown[:10]])}
 
-View detailed report: {frontend_url}/reports
+View full report: {report_url}
 
 - TimeTracker"""
 
     return send_email(
         to_email=to_email,
         subject=f"📊 Weekly Summary: {total_hours:.1f} hours ({week_str})",
-        html_content=f"<pre>{plain}</pre>",
+        html_content=html,
         plain_content=plain,
         categories=["weekly_summary"],
     )

@@ -224,7 +224,7 @@ def _build_client_matchers(clients: list) -> list:
                 continue
             escaped = re.escape(needle.lower())
             # Allow flexible separators between words
-            flex = re.sub(r'\\ ', r'[\\s_\\-.]?', escaped)
+            flex = re.sub(r'[\s_\-\.&]+', r'[\\s_\\-.&]*', escaped)
             pat = re.compile(
                 r'(?:^|[\s_\-./\\|:,()\'"<>*])' + flex + r'(?:$|[\s_\-./\\|:,()\'"<>*])',
                 re.IGNORECASE,

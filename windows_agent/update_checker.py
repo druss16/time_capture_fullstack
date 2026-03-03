@@ -179,7 +179,12 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
     """Download and silently install update on Windows."""
     import subprocess, tempfile
 
-    installer_path = os.path.join(tempfile.gettempdir(), f"TimeTracker-{latest_version}-Setup.exe")
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+    else:
+        app_dir = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "TimeTracker")
+    os.makedirs(app_dir, exist_ok=True)
+    installer_path = os.path.join(app_dir, f"TimeTracker-{latest_version}-Setup.exe")
 
     try:
         # FIX: Wait for network before downloading

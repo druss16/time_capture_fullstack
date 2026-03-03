@@ -226,7 +226,7 @@ def _build_client_matchers(clients: list) -> list:
                 continue
             escaped = re.escape(needle.lower())
             # Replace ANY separator (space, underscore, dash, dot) with flexible matcher
-            flex = re.sub(r'[\s_\-\.]+', r'[\\s_\\-.]*', escaped)
+            flex = re.sub(r'[\s_\-\.&]+', r'[\\s_\\-.&]*', escaped)
             pat = re.compile(
                 r'(?:^|[\s_\-./\\|:,()\'"<>*])' + flex + r'(?:$|[\s_\-./\\|:,()\'"<>*])',
                 re.IGNORECASE,

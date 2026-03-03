@@ -628,6 +628,29 @@ NOTIF_IDLE_THRESHOLD = int(_get("notif_idle_threshold", os.getenv("AGENT_NOTIF_I
 NOTIF_NO_CLIENT_MINUTES = int(_get("notif_no_client_minutes", os.getenv("AGENT_NOTIF_NO_CLIENT_MINUTES")) or 15)
 
 
+def _apply_client_switch(client_id, client_name, source="unknown"):
+    log(f"[CLIENT-SWITCH] → {client_name} (id={client_id}) via {source}")
+    
+    api_key_val = config.get("api_key") or API_KEY
+    if api_key_val and API_BASE:
+        set_current_client_backend(API_BASE, api_key_val, client_id)
+    
+    if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+        gui_menu_bar.state.set_client(client_id, client_name)
+        if hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
+            gui_menu_bar.app.title = f"⏱ {client_name}" if client_name else "⏱ None"
+        # Rebuild submenu so checkmark moves to the new client
+        if hasattr(gui_menu_bar, 'refresh_client_menu') and sync and sync.clients:
+            gui_menu_bar.refresh_client_menu(sync.clients)
+    
+    if notif_manager:
+        notif_manager.set_current_client(client_id, client_name)
+    
+    if ai_switcher and source != "ai_switcher":
+        ai_switcher.on_manual_switch(client_id, client_name)
+    elif ai_switcher:
+        ai_switcher.set_current_client(client_id, client_name)
+
 # ---------------- Logging Setup ----------------
 LOG_DIR = os.path.expanduser("~/Library/Logs/TimeTracker")
 LOG_FILE = os.path.join(LOG_DIR, "agent.log")
@@ -2334,6 +2357,7 @@ def run_agent():
     global sync
     global notif_manager
     global ai_switcher
+    global gui_menu_bar
 
         # === Set macOS activation policy (MUST be in run_agent, never at module level) ===
     if sys.platform == 'darwin':
@@ -2952,7 +2976,7 @@ def run_agent():
             api_base=API_BASE,
             api_key=config.get("api_key") or API_KEY,
             openai_api_key=openai_key,
-            set_current_client_fn=lambda cid, cname=None: set_current_client_backend(API_BASE, api_key, cid),
+            set_current_client_fn=lambda cid, cname=None: _apply_client_switch(cid, cname or "Unknown", source="ai_switcher"),
             gui_menu_bar=gui_menu_bar,       # ← NOW populated
             notif_manager=notif_manager,      # ← NOW populated
             sync=sync,

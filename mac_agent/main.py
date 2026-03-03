@@ -2926,7 +2926,7 @@ def run_agent():
                 "enabled": True,
                 "dwell_seconds_before_switch": 8,
                 "cooldown_seconds": 120,
-                "manual_override_snooze_minutes": 30,
+                "manual_override_snooze_minutes": 2,
                 "debug": VERBOSE,
             },
             api_base=API_BASE,

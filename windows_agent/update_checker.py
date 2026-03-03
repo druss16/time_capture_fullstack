@@ -176,28 +176,18 @@ def _restart_into_new_exe():
 # ============================================================
 
 def _auto_update_windows(download_url: str, latest_version: str) -> bool:
-    """Show update dialog on Windows - let user install manually.
-    Silent install is blocked by enterprise AV (Bitdefender ATC etc.)."""
+    """Show update dialog - let user install via browser download."""
     import ctypes
-    
-    MB_OKCANCEL = 0x01
-    MB_ICONINFORMATION = 0x40
-    MB_TOPMOST = 0x40000
-    MB_SETFOREGROUND = 0x10000
-    
     result = ctypes.windll.user32.MessageBoxW(
         0,
-        f"TimeTracker v{latest_version} is available.\n\n"
-        "Click OK to download the update.",
+        f"TimeTracker v{latest_version} is available.\n\nClick OK to download the update.",
         "TimeTracker Update Available",
-        MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND
+        0x01 | 0x40 | 0x40000 | 0x10000
     )
-    
-    if result == 1:  # IDOK
+    if result == 1:
         import webbrowser
         webbrowser.open(download_url)
-    
-    return True  # Mark as handled either way
+    return True
 
 
 def _auto_update_mac(download_url: str, latest_version: str) -> bool:

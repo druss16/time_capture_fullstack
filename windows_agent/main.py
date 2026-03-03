@@ -998,6 +998,9 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
             # >>> KEY FIX: Signal the tracking loop to reset <<<
             _wake_event.set()
 
+            from update_checker import notify_wake   # ← ADD THIS
+            notify_wake()                            # ← ADD THIS
+
             def _reconnect():
                 global _wake_handled
                 for attempt in range(10):

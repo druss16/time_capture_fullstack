@@ -176,48 +176,28 @@ def _restart_into_new_exe():
 # ============================================================
 
 def _auto_update_windows(download_url: str, latest_version: str) -> bool:
-    """Download and silently install update on Windows."""
-    import subprocess
-
-    app_data = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "TimeTracker", "updates")
-    os.makedirs(app_data, exist_ok=True)
-    installer_path = os.path.join(app_data, f"TimeTracker-{latest_version}-Setup.exe")
-
-    try:
-        # FIX: Wait for network before downloading
-        if not _wait_for_network(download_url):
-            return False
-
-        print(f"[UPDATE] Downloading v{latest_version}...")
-
-        # FIX: Use timeout-aware download instead of urlretrieve
-        file_size = _download_with_timeout(download_url, installer_path, timeout=DOWNLOAD_TIMEOUT)
-        print(f"[UPDATE] Downloaded ({file_size:,} bytes) to {installer_path}")
-
-        # Sanity check - installer should be at least 5MB
-        if file_size < 5 * 1024 * 1024:
-            print(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
-            _cleanup_file(installer_path)
-            return False
-
-        # Run Inno Setup installer silently
-        # /VERYSILENT       = no UI at all
-        # /SUPPRESSMSGBOXES = suppress any popups
-        # /NORESTART        = don't reboot
-        # /CLOSEAPPLICATIONS = close running TimeTracker first
-        print(f"[UPDATE] Installing v{latest_version} silently...")
-        subprocess.Popen(
-            [installer_path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
-            creationflags=0x08000000  # CREATE_NO_WINDOW
-        )
-
-        print(f"[UPDATE] Installer launched - update will complete momentarily")
-        return True
-
-    except Exception as e:
-        print(f"[UPDATE] Auto-update failed: {e}")
-        _cleanup_file(installer_path)
-        return False
+    """Show update dialog on Windows - let user install manually.
+    Silent install is blocked by enterprise AV (Bitdefender ATC etc.)."""
+    import ctypes
+    
+    MB_OKCANCEL = 0x01
+    MB_ICONINFORMATION = 0x40
+    MB_TOPMOST = 0x40000
+    MB_SETFOREGROUND = 0x10000
+    
+    result = ctypes.windll.user32.MessageBoxW(
+        0,
+        f"TimeTracker v{latest_version} is available.\n\n"
+        "Click OK to download the update.",
+        "TimeTracker Update Available",
+        MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND
+    )
+    
+    if result == 1:  # IDOK
+        import webbrowser
+        webbrowser.open(download_url)
+    
+    return True  # Mark as handled either way
 
 
 def _auto_update_mac(download_url: str, latest_version: str) -> bool:

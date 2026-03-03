@@ -26,6 +26,9 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 
+[Run]
+Filename: "{app}\TimeTrackerAgent.exe"; Description: "Start TimeTracker Agent"; Flags: nowait postinstall
+
 ; Install to localappdata
 DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
@@ -394,7 +397,7 @@ begin
     RestoreUserConfig();
     WriteOrgTokenToConfig();   // ← NEW: Write org_token if provided
     // Always launch agent after install (works in silent mode too)
-    Exec(ExpandConstant('{app}\TimeTrackerAgent.exe'), '', '', SW_HIDE, ewNoWait, ResultCode);
+    CreateScheduledTask
   end;
 end;
 

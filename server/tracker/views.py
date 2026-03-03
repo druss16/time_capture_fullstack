@@ -6637,7 +6637,7 @@ def agent_error_report(request):
     
     No auth required - uses device_id to find user.
     """
-    from tracker.models import AgentError, Device
+    from tracker.models import AgentError, AgentDevice
     
     data = request.data
     device_id = data.get('device_id')
@@ -6647,10 +6647,10 @@ def agent_error_report(request):
     org = None
     if device_id:
         try:
-            device = Device.objects.select_related('user', 'org').get(device_id=device_id)
+            device = AgentDevice.objects.select_related('user', 'org').get(device_id=device_id)
             user = device.user
             org = device.org
-        except Device.DoesNotExist:
+        except AgentDevice.DoesNotExist:
             pass
     
     # Parse client timestamp

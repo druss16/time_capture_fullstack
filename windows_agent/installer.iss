@@ -76,9 +76,6 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\timetracker.ico"; Tasks: desktopicon
 
-[Run]
-Filename: "{app}\TimeTrackerAgent.exe"; Description: "Start TimeTracker Agent"; Flags: nowait postinstall
-
 [UninstallRun]
 Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopAgent"
 
@@ -396,6 +393,8 @@ begin
     RestoreUserConfig();
     WriteOrgTokenToConfig();   // ← NEW: Write org_token if provided
     CreateScheduledTask;
+    // Always launch agent after install (works in silent mode too)
+    Exec(ExpandConstant('{app}\TimeTrackerAgent.exe'), '', '', SW_HIDE, ewNoWait, ResultCode);
   end;
 end;
 

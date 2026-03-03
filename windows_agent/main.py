@@ -1611,7 +1611,11 @@ def run_agent():
                 on_client_rejected=lambda data: log(f"[GUI] Client rejected"),
                 get_today_time=fetch_today_time,
                 fetch_clients=lambda: fetch_clients_from_backend(api_base, api_key),
-                set_current_client=lambda cid: set_current_client_backend(api_base, api_key, cid),
+                set_current_client=lambda cid: _apply_client_switch(
+                    cid,
+                    next((c.get("name") for c in (sync.clients or []) if c.get("id") == cid), "Unknown"),
+                    source="tray_menu"
+                ),
                 get_current_client=lambda: get_current_client_from_backend(api_base, api_key),
                 repair_callback=repair_device,
                 sync=sync,

@@ -2717,6 +2717,26 @@ def run_agent():
         elif not NOTIF_ENABLED:
             log("[NOTIF] Push notifications disabled by config")
 
+    def _on_gui_client_switch(client_id):
+        """Called when user picks a client from the GUI menu."""
+        set_current_client_backend(API_BASE, api_key, client_id)
+        if ai_switcher:
+            cname = None
+            if sync and sync.clients:
+                for c in sync.clients:
+                    if c.get("id") == client_id:
+                        cname = c.get("name")
+                        break
+            ai_switcher.on_manual_switch(client_id, cname or "Unknown")
+        if notif_manager:
+            cname_for_notif = None
+            if sync and sync.clients:
+                for c in sync.clients:
+                    if c.get("id") == client_id:
+                        cname_for_notif = c.get("name")
+                        break
+            notif_manager.set_current_client(client_id, cname_for_notif)
+
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
@@ -2731,7 +2751,7 @@ def run_agent():
                 on_client_rejected=handle_client_rejected,
                 get_today_time=fetch_today_time,
                 fetch_clients=lambda: fetch_clients_from_backend(API_BASE, API_KEY),
-                set_current_client=lambda client_id: set_current_client_backend(API_BASE, API_KEY, client_id),
+                set_current_client=lambda client_id: _on_gui_client_switch(client_id),
                 get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY),
                 repair_callback=_gui_pair_callback,
                 sync=sync,

@@ -668,11 +668,15 @@ class AIClientSwitcher:
         """Called every POLL_SECONDS to check if pending switch met dwell threshold."""
         if not self._pending_switch:
             return
+        fire = None
         with self._lock:
             p = self._pending_switch
             if p and (time.time() - p["first_seen"]) >= self.config["dwell_seconds_before_switch"]:
-                self._execute_switch(p)
+                fire = p
                 self._pending_switch = None
+        # Execute OUTSIDE the lock to prevent deadlocks
+        if fire:
+            self._execute_switch(fire)
 
     def undo_last_switch(self) -> bool:
         """Revert the most recent auto-switch (within undo window)."""
@@ -742,6 +746,21 @@ class AIClientSwitcher:
                 self.stats["file_conv"] += 1
                 self._queue_switch(file_hit)
                 return
+
+            # --- Suggestion: confident enough to suggest, not enough to auto-switch ---
+            best_local = regex_hit or learned_hit or file_hit
+            if best_local and best_local.client_id != cur_id:
+                if best_local.confidence >= self.config["suggest_threshold"]:
+                    if self.notif_manager and hasattr(self.notif_manager, "notify_client_suggestion"):
+                        self.notif_manager.notify_client_suggestion(
+                            client_id=best_local.client_id,
+                            client_name=best_local.client_name,
+                            confidence=best_local.confidence,
+                            reason=best_local.reasoning,
+                        )
+                        logger.info(f"[AI-SWITCH] Suggested: {best_local.client_name} "
+                                    f"(conf={best_local.confidence:.2f}, below auto-switch threshold)")
+                        return
 
             # --- Tier 2: OpenAI (only if all local methods failed) ---
             if self.openai_api_key and self.config["enabled"]:

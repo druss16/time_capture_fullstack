@@ -670,11 +670,15 @@ class AIClientSwitcher:
         """Called every POLL_SECONDS to check if pending switch met dwell threshold."""
         if not self._pending_switch:
             return
+        fire = None
         with self._lock:
             p = self._pending_switch
             if p and (time.time() - p["first_seen"]) >= self.config["dwell_seconds_before_switch"]:
-                self._execute_switch(p)
+                fire = p
                 self._pending_switch = None
+        # Execute OUTSIDE the lock to prevent deadlocks
+        if fire:
+            self._execute_switch(fire)
 
     def undo_last_switch(self) -> bool:
         """Revert the most recent auto-switch (within undo window)."""

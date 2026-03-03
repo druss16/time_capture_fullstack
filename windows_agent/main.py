@@ -351,23 +351,31 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
 
     # 3. GUI update (tray tooltip, floating widget, state, menu checkmarks)
     if gui_menu_bar:
-        # _switch_client updates: state + tooltip + widget + menu checkmarks
         if hasattr(gui_menu_bar, '_switch_client'):
             gui_menu_bar._switch_client(client_id, client_name)
         else:
-            # Fallback: update pieces individually
             if hasattr(gui_menu_bar, 'state'):
                 gui_menu_bar.state.set_client(client_id, client_name)
             if hasattr(gui_menu_bar, 'refresh_client_menu') and sync and sync.clients:
                 gui_menu_bar.refresh_client_menu(sync.clients)
+
+        # Force tray icon to refresh menu + tooltip immediately
+        if hasattr(gui_menu_bar, 'icon') and gui_menu_bar.icon:
+            try:
+                gui_menu_bar.icon.update_menu()
+            except Exception:
+                pass
 
     # 4. Notification manager
     if notif_manager:
         notif_manager.set_current_client(client_id, client_name)
 
     # 5. AI switcher
-    if ai_switcher:
+    # 5. AI switcher — only snooze on MANUAL switches, not AI auto-switches
+    if ai_switcher and source != "ai_switcher":
         ai_switcher.on_manual_switch(client_id, client_name)
+    elif ai_switcher:
+        ai_switcher.set_current_client(client_id, client_name)
 
 
 # ---------------- Logging Setup ----------------

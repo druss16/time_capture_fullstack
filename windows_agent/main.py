@@ -1452,6 +1452,7 @@ def run_agent():
 
     # === FORCED UPDATE CHECK ===
     from update_checker import check_for_update_blocking, start_background_checker
+    log(f"[UPDATE] Starting update check (current={APP_VERSION})")
     check_for_update_blocking(API_BASE, APP_VERSION)
     
     try:

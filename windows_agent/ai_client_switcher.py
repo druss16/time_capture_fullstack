@@ -225,8 +225,8 @@ def _build_client_matchers(clients: list) -> list:
             if len(needle) < 3:
                 continue
             escaped = re.escape(needle.lower())
-            # Allow flexible separators between words
-            flex = re.sub(r'\\ ', r'[\\s_\\-.]?', escaped)
+            # Replace ANY separator (space, underscore, dash, dot) with flexible matcher
+            flex = re.sub(r'[\s_\-\.]+', r'[\\s_\\-.]*', escaped)
             pat = re.compile(
                 r'(?:^|[\s_\-./\\|:,()\'"<>*])' + flex + r'(?:$|[\s_\-./\\|:,()\'"<>*])',
                 re.IGNORECASE,
@@ -924,7 +924,8 @@ class AIClientSwitcher:
                 self._switch_history = self._switch_history[-max_hist:]
 
             # Notification toast
-            self._notify_switch(cname, old_name)
+            self._notify_switch(cname, old_name, conf=conf, method=method)
+
 
             self.stats["switches"] += 1
             logger.info(f"[AI-SWITCH] \u2705 {old_name} \u2192 {cname} "

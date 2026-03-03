@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI Client Auto-Switcher for TimeTracker Mac Agent
+AI Client Auto-Switcher for TimeTracker Windows Agent
 
 Two-tier client detection from window titles:
   Tier 1: Local pattern matching (instant, free) — covers ~80% of cases
@@ -8,9 +8,10 @@ Two-tier client detection from window titles:
     - Persistent pattern cache (remembers prior AI decisions)
     - Learned rules that strengthen with repeated confirms
     - CPA file-naming convention detection
-  Tier 2: OpenAI classification (smart, paid) — ambiguous cases only
-    - Debounced + batched to minimize API calls
-    - Results cached locally for instant future lookups
+  Tier 2: Backend AI classification (smart, server-side) — ambiguous cases only
+    - Routed through TimeTracker backend (backend holds OpenAI key)
+    - Results cached server-side per-org (shared across all users in firm)
+    - Results also cached locally for instant future lookups
 
 Integration points (called from main.py):
   on_window_change()   — every focus change in the tracking loop
@@ -20,7 +21,7 @@ Integration points (called from main.py):
   undo_last_switch()   — revert most recent auto-switch
 """
 
-import json, os, re, time, threading, hashlib, logging
+import json, os, re, time, threading, hashlib, logging, urllib.request, urllib.error
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List
 from datetime import datetime, timezone
@@ -39,7 +40,7 @@ class ClientMatch:
     client_name: str
     confidence: float          # 0.0 - 1.0
     match_method: str          # "exact", "alias", "pattern_cache", "learned_rule",
-                               # "learned_partial", "file_convention", "openai"
+                               # "learned_partial", "file_convention", "backend_ai"
     matched_token: str = ""
     reasoning: str = ""
 
@@ -65,22 +66,19 @@ DEFAULT_CONFIG = {
 
     # --- Thresholds ---
     "local_confidence_threshold": 0.80,     # Tier 1 auto-switch minimum
-    "openai_confidence_threshold": 0.75,    # Tier 2 auto-switch minimum
-    "suggest_threshold": 0.55,              # Below local threshold but worth an AI check
+    "openai_confidence_threshold": 0.75,    # Tier 2 (backend AI) auto-switch minimum
+    "suggest_threshold": 0.55,              # Below local threshold but worth a suggestion
 
     # --- Timing ---
     "dwell_seconds_before_switch": 8,       # Must dwell N seconds before auto-switch fires
     "cooldown_seconds": 120,                # Don't re-suggest same client within N seconds
     "manual_override_snooze_minutes": 30,   # After manual switch, snooze AI for N minutes
 
-    # --- OpenAI ---
-    "openai_model": "gpt-4o-mini",
-    "openai_timeout": 8,
-    "openai_max_tokens": 600,
-    "openai_temperature": 0.1,
-    "max_openai_calls_per_hour": 30,
+    # --- Backend AI ---
+    "ai_timeout": 10,
+    "max_ai_calls_per_hour": 60,
     "ai_debounce_seconds": 5.0,            # Wait N seconds to batch AI calls
-    "ai_max_batch": 5,                     # Max titles per OpenAI request
+    "ai_max_batch": 5,                     # Max titles per backend request
 
     # --- Behavior ---
     "learn_from_confirms": True,
@@ -95,10 +93,11 @@ DEFAULT_CONFIG = {
     "cache_ttl_days": 30,
 
     # --- Skip Rules ---
-    "skip_bundles": {
-        "com.apple.finder", "com.apple.systempreferences",
-        "com.apple.ActivityMonitor", "com.apple.calculator",
-        "com.apple.Spotlight", "com.apple.loginwindow",
+    "skip_exes": {
+        "explorer.exe", "searchapp.exe", "searchui.exe",
+        "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+        "lockapp.exe", "logonui.exe", "calculator.exe",
+        "taskmgr.exe", "snippingtool.exe", "mspaint.exe",
     },
     "skip_title_patterns": [
         r"^$", r"^untitled$", r"^new tab", r"^google$", r"^about:blank$",
@@ -114,7 +113,7 @@ LEARNED_RULES_PATH = os.path.expanduser("~/.timetracker/ai_switcher_rules.json")
 
 class PatternCache:
     """
-    Persists title→client mappings learned from AI.
+    Persists title->client mappings learned from AI.
     Normalizes titles so "Smith_Co_1040_2024.pdf" and
     "Smith_Co_1120S_2024.pdf" map to the same cache key.
     """
@@ -146,19 +145,11 @@ class PatternCache:
 
     @staticmethod
     def _signature(title: str) -> str:
-        """Normalize title into a stable hash for cache lookup.
-
-        Replaces dates, long numbers, and file extensions so that
-        'Smith_1040_2024.pdf' and 'Smith_1120_2025.pdf' produce
-        the same (or similar) signatures.
-        """
+        """Normalize title into a stable hash for cache lookup."""
         t = title.lower().strip()
-        # Normalize dates (YYYY-MM-DD, MM/DD/YYYY, etc.)
         t = re.sub(r'\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b', 'DATE', t)
         t = re.sub(r'\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b', 'DATE', t)
-        # Normalize long numbers (EINs, tracking numbers, etc.)
         t = re.sub(r'\b\d{5,}\b', 'NNNNN', t)
-        # Normalize file extensions
         t = re.sub(r'\.\w{2,5}$', '.EXT', t)
         return hashlib.md5(t.encode()).hexdigest()[:16]
 
@@ -183,7 +174,6 @@ class PatternCache:
                 "ts": time.time(),
                 "example_title": title[:120],
             }
-            # Evict oldest if over limit
             if len(self._data) > self.max_entries:
                 oldest = min(self._data, key=lambda k: self._data[k].get("ts", 0))
                 del self._data[oldest]
@@ -202,15 +192,21 @@ class PatternCache:
 # Pre-compiled Regex Matchers (fast local matching)
 # =====================================================================
 
+# Boundary characters for word edges in window titles
+_BOUNDARY = r'[\s_\-./\\|:,()\'"<>*\u2013\u2014]'
+
+
 def _normalize(s: str) -> str:
-    s = re.sub(r'^\*+', '', s)  # Strip unsaved-file indicator (* prefix)
+    """Normalize window title for matching."""
+    s = re.sub(r'^\*+', '', s)  # Strip Notepad's unsaved indicator
     return re.sub(r'\s+', ' ', s.lower().strip())
+
 
 def _build_client_matchers(clients: list) -> list:
     """Pre-compile regex patterns for each client name + aliases.
 
-    Patterns allow flexible separators so "SmithCo" matches
-    "smith_co", "smith-co", "smith.co", etc.
+    Patterns allow flexible separators so "Dauphin & Fantacone" matches
+    "dauphin fantacone", "dauphin_fantacone", "dauphin-fantacone", etc.
     """
     matchers = []
     for c in clients:
@@ -223,10 +219,11 @@ def _build_client_matchers(clients: list) -> list:
             if len(needle) < 3:
                 continue
             escaped = re.escape(needle.lower())
-            # Allow flexible separators between words
-            flex = re.sub(r'[\s_\-\.&]+', r'[\\s_\\-.&]*', escaped)
+            # Replace ANY separator (space, underscore, dash, dot, ampersand)
+            # AND backslashes left by re.escape with flexible matcher
+            flex = re.sub(r'[\\\s_\-\.&]+', r'[\\s_\\-.&]*', escaped)
             pat = re.compile(
-                r'(?:^|[\s_\-./\\|:,()\'"<>*])' + flex + r'(?:$|[\s_\-./\\|:,()\'"<>*])',
+                r'(?:^|' + _BOUNDARY + r')' + flex + r'(?:$|' + _BOUNDARY + r')',
                 re.IGNORECASE,
             )
             patterns.append(pat)
@@ -290,7 +287,7 @@ def _regex_match(title: str, file_path: str, matchers: list) -> Optional[ClientM
 # =====================================================================
 
 class LearnedRules:
-    """Persistent title-pattern → client mappings that improve with use."""
+    """Persistent title-pattern -> client mappings that improve with use."""
 
     def __init__(self, path=LEARNED_RULES_PATH):
         self.path = path
@@ -315,7 +312,7 @@ class LearnedRules:
             logger.warning(f"[AI-SWITCH] Save rules failed: {e}")
 
     def learn(self, title: str, client_id: int, client_name: str, source: str = "ai"):
-        """Record title→client mapping. Strengthens on repeat, weakens on conflict."""
+        """Record title->client mapping. Strengthens on repeat, weakens on conflict."""
         for pat in self._extract_patterns(title):
             key = pat.lower()
             if key in self.rules:
@@ -324,7 +321,6 @@ class LearnedRules:
                     existing["hits"] = existing.get("hits", 0) + 1
                     existing["confidence"] = min(0.99, existing["confidence"] + 0.05)
                 else:
-                    # Conflicting client — weaken existing rule
                     existing["confidence"] = max(0.3, existing["confidence"] - 0.15)
             else:
                 self.rules[key] = {
@@ -345,7 +341,6 @@ class LearnedRules:
         for pat in self._extract_patterns(title):
             key = pat.lower()
 
-            # Exact rule match
             if key in self.rules:
                 rule = self.rules[key]
                 if rule["client_id"] != current_client_id and rule["confidence"] > best_conf:
@@ -359,7 +354,6 @@ class LearnedRules:
                     )
                     best_conf = rule["confidence"]
 
-            # Partial match (substring overlap)
             for rk, rule in self.rules.items():
                 if rule["client_id"] == current_client_id:
                     continue
@@ -381,16 +375,15 @@ class LearnedRules:
     def _extract_patterns(title: str) -> List[str]:
         """Extract reusable patterns from a window title."""
         patterns = []
-        # Strip app suffixes: "Smith_1040.pdf - Preview" → "Smith_1040.pdf"
         cleaned = re.sub(
-            r'\s*[-\u2013\u2014|]\s*(Preview|Safari|Google Chrome|Chrome|Brave|'
-            r'Firefox|Microsoft Excel|Microsoft Word|Adobe Acrobat|Finder|'
-            r'TextEdit|Code|VS Code|Terminal).*$',
+            r'\s*[-\u2013\u2014|]\s*(Google Chrome|Chrome|Brave|Firefox|'
+            r'Microsoft Edge|Microsoft Excel|Microsoft Word|Microsoft PowerPoint|'
+            r'Adobe Acrobat|Notepad\+?\+?|Visual Studio Code|Code|'
+            r'Windows PowerShell|Command Prompt|Terminal|File Explorer).*$',
             '', title, flags=re.IGNORECASE
         ).strip()
         if cleaned:
             patterns.append(cleaned.lower())
-        # First segment before separator
         for sep in [' - ', ' | ', ' \u2014 ', ' \u2013 ', '_']:
             if sep in cleaned:
                 first = cleaned.split(sep)[0].strip()
@@ -437,88 +430,54 @@ def _cpa_file_match(title: str, clients: list, current_client_id: int = None) ->
 
 
 # =====================================================================
-# OpenAI Batched Classifier (Tier 2)
+# Backend AI Classifier (Tier 2) — replaces direct OpenAI calls
 # =====================================================================
 
-def _build_ai_prompt(titles: list, clients: list) -> tuple:
-    """Build system + user prompt for batched OpenAI classification."""
-    client_lines = []
-    for c in clients[:50]:
-        aliases = c.get("aliases") or []
-        alias_str = f" (aliases: {', '.join(aliases[:3])})" if aliases else ""
-        client_lines.append(f"  ID {c['id']}: {c.get('name', '')}{alias_str}")
+def _call_backend_classify(titles: list, api_base: str, api_key: str,
+                           timeout: int = 10) -> List[Optional[ClientMatch]]:
+    """
+    Call backend POST /api/ai/classify-batch/ endpoint.
 
-    system = f"""You are a client identification engine for a CPA/accounting firm's time tracker.
+    The backend handles:
+      - OpenAI API key management (one key, server-side)
+      - Caching per-org (all users in a firm share results)
+      - Rate limiting per org
+      - Plan gating (Professional/Executive tiers)
 
-TASK: Given window titles / file names, determine which CLIENT the user is working on.
-
-KNOWN CLIENTS:
-{chr(10).join(client_lines)}
-
-RULES:
-1. CPA firms name files like: "ClientName_FormType_Year", "ClientName - 1040 - 2024"
-2. Look for client names, abbreviations, or aliases in the title or path.
-3. Clear match → confidence 0.85-0.95. Partial/ambiguous → 0.50-0.75.
-4. If NO client can be identified → return null. NEVER guess.
-5. Generic windows (Chrome, Finder, Slack with no client info) → null.
-
-Return ONLY a JSON array, one object per input:
-[{{"id":"...","client_id":<int|null>,"client_name":"<str|null>","confidence":<float>,"reasoning":"<brief>"}}]"""
-
-    items = []
-    for t in titles:
-        item = {"id": t["id"], "title": t["title"]}
-        if t.get("file_path"):
-            item["file_path"] = t["file_path"]
-        if t.get("app"):
-            item["app"] = t["app"]
-        items.append(item)
-
-    user = f"Identify the client for each:\n{json.dumps(items, indent=1)}"
-    return system, user
-
-
-def _call_openai_batch(titles: list, clients: list, api_key: str, cfg: dict) -> List[Optional[ClientMatch]]:
-    """Call OpenAI with a batch of titles. Returns list of ClientMatch or None per title."""
-    if not api_key or not titles:
+    Returns list of ClientMatch or None per title.
+    """
+    if not api_base or not api_key or not titles:
         return [None] * len(titles)
 
-    system, user = _build_ai_prompt(titles, clients)
+    url = f"{api_base.rstrip('/')}/ai/classify-batch/"
+
+    payload = {
+        "titles": [
+            {
+                "title": t.get("title", ""),
+                "app_name": t.get("app", ""),
+                "file_path": t.get("file_path", ""),
+            }
+            for t in titles
+        ]
+    }
+
     try:
-        import urllib.request
-        payload = {
-            "model": cfg.get("openai_model", "gpt-4o-mini"),
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": cfg.get("openai_temperature", 0.1),
-            "max_tokens": cfg.get("openai_max_tokens", 600),
-        }
         req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
+            url,
             data=json.dumps(payload).encode("utf-8"),
             method="POST",
         )
-        req.add_header("Authorization", f"Bearer {api_key}")
+        req.add_header("Authorization", f"DeviceKey {api_key}")
         req.add_header("Content-Type", "application/json")
 
-        timeout = cfg.get("openai_timeout", 8)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
 
-        raw = (data["choices"][0]["message"]["content"] or "").strip()
-        raw = re.sub(r'^```(?:json)?\s*', '', raw)
-        raw = re.sub(r'\s*```$', '', raw)
-
-        results = json.loads(raw)
-        if not isinstance(results, list):
-            raise ValueError("Expected JSON array from OpenAI")
-
-        result_map = {str(r.get("id", "")): r for r in results}
+        results_raw = data.get("results") or []
         matches = []
-        for t in titles:
-            r = result_map.get(t["id"])
+
+        for i, r in enumerate(results_raw):
             if not r or not r.get("client_id"):
                 matches.append(None)
                 continue
@@ -526,14 +485,36 @@ def _call_openai_batch(titles: list, clients: list, api_key: str, cfg: dict) -> 
                 client_id=int(r["client_id"]),
                 client_name=r.get("client_name") or "",
                 confidence=float(r.get("confidence", 0.0)),
-                match_method="openai",
-                matched_token=t["title"][:80],
+                match_method="backend_ai",
+                matched_token=titles[i]["title"][:80] if i < len(titles) else "",
                 reasoning=r.get("reasoning", ""),
             ))
+
+        # Pad if backend returned fewer results than expected
+        while len(matches) < len(titles):
+            matches.append(None)
+
         return matches
 
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")[:200]
+        except Exception:
+            pass
+
+        if e.code == 403:
+            logger.info(f"[AI-SWITCH] Backend AI not available (plan restriction): {body}")
+        elif e.code == 429:
+            logger.warning(f"[AI-SWITCH] Backend AI rate limited: {body}")
+        elif e.code == 404:
+            logger.debug(f"[AI-SWITCH] Backend AI endpoint not deployed yet")
+        else:
+            logger.error(f"[AI-SWITCH] Backend classify HTTP {e.code}: {body}")
+        return [None] * len(titles)
+
     except Exception as e:
-        logger.error(f"[AI-SWITCH] OpenAI batch error: {e}")
+        logger.error(f"[AI-SWITCH] Backend classify error: {e}")
         return [None] * len(titles)
 
 
@@ -543,7 +524,7 @@ def _call_openai_batch(titles: list, clients: list, api_key: str, cfg: dict) -> 
 
 class AIClientSwitcher:
     """
-    Orchestrates local + AI client detection and auto-switching.
+    Orchestrates local + backend AI client detection and auto-switching.
 
     Constructor accepts the same objects main.py already has:
       gui_menu_bar, notif_manager, sync — used directly, no adapters needed.
@@ -562,6 +543,7 @@ class AIClientSwitcher:
         self.config = {**DEFAULT_CONFIG, **(config or {})}
         self.api_base = api_base
         self.api_key = api_key
+        # openai_api_key kept for backwards compat but no longer used by agent
         self.openai_api_key = openai_api_key
         self.set_current_client_fn = set_current_client_fn
         self.gui_menu_bar = gui_menu_bar
@@ -582,7 +564,7 @@ class AIClientSwitcher:
             self.config["cache_ttl_days"],
         )
 
-        # Tier 2: OpenAI rate limiter
+        # Tier 2: Backend AI rate limiter
         self._ai_call_count = 0
         self._ai_window_start = time.time()
 
@@ -594,15 +576,15 @@ class AIClientSwitcher:
         # Switch state
         self._current_client_id: Optional[int] = None
         self._current_client_name: Optional[str] = None
-        self._pending_switch: Optional[dict] = None    # {client_id, client_name, confidence, first_seen, match}
-        self._cooldowns: Dict[int, float] = {}         # client_id → expiry timestamp
+        self._pending_switch: Optional[dict] = None
+        self._cooldowns: Dict[int, float] = {}
         self._manual_override_until: float = 0.0
         self._switch_history: List[SwitchEvent] = []
         self._lock = threading.Lock()
         self._last_title: str = ""
 
         # Skip rules
-        self._skip_bundles = set(self.config.get("skip_bundles", set()))
+        self._skip_exes = set(self.config.get("skip_exes", set()))
         self._skip_patterns = [
             re.compile(p, re.IGNORECASE)
             for p in self.config.get("skip_title_patterns", [])
@@ -610,12 +592,15 @@ class AIClientSwitcher:
 
         # Stats
         self.stats = {"regex": 0, "cache": 0, "learned": 0, "file_conv": 0,
-                      "openai": 0, "switches": 0, "suppressed": 0}
+                      "backend_ai": 0, "switches": 0, "suppressed": 0}
+
+        # Determine if backend AI is available
+        self._backend_ai_available = bool(api_base and api_key)
 
         logger.info(
             f"[AI-SWITCH] Ready: {len(clients)} clients, "
             f"dwell={self.config['dwell_seconds_before_switch']}s, "
-            f"openai={'yes' if openai_api_key else 'no'}"
+            f"backend_ai={'yes' if self._backend_ai_available else 'no'}"
         )
 
     # =================================================================
@@ -627,7 +612,8 @@ class AIClientSwitcher:
         self._clients = clients or []
         self._client_map = {c["id"]: c for c in self._clients}
         self._matchers = _build_client_matchers(self._clients)
-        self._learned.update_clients_ref(self._clients) if hasattr(self._learned, 'update_clients_ref') else None
+        if hasattr(self._learned, 'update_clients_ref'):
+            self._learned.update_clients_ref(self._clients)
         logger.info(f"[AI-SWITCH] Updated: {len(self._clients)} clients")
 
     def set_current_client(self, client_id: int, client_name: str):
@@ -645,24 +631,20 @@ class AIClientSwitcher:
             self._pending_switch = None
             logger.info(f"[AI-SWITCH] Manual override: {client_name} (snoozed {snooze_min}min)")
 
-    def on_window_change(self, app_name: str, bundle_id: str, title: str,
+    def on_window_change(self, app_name: str, exe_name: str, title: str,
                          url: str = None, file_path: str = None, in_meeting: bool = False):
         """Called from tracking loop on every focus change."""
         if not self.config["enabled"] or not title or title == self._last_title:
             return
         self._last_title = title
-
         if in_meeting or time.time() < self._manual_override_until:
             return
-
-        if self._should_skip(title, bundle_id):
+        if self._should_skip(title, exe_name):
             self._clear_pending()
             return
-
-        # Run detection in background to avoid blocking the tracking loop
         threading.Thread(
             target=self._detect,
-            args=(app_name, bundle_id, title, url, file_path),
+            args=(app_name, exe_name, title, url, file_path),
             daemon=True,
         ).start()
 
@@ -690,7 +672,7 @@ class AIClientSwitcher:
         if time.time() - last.timestamp > self.config["undo_window_seconds"]:
             return False
 
-        logger.info(f"[AI-SWITCH] UNDO: {last.to_client_name} → {last.from_client_name}")
+        logger.info(f"[AI-SWITCH] UNDO: {last.to_client_name} \u2192 {last.from_client_name}")
         self._do_backend_switch(last.from_client_id, last.from_client_name)
         self._notify_switch(last.from_client_name, last.to_client_name, is_undo=True)
         return True
@@ -702,7 +684,7 @@ class AIClientSwitcher:
     # Detection Pipeline
     # =================================================================
 
-    def _detect(self, app_name: str, bundle_id: str, title: str,
+    def _detect(self, app_name: str, exe_name: str, title: str,
                 url: str, file_path: str):
         """Run the full detection pipeline (background thread)."""
         try:
@@ -764,9 +746,8 @@ class AIClientSwitcher:
                                     f"(conf={best_local.confidence:.2f}, below auto-switch threshold)")
                         return
 
-            # --- Tier 2: OpenAI (only if all local methods failed) ---
-            if self.openai_api_key and self.config["enabled"]:
-                # Check if we got a weak local match worth verifying via AI
+            # --- Tier 2: Backend AI (only if all local methods failed) ---
+            if self._backend_ai_available and self.config["enabled"]:
                 if (regex_hit and regex_hit.confidence >= self.config["suggest_threshold"]) or not regex_hit:
                     self._enqueue_for_ai(title, file_path, app_name)
                     return
@@ -803,20 +784,20 @@ class AIClientSwitcher:
                             f"(conf={match.confidence:.2f}, via={match.match_method})")
 
     # =================================================================
-    # AI Batch Queue (debounced)
+    # Backend AI Batch Queue (debounced)
     # =================================================================
 
     def _enqueue_for_ai(self, title: str, file_path: str, app_name: str):
         """Add title to AI batch queue. Fires after debounce or when batch is full."""
-        if not self.openai_api_key:
+        if not self._backend_ai_available:
             return
 
-        # Rate limit check
+        # Rate limit check (client-side, server also rate limits)
         now = time.time()
         if now - self._ai_window_start > 3600:
             self._ai_call_count = 0
             self._ai_window_start = now
-        if self._ai_call_count >= self.config["max_openai_calls_per_hour"]:
+        if self._ai_call_count >= self.config["max_ai_calls_per_hour"]:
             return
 
         item = {
@@ -842,7 +823,7 @@ class AIClientSwitcher:
                 self._ai_timer.start()
 
     def _fire_ai_batch(self):
-        """Send queued titles to OpenAI in one batched call."""
+        """Send queued titles to backend for AI classification."""
         with self._ai_lock:
             if not self._ai_queue:
                 return
@@ -854,28 +835,37 @@ class AIClientSwitcher:
 
         def _run():
             try:
-                logger.info(f"[AI-SWITCH] OpenAI batch: {len(batch)} titles")
+                logger.info(f"[AI-SWITCH] Backend AI batch: {len(batch)} titles")
                 self._ai_call_count += 1
-                results = _call_openai_batch(batch, self._clients, self.openai_api_key, self.config)
+
+                results = _call_backend_classify(
+                    batch,
+                    api_base=self.api_base,
+                    api_key=self.api_key,
+                    timeout=self.config.get("ai_timeout", 10),
+                )
+
                 cur_id = self._current_client_id
 
                 for item, match in zip(batch, results):
                     if not match or match.client_id not in self._client_map:
                         continue
 
-                    # Cache the AI result for instant future lookups
-                    self._cache.put(item["title"], match.client_id, match.client_name, match.confidence)
+                    # Cache the result locally for instant future lookups
+                    self._cache.put(item["title"], match.client_id,
+                                    match.client_name, match.confidence)
 
                     # Learn the pattern for even faster future matching
                     if self.config["learn_from_confirms"]:
-                        self._learned.learn(item["title"], match.client_id, match.client_name, "ai")
+                        self._learned.learn(item["title"], match.client_id,
+                                            match.client_name, "backend_ai")
 
                     # Queue for switch if above threshold
                     if match.confidence >= self.config["openai_confidence_threshold"]:
                         if match.client_id != cur_id:
-                            self.stats["openai"] += 1
+                            self.stats["backend_ai"] += 1
                             self._queue_switch(match)
-                            cur_id = match.client_id  # Update for next item in batch
+                            cur_id = match.client_id
 
             except Exception as e:
                 logger.error(f"[AI-SWITCH] batch error: {e}")
@@ -898,26 +888,14 @@ class AIClientSwitcher:
             old_id = self._current_client_id
             old_name = self._current_client_name or "None"
 
-            # Backend switch
+            # Backend switch via callback
             if self.set_current_client_fn:
-                result = self.set_current_client_fn(cid, cname)
-                if result is False:
-                    return
+                self.set_current_client_fn(cid, cname)
 
             # Update internal state
             self._current_client_id = cid
             self._current_client_name = cname
             self._cooldowns[cid] = time.time() + self.config["cooldown_seconds"]
-
-            # Update GUI
-            if self.gui_menu_bar and hasattr(self.gui_menu_bar, "state"):
-                self.gui_menu_bar.state.set_client(cid, cname)
-                if hasattr(self.gui_menu_bar, "app") and self.gui_menu_bar.app:
-                    self.gui_menu_bar.app.title = f"\u23f1 {cname}"
-
-            # Update notification manager
-            if self.notif_manager and hasattr(self.notif_manager, "set_current_client"):
-                self.notif_manager.set_current_client(cid, cname)
 
             # Record history for undo
             self._switch_history.append(SwitchEvent(
@@ -937,7 +915,7 @@ class AIClientSwitcher:
                 self._switch_history = self._switch_history[-max_hist:]
 
             # Notification toast
-            self._notify_switch(cname, old_name)
+            self._notify_switch(cname, old_name, conf=conf, method=method)
 
             self.stats["switches"] += 1
             logger.info(f"[AI-SWITCH] \u2705 {old_name} \u2192 {cname} "
@@ -965,10 +943,9 @@ class AIClientSwitcher:
 
     def _notify_switch(self, new_name: str, old_name: str,
                        conf: float = 0, method: str = "", is_undo: bool = False):
-        """Show macOS notification for auto-switch or undo."""
+        """Show Windows toast notification for auto-switch or undo."""
         if not self.config["notify_on_switch"]:
             return
-
         if is_undo:
             title = "\u23f1 Client Reverted"
             body = f"Back to {new_name}"
@@ -978,48 +955,74 @@ class AIClientSwitcher:
             body = f"{old_name} \u2192 {new_name}"
             subtitle = f"Auto-detected ({int(conf * 100)}% confidence)" if conf else "Auto-detected"
 
+        full_body = f"{subtitle}\n{body}" if subtitle else body
+
+        # Method 1: win10toast
         try:
-            from UserNotifications import (
-                UNUserNotificationCenter, UNMutableNotificationContent,
-                UNNotificationRequest, UNNotificationSound,
+            from win10toast import ToastNotifier
+            toaster = ToastNotifier()
+            toaster.show_toast(title, full_body, duration=5, threaded=True)
+            return
+        except ImportError:
+            pass
+
+        # Method 2: PowerShell Windows.UI.Notifications
+        try:
+            import subprocess
+            ps_script = (
+                '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, '
+                'ContentType = WindowsRuntime] > $null; '
+                '$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(0); '
+                '$text = $template.GetElementsByTagName("text"); '
+                f'$text[0].AppendChild($template.CreateTextNode("{title}")) > $null; '
+                f'$text[1].AppendChild($template.CreateTextNode("{full_body}")) > $null; '
+                '$toast = [Windows.UI.Notifications.ToastNotification]::new($template); '
+                '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("TimeTracker").Show($toast)'
             )
-            c = UNMutableNotificationContent.alloc().init()
-            c.setTitle_(title)
-            c.setSubtitle_(subtitle)
-            c.setBody_(body)
-            c.setSound_(UNNotificationSound.defaultSound())
-            req_id = f"ai-switch-{int(time.time())}"
-            r = UNNotificationRequest.requestWithIdentifier_content_trigger_(req_id, c, None)
-            UNUserNotificationCenter.currentNotificationCenter() \
-                .addNotificationRequest_withCompletionHandler_(r, None)
+            subprocess.run(["powershell", "-Command", ps_script],
+                           timeout=5, capture_output=True)
+            return
         except Exception:
-            # Fallback to osascript
-            try:
-                import subprocess
-                subprocess.run(
-                    ["osascript", "-e",
-                     f'display notification "{body}" with title "{title}" subtitle "{subtitle}"'],
-                    timeout=3, capture_output=True,
-                )
-            except Exception:
-                pass
+            pass
+
+        # Method 3: Tkinter popup fallback
+        try:
+            def _show():
+                from tkinter import Tk, Label
+                root = Tk()
+                root.title(title)
+                root.attributes("-topmost", True)
+                root.geometry("350x80+{}+{}".format(
+                    root.winfo_screenwidth() - 370,
+                    root.winfo_screenheight() - 120))
+                root.overrideredirect(True)
+                root.configure(bg="#2d2d2d")
+                Label(root, text=title, fg="white", bg="#2d2d2d",
+                      font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x", padx=10, pady=(8, 0))
+                Label(root, text=full_body, fg="#cccccc", bg="#2d2d2d",
+                      font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=10)
+                root.after(4000, root.destroy)
+                root.mainloop()
+            threading.Thread(target=_show, daemon=True).start()
+        except Exception:
+            pass
 
     # =================================================================
     # Helpers
     # =================================================================
 
-    def _should_skip(self, title: str, bundle_id: str) -> bool:
+    def _should_skip(self, title: str, exe_name: str) -> bool:
         """Return True if this window should be ignored entirely."""
-        if bundle_id and bundle_id in self._skip_bundles:
+        if exe_name and exe_name.lower() in self._skip_exes:
             return True
         t = title.lower().strip()
         for pat in self._skip_patterns:
             if pat.search(t):
                 return True
-        # Generic app-name-only titles (no client info)
-        if t in {"google chrome", "safari", "brave browser", "firefox",
-                 "microsoft outlook", "mail", "slack", "finder",
-                 "microsoft teams", "zoom", "terminal", "iterm2"}:
+        if t in {"google chrome", "microsoft edge", "brave browser", "firefox",
+                 "microsoft outlook", "mail", "slack", "file explorer",
+                 "microsoft teams", "zoom", "windows powershell",
+                 "command prompt", "terminal", "task manager"}:
             return True
         return False
 

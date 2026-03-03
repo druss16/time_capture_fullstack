@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -301,6 +301,10 @@ urlpatterns = [
     path('agent/version-check/', views.agent_version_check),
 
     path("user/preferences/", views.user_preferences, name="user_preferences"),
+
+    # AI Classification (backend-powered)
+    path('ai/classify-window/', views_ai_classify.ai_classify_window, name='ai-classify-window'),
+    path('ai/classify-batch/', views_ai_classify.ai_classify_batch, name='ai-classify-batch'),
 
 
 ]

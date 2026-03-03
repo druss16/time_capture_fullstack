@@ -182,6 +182,12 @@ if SENTRY_DSN:
 OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "8"))
 OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
 
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+AI_CLASSIFY_MODEL = "gpt-4o-mini"
+AI_CLASSIFY_CACHE_TTL = 86400 * 7       # 7 days
+AI_CLASSIFY_RATE_LIMIT = 100            # per org per hour
+AI_CLASSIFY_ENABLED_PLANS = None        # None = all plans, or ["professional", "executive"]
+
 # -----------------------------------------------------
 # Internationalization
 # -----------------------------------------------------

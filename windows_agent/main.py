@@ -1695,7 +1695,6 @@ def run_agent():
     try:
         from ai_client_switcher import AIClientSwitcher
         
-        openai_key = config.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
         ai_switcher = AIClientSwitcher(
             config={
                 "enabled": True,
@@ -1706,13 +1705,11 @@ def run_agent():
             },
             api_base=API_BASE,
             api_key=config.get("api_key") or API_KEY,
-            openai_api_key=openai_key,
             set_current_client_fn=lambda cid, cname=None: _apply_client_switch(cid, cname or "Unknown", source="ai_switcher"),
             gui_menu_bar=gui_menu_bar,
             notif_manager=notif_manager,
             sync=sync,
         )
-        
         # Sync current client state on startup
         api_key_val = config.get("api_key") or API_KEY
         if api_key_val and API_BASE:

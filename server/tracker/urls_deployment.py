@@ -1,5 +1,6 @@
 from django.urls import path
-from . import views_deployment
+from . import views_deployment, views_autopair
+
 urlpatterns = [
     # Admin endpoints (authenticated)
     path('tokens/', views_deployment.list_deployment_tokens, name='deploy-tokens-list'),
@@ -10,4 +11,7 @@ urlpatterns = [
     path('confirm-user/', views_deployment.deploy_confirm_user, name='deploy-confirm-user'),
     # Provisioning monitoring
     path('provisioning/<slug:org_slug>/status/', views_deployment.provisioning_status, name='provisioning-status'),
+
+    path('auto-pair/', views_autopair.auto_pair_device, name='deploy-auto-pair'),
+
 ]

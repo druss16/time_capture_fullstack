@@ -25,7 +25,7 @@ def claim_with_auto_pair(api_base: str, org_token: str, hostname: str,
     
     Returns dict with status: "paired", "unprovisioned", or "error"
     """
-    url = f"{api_base.rstrip('/')}/devices/auto-pair/"
+    url = f"{api_base.rstrip('/')}/api/deploy/auto-pair/"
     
     # Generate or read device_id
     device_id = _get_or_create_device_id()
@@ -84,7 +84,7 @@ def claim_with_org_token_legacy(api_base: str, org_token: str, hostname: str,
     Legacy claim endpoint - falls back to email matching and user picker.
     Used when auto-pair doesn't find a hostname match.
     """
-    url = f"{api_base.rstrip('/')}/deploy/claim/"
+    url = f"{api_base.rstrip('/')}/api/deploy/claim/"
     payload = {
         "org_token": org_token,
         "hostname": hostname,
@@ -123,7 +123,7 @@ def confirm_user_selection(api_base: str, org_token: str, hostname: str,
     """
     Confirm user selection after the picker was shown (legacy flow).
     """
-    url = f"{api_base.rstrip('/')}/deploy/confirm-user/"
+    url = f"{api_base.rstrip('/')}/api/deploy/confirm-user/"
     payload = {
         "org_token": org_token,
         "hostname": hostname,

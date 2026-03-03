@@ -1085,43 +1085,6 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
 
 
 # ---------------- Startup Task Registration ----------------
-def register_startup_task():
-    """Register a Windows Task Scheduler task to ensure agent starts on logon."""
-    try:
-        task_name = "TimeTrackerAgent"
-
-        # Get the path to the current executable
-        if getattr(sys, 'frozen', False):
-            exe_path = f'"{sys.executable}"'
-        else:
-            exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
-
-        # Check if task already exists
-        check = subprocess.run(
-            ["schtasks", "/Query", "/TN", task_name],
-            capture_output=True, text=True
-        )
-        if check.returncode == 0:
-            log(f"[STARTUP] Task '{task_name}' already registered")
-            return
-
-        # Create task triggered on logon
-        result = subprocess.run([
-            "schtasks", "/Create",
-            "/TN", task_name,
-            "/TR", exe_path,
-            "/SC", "ONLOGON",
-            "/RL", "LIMITED",
-            "/F"  # Force overwrite
-        ], capture_output=True, text=True)
-
-        if result.returncode == 0:
-            log(f"[STARTUP] ✅ Registered startup task: {task_name}")
-        else:
-            log(f"[STARTUP] ⚠️ Failed to register task: {result.stderr}")
-
-    except Exception as e:
-        log(f"[STARTUP] Failed to register startup task: {e}")
 
 
 # ---------------- Event Posting ----------------

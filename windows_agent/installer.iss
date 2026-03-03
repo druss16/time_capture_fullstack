@@ -75,6 +75,7 @@ Source: "timetracker.ico"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\timetracker.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\timetracker.ico"; Tasks: desktopicon
+Name: "{userstartup}\TimeTracker Agent"; Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "start"
 
 [UninstallRun]
 Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopAgent"
@@ -392,7 +393,6 @@ begin
   if CurStep = ssPostInstall then begin
     RestoreUserConfig();
     WriteOrgTokenToConfig();   // ← NEW: Write org_token if provided
-    CreateScheduledTask;
     // Always launch agent after install (works in silent mode too)
     Exec(ExpandConstant('{app}\TimeTrackerAgent.exe'), '', '', SW_HIDE, ewNoWait, ResultCode);
   end;

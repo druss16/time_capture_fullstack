@@ -204,6 +204,7 @@ class PatternCache:
 # =====================================================================
 
 def _normalize(s: str) -> str:
+    s = re.sub(r'^\*+', '', s)  # Strip Notepad's unsaved indicator
     return re.sub(r'\s+', ' ', s.lower().strip())
 
 
@@ -227,7 +228,7 @@ def _build_client_matchers(clients: list) -> list:
             # Allow flexible separators between words
             flex = re.sub(r'\\ ', r'[\\s_\\-.]?', escaped)
             pat = re.compile(
-                r'(?:^|[\s_\-./\\|:,()\'"<>])' + flex + r'(?:$|[\s_\-./\\|:,()\'"<>])',
+                r'(?:^|[\s_\-./\\|:,()\'"<>*])' + flex + r'(?:$|[\s_\-./\\|:,()\'"<>*])',
                 re.IGNORECASE,
             )
             patterns.append(pat)

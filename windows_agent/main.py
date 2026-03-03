@@ -1684,6 +1684,13 @@ def run_agent():
         
         openai_key = config.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
         ai_switcher = AIClientSwitcher(
+            config={
+                "enabled": True,
+                "dwell_seconds_before_switch": 8,
+                "cooldown_seconds": 120,
+                "manual_override_snooze_minutes": 5,
+                "debug": VERBOSE,
+            },
             api_base=API_BASE,
             api_key=config.get("api_key") or API_KEY,
             openai_api_key=openai_key,

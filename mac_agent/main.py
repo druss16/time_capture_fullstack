@@ -3232,14 +3232,17 @@ def run_agent():
                             log(f"[FOCUS] {app_name} • {title or '(no title)'} • url={url or '-'} • path={fpath or '-'}")
 
                         # === Local client detection ===
-                        try:
-                            detected = detect_client_in_window(title, fpath)
-                            current_id = None
-                            if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
-                                current_id = gui_menu_bar.state.current_client_id
-                            maybe_suggest_client(detected, current_id)
-                        except Exception as e:
-                            log(f"[TRACKING] client detection error: {e}", "warning")
+                        # === Local client detection (fallback for low-confidence) ===
+                        if not ai_switcher:
+                            # No AI switcher — use old notification system
+                            try:
+                                detected = detect_client_in_window(title, fpath)
+                                current_id = None
+                                if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                                    current_id = gui_menu_bar.state.current_client_id
+                                maybe_suggest_client(detected, current_id)
+                            except Exception as e:
+                                log(f"[TRACKING] client detection error: {e}", "warning")
                     else:
                         if PRINT_EVERY_POLL:
                             log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")

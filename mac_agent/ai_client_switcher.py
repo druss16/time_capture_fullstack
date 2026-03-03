@@ -203,8 +203,8 @@ class PatternCache:
 # =====================================================================
 
 def _normalize(s: str) -> str:
+    s = re.sub(r'^\*+', '', s)  # Strip unsaved-file indicator (* prefix)
     return re.sub(r'\s+', ' ', s.lower().strip())
-
 
 def _build_client_matchers(clients: list) -> list:
     """Pre-compile regex patterns for each client name + aliases.
@@ -226,7 +226,7 @@ def _build_client_matchers(clients: list) -> list:
             # Allow flexible separators between words
             flex = re.sub(r'\\ ', r'[\\s_\\-.]?', escaped)
             pat = re.compile(
-                r'(?:^|[\s_\-./\\|:,()\'"<>])' + flex + r'(?:$|[\s_\-./\\|:,()\'"<>])',
+                r'(?:^|[\s_\-./\\|:,()\'"<>*])' + flex + r'(?:$|[\s_\-./\\|:,()\'"<>*])',
                 re.IGNORECASE,
             )
             patterns.append(pat)
@@ -744,6 +744,21 @@ class AIClientSwitcher:
                 self.stats["file_conv"] += 1
                 self._queue_switch(file_hit)
                 return
+
+            # --- Suggestion: confident enough to suggest, not enough to auto-switch ---
+            best_local = regex_hit or learned_hit or file_hit
+            if best_local and best_local.client_id != cur_id:
+                if best_local.confidence >= self.config["suggest_threshold"]:
+                    if self.notif_manager and hasattr(self.notif_manager, "notify_client_suggestion"):
+                        self.notif_manager.notify_client_suggestion(
+                            client_id=best_local.client_id,
+                            client_name=best_local.client_name,
+                            confidence=best_local.confidence,
+                            reason=best_local.reasoning,
+                        )
+                        logger.info(f"[AI-SWITCH] Suggested: {best_local.client_name} "
+                                    f"(conf={best_local.confidence:.2f}, below auto-switch threshold)")
+                        return
 
             # --- Tier 2: OpenAI (only if all local methods failed) ---
             if self.openai_api_key and self.config["enabled"]:

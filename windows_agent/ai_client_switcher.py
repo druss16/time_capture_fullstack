@@ -877,10 +877,9 @@ class AIClientSwitcher:
             old_name = self._current_client_name or "None"
 
             # Backend switch
+            # New:
             if self.set_current_client_fn:
-                result = self.set_current_client_fn(cid)
-                if result is False:
-                    return
+                result = self.set_current_client_fn(cid, cname)
 
             # Update internal state
             self._current_client_id = cid

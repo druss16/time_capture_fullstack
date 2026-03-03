@@ -2996,7 +2996,7 @@ def run_agent():
                 ai_switcher.update_clients(sync.clients)
             sync.on_update = _on_sync_with_switcher
 
-        log(f"[AI-SWITCH] ✅ Initialized (openai={'yes' if openai_key else 'no'})")
+        log(f"[AI-SWITCH] ✅ Initialized")
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
     except Exception as e:

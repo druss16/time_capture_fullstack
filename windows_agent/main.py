@@ -1085,6 +1085,9 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
 
 
 # ---------------- Startup Task Registration ----------------
+def register_startup_task():
+    """Register a Windows Task Scheduler task to ensure agent starts on logon."""
+    pass
 
 
 # ---------------- Event Posting ----------------

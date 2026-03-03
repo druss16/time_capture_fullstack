@@ -2364,6 +2364,9 @@ def run_agent():
         
         def on_wake(notification):
             log("[WAKE] System woke from sleep - resetting connections")
+            _wake_event.set()                        # ← ADD THIS
+            from update_checker import notify_wake   # ← ADD THIS
+            notify_wake()     
             
             # Reset the control check timer so we don't stall
             global _last_control_check
@@ -2929,9 +2932,7 @@ def run_agent():
             api_base=API_BASE,
             api_key=config.get("api_key") or API_KEY,
             openai_api_key=openai_key,
-            set_current_client_fn=lambda cid: set_current_client_backend(
-                API_BASE, config.get("api_key") or API_KEY, cid
-            ),
+            set_current_client_fn=lambda cid, cname=None: set_current_client_backend(API_BASE, api_key, cid),
             gui_menu_bar=gui_menu_bar,       # ← NOW populated
             notif_manager=notif_manager,      # ← NOW populated
             sync=sync,

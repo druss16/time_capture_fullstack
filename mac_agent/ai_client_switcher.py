@@ -881,7 +881,7 @@ class AIClientSwitcher:
 
             # Backend switch
             if self.set_current_client_fn:
-                result = self.set_current_client_fn(cid)
+                result = self.set_current_client_fn(cid, cname)
                 if result is False:
                     return
 
@@ -930,7 +930,7 @@ class AIClientSwitcher:
     def _do_backend_switch(self, client_id: int, client_name: str):
         """Execute backend + GUI switch (used by both auto-switch and undo)."""
         if self.set_current_client_fn:
-            self.set_current_client_fn(client_id)
+            self.set_current_client_fn(client_id, client_name)
         self._current_client_id = client_id
         self._current_client_name = client_name
         if self.gui_menu_bar and hasattr(self.gui_menu_bar, "state"):

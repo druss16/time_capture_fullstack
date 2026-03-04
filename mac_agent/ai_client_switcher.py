@@ -632,7 +632,8 @@ class AIClientSwitcher:
             logger.info(f"[AI-SWITCH] Manual override: {client_name} (snoozed {snooze_min}min)")
 
     def on_window_change(self, app_name: str, exe_name: str, title: str,
-                         url: str = None, file_path: str = None, in_meeting: bool = False):
+                     url: str = None, file_path: str = None, in_meeting: bool = False,
+                     bundle_id: str = None):
         """Called from tracking loop on every focus change."""
         if not self.config["enabled"] or not title or title == self._last_title:
             return

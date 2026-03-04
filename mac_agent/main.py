@@ -3261,7 +3261,7 @@ def run_agent():
                             _in_mtg = is_in_meeting(bundle_id, url, app_name, title)
                             ai_switcher.on_window_change(
                                 app_name=app_name,
-                                bundle_id=bundle_id,
+                                exe_name=bundle_id or "",  # Mac uses bundle_id instead of exe_name
                                 title=title or "",
                                 url=url,
                                 file_path=fpath,

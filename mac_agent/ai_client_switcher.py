@@ -941,24 +941,55 @@ class AIClientSwitcher:
     # =================================================================
     # Notifications
     # =================================================================
-
     def _notify_switch(self, new_name: str, old_name: str,
                        conf: float = 0, method: str = "", is_undo: bool = False):
-        """Show Windows toast notification for auto-switch or undo."""
         if not self.config["notify_on_switch"]:
             return
         if is_undo:
-            title = "\u23f1 Client Reverted"
+            title = "⏱ Client Reverted"
             body = f"Back to {new_name}"
             subtitle = "Undo successful"
         else:
-            title = "\u23f1 Client Switched"
-            body = f"{old_name} \u2192 {new_name}"
+            title = "⏱ Client Switched"
+            body = f"{old_name} → {new_name}"
             subtitle = f"Auto-detected ({int(conf * 100)}% confidence)" if conf else "Auto-detected"
 
         full_body = f"{subtitle}\n{body}" if subtitle else body
 
-        # Method 1: win10toast
+        # Mac: use notif_manager if available
+        if self.notif_manager and hasattr(self.notif_manager, '_send_notification'):
+            try:
+                self.notif_manager._send_notification(
+                    notif_type=None,
+                    title=title,
+                    body=full_body,
+                )
+                return
+            except Exception:
+                pass
+
+        # Mac fallback: UNUserNotificationCenter directly
+        try:
+            from UserNotifications import (
+                UNUserNotificationCenter, UNMutableNotificationContent,
+                UNNotificationRequest, UNNotificationSound,
+            )
+            content = UNMutableNotificationContent.alloc().init()
+            content.setTitle_(title)
+            content.setBody_(full_body)
+            content.setSound_(UNNotificationSound.defaultSound())
+            req_id = f"ai-switch-{int(time.time())}"
+            request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
+                req_id, content, None
+            )
+            UNUserNotificationCenter.currentNotificationCenter().addNotificationRequest_withCompletionHandler_(
+                request, None
+            )
+            return
+        except Exception:
+            pass
+
+        # Windows Method 1: win10toast
         try:
             from win10toast import ToastNotifier
             toaster = ToastNotifier()
@@ -967,7 +998,7 @@ class AIClientSwitcher:
         except ImportError:
             pass
 
-        # Method 2: PowerShell Windows.UI.Notifications
+        # Windows Method 2: PowerShell
         try:
             import subprocess
             ps_script = (
@@ -983,28 +1014,6 @@ class AIClientSwitcher:
             subprocess.run(["powershell", "-Command", ps_script],
                            timeout=5, capture_output=True)
             return
-        except Exception:
-            pass
-
-        # Method 3: Tkinter popup fallback
-        try:
-            def _show():
-                from tkinter import Tk, Label
-                root = Tk()
-                root.title(title)
-                root.attributes("-topmost", True)
-                root.geometry("350x80+{}+{}".format(
-                    root.winfo_screenwidth() - 370,
-                    root.winfo_screenheight() - 120))
-                root.overrideredirect(True)
-                root.configure(bg="#2d2d2d")
-                Label(root, text=title, fg="white", bg="#2d2d2d",
-                      font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x", padx=10, pady=(8, 0))
-                Label(root, text=full_body, fg="#cccccc", bg="#2d2d2d",
-                      font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=10)
-                root.after(4000, root.destroy)
-                root.mainloop()
-            threading.Thread(target=_show, daemon=True).start()
         except Exception:
             pass
 

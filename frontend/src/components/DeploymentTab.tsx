@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson } from '@/lib/api';
 
 // ─── Types ───
 interface DeploymentToken {
@@ -17,25 +18,6 @@ interface DeploymentToken {
 interface DeploymentTabProps {
   apiBase?: string;
 }
-
-// ─── Helpers ───
-const getCSRFToken = (): string => {
-  const match = document.cookie.match(/csrftoken=([^;]+)/);
-  return match ? match[1] : '';
-};
-
-const apiRequest = async (url: string, options: RequestInit = {}) => {
-  const resp = await fetch(url, {
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': getCSRFToken(),
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-  return resp;
-};
 
 // ─── Sub-components ───
 
@@ -240,15 +222,10 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
 
   const fetchTokens = useCallback(async () => {
     try {
-      const resp = await apiRequest(`${apiBase}/deploy/tokens/`);
-      if (resp.ok) {
-        const data = await resp.json();
-        setTokens(data.tokens || []);
-      } else {
-        setError('Failed to load deployment tokens');
-      }
-    } catch (e) {
-      setError('Network error loading tokens');
+      const data = await safeFetchJson<{ tokens: DeploymentToken[] }>(`${apiBase}/deploy/tokens/`);
+      setTokens(data.tokens || []);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load deployment tokens');
     } finally {
       setLoading(false);
     }
@@ -266,22 +243,17 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
       if (notes.trim()) body.notes = notes.trim();
       if (maxDevices) body.max_devices = parseInt(maxDevices, 10);
 
-      const resp = await apiRequest(`${apiBase}/deploy/tokens/create/`, {
+      await safeFetchJson(`${apiBase}/deploy/tokens/create/`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
 
-      if (resp.ok) {
-        setShowCreate(false);
-        setNotes('');
-        setMaxDevices('');
-        await fetchTokens();
-      } else {
-        const data = await resp.json();
-        setError(data.error || 'Failed to create token');
-      }
-    } catch {
-      setError('Network error creating token');
+      setShowCreate(false);
+      setNotes('');
+      setMaxDevices('');
+      await fetchTokens();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to create token');
     } finally {
       setCreating(false);
     }
@@ -294,17 +266,12 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
 
     setRevoking(tokenId);
     try {
-      const resp = await apiRequest(`${apiBase}/deploy/tokens/${tokenId}/revoke/`, {
+      await safeFetchJson(`${apiBase}/deploy/tokens/${tokenId}/revoke/`, {
         method: 'POST',
       });
-
-      if (resp.ok) {
-        await fetchTokens();
-      } else {
-        setError('Failed to revoke token');
-      }
-    } catch {
-      setError('Network error revoking token');
+      await fetchTokens();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to revoke token');
     } finally {
       setRevoking(null);
     }
@@ -315,7 +282,6 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>

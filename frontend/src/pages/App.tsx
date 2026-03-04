@@ -40,7 +40,6 @@ const OrganizationSettings = lazy(() => import("./OrganizationSettings"));
 const Devices = lazy(() => import("./Devices"));
 const Login = lazy(() => import("./Login"));
 const NotFound = lazy(() => import("./NotFound"));
-const TimeReview = lazy(() => import("./TimeReview"));
 const BillingPage = lazy(() => import("./BillingPage"));
 const WhiteGloveOnboarding = lazy(() => import("./settings/WhiteGloveOnboarding"));
 
@@ -288,18 +287,6 @@ export default function App() {
                     <MaybeProtected>
                       <AppLayout>
                         <BillingPage />
-                      </AppLayout>
-                    </MaybeProtected>
-                  }
-                />
-
-                {/* Time Review (Hybrid AI Categorization) */}
-                <Route
-                  path="/time-review"
-                  element={
-                    <MaybeProtected>
-                      <AppLayout>
-                        <TimeReview />
                       </AppLayout>
                     </MaybeProtected>
                   }

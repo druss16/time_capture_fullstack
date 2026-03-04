@@ -45,7 +45,10 @@ export default function Navigation() {
   useEffect(() => {
     safeFetchJson(`${API_BASE}/whoami/`)
       .then(data => setUserInfo(data))
-      .catch(console.error);
+      .catch(() => {
+        // whoami failing silently is fine — nav renders without user info
+        // (ProtectedRoute will handle redirect if truly unauthenticated)
+      });
   }, []);
 
   // Close menu when clicking outside

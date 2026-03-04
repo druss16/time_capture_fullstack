@@ -184,7 +184,7 @@ def _get_device_and_org(request):
     Extract device/user/org from DeviceKey auth header.
     Adjust this to match your actual auth model.
     """
-    from agents.models import AgentDevice  # Adjust import path
+    from .models import AgentDevice  # Adjust import path
 
     auth = request.META.get("HTTP_AUTHORIZATION", "")
     if not auth.startswith("DeviceKey "):

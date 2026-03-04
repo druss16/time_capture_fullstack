@@ -2974,7 +2974,7 @@ def run_agent():
             },
             api_base=API_BASE,
             api_key=config.get("api_key") or API_KEY,
-            set_current_client_fn=lambda cid, cname=None: _apply_client_switch(cid, cname or "Unknown", source="ai_switcher"),
+            set_current_client_fn=lambda cid, cname=None, source="ai_switcher": _apply_client_switch(cid, cname or "Unknown", source=source),
             gui_menu_bar=gui_menu_bar,
             notif_manager=notif_manager,
             sync=sync,

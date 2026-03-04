@@ -72,7 +72,7 @@ DEFAULT_CONFIG = {
     # --- Timing ---
     "dwell_seconds_before_switch": 8,       # Must dwell N seconds before auto-switch fires
     "cooldown_seconds": 120,                # Don't re-suggest same client within N seconds
-    "manual_override_snooze_minutes": 30,   # After manual switch, snooze AI for N minutes
+    "manual_override_snooze_minutes": 0,   # After manual switch, snooze AI for N minutes
 
     # --- Backend AI ---
     "ai_timeout": 10,
@@ -413,18 +413,18 @@ def _cpa_file_match(title: str, clients: list, current_client_id: int = None) ->
         return None
 
     for client in clients:
-        cname = (client.get("name") or "").strip()
-        cid = client.get("id")
-        if cid == current_client_id:
+        client_name = (client.get("name") or "").strip()
+        client_id = client.get("id")
+        if client_id == current_client_id:
             continue
-        if cname.lower() in candidate.lower() or candidate.lower() in cname.lower():
+        if client_name.lower() in candidate.lower() or candidate.lower() in client_name.lower():
             return ClientMatch(
-                client_id=cid,
-                client_name=cname,
+                client_id=client_id,
+                client_name=client_name,
                 confidence=0.82,
                 match_method="file_convention",
                 matched_token=candidate,
-                reasoning=f"CPA file pattern: '{candidate}' matches client '{cname}'",
+                reasoning=f"CPA file pattern: '{candidate}' matches client '{client_name}'",
             )
     return None
 
@@ -622,13 +622,13 @@ class AIClientSwitcher:
         self._current_client_name = client_name
 
     def on_manual_switch(self, client_id: int, client_name: str):
-        """User manually switched — snooze AI to respect their choice."""
         with self._lock:
             self._current_client_id = client_id
             self._current_client_name = client_name
             snooze_min = self.config["manual_override_snooze_minutes"]
             self._manual_override_until = time.time() + snooze_min * 60
             self._pending_switch = None
+            self._last_title = ""  # <-- add this
             logger.info(f"[AI-SWITCH] Manual override: {client_name} (snoozed {snooze_min}min)")
 
     def on_window_change(self, app_name: str, exe_name: str, title: str,
@@ -761,14 +761,13 @@ class AIClientSwitcher:
 
     def _queue_switch(self, match: ClientMatch):
         """Queue a match for dwell-based switching."""
-        cid = match.client_id
         with self._lock:
-            if cid == self._current_client_id:
+            if match.client_id == self._current_client_id:
                 return
-            if time.time() < self._cooldowns.get(cid, 0):
+            if time.time() < self._cooldowns.get(match.client_id, 0):
                 self.stats["suppressed"] += 1
                 return
-            if self._pending_switch and self._pending_switch["client_id"] == cid:
+            if self._pending_switch and self._pending_switch["client_id"] == match.client_id:
                 return  # Already pending
             self._pending_switch = {
                 "client_id": match.client_id,
@@ -878,11 +877,15 @@ class AIClientSwitcher:
 
     def _execute_switch(self, data: dict):
         """Fire the actual client switch after dwell threshold is met."""
-        cid = data["client_id"]
-        cname = data["client_name"]
-        conf = data["confidence"]
+        client_id = data["client_id"]
+        client_name = data["client_name"]
+        confidence = data["confidence"]
         method = data.get("method", "?")
         match = data.get("match")
+
+        # Already on this client — don't switch again
+        if client_id == self._current_client_id:
+            return
 
         try:
             old_id = self._current_client_id
@@ -890,24 +893,25 @@ class AIClientSwitcher:
 
             # Backend switch via callback
             if self.set_current_client_fn:
-                self.set_current_client_fn(cid, cname, "ai_switcher")
+                self.set_current_client_fn(client_id, client_name, "ai_switcher")
 
             # Update internal state
-            self._current_client_id = cid
-            self._current_client_name = cname
-            self._cooldowns[cid] = time.time() + self.config["cooldown_seconds"]
+            self._current_client_id = client_id
+            self._current_client_name = client_name
+            self._last_title = ""
+            self._cooldowns[client_id] = time.time() + self.config["cooldown_seconds"]
 
             # Record history for undo
             self._switch_history.append(SwitchEvent(
                 timestamp=time.time(),
                 from_client_id=old_id,
                 from_client_name=old_name,
-                to_client_id=cid,
-                to_client_name=cname,
+                to_client_id=client_id,
+                to_client_name=client_name,
                 trigger_title=data.get("reasoning", "")[:200],
                 match=match or ClientMatch(
-                    client_id=cid, client_name=cname,
-                    confidence=conf, match_method=method,
+                    client_id=client_id, client_name=client_name,
+                    confidence=confidence, match_method=method,
                 ),
             ))
             max_hist = self.config.get("max_switch_history", 50)
@@ -915,11 +919,11 @@ class AIClientSwitcher:
                 self._switch_history = self._switch_history[-max_hist:]
 
             # Notification toast
-            self._notify_switch(cname, old_name, conf=conf, method=method)
+            self._notify_switch(client_name, old_name, conf=confidence, method=method)
 
             self.stats["switches"] += 1
-            logger.info(f"[AI-SWITCH] \u2705 {old_name} \u2192 {cname} "
-                        f"(conf={conf:.0%}, {method})")
+            logger.info(f"[AI-SWITCH] \u2705 {old_name} \u2192 {client_name} "
+                        f"(conf={confidence:.0%}, {method})")
 
         except Exception as e:
             logger.error(f"[AI-SWITCH] switch error: {e}")
@@ -927,7 +931,7 @@ class AIClientSwitcher:
     def _do_backend_switch(self, client_id: int, client_name: str):
         """Execute backend + GUI switch (used by both auto-switch and undo)."""
         if self.set_current_client_fn:
-            self.set_current_client_fn(cid, cname, "ai_switcher")
+            self.set_current_client_fn(client_id, client_name, "ai_switcher")
         self._current_client_id = client_id
         self._current_client_name = client_name
         if self.gui_menu_bar and hasattr(self.gui_menu_bar, "state"):

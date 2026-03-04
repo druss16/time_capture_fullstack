@@ -351,16 +351,18 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
 
     # 3. GUI update (tray tooltip, floating widget, state, menu checkmarks)
     if gui_menu_bar:
-        if hasattr(gui_menu_bar, '_switch_client'):
-            gui_menu_bar._switch_client(client_id, client_name)
-        else:
-            if hasattr(gui_menu_bar, 'state'):
-                gui_menu_bar.state.set_client(client_id, client_name)
-            if hasattr(gui_menu_bar, 'refresh_client_menu') and sync and sync.clients:
-                gui_menu_bar.refresh_client_menu(sync.clients)
-
-        # Force tray icon to refresh menu + tooltip immediately
+        # Update state directly — do NOT call _switch_client (creates callback loop)
+        if hasattr(gui_menu_bar, 'state'):
+            gui_menu_bar.state.set_client(client_id, client_name)
+        # Update floating widget
+        if hasattr(gui_menu_bar, 'floating_widget') and gui_menu_bar.floating_widget:
+            gui_menu_bar.floating_widget.update_client(client_id, client_name)
+        # Update tray tooltip
         if hasattr(gui_menu_bar, 'icon') and gui_menu_bar.icon:
+            tooltip = f"TimeTracker - {client_name}"
+            if hasattr(gui_menu_bar, 'user_name') and gui_menu_bar.user_name:
+                tooltip = f"TimeTracker ({gui_menu_bar.user_name}) - {client_name}"
+            gui_menu_bar.icon.title = tooltip
             try:
                 gui_menu_bar.icon.update_menu()
             except Exception:

@@ -1252,6 +1252,10 @@ class TimeTrackerSystemTray:
     
     def _switch_client(self, client_id: int, client_name: str):
         """Handle client switch"""
+        # Already on this client — skip
+        if client_id and client_id == self.state.current_client_id:
+            return
+        """Handle client switch"""
         track_client_selection(client_id)
         
         if client_id == 0:

@@ -75,7 +75,9 @@ Source: "timetracker.ico"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\timetracker.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\timetracker.ico"; Tasks: desktopicon
-Name: "{userstartup}\TimeTracker Agent"; Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "start"
+
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "TimeTracker"; ValueData: """{app}\TimeTrackerAgent.exe"" start"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\TimeTrackerAgent.exe"; Description: "Start TimeTracker Agent"; Flags: nowait postinstall
@@ -395,9 +397,8 @@ begin
 
   if CurStep = ssPostInstall then begin
     RestoreUserConfig();
-    WriteOrgTokenToConfig();   // ← NEW: Write org_token if provided
-    // Always launch agent after install (works in silent mode too)
-    CreateScheduledTask
+    WriteOrgTokenToConfig();
+    CreateScheduledTask;
   end;
 end;
 

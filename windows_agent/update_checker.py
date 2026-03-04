@@ -1,10 +1,10 @@
 """
-update_checker.py - Cross-platform auto-update for TimeTracker agents.
+update_checker.py — Cross-platform auto-update for TimeTracker agents.
 
 Features:
   - Startup blocking check for forced updates
   - Background polling every 5 minutes
-  - Silent auto-update: downloads + installs with zero user interaction (Windows)
+  - Windows: shows update dialog, user downloads from browser (AV-safe)
   - Mac: AppleScript password prompt, then automatic install
   - Mtime detection: if exe on disk changes, auto-restart into new version
   - Network readiness checks before downloads (prevents post-sleep crashes)
@@ -15,10 +15,10 @@ Drop this file into both mac_agent/ and windows_agent/.
 Usage in main.py:
     from update_checker import check_for_update_blocking, start_background_checker
 
-    # Call BEFORE starting the agent - blocks until user updates if outdated
+    # Call BEFORE starting the agent — blocks until user updates if outdated
     check_for_update_blocking(API_BASE, APP_VERSION)
 
-    # Call AFTER starting the agent - re-checks every 5 minutes
+    # Call AFTER starting the agent — re-checks every 5 minutes
     start_background_checker(API_BASE, APP_VERSION)
 
     # In your on_wake handler, call:
@@ -172,22 +172,40 @@ def _restart_into_new_exe():
 
 
 # ============================================================
-# SILENT AUTO-UPDATE (download + install)
+# UPDATE ACTIONS (platform-specific)
 # ============================================================
 
 def _auto_update_windows(download_url: str, latest_version: str) -> bool:
-    """Show update dialog - let user install via browser download."""
-    import ctypes
-    result = ctypes.windll.user32.MessageBoxW(
-        0,
-        f"TimeTracker v{latest_version} is available.\n\nClick OK to download the update.",
-        "TimeTracker Update Available",
-        0x01 | 0x40 | 0x40000 | 0x10000
-    )
-    if result == 1:
-        import webbrowser
-        webbrowser.open(download_url)
-    return True
+    """Show update dialog on Windows - let user install via browser download.
+    Silent install is blocked by enterprise AV (Bitdefender ATC etc.)."""
+    try:
+        import ctypes
+        MB_OKCANCEL = 0x01
+        MB_ICONINFORMATION = 0x40
+        MB_TOPMOST = 0x40000
+        MB_SETFOREGROUND = 0x10000
+
+        result = ctypes.windll.user32.MessageBoxW(
+            0,
+            f"TimeTracker v{latest_version} is available.\n\n"
+            "Click OK to download the update.",
+            "TimeTracker Update Available",
+            MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND
+        )
+
+        if result == 1:  # IDOK
+            webbrowser.open(download_url)
+
+        return True  # Mark as handled either way
+
+    except Exception as e:
+        print(f"[UPDATE] Windows update dialog failed: {e}")
+        # Fallback: just open the browser
+        try:
+            webbrowser.open(download_url)
+        except Exception:
+            pass
+        return True
 
 
 def _auto_update_mac(download_url: str, latest_version: str) -> bool:
@@ -197,13 +215,13 @@ def _auto_update_mac(download_url: str, latest_version: str) -> bool:
     pkg_path = os.path.join(tempfile.gettempdir(), f"TimeTracker-{latest_version}.pkg")
 
     try:
-        # FIX: Wait for network before downloading
+        # Wait for network before downloading
         if not _wait_for_network(download_url):
             return False
 
         print(f"[UPDATE] Downloading v{latest_version}...")
 
-        # FIX: Use timeout-aware download instead of urlretrieve
+        # Use timeout-aware download instead of urlretrieve
         file_size = _download_with_timeout(download_url, pkg_path, timeout=DOWNLOAD_TIMEOUT)
         print(f"[UPDATE] Downloaded ({file_size:,} bytes) to {pkg_path}")
 
@@ -220,7 +238,7 @@ def _auto_update_mac(download_url: str, latest_version: str) -> bool:
             f"'{pkg_path}'"
             f' -target /" with administrator privileges with prompt '
             f'"TimeTracker needs to install an update (v{latest_version}).'
-            f'\\n\\nEnter your password to continue."'
+            f'\\\\n\\\\nEnter your password to continue."'
         )
         subprocess.Popen(["osascript", "-e", install_script])
 
@@ -257,7 +275,7 @@ def _nag_file() -> str:
 def _already_nagged(version: str) -> bool:
     """
     Check if we already attempted this version.
-    FIX: Also check if the nag is stale (>24h old) - if a previous attempt
+    Also check if the nag is stale (>24h old) — if a previous attempt
     failed mid-download, we should retry rather than permanently skip.
     """
     try:
@@ -268,13 +286,13 @@ def _already_nagged(version: str) -> bool:
                 if data.get("version") != version:
                     return False
 
-                # FIX: Stale nag check - retry after 24 hours regardless
+                # Stale nag check - retry after 24 hours regardless
                 nag_ts = data.get("ts", 0)
                 if time.time() - nag_ts > 86400:  # 24 hours
                     print(f"[UPDATE] Nag for v{version} is stale (>24h) - will retry")
                     return False
 
-                # FIX: Check if the download actually succeeded
+                # Check if the download actually succeeded
                 if not data.get("download_ok", False):
                     # Previous attempt failed - retry after 1 hour
                     if time.time() - nag_ts > 3600:
@@ -290,7 +308,7 @@ def _already_nagged(version: str) -> bool:
 def _mark_nagged(version: str, download_ok: bool = False):
     """
     Mark that we have attempted this version.
-    FIX: Track whether the download actually succeeded so we can retry failures.
+    Track whether the download actually succeeded so we can retry failures.
     """
     try:
         path = _nag_file()
@@ -348,7 +366,7 @@ def _disable_restart_task():
 def check_version(api_base: str, current_version: str) -> dict:
     """
     Check for available updates. Returns None on any failure.
-    FIX: Explicit handling for URLError (network not ready after sleep).
+    Explicit handling for URLError (network not ready after sleep).
     """
     plat = "macos" if sys.platform == "darwin" else "windows"
     url = f"{api_base}/agent/version-check/?version={current_version}&platform={plat}"
@@ -380,7 +398,7 @@ def _show_blocking_dialog(latest_version: str, download_url: str):
         try:
             import subprocess
             script = (
-                f'display dialog "TimeTracker v{latest_version} is available.\\n\\n'
+                f'display dialog "TimeTracker v{latest_version} is available.\\\\n\\\\n'
                 f'You must update to continue." '
                 f'buttons {{"Quit", "Download Update"}} default button "Download Update" '
                 f'with title "Update Required" with icon caution'
@@ -440,9 +458,9 @@ def check_for_update_blocking(api_base: str, current_version: str):
     """
     Check for updates on startup.
     - Forced update: block with dialog, exit
-    - Regular update: start silent auto-update immediately
+    - Regular update: show dialog (Windows) or silent install (Mac)
 
-    FIX: Entire function wrapped in try/except - an update check failure
+    Entire function wrapped in try/except — an update check failure
     must NEVER prevent the agent from starting. The tracking loop is
     more important than any update.
     """
@@ -475,15 +493,14 @@ def check_for_update_blocking(api_base: str, current_version: str):
             _show_blocking_dialog(latest, url)
 
         else:
-            # Non-forced: silent auto-update on startup too
+            # Non-forced: prompt user (Windows) or silent install (Mac)
             if _already_nagged(latest):
                 print(f"[UPDATE] v{latest} already queued for install - skipping")
                 return
 
-            print(f"[UPDATE] Auto-updating on startup: {current_version} -> {latest}")
+            print(f"[UPDATE] Update available on startup: {current_version} -> {latest}")
 
-            # FIX: Download in background thread so agent starts immediately.
-            # mark_nagged with download_ok=False first, update to True on success.
+            # Run in background thread so agent starts immediately
             def _bg_update():
                 _mark_nagged(latest, download_ok=False)
                 success = False
@@ -519,13 +536,13 @@ def start_background_checker(api_base: str, current_version: str):
     Periodically re-check for updates while the agent is running.
 
     Three update paths:
-      1. Mtime detection - exe on disk changed (installer already ran) -> restart
-      2. Forced update - block with dialog, exit
-      3. Silent auto-update - download + install with zero UI (Windows)
+      1. Mtime detection — exe on disk changed (installer already ran) -> restart
+      2. Forced update — block with dialog, exit
+      3. Update prompt (Windows) or silent install (Mac)
 
-    FIX: Post-wake delay prevents crashes when WiFi is not reconnected yet.
-    FIX: All download paths check network readiness first.
-    FIX: mark_nagged only set to download_ok=True AFTER successful download.
+    Post-wake delay prevents crashes when WiFi is not reconnected yet.
+    All download paths check network readiness first.
+    mark_nagged only set to download_ok=True AFTER successful handling.
     """
     if current_version in ("dev", "0.0.0", ""):
         return
@@ -534,7 +551,7 @@ def start_background_checker(api_base: str, current_version: str):
         while True:
             time.sleep(RECHECK_INTERVAL)
 
-            # -- FIX: Post-wake delay --
+            # -- Post-wake delay --
             # If we just woke from sleep, wait extra time for WiFi to reconnect
             since_wake = _seconds_since_wake()
             if since_wake < POST_WAKE_DELAY:
@@ -570,16 +587,16 @@ def start_background_checker(api_base: str, current_version: str):
                 if _already_nagged(latest):
                     continue
 
-                # -- Path 2: Forced update - block with dialog --
+                # -- Path 2: Forced update — block with dialog --
                 if data.get("force"):
                     print(f"[UPDATE] Forced update detected mid-session: "
                           f"{current_version} -> {latest}")
                     _mark_nagged(latest, download_ok=False)
                     _show_blocking_dialog(latest, url)
 
-                # -- Path 3: Silent auto-update --
+                # -- Path 3: Update prompt (Windows) or silent install (Mac) --
                 else:
-                    print(f"[UPDATE] Auto-updating: {current_version} -> {latest}")
+                    print(f"[UPDATE] Update available: {current_version} -> {latest}")
                     _mark_nagged(latest, download_ok=False)
 
                     success = False
@@ -595,11 +612,11 @@ def start_background_checker(api_base: str, current_version: str):
                     if success:
                         _mark_nagged(latest, download_ok=True)
                     else:
-                        # FIX: Don't permanently skip - will retry after 1h
+                        # Don't permanently skip - will retry after 1h
                         print("[UPDATE] Download/install failed - will retry next cycle")
 
             except Exception as e:
-                # FIX: Never let an update check crash the background thread
+                # Never let an update check crash the background thread
                 print(f"[UPDATE] Background check error (non-fatal): {e}")
 
     t = threading.Thread(target=_loop, daemon=True)

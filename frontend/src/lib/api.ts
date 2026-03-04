@@ -15,6 +15,26 @@ export const API_ENDPOINTS = {
 } as const;
 
 // ============================================================================
+// Error message extractor — converts raw API error bodies into human-readable strings
+// Handles: Django custom errors, DRF detail/non_field_errors, plain text, etc.
+// ============================================================================
+function extractErrorMessage(body: any): string {
+  if (typeof body === "string") {
+    try { body = JSON.parse(body); } catch {}
+  }
+  if (typeof body === "object" && body !== null) {
+    return (
+      body.error ||
+      body.detail ||
+      body.message ||
+      body.non_field_errors?.[0] ||
+      "Something went wrong."
+    );
+  }
+  return "Something went wrong. Please try again.";
+}
+
+// ============================================================================
 // Safe JSON fetch with token-based auth
 // ============================================================================
 export async function safeFetchJson<T = any>(input: string, init: RequestInit = {}): Promise<T> {
@@ -51,7 +71,7 @@ export async function safeFetchJson<T = any>(input: string, init: RequestInit = 
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     const body = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();
-    throw new Error(`HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+    throw new Error(extractErrorMessage(body));
   }
   return ct.includes("json") ? res.json() : ({} as T);
 }
@@ -121,7 +141,7 @@ export async function safeUploadFile<T = any>(
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     const body = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();
-    throw new Error(`HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+    throw new Error(extractErrorMessage(body));
   }
   
   return ct.includes("json") ? res.json() : ({} as T);
@@ -174,7 +194,7 @@ export async function safeUploadFormData<T = any>(
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     const body = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();
-    throw new Error(`HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+    throw new Error(extractErrorMessage(body));
   }
   
   return ct.includes("json") ? res.json() : ({} as T);

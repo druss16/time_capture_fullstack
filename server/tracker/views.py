@@ -5959,18 +5959,21 @@ import json
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def org_ai_settings(request):
+    print(f"[AI_DEBUG] user={request.user.username} id={request.user.id}")
+    
     membership = OrganizationMembership.objects.select_related("organization").filter(
         user=request.user
     ).first()
     
-    # TEMP DEBUG - remove after fix
-    print(f"[AI_SETTINGS] user={request.user} id={request.user.id} membership={membership} role={getattr(membership, 'role', None)}")
+    print(f"[AI_DEBUG] membership={membership} role={getattr(membership, 'role', None)}")
     
     if not membership:
         return Response({"error": "No organization found"}, status=404)
 
     org = membership.organization
 
+    print(f"[AI_DEBUG] role check: {membership.role not in ('admin', 'owner')}")
+    
     if membership.role not in ("admin", "owner"):
         return Response({"error": "Admin access required"}, status=403)
 

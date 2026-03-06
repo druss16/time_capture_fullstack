@@ -71,9 +71,20 @@ class Organization(models.Model):
     payment_grace_deadline = models.DateTimeField(null=True, blank=True)
 
     auto_submit_timesheets = models.BooleanField(
-    default=False,
-    help_text="Auto-submit draft timesheets on Tuesday 9am"
-    ) 
+        default=False,
+        help_text="Auto-submit draft timesheets on Tuesday 9am"
+    )
+
+    ai_sensitivity = models.PositiveSmallIntegerField(
+        default=50,
+        help_text=(
+            "Controls how aggressively the desktop agent matches window titles "
+            "to clients (0 = conservative, 50 = balanced, 100 = aggressive). "
+            "Admin-only setting."
+        ),
+    )
+
+    # Metadata
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)

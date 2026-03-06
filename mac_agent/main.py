@@ -292,6 +292,7 @@ PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 180))
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 _wake_event = threading.Event()
+_wake_idle_bypass_until = 0.0
 
 
 NUDGE_ENABLED        = bool(_get("nudge_enabled", os.getenv("AGENT_NUDGE_ENABLED") == "1") or True)
@@ -2388,9 +2389,11 @@ def run_agent():
         
         def on_wake(notification):
             log("[WAKE] System woke from sleep - resetting connections")
-            _wake_event.set()                        # ← ADD THIS
-            from update_checker import notify_wake   # ← ADD THIS
-            notify_wake()     
+            _wake_event.set()
+            global _wake_idle_bypass_until
+            _wake_idle_bypass_until = time.time() + 30  # 30s grace period after wake
+            from update_checker import notify_wake
+            notify_wake()
             
             # Reset the control check timer so we don't stall
             global _last_control_check
@@ -2400,7 +2403,7 @@ def run_agent():
             def _reconnect():
                 for attempt in range(5):
                     try:
-                        time.sleep(3 * (attempt + 1))  # 3s, 6s, 9s, 12s, 15s
+                        time.sleep(3 * (attempt + 1))
                         api_key_val = config.get("api_key") or API_KEY
                         if api_key_val and API_BASE:
                             url = f"{API_BASE}/agents/hello2/"
@@ -3008,6 +3011,7 @@ def run_agent():
     # === TRACKING LOOP FUNCTION ===
     def tracking_loop():
         global _last_subscription_check, _subscription_active
+        nonlocal _last_detect_heartbeat
 
         """Main tracking loop - monitors frontmost app and records dwell time"""
         print("[TRACKING] Initializing...")
@@ -3113,7 +3117,8 @@ def run_agent():
                         in_meeting = is_in_meeting(bundle_id, url, app_name, title)
                     
                     # ── IDLE ENTRY: lock screen, or mouse idle (unless in meeting) ──
-                    if force_idle or (idle >= MOUSE_IDLE_PAUSE_S and not in_meeting):
+                    _in_wake_bypass = time.time() < _wake_idle_bypass_until
+                    if not _in_wake_bypass and (force_idle or (idle >= MOUSE_IDLE_PAUSE_S and not in_meeting)):
                         if current_sig != IDLE_SIG:
                             if notif_manager:
                                 try:
@@ -3190,6 +3195,8 @@ def run_agent():
 
                     # ── FIX: Reuse the peek we already did (no double call) ──
                     front = front_peek
+                    if front:
+                        _last_detect_heartbeat = time.time()  # ← ADD THIS
                     if not front:
                         if PRINT_EVERY_POLL:
                             log("[POLL] No frontmost")
@@ -3356,17 +3363,30 @@ def run_agent():
     # === RE-CHECK FOR UPDATES EVERY HOUR ===
     start_background_checker(API_BASE, APP_VERSION)
 
+    # Global heartbeat - update every time we successfully detect an app
+    _last_detect_heartbeat = time.time()
+
+    # In the active detection path (after get_frontmost_app returns something):
+    _last_detect_heartbeat = time.time()
+
     # === WATCHDOG: Restart tracking if it dies ===
+    # In watchdog:
     def watchdog():
-        nonlocal tracking_thread  # <-- ADD THIS
+        nonlocal tracking_thread
         while True:
-            time.sleep(30)  # Check every 30 seconds
+            time.sleep(30)
             if not tracking_thread.is_alive():
-                log("[WATCHDOG] ⚠️ Tracking thread died! Restarting...")
-                report_error_to_backend("watchdog", "Tracking thread died, restarting", "")
-                tracking_thread = threading.Thread(target=tracking_loop, daemon=False)  # <-- Update reference
+                log("[WATCHDOG] ⚠️ Thread dead - restarting")
+                tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
                 tracking_thread.start()
-                log("[WATCHDOG] ✅ Tracking thread restarted")
+            else:
+                # NEW: Check if thread is alive but stuck (not detecting for >2min while not idle)
+                heartbeat_age = time.time() - _last_detect_heartbeat
+                current_idle = mouse_idle_seconds()
+                if heartbeat_age > 120 and current_idle < MOUSE_IDLE_PAUSE_S:
+                    log(f"[WATCHDOG] ⚠️ Thread alive but no detection for {int(heartbeat_age)}s — restarting")
+                    tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
+                    tracking_thread.start()
 
     watchdog_thread = threading.Thread(target=watchdog, daemon=True)
     watchdog_thread.start()

@@ -132,6 +132,7 @@ urlpatterns = [
     # Settings endpoints
     # -------------------------------
     path("settings/org/", views.settings_org, name="settings_org"),
+    path("settings/ai/", views.org_ai_settings, name="org_ai_settings"),
     path("settings/team/", views.settings_team_list, name="settings_team_list"),
     path("settings/team/invite/", views.settings_team_invite, name="settings_team_invite"),
     path("settings/team/<int:user_id>/", views.settings_team_remove, name="settings_team_remove"),
@@ -290,6 +291,7 @@ urlpatterns = [
     
     # Utility
     path('settings/clients/ungrouped/', views_client_groups.ungrouped_clients, name='ungrouped-clients'),
+
 
     path('timesheet/needs-review/', views_notifications.timesheet_needs_review, name='timesheet-needs-review'),
     path('timesheet/dismiss-reminder/', views_notifications.dismiss_timesheet_reminder, name='dismiss-timesheet-reminder'),

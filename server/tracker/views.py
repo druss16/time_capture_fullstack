@@ -5907,6 +5907,7 @@ def settings_org(request):
             "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
             "can_edit_org": is_admin_or_owner,
             "role": membership.role,
+            "ai_sensitivity":   org.ai_sensitivity,   # <-- NEW
         })
     # PATCH
     if not is_admin_or_owner:
@@ -5924,6 +5925,13 @@ def settings_org(request):
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
     if "auto_submit_timesheets" in request.data:
         org.auto_submit_timesheets = bool(request.data["auto_submit_timesheets"])
+    if "ai_sensitivity" in request.data:
+        try:
+            v = int(request.data["ai_sensitivity"])
+            if 0 <= v <= 100:
+                org.ai_sensitivity = v
+        except (TypeError, ValueError):
+            pass
     org.save()
     if "billing_email" in request.data:
         profile.billing_email = (request.data.get("billing_email") or "").strip() or None
@@ -5939,6 +5947,67 @@ def settings_org(request):
         "auto_submit_timesheets": getattr(org, "auto_submit_timesheets", False),
         "message": "Settings updated"
     })
+
+
+from django.core.exceptions import ValidationError
+from django.views.decorators.http import require_http_methods
+from django.contrib.auth.decorators import login_required
+from django.http import JsonResponse
+import json
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def org_ai_settings(request):
+    """
+    GET  /api/settings/ai/   — Returns current AI sensitivity (admin only).
+    PATCH /api/settings/ai/  — Updates ai_sensitivity (0–100). Admin only.
+    """
+    membership = OrganizationMembership.objects.select_related("organization").filter(
+        user=request.user
+    ).first()
+    if not membership:
+        return Response({"error": "No organization found"}, status=404)
+
+    org = membership.organization
+
+    if membership.role not in ("admin", "owner"):
+        return Response({"error": "Admin access required"}, status=403)
+
+    if request.method == "GET":
+        return Response({
+            "ai_sensitivity": org.ai_sensitivity,
+            "sensitivity_label": _sensitivity_label(org.ai_sensitivity),
+        })
+
+    # PATCH
+    sensitivity = request.data.get("ai_sensitivity")
+    if sensitivity is None:
+        return Response({"error": "ai_sensitivity is required"}, status=400)
+
+    try:
+        sensitivity = int(sensitivity)
+        if not (0 <= sensitivity <= 100):
+            raise ValueError
+    except (TypeError, ValueError):
+        return Response({"error": "ai_sensitivity must be an integer 0–100"}, status=400)
+
+    org.ai_sensitivity = sensitivity
+    org.save(update_fields=["ai_sensitivity"])
+
+    return Response({
+        "ai_sensitivity": org.ai_sensitivity,
+        "sensitivity_label": _sensitivity_label(org.ai_sensitivity),
+        "updated": True,
+    })
+
+
+def _sensitivity_label(value: int) -> str:
+    if value <= 20:   return "Conservative"
+    elif value <= 40: return "Cautious"
+    elif value <= 60: return "Balanced"
+    elif value <= 80: return "Aggressive"
+    else:             return "Very Aggressive"
 
 # ============================================================================
 # Team Members

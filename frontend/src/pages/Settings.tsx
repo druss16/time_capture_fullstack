@@ -3,12 +3,14 @@
  * With Plan-Based Feature Gating & Bulk Assignment
  * Professional plan: Organization, Team, Clients, Devices, Token
  * Executive plan: All features including Billing Rates & Employee Costs
- * 
+ *
  * FIXES APPLIED:
  * 1. Added getUserDisplayName() helper for consistent name display
  * 2. Fixed employee dropdowns in BillingRatesTab, EmployeeCostRatesTab
  * 3. Fixed OrganizationTab state refresh after save
  * 4. Fixed BulkAssignModal user display
+ * 5. AI sensitivity slider merged directly into OrganizationTab (admin/owner only)
+ *    — AISensitivitySettings component import removed
  */
 
 import { useEffect, useState, useCallback, useRef } from "react";
@@ -49,13 +51,15 @@ import {
   Calendar,
   Folder,
   Link2,
+  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
+import axios from "axios";
 
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
 import ClientImportWizard from '@/components/ClientImportWizard';
-import ClientGroupManager from '@/components/ClientGroupManager';  // ← ADD THIS
+import ClientGroupManager from '@/components/ClientGroupManager';
 
 import IntegrationsTab from '@/components/IntegrationsTab';
 import DeploymentTab from '@/components/DeploymentTab';
@@ -63,6 +67,7 @@ import DeploymentTab from '@/components/DeploymentTab';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
+
 
 // Types
 type PlanType = 'professional' | 'executive' | 'none';
@@ -163,23 +168,12 @@ interface TabConfig {
 // HELPER: Get user display name with fallbacks
 // ============================================================================
 const getUserDisplayName = (user: TeamMember): string => {
-  // Try full name first
   const fullName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
   if (fullName) return fullName;
-  
-  // Fallback to first_name only
   if (user.first_name) return user.first_name;
-  
-  // Fallback to last_name only
   if (user.last_name) return user.last_name;
-  
-  // Fallback to username
   if (user.username) return user.username;
-  
-  // Fallback to email
   if (user.email) return user.email;
-  
-  // Last resort: User ID
   return `User ${user.id}`;
 };
 
@@ -202,7 +196,7 @@ function UpgradePrompt({ featureName }: { featureName: string }) {
           </div>
         </div>
       </div>
-      
+
       <div className="relative z-10 text-center p-8 bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border-2 border-slate-200 max-w-md">
         <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
           <Lock className="w-8 h-8 text-slate-400" />
@@ -234,10 +228,10 @@ function UpgradePrompt({ featureName }: { featureName: string }) {
 // ============================================================================
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>(() => {
-  const params = new URLSearchParams(window.location.search);
-  const tab = params.get('tab');
-  const validTabs: Tab[] = ['organization', 'team', 'clients', 'assignments', 'groups', 'integrations', 'billing', 'costs', 'devices', 'token', 'deployment'];
-  return validTabs.includes(tab as Tab) ? (tab as Tab) : 'organization';
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    const validTabs: Tab[] = ['organization', 'team', 'clients', 'assignments', 'groups', 'integrations', 'billing', 'costs', 'devices', 'token', 'deployment'];
+    return validTabs.includes(tab as Tab) ? (tab as Tab) : 'organization';
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -251,7 +245,7 @@ export default function Settings() {
   const [installToken, setInstallToken] = useState<InstallToken | null>(null);
   const [billingRates, setBillingRates] = useState<BillingRate[]>([]);
   const [employeeCostRates, setEmployeeCostRates] = useState<EmployeeCostRate[]>([]);
-  
+
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<string>('member');
 
@@ -302,15 +296,13 @@ export default function Settings() {
           setOrgInfo(org);
           setOrgPlan(org.plan || 'professional');
           break;
-          
+
         case 'team':
           const team = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`);
           setTeamMembers(team || []);
           if (currentUserId) {
             const myMembership = team.find((m: TeamMember) => m.id === currentUserId);
-            if (myMembership) {
-              setCurrentUserRole(myMembership.role);
-            }
+            if (myMembership) setCurrentUserRole(myMembership.role);
           }
           break;
 
@@ -322,7 +314,7 @@ export default function Settings() {
           setClients(groupClients || []);
           setTeamMembers(groupTeam || []);
           break;
-          
+
         case 'clients':
           const [clientList, clientsTeam] = await Promise.all([
             safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
@@ -331,7 +323,7 @@ export default function Settings() {
           setClients(clientList || []);
           setTeamMembers(clientsTeam || []);
           break;
-          
+
         case 'assignments':
           const [assignmentClients, assignmentTeam] = await Promise.all([
             safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
@@ -340,7 +332,7 @@ export default function Settings() {
           setClients(assignmentClients || []);
           setTeamMembers(assignmentTeam || []);
           break;
-          
+
         case 'billing':
           if (EXECUTIVE_PLANS.includes(orgPlan)) {
             const rates = await safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`);
@@ -353,7 +345,7 @@ export default function Settings() {
             setTeamMembers(teamForRates || []);
           }
           break;
-          
+
         case 'costs':
           if (EXECUTIVE_PLANS.includes(orgPlan)) {
             const costRates = await safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []);
@@ -362,19 +354,18 @@ export default function Settings() {
             setTeamMembers(teamForCosts || []);
           }
           break;
-          
+
         case 'devices':
           const deviceList = await safeFetchJson<Device[]>(`${API_BASE}/settings/devices/`);
           setDevices(deviceList || []);
           break;
-          
+
         case 'token':
           const token = await safeFetchJson<InstallToken>(`${API_BASE}/settings/install-token/`);
           setInstallToken(token);
           break;
 
         case 'integrations':
-          // IntegrationsTab handles its own data loading
           break;
       }
     } catch (err: any) {
@@ -389,17 +380,17 @@ export default function Settings() {
   }, [activeTab, loadTabData]);
 
   const tabs: TabConfig[] = [
-  { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
-  { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
-  { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
-  { id: 'assignments', label: 'Client Access', icon: <Shield className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },
-  { id: 'groups', label: 'Client Groups', icon: <Folder className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },  // ← ADD THIS
-  { id: 'integrations', label: 'Integrations', icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner', 'admin'] },
-  { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
-  { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
-  { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
-  { id: 'deployment', label: 'MDM Deploy', icon: <Monitor className="w-4 h-4" />, requiredRole: ['owner', 'admin'] },
-];
+    { id: 'organization', label: 'Organization', icon: <Building2 className="w-4 h-4" /> },
+    { id: 'team', label: 'Team Members', icon: <Users className="w-4 h-4" /> },
+    { id: 'clients', label: 'Clients', icon: <Briefcase className="w-4 h-4" /> },
+    { id: 'assignments', label: 'Client Access', icon: <Shield className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },
+    { id: 'groups', label: 'Client Groups', icon: <Folder className="w-4 h-4" />, requiredRole: ['owner', 'admin', 'manager'] },
+    { id: 'integrations', label: 'Integrations', icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner', 'admin'] },
+    { id: 'billing', label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
+    { id: 'costs', label: 'Employee Costs', icon: <Users className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
+    { id: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
+    { id: 'deployment', label: 'MDM Deploy', icon: <Monitor className="w-4 h-4" />, requiredRole: ['owner', 'admin'] },
+  ];
 
   const isTabLocked = (tab: TabConfig): boolean => {
     if (!tab.requiredPlan) return false;
@@ -460,9 +451,11 @@ export default function Settings() {
                     onClick={() => setActiveTab(tab.id)}
                     className={cn(
                       'w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold transition-all',
-                      isLocked ? 'text-slate-400 hover:bg-slate-100'
-                        : activeTab === tab.id ? 'bg-primary text-white shadow-lg shadow-primary/25'
-                        : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                      isLocked
+                        ? 'text-slate-400 hover:bg-slate-100'
+                        : activeTab === tab.id
+                          ? 'bg-primary text-white shadow-lg shadow-primary/25'
+                          : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
                     )}
                   >
                     <span className="relative">
@@ -509,7 +502,14 @@ export default function Settings() {
                   ) : (
                     <>
                       {activeTab === 'organization' && (
-                        <OrganizationTab orgInfo={orgInfo} orgPlan={orgPlan} onUpdate={(updated) => { setOrgInfo(updated); setOrgPlan(updated.plan || 'professional'); }} onSuccess={showSuccess} onError={showError} />
+                        <OrganizationTab
+                          orgInfo={orgInfo}
+                          orgPlan={orgPlan}
+                          onUpdate={(updated) => { setOrgInfo(updated); setOrgPlan(updated.plan || 'professional'); }}
+                          onSuccess={showSuccess}
+                          onError={showError}
+                          currentUserRole={currentUserRole}
+                        />
                       )}
                       {activeTab === 'team' && (
                         <TeamTab members={teamMembers} currentUserId={currentUserId} currentUserRole={currentUserRole} onRefresh={() => loadTabData('team')} onSuccess={showSuccess} onError={showError} />
@@ -554,140 +554,409 @@ export default function Settings() {
 }
 
 // ============================================================================
-// Organization Tab - FIXED: Form state refresh after save
+// AI Sensitivity helpers
 // ============================================================================
-function OrganizationTab({ orgInfo, orgPlan, onUpdate, onSuccess, onError }: { orgInfo: OrgInfo | null; orgPlan: PlanType; onUpdate: (org: OrgInfo) => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
+const SENSITIVITY_PRESETS = [
+  { value: 10,  label: "Conservative",    color: "#6366f1" },
+  { value: 35,  label: "Cautious",        color: "#3b82f6" },
+  { value: 50,  label: "Balanced",        color: "#10b981" },
+  { value: 70,  label: "Aggressive",      color: "#f59e0b" },
+  { value: 90,  label: "Very Aggressive", color: "#ef4444" },
+];
+
+const SENSITIVITY_DESCRIPTIONS: Record<string, string> = {
+  Conservative:      "Only switches when the full client name appears in a window title. Zero false positives — best for firms with very generic client names.",
+  Cautious:          "Requires a strong name match. Partial words are ignored. Good default for small firms that prefer manual control.",
+  Balanced:          "Default setting. Full-name matches auto-switch; partial words show a suggestion toast but don't switch automatically.",
+  Aggressive:        'Partial words trigger auto-switch. "Dauphin" in any window title will switch to "Dauphin & Fantacone". Best for firms with unique client names.',
+  "Very Aggressive": "Very short name fragments trigger switches. Maximises automatic detection but may produce occasional false positives.",
+};
+
+function getSensitivityLabel(v: number) {
+  if (v <= 20) return "Conservative";
+  if (v <= 40) return "Cautious";
+  if (v <= 60) return "Balanced";
+  if (v <= 80) return "Aggressive";
+  return "Very Aggressive";
+}
+
+function getSensitivityColor(v: number) {
+  return SENSITIVITY_PRESETS.reduce((closest, p) =>
+    Math.abs(p.value - v) < Math.abs(closest.value - v) ? p : closest
+  ).color;
+}
+
+function computeThresholds(s: number) {
+  const pct = Math.max(0, Math.min(100, s)) / 100;
+  return {
+    local:   Math.round((0.90 - pct * 0.40) * 100),
+    ai:      Math.round((0.85 - pct * 0.40) * 100),
+    suggest: Math.round((0.70 - pct * 0.35) * 100),
+    partial: pct >= 0.40,
+    minWord: pct < 0.40 ? null : pct < 0.70 ? 6 : pct < 0.90 ? 4 : 3,
+  };
+}
+
+// ============================================================================
+// Organization Tab — unified org info + AI sensitivity
+// ============================================================================
+function OrganizationTab({
+  orgInfo, orgPlan, onUpdate, onSuccess, onError, currentUserRole,
+}: {
+  orgInfo: OrgInfo | null;
+  orgPlan: PlanType;
+  onUpdate: (org: OrgInfo) => void;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
+  currentUserRole: string;
+}) {
+  // ── Org form state ────────────────────────────────────────────────────────
   const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', billing_email: '', billing_contact: '', billing_rate_default: '150.00' });
+  const [saving,  setSaving]  = useState(false);
+  const [form, setForm] = useState({
+    name: "", billing_email: "", billing_contact: "", billing_rate_default: "150.00",
+  });
 
   useEffect(() => {
     if (orgInfo) {
-      setForm({ 
-        name: orgInfo.name || '', 
-        billing_email: orgInfo.billing_email || '', 
-        billing_contact: orgInfo.billing_contact || '', 
-        billing_rate_default: orgInfo.billing_rate_default || '150.00' 
+      setForm({
+        name:                 orgInfo.name || "",
+        billing_email:        orgInfo.billing_email || "",
+        billing_contact:      orgInfo.billing_contact || "",
+        billing_rate_default: orgInfo.billing_rate_default || "150.00",
       });
     }
   }, [orgInfo]);
 
-  const handleSave = async () => {
+  const handleOrgSave = async () => {
     setSaving(true);
     try {
-      const updated = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`, { 
-        method: 'PATCH', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify(form) 
+      const updated = await safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
       });
-      
-      // FIX: Update both parent state AND local form state
       onUpdate(updated);
-      
-      // Sync form state with returned data to ensure consistency
       setForm({
-        name: updated.name || '',
-        billing_email: updated.billing_email || '',
-        billing_contact: updated.billing_contact || '',
-        billing_rate_default: updated.billing_rate_default || '150.00'
+        name:                 updated.name || "",
+        billing_email:        updated.billing_email || "",
+        billing_contact:      updated.billing_contact || "",
+        billing_rate_default: updated.billing_rate_default || "150.00",
       });
-      
       setEditing(false);
-      onSuccess('Organization updated');
+      onSuccess("Organization updated");
     } catch (err: any) {
-      onError(err?.message || 'Failed to update');
+      onError(err?.message || "Failed to update");
     } finally {
       setSaving(false);
     }
   };
 
-  if (!orgInfo) return <div className="text-slate-500 font-medium">No organization data</div>;
+  // ── Sensitivity state ─────────────────────────────────────────────────────
+  const isAdmin = currentUserRole === "admin" || currentUserRole === "owner";
+  const [sensitivity,    setSensitivity]    = useState(50);
+  const [savedSens,      setSavedSens]      = useState(50);
+  const [sensLoading,    setSensLoading]    = useState(true);
+  const [sensSaving,     setSensSaving]     = useState(false);
+  const [showThresholds, setShowThresholds] = useState(false);
 
-  const planLabel = orgPlan === 'executive' ? '💎 Executive' : orgPlan === 'professional' ? '⭐ Professional' : '🚫 No Plan';
+  useEffect(() => {
+    if (!isAdmin) { setSensLoading(false); return; }
+    axios.get(`${API_BASE}/settings/ai/`)
+      .then(res => {
+        setSensitivity(res.data.ai_sensitivity ?? 50);
+        setSavedSens(res.data.ai_sensitivity ?? 50);
+      })
+      .catch(() => {})
+      .finally(() => setSensLoading(false));
+  }, [isAdmin]);
+
+  const handleSensSave = async () => {
+    setSensSaving(true);
+    try {
+      await axios.patch(`${API_BASE}/settings/ai/`, { ai_sensitivity: sensitivity });
+      setSavedSens(sensitivity);
+      onSuccess("Sensitivity saved. Agents will update at next sync.");
+    } catch {
+      onError("Failed to save sensitivity.");
+    } finally {
+      setSensSaving(false);
+    }
+  };
+
+  // ── Early return ──────────────────────────────────────────────────────────
+  if (!orgInfo) return <div className="text-slate-500 font-medium p-4">No organization data</div>;
+
+  const planLabel  = orgPlan === "executive" ? "💎 Executive" : orgPlan === "professional" ? "⭐ Professional" : "🚫 No Plan";
+  const sensLabel  = getSensitivityLabel(sensitivity);
+  const sensColor  = getSensitivityColor(sensitivity);
+  const thresholds = computeThresholds(sensitivity);
+  const sensDesc   = SENSITIVITY_DESCRIPTIONS[sensLabel] ?? "";
+  const sensChanged = sensitivity !== savedSens;
 
   return (
     <div>
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
           <Building2 className="w-5 h-5 text-primary" />
-          Organization Info
+          Organization
         </h2>
         {!editing && (
-          <button onClick={() => setEditing(true)} className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">
-            <Pencil className="w-4 h-4" />
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
+          >
+            <Pencil className="w-3.5 h-3.5" />
             Edit
           </button>
         )}
       </div>
 
+      {/* ── Section 1: Org Info ──────────────────────────────────────────────── */}
       {editing ? (
-        <div className="space-y-5 max-w-md">
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Organization Name</label>
-            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Billing Email</label>
-            <input type="email" value={form.billing_email} onChange={(e) => setForm({ ...form, billing_email: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Billing Contact Name</label>
-            <input type="text" value={form.billing_contact} onChange={(e) => setForm({ ...form, billing_contact: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" />
-          </div>
-          <div className="pt-4 border-t-2 border-slate-200">
-            <label className="block text-sm font-bold text-slate-800 mb-2 flex items-center gap-2">
-              <DollarSign className="w-4 h-4" />
-              Default Hourly Billing Rate
-            </label>
-            <div className="relative max-w-xs">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">$</span>
-              <input type="number" step="0.01" min="0" value={form.billing_rate_default} onChange={(e) => setForm({ ...form, billing_rate_default: e.target.value })} className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-xl text-slate-900 font-semibold focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all" placeholder="150.00" />
+        <div className="bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl p-6 mb-6">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-5">Edit Organization Info</p>
+          <div className="grid grid-cols-2 gap-5">
+            <div className="col-span-2 sm:col-span-1">
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">Organization Name</label>
+              <input
+                type="text" value={form.name}
+                onChange={e => setForm({ ...form, name: e.target.value })}
+                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">Billing Email</label>
+              <input
+                type="email" value={form.billing_email}
+                onChange={e => setForm({ ...form, billing_email: e.target.value })}
+                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">Billing Contact</label>
+              <input
+                type="text" value={form.billing_contact}
+                onChange={e => setForm({ ...form, billing_contact: e.target.value })}
+                className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">Default Hourly Rate</label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold text-sm">$</span>
+                <input
+                  type="number" step="0.01" min="0" value={form.billing_rate_default}
+                  onChange={e => setForm({ ...form, billing_rate_default: e.target.value })}
+                  className="w-full pl-8 pr-4 py-2.5 border-2 border-slate-200 rounded-xl font-semibold text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                />
+              </div>
             </div>
           </div>
-          <div className="flex gap-3 pt-4">
-            <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all">
+          <div className="flex gap-3 mt-5 pt-5 border-t-2 border-slate-200">
+            <button
+              onClick={handleOrgSave} disabled={saving}
+              className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/20 transition-all"
+            >
               {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Save
+              Save Changes
             </button>
-            <button onClick={() => setEditing(false)} className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">Cancel</button>
+            <button
+              onClick={() => setEditing(false)}
+              className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-white transition-all"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-6">
-            <div><p className="text-sm text-slate-500 font-semibold mb-1">Organization Name</p><p className="text-slate-900 font-bold">{orgInfo.name}</p></div>
-            <div><p className="text-sm text-slate-500 font-semibold mb-1">Created</p><p className="text-slate-900 font-bold">{new Date(orgInfo.created_at).toLocaleDateString()}</p></div>
-            <div><p className="text-sm text-slate-500 font-semibold mb-1">Billing Email</p><p className="text-slate-900 font-bold">{orgInfo.billing_email || '—'}</p></div>
-            <div><p className="text-sm text-slate-500 font-semibold mb-1">Billing Contact</p><p className="text-slate-900 font-bold">{orgInfo.billing_contact || '—'}</p></div>
-          </div>
-          <div className="pt-4 border-t-2 border-slate-200">
-            <div className={cn('rounded-xl p-4 border-2', orgPlan === 'executive' ? 'bg-primary/5 border-primary/20' : orgPlan === 'professional' ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200')}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className={cn('text-sm font-bold', orgPlan === 'executive' ? 'text-primary' : orgPlan === 'professional' ? 'text-amber-700' : 'text-red-700')}>Current Plan</p>
-                  <p className={cn('text-2xl font-extrabold mt-1', orgPlan === 'executive' ? 'text-primary' : orgPlan === 'professional' ? 'text-amber-700' : 'text-red-700')}>{planLabel}</p>
-                </div>
-                {orgPlan !== 'executive' && (
-                  <a href="/account/billing" className="px-4 py-2 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4" />
-                    {orgPlan === 'none' ? 'Subscribe' : 'Upgrade'}
-                  </a>
-                )}
+        <div className="mb-6">
+          {/* Info strip */}
+          <div className="grid grid-cols-3 gap-px bg-slate-200 rounded-2xl overflow-hidden border-2 border-slate-200 mb-4">
+            {[
+              { label: "Organization",    value: orgInfo.name },
+              { label: "Billing Email",   value: orgInfo.billing_email || "—" },
+              { label: "Billing Contact", value: orgInfo.billing_contact || "—" },
+            ].map(({ label, value }) => (
+              <div key={label} className="bg-white px-5 py-4">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">{label}</p>
+                <p className="font-bold text-slate-900 text-sm truncate">{value}</p>
               </div>
+            ))}
+          </div>
+
+          {/* Plan + Rate side-by-side */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className={cn(
+              "rounded-2xl border-2 px-5 py-4 flex items-center justify-between",
+              orgPlan === "executive" ? "bg-primary/5 border-primary/20" : "bg-amber-50 border-amber-200"
+            )}>
+              <div>
+                <p className={cn("text-xs font-bold uppercase tracking-widest mb-1",
+                  orgPlan === "executive" ? "text-primary/60" : "text-amber-600"
+                )}>Current Plan</p>
+                <p className={cn("text-lg font-extrabold",
+                  orgPlan === "executive" ? "text-primary" : "text-amber-700"
+                )}>{planLabel}</p>
+              </div>
+              {orgPlan !== "executive" && (
+                <a
+                  href="/account/billing"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-sm font-bold rounded-xl hover:opacity-90 shadow-lg shadow-primary/20 transition-all"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Upgrade
+                </a>
+              )}
             </div>
-          </div>
-          <div className="pt-4 border-t-2 border-slate-200">
-            <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-emerald-700 font-bold flex items-center gap-2"><DollarSign className="w-4 h-4" />Default Hourly Billing Rate</p>
-                  <p className="text-3xl font-extrabold text-emerald-700 mt-1">${parseFloat(orgInfo.billing_rate_default || '150.00').toFixed(2)}/hr</p>
-                </div>
-                <span className="bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-full text-xs font-bold">Firm Default</span>
+
+            <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50 px-5 py-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-emerald-600/70 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+                  <DollarSign className="w-3 h-3" />Default Rate
+                </p>
+                <p className="text-lg font-extrabold text-emerald-700">
+                  ${parseFloat(orgInfo.billing_rate_default || "150.00").toFixed(2)}
+                  <span className="text-sm font-semibold text-emerald-600/70">/hr</span>
+                </p>
               </div>
+              <span className="text-xs bg-emerald-100 text-emerald-700 font-bold px-2.5 py-1 rounded-full">Firm Default</span>
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Section 2: AI Sensitivity (admin/owner only) ──────────────────────── */}
+      {isAdmin && (
+        <>
+          <div className="flex items-center gap-3 my-6">
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-widest">
+              <Brain className="w-3.5 h-3.5" />AI Settings
+            </span>
+            <div className="flex-1 h-px bg-slate-200" />
+          </div>
+
+          <div>
+            <div className="flex items-start justify-between mb-5">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Client Detection Sensitivity</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  How aggressively the desktop agent matches windows to clients.
+                </p>
+              </div>
+              {!sensLoading && (
+                <span
+                  className="text-sm font-bold px-3 py-1 rounded-full text-white shrink-0 ml-4"
+                  style={{ backgroundColor: sensColor }}
+                >
+                  {sensitivity} — {sensLabel}
+                </span>
+              )}
+            </div>
+
+            {sensLoading ? (
+              <div className="h-10 bg-slate-100 animate-pulse rounded-xl" />
+            ) : (
+              <>
+                {/* Slider */}
+                <div className="mb-4">
+                  <input
+                    type="range" min={0} max={100} step={1} value={sensitivity}
+                    onChange={e => setSensitivity(Number(e.target.value))}
+                    className="w-full h-2 rounded-full appearance-none cursor-pointer"
+                    style={{
+                      background: `linear-gradient(to right, ${sensColor} ${sensitivity}%, #e2e8f0 ${sensitivity}%)`,
+                      accentColor: sensColor,
+                    }}
+                  />
+                  <div className="flex justify-between mt-2 px-0.5">
+                    {["Conservative", "Cautious", "Balanced", "Aggressive", "Max"].map(t => (
+                      <span key={t} className="text-xs text-slate-400 font-medium">{t}</span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div
+                  className="text-sm text-slate-600 bg-slate-50 rounded-xl px-4 py-3 mb-4 border-l-4"
+                  style={{ borderLeftColor: sensColor }}
+                >
+                  {sensDesc}
+                </div>
+
+                {/* Preset buttons */}
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {SENSITIVITY_PRESETS.map(p => (
+                    <button
+                      key={p.value}
+                      onClick={() => setSensitivity(p.value)}
+                      className="px-3 py-1.5 rounded-full border text-xs font-bold transition-all"
+                      style={sensitivity === p.value
+                        ? { backgroundColor: p.color, color: "white", borderColor: p.color }
+                        : { borderColor: "#cbd5e1", color: "#475569" }
+                      }
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Collapsible thresholds */}
+                <button
+                  onClick={() => setShowThresholds(v => !v)}
+                  className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 transition-colors mb-3 select-none"
+                >
+                  <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", showThresholds && "rotate-180")} />
+                  {showThresholds ? "Hide" : "Show"} confidence thresholds
+                </button>
+
+                {showThresholds && (
+                  <div className="grid grid-cols-2 gap-3 mb-4 text-xs">
+                    {[
+                      { label: "Full-name auto-switch", value: `≥ ${thresholds.local}%` },
+                      { label: "AI auto-switch",        value: `≥ ${thresholds.ai}%` },
+                      { label: "Suggestion toast",      value: `≥ ${thresholds.suggest}%` },
+                      {
+                        label: "Partial-word matching",
+                        value: thresholds.partial
+                          ? `On (min ${thresholds.minWord} chars)`
+                          : "Off",
+                      },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
+                        <div className="text-slate-500">{label}</div>
+                        <div className="font-bold mt-0.5" style={{ color: sensColor }}>{value}</div>
+                      </div>
+                    ))}
+                    <p className="col-span-2 text-xs text-slate-400 italic">
+                      {thresholds.partial
+                        ? `At this sensitivity, "Eric Dauphin update" would ${thresholds.local <= 65 ? "auto-switch" : "suggest switching"} to "Dauphin & Fantacone".`
+                        : "The window title must contain the full client name to trigger a switch."
+                      }
+                    </p>
+                  </div>
+                )}
+
+                {/* Save row */}
+                <div className="flex items-center gap-4 pt-4 border-t-2 border-slate-100">
+                  <button
+                    onClick={handleSensSave}
+                    disabled={sensSaving || !sensChanged}
+                    className="px-5 py-2.5 rounded-xl text-sm font-bold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ backgroundColor: sensChanged ? sensColor : "#94a3b8" }}
+                  >
+                    {sensSaving ? "Saving…" : "Save Sensitivity"}
+                  </button>
+                  {sensChanged && !sensSaving && (
+                    <span className="text-xs text-slate-400">Unsaved changes</span>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -878,7 +1147,7 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: '', code: '', visibility: 'all' });
   const [saving, setSaving] = useState(false);
-  
+
   const [selectedClientIds, setSelectedClientIds] = useState<Set<number>>(new Set());
   const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
   const [showCSVImportModal, setShowCSVImportModal] = useState(false);
@@ -900,9 +1169,7 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
   };
 
   const clearSelection = () => setSelectedClientIds(new Set());
-
   const selectedClients = clients.filter(c => selectedClientIds.has(c.id));
-
   const resetForm = () => { setForm({ name: '', code: '', visibility: 'all' }); setShowAdd(false); setEditingId(null); };
 
   const handleSave = async () => {
@@ -964,14 +1231,14 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
           Clients
           <span className="text-sm font-bold text-slate-500">({clients.length})</span>
         </h2>
-        
+
         {canManageClients && (
           <div className="flex items-center gap-2">
             <div className="relative">
               <button onClick={() => setShowImportDropdown(!showImportDropdown)} className="flex items-center gap-2 px-3 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">
                 <Upload className="w-4 h-4" />Import<ChevronDown className="w-4 h-4" />
               </button>
-              
+
               {showImportDropdown && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setShowImportDropdown(false)} />
@@ -992,7 +1259,7 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
                 </>
               )}
             </div>
-            
+
             <button onClick={() => { resetForm(); setShowAdd(true); }} className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all">
               <Plus className="w-4 h-4" />Add Client
             </button>
@@ -1107,7 +1374,6 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
         </div>
       )}
 
-      {/* Modals */}
       {showImportWizard && <ClientImportWizard onClose={() => setShowImportWizard(false)} onSuccess={() => { onRefresh(); onSuccess('Clients imported!'); }} users={users} />}
       {showBulkAssignModal && <BulkAssignModal isOpen={showBulkAssignModal} onClose={() => setShowBulkAssignModal(false)} selectedClients={selectedClients} users={users} onSuccess={() => { onRefresh(); clearSelection(); onSuccess('Team assigned!'); }} />}
       {showCSVImportModal && <CSVImportModal isOpen={showCSVImportModal} onClose={() => setShowCSVImportModal(false)} onSuccess={() => { onRefresh(); onSuccess('Assignments imported!'); }} />}
@@ -1117,7 +1383,7 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
 }
 
 // ============================================================================
-// Bulk Assign Modal - FIXED: User display with getUserDisplayName
+// Bulk Assign Modal
 // ============================================================================
 function BulkAssignModal({ isOpen, onClose, selectedClients, users, onSuccess }: { isOpen: boolean; onClose: () => void; selectedClients: Client[]; users: TeamMember[]; onSuccess: () => void; }) {
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
@@ -1179,8 +1445,6 @@ function BulkAssignModal({ isOpen, onClose, selectedClients, users, onSuccess }:
                   <p className="text-sm text-red-700 font-medium">{error}</p>
                 </div>
               )}
-
-              {/* Mode Selection */}
               <div className="mb-6">
                 <label className="block text-sm font-bold text-slate-800 mb-3">Assignment Mode</label>
                 <div className="grid grid-cols-2 gap-3">
@@ -1200,8 +1464,6 @@ function BulkAssignModal({ isOpen, onClose, selectedClients, users, onSuccess }:
                   </button>
                 </div>
               </div>
-
-              {/* Role Selection */}
               <div className="mb-6">
                 <label className="block text-sm font-bold text-slate-800 mb-2">Default Role</label>
                 <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
@@ -1211,8 +1473,6 @@ function BulkAssignModal({ isOpen, onClose, selectedClients, users, onSuccess }:
                   <option value="Lead">Lead</option>
                 </select>
               </div>
-
-              {/* User Selection - FIXED with getUserDisplayName */}
               <div>
                 <label className="block text-sm font-bold text-slate-800 mb-3">Select Team Members</label>
                 <div className="border-2 border-slate-200 rounded-xl max-h-64 overflow-y-auto">
@@ -1271,7 +1531,6 @@ function CSVImportModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClo
     if (selectedFile) {
       setFile(selectedFile);
       setError(null);
-      // Preview first few rows
       const reader = new FileReader();
       reader.onload = (event) => {
         const text = event.target?.result as string;
@@ -1285,9 +1544,7 @@ function CSVImportModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClo
 
   const handleDownloadTemplate = async () => {
     try {
-      const response = await fetch(`${API_BASE}/clients/assignment-template/`, {
-        credentials: 'include',
-      });
+      const response = await fetch(`${API_BASE}/clients/assignment-template/`, { credentials: 'include' });
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1309,18 +1566,11 @@ function CSVImportModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClo
     try {
       const formData = new FormData();
       formData.append('file', file);
-      
-      const response = await fetch(`${API_BASE}/clients/import-assignments/`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData,
-      });
-      
+      const response = await fetch(`${API_BASE}/clients/import-assignments/`, { method: 'POST', credentials: 'include', body: formData });
       if (!response.ok) {
         const errData = await response.json();
         throw new Error(errData.error || 'Import failed');
       }
-      
       const data = await response.json();
       setResult(data);
       setTimeout(() => { onSuccess(); handleClose(); }, 2000);
@@ -1370,8 +1620,6 @@ function CSVImportModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClo
                   <p className="text-sm text-red-700 font-medium">{error}</p>
                 </div>
               )}
-
-              {/* Template Download */}
               <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
                 <div className="flex items-center justify-between">
                   <div>
@@ -1379,58 +1627,33 @@ function CSVImportModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClo
                     <p className="text-sm text-blue-600">Get a pre-filled CSV with your clients and team members</p>
                   </div>
                   <button onClick={handleDownloadTemplate} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors">
-                    <Download className="w-4 h-4" />
-                    Template
+                    <Download className="w-4 h-4" />Template
                   </button>
                 </div>
               </div>
-
-              {/* File Upload */}
               <div className="mb-6">
                 <label className="block text-sm font-bold text-slate-800 mb-3">Upload CSV File</label>
-                <div 
-                  onClick={() => fileInputRef.current?.click()}
-                  className={cn(
-                    'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all',
-                    file ? 'border-emerald-300 bg-emerald-50' : 'border-slate-300 hover:border-primary hover:bg-primary/5'
-                  )}
-                >
+                <div onClick={() => fileInputRef.current?.click()} className={cn('border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all', file ? 'border-emerald-300 bg-emerald-50' : 'border-slate-300 hover:border-primary hover:bg-primary/5')}>
                   <input ref={fileInputRef} type="file" accept=".csv" onChange={handleFileChange} className="hidden" />
                   {file ? (
-                    <>
-                      <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto mb-2" />
-                      <p className="font-bold text-emerald-800">{file.name}</p>
-                      <p className="text-sm text-emerald-600">Click to change file</p>
-                    </>
+                    <><CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto mb-2" /><p className="font-bold text-emerald-800">{file.name}</p><p className="text-sm text-emerald-600">Click to change file</p></>
                   ) : (
-                    <>
-                      <Upload className="w-10 h-10 text-slate-400 mx-auto mb-2" />
-                      <p className="font-bold text-slate-700">Click to select a CSV file</p>
-                      <p className="text-sm text-slate-500">or drag and drop</p>
-                    </>
+                    <><Upload className="w-10 h-10 text-slate-400 mx-auto mb-2" /><p className="font-bold text-slate-700">Click to select a CSV file</p><p className="text-sm text-slate-500">or drag and drop</p></>
                   )}
                 </div>
               </div>
-
-              {/* Preview */}
               {preview.length > 0 && (
                 <div className="mb-6">
                   <label className="block text-sm font-bold text-slate-800 mb-3">Preview</label>
                   <div className="border-2 border-slate-200 rounded-xl overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-100">
-                        <tr>
-                          {preview[0]?.map((header: string, i: number) => (
-                            <th key={i} className="px-3 py-2 text-left font-bold text-slate-700 whitespace-nowrap">{header}</th>
-                          ))}
-                        </tr>
+                        <tr>{preview[0]?.map((header: string, i: number) => <th key={i} className="px-3 py-2 text-left font-bold text-slate-700 whitespace-nowrap">{header}</th>)}</tr>
                       </thead>
                       <tbody>
                         {preview.slice(1).map((row, i) => (
                           <tr key={i} className="border-t border-slate-100">
-                            {row.map((cell: string, j: number) => (
-                              <td key={j} className="px-3 py-2 text-slate-600 whitespace-nowrap">{cell}</td>
-                            ))}
+                            {row.map((cell: string, j: number) => <td key={j} className="px-3 py-2 text-slate-600 whitespace-nowrap">{cell}</td>)}
                           </tr>
                         ))}
                       </tbody>
@@ -1439,8 +1662,6 @@ function CSVImportModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClo
                   <p className="text-xs text-slate-500 mt-2">Showing first {preview.length - 1} rows</p>
                 </div>
               )}
-
-              {/* Format Instructions */}
               <div className="p-4 bg-slate-50 border-2 border-slate-200 rounded-xl">
                 <p className="font-bold text-slate-800 mb-2">CSV Format</p>
                 <p className="text-sm text-slate-600">Required columns: <code className="bg-slate-200 px-1 rounded">client_code</code>, <code className="bg-slate-200 px-1 rounded">user_email</code>, <code className="bg-slate-200 px-1 rounded">role</code></p>
@@ -1491,11 +1712,7 @@ function CopyAssignmentsModal({ isOpen, onClose, clients, onSuccess }: { isOpen:
     setLoading(true);
     setError(null);
     try {
-      const response = await safeFetchJson<any>(`${API_BASE}/clients/copy-assignments/`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ source_client_id: sourceClientId, target_client_ids: Array.from(targetClientIds) }) 
-      });
+      const response = await safeFetchJson<any>(`${API_BASE}/clients/copy-assignments/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_client_id: sourceClientId, target_client_ids: Array.from(targetClientIds) }) });
       setResult(response);
       setTimeout(() => { onSuccess(); handleClose(); }, 2000);
     } catch (err: any) {
@@ -1535,65 +1752,33 @@ function CopyAssignmentsModal({ isOpen, onClose, clients, onSuccess }: { isOpen:
                   <p className="text-sm text-red-700 font-medium">{error}</p>
                 </div>
               )}
-
-              {/* Source Client Selection */}
               <div className="mb-6">
                 <label className="block text-sm font-bold text-slate-800 mb-3">Copy From (Source Client)</label>
-                <input 
-                  type="text" 
-                  placeholder="Search clients..." 
-                  value={searchSource} 
-                  onChange={(e) => setSearchSource(e.target.value)} 
-                  className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 mb-2 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" 
-                />
+                <input type="text" placeholder="Search clients..." value={searchSource} onChange={(e) => setSearchSource(e.target.value)} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 mb-2 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" />
                 <div className="border-2 border-slate-200 rounded-xl max-h-40 overflow-y-auto">
                   {filteredSourceClients.map(client => (
-                    <button 
-                      key={client.id} 
-                      onClick={() => { setSourceClientId(client.id); setTargetClientIds(new Set()); }} 
-                      className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', sourceClientId === client.id && 'bg-purple-50')}
-                    >
+                    <button key={client.id} onClick={() => { setSourceClientId(client.id); setTargetClientIds(new Set()); }} className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', sourceClientId === client.id && 'bg-purple-50')}>
                       {sourceClientId === client.id ? <CheckSquare className="w-5 h-5 text-purple-600 flex-shrink-0" /> : <Square className="w-5 h-5 text-slate-400 flex-shrink-0" />}
-                      <div className="flex-1 text-left">
-                        <p className="font-bold text-slate-900 text-sm">{client.name}</p>
-                        {client.code && <p className="text-xs text-slate-500 font-mono">{client.code}</p>}
-                      </div>
+                      <div className="flex-1 text-left"><p className="font-bold text-slate-900 text-sm">{client.name}</p>{client.code && <p className="text-xs text-slate-500 font-mono">{client.code}</p>}</div>
                     </button>
                   ))}
                   {filteredSourceClients.length === 0 && <div className="text-center py-4 text-slate-500">No clients found</div>}
                 </div>
               </div>
-
-              {/* Target Clients Selection */}
               {sourceClientId && (
                 <div>
                   <label className="block text-sm font-bold text-slate-800 mb-3">Copy To (Target Clients)</label>
-                  <input 
-                    type="text" 
-                    placeholder="Search clients..." 
-                    value={searchTarget} 
-                    onChange={(e) => setSearchTarget(e.target.value)} 
-                    className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 mb-2 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" 
-                  />
+                  <input type="text" placeholder="Search clients..." value={searchTarget} onChange={(e) => setSearchTarget(e.target.value)} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 mb-2 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all" />
                   <div className="border-2 border-slate-200 rounded-xl max-h-48 overflow-y-auto">
                     {filteredTargetClients.map(client => (
-                      <button 
-                        key={client.id} 
-                        onClick={() => handleToggleTarget(client.id)} 
-                        className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', targetClientIds.has(client.id) && 'bg-primary/5')}
-                      >
+                      <button key={client.id} onClick={() => handleToggleTarget(client.id)} className={cn('w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0', targetClientIds.has(client.id) && 'bg-primary/5')}>
                         {targetClientIds.has(client.id) ? <CheckSquare className="w-5 h-5 text-primary flex-shrink-0" /> : <Square className="w-5 h-5 text-slate-400 flex-shrink-0" />}
-                        <div className="flex-1 text-left">
-                          <p className="font-bold text-slate-900 text-sm">{client.name}</p>
-                          {client.code && <p className="text-xs text-slate-500 font-mono">{client.code}</p>}
-                        </div>
+                        <div className="flex-1 text-left"><p className="font-bold text-slate-900 text-sm">{client.name}</p>{client.code && <p className="text-xs text-slate-500 font-mono">{client.code}</p>}</div>
                       </button>
                     ))}
                     {filteredTargetClients.length === 0 && <div className="text-center py-4 text-slate-500">No other clients available</div>}
                   </div>
-                  {targetClientIds.size > 0 && (
-                    <p className="mt-2 text-sm text-primary font-semibold">{targetClientIds.size} client{targetClientIds.size !== 1 ? 's' : ''} selected</p>
-                  )}
+                  {targetClientIds.size > 0 && <p className="mt-2 text-sm text-primary font-semibold">{targetClientIds.size} client{targetClientIds.size !== 1 ? 's' : ''} selected</p>}
                 </div>
               )}
             </>
@@ -1615,7 +1800,7 @@ function CopyAssignmentsModal({ isOpen, onClose, clients, onSuccess }: { isOpen:
 }
 
 // ============================================================================
-// Billing Rates Tab - FIXED: Employee dropdown with getUserDisplayName
+// Billing Rates Tab
 // ============================================================================
 function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onSuccess, onError }: { rates: BillingRate[]; users: TeamMember[]; clients: Client[]; orgDefaultRate: string; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -1629,12 +1814,7 @@ function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onS
     if (!form.rate) return;
     setSaving(true);
     try {
-      const payload = { 
-        user: form.user || null, 
-        client: form.client || null, 
-        rate: form.rate, 
-        effective_date: form.effective_date 
-      };
+      const payload = { user: form.user || null, client: form.client || null, rate: form.rate, effective_date: form.effective_date };
       if (editingId) {
         await safeFetchJson(`${API_BASE}/billing/rates/${editingId}/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         onSuccess('Rate updated');
@@ -1681,7 +1861,6 @@ function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onS
         </button>
       </div>
 
-      {/* Default Rate Banner */}
       <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
         <div className="flex items-center justify-between">
           <div>
@@ -1696,14 +1875,11 @@ function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onS
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
           <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Rate' : 'Add Rate Override'}</h3>
           <div className="grid grid-cols-4 gap-4">
-            {/* FIXED: Employee dropdown with getUserDisplayName */}
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Employee</label>
               <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
                 <option value="">All Employees</option>
-                {users.map(u => (
-                  <option key={u.id} value={u.id}>{getUserDisplayName(u)}</option>
-                ))}
+                {users.map(u => <option key={u.id} value={u.id}>{getUserDisplayName(u)}</option>)}
               </select>
             </div>
             <div>
@@ -1776,7 +1952,7 @@ function BillingRatesTab({ rates, users, clients, orgDefaultRate, onRefresh, onS
 }
 
 // ============================================================================
-// Employee Cost Rates Tab - FIXED: Employee dropdown with getUserDisplayName
+// Employee Cost Rates Tab
 // ============================================================================
 function EmployeeCostRatesTab({ rates, users, onRefresh, onSuccess, onError }: { rates: EmployeeCostRate[]; users: TeamMember[]; onRefresh: () => void; onSuccess: (msg: string) => void; onError: (msg: string) => void; }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -1845,14 +2021,11 @@ function EmployeeCostRatesTab({ rates, users, onRefresh, onSuccess, onError }: {
         <div className="mb-6 p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
           <h3 className="font-bold text-slate-900 mb-4">{editingId ? 'Edit Cost Rate' : 'Add Cost Rate'}</h3>
           <div className="grid grid-cols-3 gap-4">
-            {/* FIXED: Employee dropdown with getUserDisplayName */}
             <div>
               <label className="block text-sm font-bold text-slate-800 mb-2">Employee *</label>
               <select value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all bg-white">
                 <option value="">Select Employee</option>
-                {users.map(u => (
-                  <option key={u.id} value={u.id}>{getUserDisplayName(u)}</option>
-                ))}
+                {users.map(u => <option key={u.id} value={u.id}>{getUserDisplayName(u)}</option>)}
               </select>
             </div>
             <div>
@@ -1973,8 +2146,7 @@ function DevicesTab({ devices, onRefresh, onSuccess, onError }: { devices: Devic
           <span className="text-sm font-bold text-slate-500">({devices.length})</span>
         </h2>
         <button onClick={onRefresh} className="flex items-center gap-2 px-4 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all">
-          <RefreshCw className="w-4 h-4" />
-          Refresh
+          <RefreshCw className="w-4 h-4" />Refresh
         </button>
       </div>
 
@@ -2011,13 +2183,9 @@ function DevicesTab({ devices, onRefresh, onSuccess, onError }: { devices: Devic
                 </td>
                 <td className="px-4 py-3 text-right">
                   {device.is_active ? (
-                    <button onClick={() => handleDeactivate(device.id, device.machine_name)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Deactivate">
-                      <X className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => handleDeactivate(device.id, device.machine_name)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Deactivate"><X className="w-4 h-4" /></button>
                   ) : (
-                    <button onClick={() => handleActivate(device.id)} className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors" title="Activate">
-                      <Check className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => handleActivate(device.id)} className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors" title="Activate"><Check className="w-4 h-4" /></button>
                   )}
                 </td>
               </tr>
@@ -2092,12 +2260,10 @@ function TokenTab({ token, onRefresh, onSuccess, onError }: { token: InstallToke
               <div className="flex-1 bg-white border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-sm text-slate-700">
                 {showToken ? token.token : maskedToken}
               </div>
-              <button onClick={() => setShowToken(!showToken)} className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-colors" title={showToken ? 'Hide token' : 'Show token'}>
+              <button onClick={() => setShowToken(!showToken)} className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-colors">
                 {showToken ? <EyeOff className="w-5 h-5 text-slate-500" /> : <Eye className="w-5 h-5 text-slate-500" />}
               </button>
-              <button onClick={handleCopy} className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-colors" title="Copy token">
-                <Copy className="w-5 h-5 text-slate-500" />
-              </button>
+              <button onClick={handleCopy} className="p-3 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-colors"><Copy className="w-5 h-5 text-slate-500" /></button>
             </div>
             <p className="text-xs text-slate-500 mt-2">Created: {new Date(token.created_at).toLocaleString()}</p>
           </div>
@@ -2124,9 +2290,7 @@ function TokenTab({ token, onRefresh, onSuccess, onError }: { token: InstallToke
         <div className="text-center py-12">
           <Key className="w-12 h-12 mx-auto mb-3 text-slate-300" />
           <p className="font-bold text-slate-700">No install token found</p>
-          <button onClick={onRefresh} className="mt-4 px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90">
-            Generate Token
-          </button>
+          <button onClick={onRefresh} className="mt-4 px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90">Generate Token</button>
         </div>
       )}
     </div>

@@ -1689,10 +1689,21 @@ def run_agent():
                 pass
         
         log("[AI-SWITCH] ✅ Initialized")
+
+        # Keep client list + sensitivity fresh when sync updates
+        if sync:
+            _original_on_sync = sync.on_update
+            def _on_sync_with_switcher():
+                if _original_on_sync:
+                    _original_on_sync()
+                ai_switcher.update_clients(sync.clients)
+                if hasattr(sync, 'org_settings') and sync.org_settings:
+                    ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
+                    ai_switcher.update_sensitivity(ai_sensitivity)
+            sync.on_update = _on_sync_with_switcher
+
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
-    except Exception as e:
-        log(f"[AI-SWITCH] Init failed: {e}")
                         
 
     log("=== Windows Activity Agent starting… (Ctrl+C to stop) ===")

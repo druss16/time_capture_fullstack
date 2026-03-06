@@ -2997,6 +2997,16 @@ def run_agent():
                 if _original_on_sync:
                     _original_on_sync()
                 ai_switcher.update_clients(sync.clients)
+                # Push org AI sensitivity setting to the switcher on every sync
+                if hasattr(sync, 'org_settings') and sync.org_settings:
+                    ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
+                    ai_switcher.update_sensitivity(ai_sensitivity)
+            sync.on_update = _on_sync_with_switcher
+            _original_on_sync = sync.on_update
+            def _on_sync_with_switcher():
+                if _original_on_sync:
+                    _original_on_sync()
+                ai_switcher.update_clients(sync.clients)
             sync.on_update = _on_sync_with_switcher
 
         log(f"[AI-SWITCH] ✅ Initialized")

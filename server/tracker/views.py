@@ -5955,7 +5955,7 @@ from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 import json
 
-
+@csrf_exempt
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def org_ai_settings(request):

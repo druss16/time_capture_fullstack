@@ -55,7 +55,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
-import axios from "axios";
 
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
 import ClientImportWizard from '@/components/ClientImportWizard';
@@ -667,10 +666,15 @@ function OrganizationTab({
     setSensLoading(false);
   }, [orgInfo, isAdmin]);
 
+
   const handleSensSave = async () => {
     setSensSaving(true);
     try {
-      await axios.patch(`${API_BASE}/settings/org/`, { ai_sensitivity: sensitivity });
+      await safeFetchJson(`${API_BASE}/settings/org/`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ai_sensitivity: sensitivity }),
+      });
       setSavedSens(sensitivity);
       onSuccess("Sensitivity saved. Agents will update at next sync.");
     } catch {

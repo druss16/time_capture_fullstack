@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
-import axios from "axios";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -145,14 +144,18 @@ export default function OrganizationTab({
   const handleSensSave = async () => {
     setSensSaving(true);
     try {
-      await axios.patch("${API_BASE}/settings/ai/", { ai_sensitivity: sensitivity });
+      await safeFetchJson(`${API_BASE}/settings/org/`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ai_sensitivity: sensitivity }),
+      });
       setSavedSens(sensitivity);
       onSuccess("Sensitivity saved. Agents will update at next sync.");
     } catch {
       onError("Failed to save sensitivity.");
     } finally {
       setSensSaving(false);
-    }c
+    }
   };
 
   // ── Derived values ────────────────────────────────────────────────────────

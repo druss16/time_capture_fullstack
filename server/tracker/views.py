@@ -5873,6 +5873,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 @api_view(["GET", "PATCH"])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def settings_org(request):
     """GET/PATCH organization settings including industry_type."""

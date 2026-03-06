@@ -5908,6 +5908,8 @@ def settings_org(request):
             "can_edit_org": is_admin_or_owner,
             "role": membership.role,
             "ai_sensitivity":   org.ai_sensitivity,   # <-- NEW
+            "sensitivity_label": _sensitivity_label(org.ai_sensitivity),  # add this
+
         })
     # PATCH
     if not is_admin_or_owner:

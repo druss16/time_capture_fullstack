@@ -5913,7 +5913,6 @@ def settings_org(request):
 
         })
     # PATCH
-    print(f"[ORG_DEBUG] user={request.user} role={getattr(membership, 'role', None)} is_admin={is_admin_or_owner}")
     if not is_admin_or_owner:
         return Response({"error": "Only owner/admin can update"}, status=403)
     if "name" in request.data:

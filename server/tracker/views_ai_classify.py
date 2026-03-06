@@ -192,7 +192,7 @@ def _get_device_and_org(request):
 
     key = auth.replace("DeviceKey ", "").strip()
     try:
-        device = AgentDevice.objects.select_related("user", "user__organization").get(
+        AgentDevice.objects.select_related("user").get(
             api_key=key, is_active=True
         )
         org = device.user.organization

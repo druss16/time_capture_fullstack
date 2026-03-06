@@ -219,9 +219,9 @@ export default function Login() {
 
           <p className="text-center text-sm text-muted-foreground">
             Don't have an account?{" "}
-            <Link className="font-semibold text-primary hover:text-primary/80 transition-colors" to={`/signup?next=${encodeURIComponent(next)}`}>
+{/*            <Link className="font-semibold text-primary hover:text-primary/80 transition-colors" to={`/signup?next=${encodeURIComponent(next)}`}>
               Sign up
-            </Link>
+            </Link>*/}
           </p>
         </div>
       </div>

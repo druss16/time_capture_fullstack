@@ -5959,13 +5959,13 @@ import json
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def org_ai_settings(request):
-    """
-    GET  /api/settings/ai/   — Returns current AI sensitivity (admin only).
-    PATCH /api/settings/ai/  — Updates ai_sensitivity (0–100). Admin only.
-    """
     membership = OrganizationMembership.objects.select_related("organization").filter(
         user=request.user
     ).first()
+    
+    # TEMP DEBUG - remove after fix
+    print(f"[AI_SETTINGS] user={request.user} id={request.user.id} membership={membership} role={getattr(membership, 'role', None)}")
+    
     if not membership:
         return Response({"error": "No organization found"}, status=404)
 

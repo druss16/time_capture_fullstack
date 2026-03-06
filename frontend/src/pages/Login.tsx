@@ -218,7 +218,7 @@ export default function Login() {
           </form>
 
           <p className="text-center text-sm text-muted-foreground">
-            Don't have an account?{" "}
+            Don't have an account? Email info@mavops.ai {" "}
 {/*            <Link className="font-semibold text-primary hover:text-primary/80 transition-colors" to={`/signup?next=${encodeURIComponent(next)}`}>
               Sign up
             </Link>*/}

@@ -61,7 +61,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
           : 0;
 
         setStatus({
-          isActive: data.subscription?.status === 'active' || data.trial?.active,
+          isActive: data.subscription?.status === 'active' || data.trial?.active || ['professional', 'executive'].includes(data.organization?.plan),
           isTrial: data.trial?.active || false,
           trialDaysLeft,
           plan: data.organization?.plan || null,

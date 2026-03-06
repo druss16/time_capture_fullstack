@@ -5955,54 +5955,54 @@ from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 import json
 
-@api_view(["GET", "PATCH"])
-@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
-@permission_classes([IsAuthenticated])
-def org_ai_settings(request):
-    print(f"[AI_DEBUG] user={request.user.username} id={request.user.id}")
+# @api_view(["GET", "PATCH"])
+# @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+# @permission_classes([IsAuthenticated])
+# def org_ai_settings(request):
+#     print(f"[AI_DEBUG] user={request.user.username} id={request.user.id}")
     
-    membership = OrganizationMembership.objects.select_related("organization").filter(
-        user=request.user
-    ).first()
+#     membership = OrganizationMembership.objects.select_related("organization").filter(
+#         user=request.user
+#     ).first()
     
-    print(f"[AI_DEBUG] membership={membership} role={getattr(membership, 'role', None)}")
+#     print(f"[AI_DEBUG] membership={membership} role={getattr(membership, 'role', None)}")
     
-    if not membership:
-        return Response({"error": "No organization found"}, status=404)
+#     if not membership:
+#         return Response({"error": "No organization found"}, status=404)
 
-    org = membership.organization
+#     org = membership.organization
 
-    print(f"[AI_DEBUG] role check: {membership.role not in ('admin', 'owner')}")
+#     print(f"[AI_DEBUG] role check: {membership.role not in ('admin', 'owner')}")
     
-    if membership.role not in ("admin", "owner"):
-        return Response({"error": "Admin access required"}, status=403)
+#     if membership.role not in ("admin", "owner"):
+#         return Response({"error": "Admin access required"}, status=403)
 
-    if request.method == "GET":
-        return Response({
-            "ai_sensitivity": org.ai_sensitivity,
-            "sensitivity_label": _sensitivity_label(org.ai_sensitivity),
-        })
+#     if request.method == "GET":
+#         return Response({
+#             "ai_sensitivity": org.ai_sensitivity,
+#             "sensitivity_label": _sensitivity_label(org.ai_sensitivity),
+#         })
 
-    # PATCH
-    sensitivity = request.data.get("ai_sensitivity")
-    if sensitivity is None:
-        return Response({"error": "ai_sensitivity is required"}, status=400)
+#     # PATCH
+#     sensitivity = request.data.get("ai_sensitivity")
+#     if sensitivity is None:
+#         return Response({"error": "ai_sensitivity is required"}, status=400)
 
-    try:
-        sensitivity = int(sensitivity)
-        if not (0 <= sensitivity <= 100):
-            raise ValueError
-    except (TypeError, ValueError):
-        return Response({"error": "ai_sensitivity must be an integer 0–100"}, status=400)
+#     try:
+#         sensitivity = int(sensitivity)
+#         if not (0 <= sensitivity <= 100):
+#             raise ValueError
+#     except (TypeError, ValueError):
+#         return Response({"error": "ai_sensitivity must be an integer 0–100"}, status=400)
 
-    org.ai_sensitivity = sensitivity
-    org.save(update_fields=["ai_sensitivity"])
+#     org.ai_sensitivity = sensitivity
+#     org.save(update_fields=["ai_sensitivity"])
 
-    return Response({
-        "ai_sensitivity": org.ai_sensitivity,
-        "sensitivity_label": _sensitivity_label(org.ai_sensitivity),
-        "updated": True,
-    })
+#     return Response({
+#         "ai_sensitivity": org.ai_sensitivity,
+#         "sensitivity_label": _sensitivity_label(org.ai_sensitivity),
+#         "updated": True,
+#     })
 
 
 def _sensitivity_label(value: int) -> str:

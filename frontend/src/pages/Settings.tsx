@@ -661,20 +661,16 @@ function OrganizationTab({
   const [showThresholds, setShowThresholds] = useState(false);
 
   useEffect(() => {
-    if (!isAdmin) { setSensLoading(false); return; }
-    axios.get(`${API_BASE}/settings/ai/`)
-      .then(res => {
-        setSensitivity(res.data.ai_sensitivity ?? 50);
-        setSavedSens(res.data.ai_sensitivity ?? 50);
-      })
-      .catch(() => {})
-      .finally(() => setSensLoading(false));
-  }, [isAdmin]);
+    const v = (orgInfo as any)?.ai_sensitivity ?? 50;
+    setSensitivity(v);
+    setSavedSens(v);
+    setSensLoading(false);
+  }, [orgInfo, isAdmin]);
 
   const handleSensSave = async () => {
     setSensSaving(true);
     try {
-      await axios.patch(`${API_BASE}/settings/ai/`, { ai_sensitivity: sensitivity });
+      await axios.patch(`${API_BASE}/settings/org/`, { ai_sensitivity: sensitivity });
       setSavedSens(sensitivity);
       onSuccess("Sensitivity saved. Agents will update at next sync.");
     } catch {

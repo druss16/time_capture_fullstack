@@ -210,6 +210,7 @@ interface ProfitTableRow    { name: string;  revenue: number; cost: number; marg
 // ─── Auth helper ─────────────────────────────────────────────────────────────
 function _getToken(): string {
   return (
+    localStorage.getItem("auth_token") ||        // ← this is the real key
     localStorage.getItem("tt_auth_token") ||
     localStorage.getItem("authToken") ||
     localStorage.getItem("token") ||

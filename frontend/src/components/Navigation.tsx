@@ -18,7 +18,8 @@ import {
   CreditCard,
   KeyRound,
   Building2,
-  Download
+  Download,
+  BarChart2,
 } from 'lucide-react';
 import { safeFetchJson, API_BASE } from "@/lib/api";
 import { cn, getRoleColor } from "@/lib/design-system";
@@ -73,7 +74,8 @@ export default function Navigation() {
   }, []);
 
   const userRole = userInfo?.role;
-  const canAccessSettings = ['owner', 'admin'].includes(userRole || '');
+  const canAccessSettings  = ['owner', 'admin'].includes(userRole || '');
+  const canAccessAnalytics = ['owner', 'admin', 'manager'].includes(userRole || '');
   const isOwner = userRole === 'owner';
   const mdmManaged = userInfo?.mdm_managed || false;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
@@ -163,6 +165,22 @@ export default function Navigation() {
                 >
                   <Settings className="w-4 h-4" />
                   Settings
+                </Link>
+              )}
+
+              {canAccessAnalytics && (
+                <Link
+                  to="/analytics"
+                  className={cn(
+                    'flex items-center gap-2 px-3.5 py-2 rounded-xl',
+                    'text-sm font-semibold transition-all duration-200',
+                    isActive('/analytics')
+                      ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-700'
+                  )}
+                >
+                  <BarChart2 className="w-4 h-4" />
+                  Analytics
                 </Link>
               )}
             </div>
@@ -303,6 +321,19 @@ export default function Navigation() {
             >
               <Settings className="w-4 h-4" />
               Settings
+            </Link>
+          )}
+          {canAccessAnalytics && (
+            <Link
+              to="/analytics"
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg whitespace-nowrap',
+                'text-sm font-semibold transition-all',
+                isActive('/analytics') ? 'bg-primary text-primary-foreground' : 'text-slate-400 hover:text-white hover:bg-slate-700'
+              )}
+            >
+              <BarChart2 className="w-4 h-4" />
+              Analytics
             </Link>
           )}
         </div>

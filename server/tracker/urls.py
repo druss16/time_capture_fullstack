@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -307,6 +307,12 @@ urlpatterns = [
     # AI Classification (backend-powered)
     path('ai/classify-window/', views_ai_classify.ai_classify_window, name='ai-classify-window'),
     path('ai/classify-batch/', views_ai_classify.ai_classify_batch, name='ai-classify-batch'),
+
+    # ===============================
+    # ✅ EXECUTIVE ANALYTICS
+    # ===============================
+
+    path("analytics/executive/", views_analytics.executive_dashboard, name="analytics-executive"),
 
 
 ]

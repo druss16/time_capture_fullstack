@@ -42,6 +42,8 @@ const Login = lazy(() => import("./Login"));
 const NotFound = lazy(() => import("./NotFound"));
 const BillingPage = lazy(() => import("./BillingPage"));
 const WhiteGloveOnboarding = lazy(() => import("./settings/WhiteGloveOnboarding"));
+const ExecutiveDashboard = lazy(() => import("./ExecutiveDashboard"));
+
 
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -358,6 +360,19 @@ export default function App() {
                       <AppLayout>
                         <Clients />
                       </AppLayout>
+                    </MaybeProtected>
+                  }
+                />
+
+                <Route
+                  path="/analytics"
+                  element={
+                    <MaybeProtected>
+                      <AdminRoute>
+                        <AppLayout>
+                          <ExecutiveDashboard apiBase={API_BASE} />
+                        </AppLayout>
+                      </AdminRoute>
                     </MaybeProtected>
                   }
                 />

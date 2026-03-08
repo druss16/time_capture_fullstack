@@ -22,6 +22,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.conf import settings
 from django.core.cache import cache  # Redis/memcached recommended
+from .models import OrganizationMembership
 
 logger = logging.getLogger(__name__)
 
@@ -188,10 +189,11 @@ def _get_device_and_org(request):
 
     key = auth.replace("DeviceKey ", "").strip()
     try:
-        device = AgentDevice.objects.select_related("user__organization").get(
+        device = AgentDevice.objects.select_related("user").get(
             api_key=key, is_active=True
         )
-        org = device.user.organization
+        membership = OrganizationMembership.objects.filter(user=device.user).first()
+        org = membership.organization if membership else None
         return device, device.user, org
     except AgentDevice.DoesNotExist:
         return None, None, None

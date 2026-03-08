@@ -265,7 +265,11 @@ CONTROL_URL = _get("control_url", None) or f"{API_BASE}/agent/control/"
 PAIR_CLAIM  = _get("pair_claim_url", None) or f"{API_BASE}/agents/pair/claim/"
 
 API_KEY           = _get("api_key", os.getenv("AGENT_API_KEY"))
-APP_VERSION       = _get("app_version", os.getenv("AGENT_APP_VERSION")) or "1.0.0"
+try:
+    from version import APP_VERSION as _BUILT_VERSION
+    APP_VERSION = _BUILT_VERSION
+except ImportError:
+    APP_VERSION = _get("app_version", os.getenv("AGENT_APP_VERSION")) or "1.0.0"
 DEVICE_ID_FILE    = _get("device_id_file", os.path.expanduser("~/.mavops_device_id"))
 
 POLL_SECONDS      = int(_get("poll_seconds", _get("AGENT_POLL_SECONDS", 5, "AGENT_POLL_SECONDS")) or 5)

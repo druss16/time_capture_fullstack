@@ -54,20 +54,28 @@ User = get_user_model()
 # ============================================================================
 
 def _get_user_org(user):
-    """Return the user's Organization via OrganizationMembership."""
+    """Return the user's Organization — prefer owner role, then most recent."""
     try:
-        m = OrganizationMembership.objects.filter(user=user).first()
-        return m.organization if m else None
+        # Prefer the org where this user is owner
+        membership = (
+            OrganizationMembership.objects
+            .filter(user=user, role="owner")
+            .select_related("organization")
+            .first()
+        )
+        # Fallback to any membership
+        if not membership:
+            membership = (
+                OrganizationMembership.objects
+                .filter(user=user)
+                .select_related("organization")
+                .order_by("-id")
+                .first()
+            )
+        return membership.organization if membership else None
     except Exception as exc:
         logger.error("[ANALYTICS] get_user_org error: %s", exc)
         return None
-
-
-def _safe_float(v, default: float = 0.0) -> float:
-    try:
-        return float(v) if v is not None else default
-    except (TypeError, ValueError):
-        return default
 
 
 def _parse_period(period: str) -> tuple[date, date]:

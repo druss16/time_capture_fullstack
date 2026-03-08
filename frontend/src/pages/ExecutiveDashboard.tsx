@@ -219,7 +219,7 @@ function _getToken(): string {
 
 // ─── Data fetcher ────────────────────────────────────────────────────────────
 async function fetchDashboard(apiBase: string, period: string): Promise<DashboardResponse> {
-  const url = `${apiBase}/api/analytics/executive/?period=${period}`;
+  const url = `${apiBase}/analytics/executive/?period=${period}`;
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${_getToken()}`,

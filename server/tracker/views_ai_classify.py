@@ -180,11 +180,7 @@ def _call_openai(titles: list, clients: list) -> list:
 # =====================================================================
 
 def _get_device_and_org(request):
-    """
-    Extract device/user/org from DeviceKey auth header.
-    Adjust this to match your actual auth model.
-    """
-    from .models import AgentDevice  # Adjust import path
+    from .models import AgentDevice
 
     auth = request.META.get("HTTP_AUTHORIZATION", "")
     if not auth.startswith("DeviceKey "):
@@ -192,7 +188,7 @@ def _get_device_and_org(request):
 
     key = auth.replace("DeviceKey ", "").strip()
     try:
-        AgentDevice.objects.select_related("user").get(
+        device = AgentDevice.objects.select_related("user__organization").get(
             api_key=key, is_active=True
         )
         org = device.user.organization

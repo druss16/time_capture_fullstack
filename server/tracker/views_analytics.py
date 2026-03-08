@@ -613,7 +613,7 @@ def executive_dashboard(request):
 
     # Plan gate
     plan = getattr(org, "plan", "none") or "none"
-    if plan not in ("professional", "executive", "trial"):
+    if not any(plan.startswith(p) for p in ("professional", "executive", "trial")):
         return Response(
             {
                 "error": "upgrade_required",

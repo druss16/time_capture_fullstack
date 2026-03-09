@@ -412,6 +412,10 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                         'end': updated_end,
                         'minutes': updated_minutes,
                     }
+
+                    # ✅ ADD THIS — recalculate billing_amount when minutes change
+                    if locked.billing_rate and updated_minutes:
+                        update_fields['billing_amount'] = round((updated_minutes / 60) * float(locked.billing_rate), 2)
                     
                     # If categorized, update category_hours
                     if locked.is_categorized and locked.category_hours:
@@ -544,6 +548,11 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             pass
     if not client and device_id:
         client = get_current_client_for_user(user, device_id=device_id)
+
+    # ✅ Calculate billing rate and amount for new blocks
+    from decimal import Decimal
+    billing_rate = getattr(org, 'billing_rate_default', None) or Decimal('0')
+    billing_amount = round((minutes / 60) * float(billing_rate), 2)
     
     if is_idle:
         hours = round(minutes / 60.0, 2)
@@ -569,6 +578,9 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             categorized_by="system",
             categorized_at=timezone.now(),
             approved=False,
+            is_billable=False,
+            billing_rate=billing_rate,
+            billing_amount=0,
         )
     else:
         new_block = Block.objects.create(
@@ -591,6 +603,9 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             category_hours={},
             is_categorized=False,
             approved=False,
+            is_billable=True,
+            billing_rate=billing_rate,
+            billing_amount=billing_amount,
         )
     
     # Link events

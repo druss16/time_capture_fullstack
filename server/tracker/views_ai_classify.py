@@ -201,7 +201,7 @@ def _get_device_and_org(request):
 
 def _get_org_clients(org):
     """Get active clients for this org. Adjust to your Client model."""
-    from clients.models import Client  # Adjust import path
+    from .models import Client  # Adjust import path
 
     clients = Client.objects.filter(
         organization=org, is_active=True
@@ -436,7 +436,7 @@ def _log_classification(org, device, title, result):
     Create this model or skip if you don't need analytics yet.
     """
     try:
-        from agents.models import AIClassificationLog  # Optional model
+        from .models import AIClassificationLog  # Optional model
 
         AIClassificationLog.objects.create(
             organization=org,

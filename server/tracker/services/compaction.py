@@ -454,7 +454,11 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     return created_count + merged_count
 
 def _resolve_billing_rate(org, user, client_id, task_type_id=None):
-    """
+    try:
+        from tracker.models import BillingRate
+    except ImportError:
+        from decimal import Decimal
+        return getattr(org, 'billing_rate_default', None) or Decimal('0')    """
     Resolve the correct billing rate for a block using priority hierarchy:
     1. user + client + task_type  (most specific)
     2. user + client

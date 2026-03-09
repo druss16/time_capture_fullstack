@@ -422,7 +422,7 @@ def _calc_profitability(org, start_date: date, end_date: date) -> dict:
     cost_rates: dict[int, float] = {}
     for rate in (
         EmployeeCostRate.objects
-        .filter(org=org)
+        .filter(organization=org)
         .select_related("user")
         .order_by("user_id", "-effective_date")
     ):
@@ -653,7 +653,7 @@ def _calc_invoice_profitability(org, start_date: date, end_date: date) -> dict:
     cost_rates: dict[int, float] = {}
     for cr in (
         EmployeeCostRate.objects
-        .filter(org=org)
+        .filter(organization=org)
         .select_related("user")
         .order_by("user_id", "-effective_date")
     ):

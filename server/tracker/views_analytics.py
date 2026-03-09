@@ -60,10 +60,22 @@ User = get_user_model()
 # ============================================================================
 
 def _get_user_org(user):
-    """Return the user's Organization via OrganizationMembership."""
     try:
-        m = OrganizationMembership.objects.filter(user=user).first()
-        return m.organization if m else None
+        membership = (
+            OrganizationMembership.objects
+            .filter(user=user, role="owner")
+            .select_related("organization")
+            .first()
+        )
+        if not membership:
+            membership = (
+                OrganizationMembership.objects
+                .filter(user=user)
+                .select_related("organization")
+                .order_by("-id")
+                .first()
+            )
+        return membership.organization if membership else None
     except Exception as exc:
         logger.error("[ANALYTICS] get_user_org error: %s", exc)
         return None
@@ -410,7 +422,7 @@ def _calc_profitability(org, start_date: date, end_date: date) -> dict:
     cost_rates: dict[int, float] = {}
     for rate in (
         EmployeeCostRate.objects
-        .filter(organization=org)
+        .filter(org=org)
         .select_related("user")
         .order_by("user_id", "-effective_date")
     ):

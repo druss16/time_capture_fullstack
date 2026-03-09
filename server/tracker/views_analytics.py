@@ -43,8 +43,13 @@ from tracker.models import (
     OrganizationMembership,
     Timesheet,
     EmployeeCostRate,
-    BillingRate,
 )
+
+# BillingRate may not exist in all schema versions — import safely
+try:
+    from tracker.models import BillingRate
+except ImportError:
+    BillingRate = None
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -592,11 +597,11 @@ def _get_billing_rate(org, user_id: int, client_id: int | None,
     5. user only
     6. org default
     """
+    if BillingRate is None:
+        return Decimal(str(_safe_float(getattr(org, "billing_rate_default", 0))))
+
     qs = BillingRate.objects.filter(org=org).order_by("-effective_date")
 
-    candidates = []
-
-    # Build filter combinations from most → least specific
     filters = []
     if user_id and client_id and task_type_id:
         filters.append(Q(user_id=user_id, client_id=client_id, task_type_id=task_type_id))
@@ -614,7 +619,7 @@ def _get_billing_rate(org, user_id: int, client_id: int | None,
         if match:
             return match.rate
 
-    return _safe_float(getattr(org, "billing_rate_default", 0))
+    return Decimal(str(_safe_float(getattr(org, "billing_rate_default", 0))))
 
 
 # ============================================================================

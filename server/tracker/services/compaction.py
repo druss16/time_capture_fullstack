@@ -1,859 +1,791 @@
-# tracker/views_analytics.py
+# tracker/services/compaction.py
 """
-Executive Analytics Dashboard API
-===================================
-GET /api/analytics/executive/?period=12m
+Event-centric compaction - FIXED VERSION
 
-C-level KPIs for CPA firm owners/admins:
-  - Realization Rate      (billed ÷ worked hours, per client)
-  - Billable Utilization  (billable ÷ total tracked, per staff)
-  - WIP Pipeline          (approved & uninvoiced, aged buckets)
-  - Effective Billing Rate (actual revenue ÷ billable hours)
-  - Revenue Trend         (rolling months from Invoice)
-  - Client Profitability  (revenue − labor cost, per client)
-  - Timesheet Compliance  (% submitted on time, trend)
-  - Invoice Cycle Time    (approval → invoiced avg days)
-
-Period param: 3m | 6m | 12m | ytd | YYYY-MM-DD:YYYY-MM-DD
-Requires: owner / admin / manager role
-Plan gate: professional or executive (trial allowed)
+FIXES:
+1. Added auto_compact_all_active_users() - was missing, Celery task was failing
+2. Use .update() instead of .save() to bypass Block protection when merging
+3. 3-minute idle cap to match agent's MOUSE_IDLE_PAUSE_S
 """
 
 from __future__ import annotations
+from datetime import datetime, timedelta, date as date_type
+from typing import Optional, List, Dict, Any
+from django.db import transaction
+from django.db.models import Q, Count
+from django.utils import timezone
+from django.contrib.auth import get_user_model
+
+from tracker.models import Block, RawEvent, Client
+from tracker.utils.blocks import is_idle_activity, get_current_client_for_user
 
 import logging
-from collections import defaultdict
-from datetime import date, timedelta
-from decimal import Decimal
-
-from django.contrib.auth import get_user_model
-from django.db.models import Sum, Count, Q
-from django.db.models.functions import TruncMonth, Coalesce
-from django.utils import timezone
-
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-
-from tracker.models import (
-    Block,
-    Client,
-    Invoice,
-    Organization,
-    OrganizationMembership,
-    Timesheet,
-    EmployeeCostRate,
-)
-
-# BillingRate may not exist in all schema versions — import safely
-try:
-    from tracker.models import BillingRate
-except ImportError:
-    BillingRate = None
-
 logger = logging.getLogger(__name__)
+
 User = get_user_model()
 
+# Configuration
+IDLE_CAP = timedelta(minutes=3)  # ✅ FIXED: Was 30, now 3 to match agent
+MIN_BLOCK_MINUTES = 0.5
+SESSION_GAP = timedelta(minutes=30)
+AUTO_CATEGORIZE_THRESHOLD = 0.70
 
-# ============================================================================
-# Shared helpers
-# ============================================================================
 
-def _get_user_org(user):
-    """Return the user's Organization via OrganizationMembership."""
+def _safe_device_id(device_id) -> int:
+    if device_id is None:
+        return 0
     try:
-        m = OrganizationMembership.objects.filter(user=user).first()
-        return m.organization if m else None
-    except Exception as exc:
-        logger.error("[ANALYTICS] get_user_org error: %s", exc)
-        return None
+        return int(device_id)
+    except (ValueError, TypeError):
+        return 0
 
 
-def _safe_float(v, default: float = 0.0) -> float:
-    try:
-        return float(v) if v is not None else default
-    except (TypeError, ValueError):
-        return default
+def _app_key(event_or_block) -> str:
+    if isinstance(event_or_block, dict):
+        return (event_or_block.get("app_name") or "").lower().strip()
+    return (getattr(event_or_block, 'app_name', None) or "").lower().strip()
 
 
-def _parse_period(period: str) -> tuple[date, date]:
-    """
-    '12m'  → last 12 calendar months (first of start-month → today)
-    'ytd'  → Jan 1 this year → today
-    'YYYY-MM-DD:YYYY-MM-DD' → explicit range
-    """
-    today = timezone.now().date()
-
-    if ":" in period:
-        parts = period.split(":", 1)
-        return date.fromisoformat(parts[0]), date.fromisoformat(parts[1])
-
-    if period == "ytd":
-        return today.replace(month=1, day=1), today
-
-    months_map = {"3m": 3, "6m": 6, "12m": 12, "24m": 24}
-    n = months_map.get(period, 12)
-
-    year, month = today.year, today.month - n
-    while month <= 0:
-        month += 12
-        year -= 1
-    return date(year, month, 1), today
-
-
-def _months_between(start: date, end: date) -> list[date]:
-    """All first-of-month dates from start → end (inclusive)."""
-    result, cur = [], start.replace(day=1)
-    while cur <= end:
-        result.append(cur)
-        cur = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
-    return result
-
-
-# ============================================================================
-# KPI: Realization Rate
-# ============================================================================
-
-def _calc_realization(org, start_date: date, end_date: date) -> dict:
-    """
-    Realization = Billed Hours (Invoice) ÷ Worked Hours (Block) × 100
-    Thresholds match views_billing.py: ≥125 excellent, ≥100 good,
-    ≥85 warning, <85 critical.
-    """
-    # --- Invoiced hours by client ---
-    invoiced_qs = (
-        Invoice.objects
-        .filter(org=org, invoice_date__gte=start_date,
-                invoice_date__lte=end_date, client__isnull=False)
-        .values("client_id", "client__name")
-        .annotate(
-            billed_hours=Coalesce(Sum("hours_billed"), Decimal("0")),
-            billed_amount=Coalesce(Sum("amount"), Decimal("0")),
-        )
-    )
-    invoiced = {
-        r["client_id"]: {
-            "name": r["client__name"],
-            "billed_hours": _safe_float(r["billed_hours"]),
-            "billed_amount": _safe_float(r["billed_amount"]),
-        }
-        for r in invoiced_qs
-    }
-
-    # --- Worked (billable) hours by client ---
-    worked_qs = (
-        Block.objects
-        .filter(org=org, day__gte=start_date, day__lte=end_date,
-                is_billable=True, client__isnull=False)
-        .values("client_id", "client__name")
-        .annotate(worked_minutes=Coalesce(Sum("minutes"), 0))
-    )
-    worked = {
-        r["client_id"]: {
-            "name": r["client__name"],
-            "worked_hours": _safe_float(r["worked_minutes"]) / 60.0,
-        }
-        for r in worked_qs
-    }
-
-    all_ids = set(invoiced) | set(worked)
-    clients, total_billed, total_worked = [], 0.0, 0.0
-
-    for cid in all_ids:
-        inv = invoiced.get(cid, {})
-        wrk = worked.get(cid, {})
-        bh = inv.get("billed_hours", 0.0)
-        wh = wrk.get("worked_hours", 0.0)
-        name = inv.get("name") or wrk.get("name", "Unknown")
-
-        if wh > 0 and bh > 0:
-            rate = bh / wh * 100
-        elif wh > 0:
-            rate = 0.0
+def _calculate_minutes_from_events(events_qs) -> int:
+    """Calculate total minutes from events. SINGLE SOURCE OF TRUTH."""
+    events = list(events_qs.order_by('ts_utc'))
+    if not events:
+        return 0
+    
+    total_seconds = 0
+    for i, event in enumerate(events):
+        if i + 1 < len(events):
+            duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+            duration = min(duration, IDLE_CAP.total_seconds())  # 3 min cap
         else:
-            rate = 100.0  # invoiced with no tracked time
+            duration = 180  # 3 min for last event (was 300)
+        total_seconds += duration
+    
+    return int(total_seconds / 60)
 
-        if rate >= 125:
-            status = "excellent"
-        elif rate >= 100:
-            status = "good"
-        elif rate >= 85:
-            status = "warning"
+
+# =============================================================================
+# AUTO-CATEGORIZATION PATTERNS
+# =============================================================================
+def auto_categorize_block(block: Block) -> bool:
+    """
+    Auto-categorize using industry-specific pattern matching.
+    Returns True if categorized.
+    """
+    if block.is_categorized:
+        return False
+    
+    # ✅ NEW: Get industry-specific patterns instead of hardcoded generic ones
+    org = getattr(block, 'org', None)
+    industry_type = 'general'
+    if org:
+        industry_type = getattr(org, 'industry_type', 'general') or 'general'
+    
+    from tracker.industry_categories import get_combined_tool_detection
+    TOOL_PATTERNS = get_combined_tool_detection(industry_type)
+    
+    # Extract block context
+    title = (block.window_title or block.title or "").lower()
+    url = (block.url or "").lower()
+    app_name = (block.app_name or "").lower()
+    file_path = (block.file_path or "").lower()
+    bundle_id = (block.bundle_id or "").lower()
+    combined = f"{title} {url} {app_name} {file_path} {bundle_id}"
+    
+    hours = round((block.minutes or 0) / 60.0, 2)
+    if hours <= 0:
+        hours = 0.01
+    
+    best_match = None
+    best_confidence = 0.0
+    
+    # ✅ NEW: Use industry-specific tool detection patterns
+    for tool_name, patterns in TOOL_PATTERNS.items():
+        confidence = 0.0
+        
+        # Check keywords
+        for keyword in patterns.get('keywords', []):
+            if keyword.lower() in combined:
+                confidence = max(confidence, patterns.get('confidence', 0.85))
+                break
+        
+        # Check domains
+        for domain in patterns.get('domains', []):
+            if domain.lower() in url:
+                confidence = max(confidence, patterns.get('confidence', 0.85))
+                break
+        
+        if confidence > best_confidence:
+            best_confidence = confidence
+            best_match = {
+                'category': patterns.get('category', 'Uncategorized'),
+                'confidence': confidence
+            }
+    
+    if best_match and best_match['confidence'] >= AUTO_CATEGORIZE_THRESHOLD:
+        try:
+            block.category_hours = {best_match['category']: hours}
+            block.is_categorized = True
+            block.categorized_at = timezone.now()
+            block.categorized_by = 'pattern'
+            block.ai_confidence = best_match['confidence']
+            block.ai_category = best_match['category']
+            block.save(update_fields=[
+                'category_hours', 'is_categorized', 'categorized_at',
+                'categorized_by', 'ai_confidence', 'ai_category'
+            ])
+            logger.info(f"[AUTO-CAT] Block {block.id} ({block.app_name}) → {best_match['category']}")
+            return True
+        except Exception as e:
+            logger.error(f"[AUTO-CAT] Failed: {e}")
+    
+    return False
+
+
+# =============================================================================
+# ✅ FIX #1: This function was MISSING - Celery was failing silently!
+# =============================================================================
+
+def auto_compact_all_active_users(minutes_back: int = 30) -> Dict[str, int]:
+    """
+    Auto-compact recent events for ALL active users.
+    Called by Celery beat every 5 minutes.
+    
+    Args:
+        minutes_back: How far back to look for unlinked events (default 30 min)
+    
+    Returns:
+        Dict with stats: users_processed, blocks_created, errors
+    """
+    stats = {
+        'users_processed': 0,
+        'blocks_created': 0,
+        'errors': 0,
+    }
+    
+    # Find all users with unlinked events in the last N minutes
+    cutoff = timezone.now() - timedelta(minutes=minutes_back)
+    
+    users_with_events = RawEvent.objects.filter(
+        ts_utc__gte=cutoff,
+        block__isnull=True
+    ).values('user').annotate(count=Count('id')).filter(count__gt=0)
+    
+    logger.info(f"[AUTO-COMPACT] Found {len(users_with_events)} users with unlinked events")
+    
+    for user_data in users_with_events:
+        user_id = user_data['user']
+        event_count = user_data['count']
+        
+        try:
+            user = User.objects.get(id=user_id)
+            logger.info(f"[AUTO-COMPACT] Processing {user.username}: {event_count} events")
+            
+            # Compact today's events for this user
+            today = timezone.localdate()
+            result = compact_day(user, today)
+            
+            stats['users_processed'] += 1
+            stats['blocks_created'] += result
+            
+        except User.DoesNotExist:
+            logger.warning(f"[AUTO-COMPACT] User {user_id} not found")
+            stats['errors'] += 1
+        except Exception as e:
+            logger.error(f"[AUTO-COMPACT] Error for user {user_id}: {e}", exc_info=True)
+            stats['errors'] += 1
+    
+    logger.info(
+        f"[AUTO-COMPACT] Complete: {stats['users_processed']} users, "
+        f"{stats['blocks_created']} blocks, {stats['errors']} errors"
+    )
+    
+    return stats
+
+
+def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org=None) -> int:
+    """Main entry point."""
+    today = timezone.localdate()
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            return 0
+    return compact_day(user, today, hostname=hostname, org=org)
+
+
+def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) -> int:
+    """
+    Main compaction logic - FIXED to prevent duplicates and separate by client.
+    
+    KEY CHANGES:
+    1. Group by app AND client (not just app)
+    2. Don't merge blocks with different clients
+    3. Use .update() instead of .save() to bypass Block protection
+    """
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            return 0
+    
+    if not user:
+        return 0
+    
+    if not org:
+        from tracker.models import Organization, OrganizationMembership
+        membership = OrganizationMembership.objects.filter(user=user).first()
+        if membership:
+            org = membership.organization
         else:
-            status = "critical"
-
-        clients.append({
-            "client_id": cid,
-            "client_name": name,
-            "billed_hours": round(bh, 2),
-            "worked_hours": round(wh, 2),
-            "billed_amount": round(inv.get("billed_amount", 0.0), 2),
-            "realization": round(rate, 1),
-            "status": status,
+            org, _ = Organization.objects.get_or_create(
+                name="default-org", defaults={"slug": "default-org"}
+            )
+    
+    # Get unlinked events
+    qs = RawEvent.objects.filter(
+        user=user,
+        ts_utc__date=day,
+        block__isnull=True
+    ).order_by('ts_utc')
+    
+    if hostname:
+        qs = qs.filter(hostname=hostname)
+    
+    events = list(qs)
+    if not events:
+        return 0
+    
+    logger.info(f"[COMPACT] Processing {len(events)} unlinked events for {user.username}")
+    
+    # Calculate durations
+    events_with_duration = []
+    for i, event in enumerate(events):
+        if i + 1 < len(events):
+            duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+        else:
+            duration = 180  # 3 min for last event
+        duration = min(duration, IDLE_CAP.total_seconds())  # 3 min cap
+        
+        events_with_duration.append({
+            'event': event,
+            'start': event.ts_utc,
+            'duration_minutes': duration / 60.0,
+            'app_name': event.app_name or "",
+            'bundle_id': event.bundle_id or "",
+            'window_title': event.window_title or "",
+            'url': event.url or "",
+            'file_path': event.file_path or "",
+            'hostname': event.hostname or hostname or "unknown",
+            'device_id': _safe_device_id(getattr(event, 'device_id', None)),
+            'current_client_id': getattr(event, 'current_client_id', None),
         })
-        total_billed += bh
-        total_worked += wh
-
-    clients.sort(key=lambda x: x["realization"])
-    overall = (total_billed / total_worked * 100) if total_worked > 0 else 0.0
-
-    return {
-        "overall": round(overall, 1),
-        "total_billed_hours": round(total_billed, 2),
-        "total_worked_hours": round(total_worked, 2),
-        "clients": clients,
-    }
-
-
-# ============================================================================
-# KPI: Billable Utilization
-# ============================================================================
-
-def _calc_billable_utilization(org, start_date: date, end_date: date) -> dict:
-    """
-    Utilization = Billable Hours ÷ Total Tracked Hours × 100, per staff.
-    """
-    qs = (
-        Block.objects
-        .filter(org=org, day__gte=start_date, day__lte=end_date)
-        .values("user_id", "user__username", "user__first_name",
-                "user__last_name", "is_billable")
-        .annotate(mins=Coalesce(Sum("minutes"), 0))
-    )
-
-    staff: dict = defaultdict(lambda: {"name": "", "billable": 0, "total": 0})
-    for r in qs:
-        uid = r["user_id"]
-        fn = (r["user__first_name"] or "").strip()
-        ln = (r["user__last_name"] or "").strip()
-        staff[uid]["name"] = (f"{fn} {ln}".strip()) or r["user__username"]
-        staff[uid]["total"] += r["mins"]
-        if r["is_billable"]:
-            staff[uid]["billable"] += r["mins"]
-
-    staff_list, org_bill, org_total = [], 0, 0
-    for uid, d in staff.items():
-        bh = d["billable"] / 60.0
-        th = d["total"] / 60.0
-        util = (bh / th * 100) if th > 0 else 0.0
-        staff_list.append({
-            "user_id": uid,
-            "name": d["name"],
-            "billable_hours": round(bh, 2),
-            "total_hours": round(th, 2),
-            "utilization": round(util, 1),
-        })
-        org_bill += d["billable"]
-        org_total += d["total"]
-
-    staff_list.sort(key=lambda x: -x["utilization"])
-    overall = (org_bill / org_total * 100) if org_total > 0 else 0.0
-
-    return {
-        "overall": round(overall, 1),
-        "total_billable_hours": round(org_bill / 60.0, 2),
-        "total_tracked_hours": round(org_total / 60.0, 2),
-        "staff": staff_list,
-    }
-
-
-# ============================================================================
-# KPI: WIP Pipeline
-# ============================================================================
-
-def _calc_wip(org) -> dict:
-    """
-    WIP = approved=True AND invoiced=False blocks.
-    Aged into 0-30 / 31-60 / 61-90 / 90+ day buckets by approved_at.
-    """
-    blocks = (
-        Block.objects
-        .filter(org=org, approved=True, invoiced=False, is_billable=True)
-        .select_related("client")
-    )
-    now = timezone.now()
-    buckets = {"0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
-    client_wip: dict[str, float] = defaultdict(float)
-    total = 0.0
-
-    default_rate = _safe_float(getattr(org, "billing_rate_default", 0))
-
-    for b in blocks:
-        amount = _safe_float(b.billing_amount)
-        if not amount:
-            hours = _safe_float(b.minutes) / 60.0
-            rate = _safe_float(b.billing_rate) or default_rate
-            amount = hours * rate
-
-        ref = b.approved_at or b.start
-        if ref:
-            if timezone.is_naive(ref):
-                ref = timezone.make_aware(ref)
-            age = (now - ref).days
+    
+    # Split into sessions
+    sessions = []
+    current_session = [events_with_duration[0]]
+    
+    for i in range(1, len(events_with_duration)):
+        prev = events_with_duration[i - 1]
+        curr = events_with_duration[i]
+        gap = (curr['start'] - prev['start']).total_seconds() - prev['duration_minutes'] * 60
+        
+        if gap > SESSION_GAP.total_seconds():
+            sessions.append(current_session)
+            current_session = [curr]
         else:
-            age = 0
+            current_session.append(curr)
+    
+    if current_session:
+        sessions.append(current_session)
+    
+    # ✅ FIX: Group by app AND client within each session
+    blocks_to_create = []
+    for session in sessions:
+        by_app_client: Dict[str, List] = {}
+        for ev in session:
+            app = _app_key(ev)
+            client_id = ev.get('current_client_id') or 0
+            key = f"{app}|{client_id}"  # Group by app AND client
+            if key not in by_app_client:
+                by_app_client[key] = []
+            by_app_client[key].append(ev)
+        
+        for key, app_events in by_app_client.items():
+            if not app_events:
+                continue
+             
+            starts = [e['start'] for e in app_events]
+            block_start = min(starts)
+            block_end = max(starts) + timedelta(minutes=app_events[-1]['duration_minutes'])
+            new_event_minutes = sum(e['duration_minutes'] for e in app_events)
+            
+            if new_event_minutes < MIN_BLOCK_MINUTES:
+                continue
+            
+            titles = [e['window_title'] for e in app_events if e['window_title']]
+            titles = [t for t in titles if t.lower() not in ('', 'open', 'untitled', 'new tab')]
+            window_title = max(titles, key=len) if titles else app_events[0]['window_title']
+            
+            urls = [e['url'] for e in app_events if e['url']]
+            paths = [e['file_path'] for e in app_events if e['file_path']]
+            
+            # Get the client_id (all events in this group have same client)
+            client_id = app_events[0].get('current_client_id')
+            
+            blocks_to_create.append({
+                'start': block_start,
+                'end': block_end,
+                'app_name': app_events[0]['app_name'],
+                'bundle_id': app_events[0]['bundle_id'],
+                'window_title': window_title,
+                'url': urls[0] if urls else "",
+                'file_path': paths[0] if paths else "",
+                'hostname': app_events[0]['hostname'],
+                'device_id': app_events[0]['device_id'],
+                'current_client_id': client_id,
+                'source_events': [e['event'] for e in app_events],
+            })
+    
+    # Get ALL existing blocks for this day
+    existing_blocks = list(Block.objects.filter(
+        user=user,
+        day=day,
+    ).order_by('start'))
+    
+    # ✅ FIX: Build lookup by app AND client
+    existing_by_app_client = {}
+    for b in existing_blocks:
+        app = _app_key(b)
+        client_id = b.client_id or 0
+        key = f"{app}|{client_id}"
+        if key not in existing_by_app_client:
+            existing_by_app_client[key] = []
+        existing_by_app_client[key].append(b)
+    
+    created_count = 0
+    merged_count = 0
+    blocks_to_categorize = []
+    
+    with transaction.atomic():
+        for block_data in blocks_to_create:
+            app = _app_key(block_data)
+            new_start = block_data['start']
+            new_end = block_data['end']
+            new_client_id = block_data.get('current_client_id') or 0
+            key = f"{app}|{new_client_id}"
+            
+            # Find an existing block to merge into (same app AND same client)
+            merge_target = None
+            
+            for existing in existing_by_app_client.get(key, []):
+                gap_to_existing = (new_start - existing.end).total_seconds() if existing.end else float('inf')
+                gap_from_existing = (existing.start - new_end).total_seconds() if existing.start else float('inf')
+                
+                if gap_to_existing < SESSION_GAP.total_seconds() or gap_from_existing < SESSION_GAP.total_seconds():
+                    merge_target = existing
+                    break
+                
+                if existing.start and existing.end:
+                    if new_start >= existing.start and new_start <= existing.end:
+                        merge_target = existing
+                        break
+            
+            if merge_target:
+                try:
+                    locked = Block.objects.select_for_update().get(id=merge_target.id)
+                    
+                    # Link events to this block
+                    event_ids = [e.id for e in block_data['source_events']]
+                    RawEvent.objects.filter(id__in=event_ids).update(block=locked)
+                    
+                    # Calculate new values
+                    updated_start = min(locked.start, new_start)
+                    updated_end = max(locked.end, new_end)
+                    updated_minutes = _calculate_minutes_from_events(
+                        RawEvent.objects.filter(block=locked)
+                    )
+                    
+                    # Build update dict
+                    update_fields = {
+                        'start': updated_start,
+                        'end': updated_end,
+                        'minutes': updated_minutes,
+                    }
 
-        if age <= 30:
-            buckets["0_30"] += amount
-        elif age <= 60:
-            buckets["31_60"] += amount
-        elif age <= 90:
-            buckets["61_90"] += amount
-        else:
-            buckets["90_plus"] += amount
+                    # ✅ ADD THIS — recalculate billing_amount when minutes change
+                    if locked.billing_rate and updated_minutes:
+                        update_fields['billing_amount'] = round((updated_minutes / 60) * float(locked.billing_rate), 2)
+                    
+                    # If categorized, update category_hours
+                    if locked.is_categorized and locked.category_hours:
+                        category = list(locked.category_hours.keys())[0]
+                        update_fields['category_hours'] = {category: round(updated_minutes / 60.0, 2)}
+                    
+                    # Use .update() to bypass Block.save() protection
+                    Block.objects.filter(id=locked.id).update(**update_fields)
+                    
+                    merged_count += 1
+                    logger.debug(f"[COMPACT] Merged into block {locked.id} ({locked.app_name})")
+                    continue
+                    
+                except Block.DoesNotExist:
+                    pass
+            
+            # CREATE new block
+            new_block = _create_block(block_data, user, org, day)
+            if new_block:
+                created_count += 1
+                if not new_block.is_categorized:
+                    blocks_to_categorize.append(new_block)
+                
+                # Add to lookup for future merges in this run
+                if key not in existing_by_app_client:
+                    existing_by_app_client[key] = []
+                existing_by_app_client[key].append(new_block)
+    
+    # Auto-categorize new blocks
+    auto_cat_count = 0
+    for block in blocks_to_categorize:
+        if auto_categorize_block(block):
+            auto_cat_count += 1
+    
+    logger.info(f"[COMPACT] Created {created_count}, merged {merged_count}, auto-cat {auto_cat_count}")
+    return created_count + merged_count
 
-        total += amount
-        cname = b.client.name if b.client else "Unassigned"
-        client_wip[cname] += amount
-
-    top_clients = sorted(
-        [{"client": k, "wip": round(v, 2)} for k, v in client_wip.items()],
-        key=lambda x: -x["wip"],
-    )[:10]
-
-    return {
-        "total": round(total, 2),
-        "buckets": {k: round(v, 2) for k, v in buckets.items()},
-        "top_clients": top_clients,
-    }
-
-
-# ============================================================================
-# KPI: Effective Billing Rate
-# ============================================================================
-
-def _calc_effective_rate(org, start_date: date, end_date: date) -> dict:
+def _resolve_billing_rate(org, user, client_id, task_type_id=None):
     """
-    Effective Rate = Total Billing Amount ÷ Total Billable Hours
-    """
-    agg = Block.objects.filter(
-        org=org, day__gte=start_date, day__lte=end_date, is_billable=True,
-    ).aggregate(
-        total_amount=Coalesce(Sum("billing_amount"), Decimal("0")),
-        total_minutes=Coalesce(Sum("minutes"), 0),
-    )
-    total_hours = _safe_float(agg["total_minutes"]) / 60.0
-    total_amount = _safe_float(agg["total_amount"])
-    eff = (total_amount / total_hours) if total_hours > 0 else 0.0
-    standard = _safe_float(getattr(org, "billing_rate_default", 0))
-
-    return {
-        "effective_rate": round(eff, 2),
-        "standard_rate": round(standard, 2),
-        "variance": round(eff - standard, 2),
-        "total_billable_hours": round(total_hours, 2),
-        "total_revenue": round(total_amount, 2),
-    }
-
-
-# ============================================================================
-# KPI: Revenue Trend
-# ============================================================================
-
-def _calc_revenue_trend(org, start_date: date, end_date: date) -> dict:
-    """
-    Monthly invoice revenue from Invoice model. Every month in the range
-    is included (zeros for months with no invoices).
-    """
-    months = _months_between(start_date, end_date)
-
-    inv_qs = (
-        Invoice.objects
-        .filter(org=org, invoice_date__gte=start_date, invoice_date__lte=end_date)
-        .annotate(month=TruncMonth("invoice_date"))
-        .values("month")
-        .annotate(
-            revenue=Coalesce(Sum("amount"), Decimal("0")),
-            hours=Coalesce(Sum("hours_billed"), Decimal("0")),
-            invoice_count=Count("id"),
-        )
-        .order_by("month")
-    )
-
-    inv_by_month: dict = {}
-    for r in inv_qs:
-        m = r["month"]
-        key = m.date() if hasattr(m, "date") else m
-        inv_by_month[key] = r
-
-    trend = []
-    for m in months:
-        r = inv_by_month.get(m, {})
-        trend.append({
-            "month": m.strftime("%Y-%m"),
-            "month_label": m.strftime("%b %Y"),
-            "revenue": round(_safe_float(r.get("revenue")), 2),
-            "hours": round(_safe_float(r.get("hours")), 2),
-            "invoice_count": r.get("invoice_count", 0),
-        })
-
-    total = sum(t["revenue"] for t in trend)
-    avg = total / len(trend) if trend else 0.0
-
-    return {
-        "trend": trend,
-        "total_revenue": round(total, 2),
-        "avg_monthly_revenue": round(avg, 2),
-    }
-
-
-# ============================================================================
-# KPI: Client Profitability
-# ============================================================================
-
-def _calc_profitability(org, start_date: date, end_date: date) -> dict:
-    """
-    Profit = Revenue (billing_amount) - Cost (hours × EmployeeCostRate.cost_rate)
-    EmployeeCostRate FK is `organization` (not `org`); field is `cost_rate`.
-    """
-    # Most recent cost rate per user (FK: organization)
-    cost_rates: dict[int, float] = {}
-    for rate in (
-        EmployeeCostRate.objects
-        .filter(organization=org)
-        .select_related("user")
-        .order_by("user_id", "-effective_date")
-    ):
-        if rate.user_id not in cost_rates:
-            cost_rates[rate.user_id] = _safe_float(rate.cost_rate)
-
-    default_cost = _safe_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
-    default_bill = _safe_float(getattr(org, "billing_rate_default", 0))
-
-    blocks = (
-        Block.objects
-        .filter(org=org, day__gte=start_date, day__lte=end_date, is_billable=True)
-        .select_related("client", "user")
-    )
-
-    data: dict = defaultdict(lambda: {"name": "", "revenue": 0.0, "cost": 0.0, "hours": 0.0})
-    for b in blocks:
-        cid = b.client_id or 0
-        cname = b.client.name if b.client else "Unassigned"
-        hours = _safe_float(b.minutes) / 60.0
-        revenue = _safe_float(b.billing_amount)
-        if not revenue:
-            rate = _safe_float(b.billing_rate) or default_bill
-            revenue = hours * rate
-        cost = hours * cost_rates.get(b.user_id, default_cost)
-
-        data[cid]["name"] = cname
-        data[cid]["revenue"] += revenue
-        data[cid]["cost"] += cost
-        data[cid]["hours"] += hours
-
-    clients = []
-    for cid, d in data.items():
-        margin = d["revenue"] - d["cost"]
-        margin_pct = (margin / d["revenue"] * 100) if d["revenue"] > 0 else 0.0
-        clients.append({
-            "client_id": cid,
-            "client_name": d["name"],
-            "revenue": round(d["revenue"], 2),
-            "cost": round(d["cost"], 2),
-            "margin": round(margin, 2),
-            "margin_pct": round(margin_pct, 1),
-            "hours": round(d["hours"], 2),
-        })
-
-    clients.sort(key=lambda x: -x["revenue"])
-    tr = sum(c["revenue"] for c in clients)
-    tc = sum(c["cost"] for c in clients)
-    tm = tr - tc
-
-    return {
-        "clients": clients,
-        "totals": {
-            "revenue": round(tr, 2),
-            "cost": round(tc, 2),
-            "margin": round(tm, 2),
-            "margin_pct": round(tm / tr * 100, 1) if tr > 0 else 0.0,
-        },
-    }
-
-
-# ============================================================================
-# KPI: Timesheet Compliance
-# ============================================================================
-
-def _calc_timesheet_compliance(org, start_date: date, end_date: date) -> dict:
-    """
-    Compliance = % of timesheets submitted within GRACE_DAYS after week end.
-    Timesheet FK is `org` (confirmed in views_billing.py).
-    """
-    GRACE_DAYS = 2
-
-    timesheets = Timesheet.objects.filter(
-        org=org,
-        week_start__gte=start_date,
-        week_start__lte=end_date,
-    ).exclude(status="draft")
-
-    total = timesheets.count()
-    if total == 0:
-        return {"overall": None, "total_timesheets": 0,
-                "compliant": 0, "late": 0, "trend": []}
-
-    compliant = 0
-    late = 0
-    monthly: dict = defaultdict(lambda: {"compliant": 0, "total": 0})
-
-    for ts in timesheets:
-        week_end = ts.week_start + timedelta(days=6)
-        deadline = week_end + timedelta(days=GRACE_DAYS)
-        mk = ts.week_start.replace(day=1).strftime("%Y-%m")
-        monthly[mk]["total"] += 1
-
-        if ts.submitted_at:
-            sub_date = (ts.submitted_at.date()
-                        if hasattr(ts.submitted_at, "date")
-                        else ts.submitted_at)
-            if sub_date <= deadline:
-                compliant += 1
-                monthly[mk]["compliant"] += 1
-            else:
-                late += 1
-        else:
-            late += 1  # never submitted
-
-    overall = (compliant / total * 100) if total > 0 else 0.0
-
-    trend = [
-        {
-            "month": k,
-            "compliance": round(v["compliant"] / v["total"] * 100, 1) if v["total"] > 0 else 0.0,
-            "total": v["total"],
-            "compliant": v["compliant"],
-        }
-        for k, v in sorted(monthly.items())
-    ]
-
-    return {
-        "overall": round(overall, 1),
-        "total_timesheets": total,
-        "compliant": compliant,
-        "late": late,
-        "grace_days": GRACE_DAYS,
-        "trend": trend,
-    }
-
-
-# ============================================================================
-# KPI: Invoice Cycle Time
-# ============================================================================
-
-def _calc_invoice_cycle_time(org, start_date: date, end_date: date) -> dict:
-    """
-    Avg/median days from Timesheet.approved_at → Block.invoiced_at.
-    """
-    blocks = (
-        Block.objects
-        .filter(
-            org=org,
-            day__gte=start_date,
-            day__lte=end_date,
-            invoiced=True,
-            invoiced_at__isnull=False,
-        )
-        .select_related("timesheet")
-    )
-
-    cycle_times = []
-    for b in blocks:
-        ts = b.timesheet
-        if ts and ts.approved_at and b.invoiced_at:
-            days = (b.invoiced_at - ts.approved_at).days
-            if 0 <= days <= 365:
-                cycle_times.append(days)
-
-    if not cycle_times:
-        return {"avg_days": None, "median_days": None, "sample_size": 0}
-
-    cycle_times.sort()
-    avg = sum(cycle_times) / len(cycle_times)
-    n = len(cycle_times)
-    mid = n // 2
-    median = cycle_times[mid] if n % 2 else (cycle_times[mid - 1] + cycle_times[mid]) / 2.0
-
-    return {
-        "avg_days": round(avg, 1),
-        "median_days": round(median, 1),
-        "sample_size": n,
-    }
-
-
-# ============================================================================
-# Helper: Resolve BillingRate for a block
-# ============================================================================
-
-def _get_billing_rate(org, user_id: int, client_id: int | None,
-                      task_type_id: int | None) -> Decimal:
-    """
-    Resolve the correct BillingRate using priority hierarchy:
+    Resolve the correct billing rate for a block using priority hierarchy:
     1. user + client + task_type  (most specific)
     2. user + client
     3. client + task_type
     4. client only
     5. user only
     6. org default
+
+    Returns a Decimal.
     """
-    if BillingRate is None:
-        return Decimal(str(_safe_float(getattr(org, "billing_rate_default", 0))))
+    from tracker.models import BillingRate
+    from django.db.models import Q
+    from decimal import Decimal
+
+    if not org:
+        return Decimal('0')
 
     qs = BillingRate.objects.filter(org=org).order_by("-effective_date")
+    uid = getattr(user, 'id', None)
 
     filters = []
-    if user_id and client_id and task_type_id:
-        filters.append(Q(user_id=user_id, client_id=client_id, task_type_id=task_type_id))
-    if user_id and client_id:
-        filters.append(Q(user_id=user_id, client_id=client_id, task_type__isnull=True))
+    if uid and client_id and task_type_id:
+        filters.append(Q(user_id=uid, client_id=client_id, task_type_id=task_type_id))
+    if uid and client_id:
+        filters.append(Q(user_id=uid, client_id=client_id, task_type__isnull=True))
     if client_id and task_type_id:
         filters.append(Q(user_id__isnull=True, client_id=client_id, task_type_id=task_type_id))
     if client_id:
         filters.append(Q(user_id__isnull=True, client_id=client_id, task_type__isnull=True))
-    if user_id:
-        filters.append(Q(user_id=user_id, client__isnull=True, task_type__isnull=True))
+    if uid:
+        filters.append(Q(user_id=uid, client__isnull=True, task_type__isnull=True))
 
     for f in filters:
         match = qs.filter(f).first()
         if match:
             return match.rate
 
-    return Decimal(str(_safe_float(getattr(org, "billing_rate_default", 0))))
+    # Fallback to org default
+    return getattr(org, 'billing_rate_default', None) or Decimal('0')
 
-
-# ============================================================================
-# KPI: Invoice-based Profitability (Invoice Revenue vs Worked Cost)
-# ============================================================================
-
-def _calc_invoice_profitability(org, start_date: date, end_date: date) -> dict:
-    """
-    True profitability using ACTUAL invoiced revenue (not estimated billing_amount).
-
-    Revenue  = SUM(Invoice.amount) per client in period
-    Cost     = SUM(Block.minutes / 60 × EmployeeCostRate.cost_rate) per client
-    Margin   = Revenue − Cost
-
-    Also computes per-client breakdown by task_type (service line) using
-    BillingRate to show rate mix.
-    """
-    # --- Cost rates per user ---
-    cost_rates: dict[int, float] = {}
-    for cr in (
-        EmployeeCostRate.objects
-        .filter(organization=org)
-        .select_related("user")
-        .order_by("user_id", "-effective_date")
-    ):
-        if cr.user_id not in cost_rates:
-            cost_rates[cr.user_id] = _safe_float(cr.cost_rate)
-
-    default_cost = _safe_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
-
-    # --- Invoiced revenue per client ---
-    inv_qs = (
-        Invoice.objects
-        .filter(org=org, invoice_date__gte=start_date,
-                invoice_date__lte=end_date, client__isnull=False)
-        .values("client_id", "client__name")
-        .annotate(
-            invoiced_amount=Coalesce(Sum("amount"), Decimal("0")),
-            invoiced_hours =Coalesce(Sum("hours_billed"), Decimal("0")),
-            invoice_count  =Count("id"),
-        )
-    )
-    invoiced: dict[int, dict] = {}
-    for r in inv_qs:
-        invoiced[r["client_id"]] = {
-            "name":           r["client__name"],
-            "invoiced_amount": _safe_float(r["invoiced_amount"]),
-            "invoiced_hours":  _safe_float(r["invoiced_hours"]),
-            "invoice_count":   r["invoice_count"],
-        }
-
-    # --- Worked cost + hours per client, broken down by task_type ---
-    blocks = (
-        Block.objects
-        .filter(org=org, day__gte=start_date, day__lte=end_date, is_billable=True)
-        .select_related("client", "user", "task_type")
-    )
-
-    worked: dict[int, dict] = defaultdict(lambda: {
-        "name": "", "cost": 0.0, "hours": 0.0,
-        "services": defaultdict(lambda: {"hours": 0.0, "cost": 0.0}),
-    })
-
-    for b in blocks:
-        cid   = b.client_id or 0
-        hours = _safe_float(b.minutes) / 60.0
-        cost  = hours * cost_rates.get(b.user_id, default_cost)
-        svc   = b.task_type.name if b.task_type else "General"
-
-        if b.client:
-            worked[cid]["name"] = b.client.name
-        elif cid == 0:
-            worked[cid]["name"] = "Unassigned"
-
-        worked[cid]["cost"]  += cost
-        worked[cid]["hours"] += hours
-        worked[cid]["services"][svc]["hours"] += hours
-        worked[cid]["services"][svc]["cost"]  += cost
-
-    # --- Merge invoiced + worked ---
-    all_cids = set(invoiced) | {k for k in worked if k != 0}
-    clients  = []
-
-    for cid in all_cids:
-        inv  = invoiced.get(cid, {})
-        wrk  = worked.get(cid, {})
-        name = inv.get("name") or wrk.get("name") or f"Client {cid}"
-
-        invoiced_amt  = inv.get("invoiced_amount", 0.0)
-        invoiced_hrs  = inv.get("invoiced_hours",  0.0)
-        worked_hrs    = wrk.get("hours", 0.0)
-        worked_cost   = wrk.get("cost",  0.0)
-        invoice_count = inv.get("invoice_count", 0)
-
-        margin     = invoiced_amt - worked_cost
-        margin_pct = (margin / invoiced_amt * 100) if invoiced_amt > 0 else 0.0
-
-        # Realization: invoiced hours ÷ worked hours
-        realization = (invoiced_hrs / worked_hrs * 100) if worked_hrs > 0 else None
-
-        # Service breakdown
-        services = [
-            {
-                "service":  svc,
-                "hours":    round(d["hours"], 2),
-                "cost":     round(d["cost"],  2),
-            }
-            for svc, d in wrk.get("services", {}).items()
-        ]
-        services.sort(key=lambda x: -x["hours"])
-
-        clients.append({
-            "client_id":      cid,
-            "client_name":    name,
-            "invoiced_amount": round(invoiced_amt,  2),
-            "invoiced_hours":  round(invoiced_hrs,  2),
-            "worked_hours":    round(worked_hrs,    2),
-            "worked_cost":     round(worked_cost,   2),
-            "margin":          round(margin,        2),
-            "margin_pct":      round(margin_pct,    1),
-            "realization":     round(realization, 1) if realization is not None else None,
-            "invoice_count":   invoice_count,
-            "services":        services,
-        })
-
-    clients.sort(key=lambda x: -x["invoiced_amount"])
-
-    # Totals
-    total_invoiced = sum(c["invoiced_amount"] for c in clients)
-    total_cost     = sum(c["worked_cost"]     for c in clients)
-    total_margin   = total_invoiced - total_cost
-    total_hours    = sum(c["worked_hours"]    for c in clients)
-
-    return {
-        "clients": clients,
-        "totals": {
-            "invoiced_amount": round(total_invoiced, 2),
-            "worked_cost":     round(total_cost,     2),
-            "margin":          round(total_margin,   2),
-            "margin_pct":      round(total_margin / total_invoiced * 100, 1) if total_invoiced > 0 else 0.0,
-            "worked_hours":    round(total_hours, 2),
-        },
-        "has_invoices": len(invoiced) > 0,
+def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
+    """Create a new block - checks work patterns BEFORE defaulting to idle."""
+    
+    # Extract context for pattern matching
+    app_name = (block_data.get("app_name") or "").lower()
+    bundle_id = (block_data.get("bundle_id") or "").lower()
+    window_title = (block_data.get("window_title") or "").lower()
+    url = (block_data.get("url") or "").lower()
+    file_path = (block_data.get("file_path") or "").lower()
+    
+    # =========================================================================
+    # ✅ FIX: Check work patterns FIRST before marking as idle
+    # This prevents Claude.ai, GitHub, etc. from being marked as idle
+    # =========================================================================
+    
+    # Domains that should NEVER be marked as idle (active work tools)
+    NEVER_IDLE_DOMAINS = {
+        'claude.ai', 'chat.openai.com', 'chatgpt.com',  # AI assistants
+        'github.com', 'gitlab.com', 'bitbucket.org',     # Code repos
+        'stackoverflow.com', 'docs.python.org',          # Research
+        'localhost', '127.0.0.1',                         # Local dev
+        'figma.com', 'canva.com',                         # Design tools
+        'notion.so', 'docs.google.com',                   # Docs
+        'slack.com', 'teams.microsoft.com',               # Communication
+        'zoom.us', 'meet.google.com',                     # Meetings
+        'qbo.intuit.com', 'quickbooks.intuit.com',        # Accounting
+        'cchaxcess.com', 'irs.gov',                       # Tax
     }
-
-
-# ============================================================================
-# Main View
-# ============================================================================
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def executive_dashboard(request):
-    """
-    GET /api/analytics/executive/?period=12m
-
-    Query params
-    ------------
-    period : 3m | 6m | 12m (default) | ytd | YYYY-MM-DD:YYYY-MM-DD
-
-    Auth
-    ----
-    Bearer token or session. Role: owner | admin | manager.
-    Plan: professional | executive | trial.
-    """
-    user = request.user
-    org = _get_user_org(user)
-
-    if not org:
-        return Response({"error": "No organization found"}, status=404)
-
-    # Role gate
-    membership = OrganizationMembership.objects.filter(
-        user=user, organization=org
-    ).first()
-    if not membership or membership.role not in ("owner", "admin", "manager"):
-        return Response(
-            {"error": "Permission denied. Manager role or above required."},
-            status=403,
+    
+    # Apps that should NEVER be marked as idle
+    NEVER_IDLE_APPS = {
+        'code', 'vscode', 'visual studio', 'sublime', 'sublime_text',
+        'pycharm', 'intellij', 'webstorm', 'xcode', 'android studio',
+        'terminal', 'iterm', 'iterm2', 'warp', 'hyper',
+        'figma', 'sketch', 'photoshop',
+        'zoom', 'teams', 'slack',
+    }
+    
+    # Check if this matches a work pattern
+    is_work_pattern = False
+    
+    # Check URL domains
+    for domain in NEVER_IDLE_DOMAINS:
+        if domain in url:
+            is_work_pattern = True
+            break
+    
+    # Check app names
+    if not is_work_pattern:
+        for app in NEVER_IDLE_APPS:
+            if app in app_name:
+                is_work_pattern = True
+                break
+    
+    # Only check idle detection if no work pattern matched
+    if is_work_pattern:
+        is_idle = False
+    else:
+        is_idle = is_idle_activity(
+            app_name=block_data.get("app_name"),
+            bundle_id=block_data.get("bundle_id"),
+            window_title=block_data.get("window_title")
         )
-
-    # Plan gate
-    plan = getattr(org, "plan", "none") or "none"
-    if not any(plan.startswith(p) for p in ("professional", "executive", "trial")):
-        return Response(
-            {
-                "error": "upgrade_required",
-                "message": "Executive dashboard requires a Professional or Executive plan.",
-                "current_plan": plan,
-                "upgrade_url": "/account/billing",
-            },
-            status=403,
-        )
-
-    # Parse period
-    period = (request.GET.get("period") or "12m").strip()
-    try:
-        start_date, end_date = _parse_period(period)
-    except Exception:
-        return Response({"error": f"Invalid period '{period}'"}, status=400)
-
-    logger.info(
-        "[ANALYTICS] executive_dashboard user=%s org=%s period=%s %s→%s",
-        user.username, org.slug, period, start_date, end_date,
-    )
-
-    def _safe(fn, *args):
-        """Run KPI calculator and return error dict on failure."""
+    
+    # =========================================================================
+    # Rest of function unchanged
+    # =========================================================================
+    
+    device_id = block_data.get("device_id", 0)
+    source_events = block_data.get('source_events', [])
+    
+    if source_events:
+        total_seconds = 0
+        for i, event in enumerate(source_events):
+            if i + 1 < len(source_events):
+                duration = (source_events[i + 1].ts_utc - event.ts_utc).total_seconds()
+                duration = min(duration, IDLE_CAP.total_seconds())
+            else:
+                duration = 180  # 3 min for last event
+            total_seconds += duration
+        minutes = int(total_seconds / 60)
+    else:
+        minutes = 3  # fallback
+    
+    # Get client for ALL blocks (including idle)
+    client = None
+    client_id = block_data.get("current_client_id")
+    if client_id:
         try:
-            return fn(*args)
-        except Exception as exc:
-            logger.error("[ANALYTICS] %s failed: %s", fn.__name__, exc, exc_info=True)
-            return {"error": str(exc)}
+            client = Client.objects.get(id=client_id)
+        except Client.DoesNotExist:
+            pass
+    if not client and device_id:
+        client = get_current_client_for_user(user, device_id=device_id)
 
-    return Response({
-        "meta": {
-            "org_id": org.id,
-            "org_name": org.name,
-            "period": period,
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "generated_at": timezone.now().isoformat(),
-            "plan": plan,
-            "role": membership.role,
-        },
-        "kpis": {
-            "realization_rate":      _safe(_calc_realization,            org, start_date, end_date),
-            "billable_utilization":  _safe(_calc_billable_utilization,   org, start_date, end_date),
-            "wip_pipeline":          _safe(_calc_wip,                    org),
-            "effective_rate":        _safe(_calc_effective_rate,         org, start_date, end_date),
-            "revenue_trend":         _safe(_calc_revenue_trend,          org, start_date, end_date),
-            "client_profitability":  _safe(_calc_profitability,          org, start_date, end_date),
-            "invoice_profitability": _safe(_calc_invoice_profitability,  org, start_date, end_date),
-            "timesheet_compliance":  _safe(_calc_timesheet_compliance,   org, start_date, end_date),
-            "invoice_cycle_time":    _safe(_calc_invoice_cycle_time,     org, start_date, end_date),
-        },
-    })
+    # ✅ Calculate billing rate and amount for new blocks
+    client_id_for_rate = block_data.get("current_client_id")
+    task_type_id_for_rate = block_data.get("task_type_id")  # None for now, set when task types are tracked
+    billing_rate = _resolve_billing_rate(org, user, client_id_for_rate, task_type_id_for_rate)
+    billing_amount = round((minutes / 60) * float(billing_rate), 2)
+    
+    if is_idle:
+        hours = round(minutes / 60.0, 2)
+        new_block = Block.objects.create(
+            org=org,
+            user=user,
+            device_id=device_id or 0,
+            hostname=block_data["hostname"],
+            start=block_data["start"],
+            end=block_data["end"],
+            day=day,
+            minutes=minutes,
+            title="Idle",
+            window_title="Idle/Uncategorized",
+            url="",
+            file_path="",
+            app_name=block_data.get("app_name") or "Idle",
+            bundle_id=block_data.get("bundle_id") or "__idle__",
+            hints={},
+            client=client,
+            category_hours={"Idle": hours},
+            is_categorized=True,
+            categorized_by="system",
+            categorized_at=timezone.now(),
+            approved=False,
+            is_billable=False,
+            billing_rate=billing_rate,
+            billing_amount=0,
+        )
+    else:
+        new_block = Block.objects.create(
+            org=org,
+            user=user,
+            device_id=device_id or 0,
+            hostname=block_data["hostname"],
+            start=block_data["start"],
+            end=block_data["end"],
+            day=day,
+            minutes=minutes,
+            title=block_data.get("app_name") or "Unknown",
+            window_title=block_data.get("window_title") or "",
+            url=block_data.get("url") or "",
+            file_path=block_data.get("file_path") or "",
+            app_name=block_data.get("app_name") or "",
+            bundle_id=block_data.get("bundle_id") or "",
+            hints={},
+            client=client,
+            category_hours={},
+            is_categorized=False,
+            approved=False,
+            is_billable=True,
+            billing_rate=billing_rate,
+            billing_amount=billing_amount,
+        )
+    
+    # Link events
+    event_ids = [e.id for e in block_data['source_events']]
+    RawEvent.objects.filter(id__in=event_ids).update(block=new_block)
+    
+    return new_block
+
+def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:
+    """Quick compaction of recent events."""
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            return 0
+    if not user:
+        return 0
+    today = timezone.localdate()
+    return compact_day(user, today, hostname=hostname)
+
+
+def auto_categorize_existing_blocks(user, day: date_type = None) -> Dict[str, int]:
+    """Backfill auto-categorization on existing uncategorized blocks."""
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            return {'error': 'User not found'}
+    
+    if day is None:
+        day = timezone.localdate()
+    
+    blocks = Block.objects.filter(user=user, day=day, is_categorized=False)
+    stats = {'checked': 0, 'categorized': 0}
+    
+    for block in blocks:
+        stats['checked'] += 1
+        if auto_categorize_block(block):
+            stats['categorized'] += 1
+    
+    logger.info(f"[AUTO-CAT] Checked {stats['checked']}, categorized {stats['categorized']}")
+    return stats
+
+
+def recalculate_block_minutes(block_id: int) -> int:
+    """Recalculate minutes for a specific block."""
+    try:
+        block = Block.objects.get(id=block_id)
+        new_minutes = _calculate_minutes_from_events(RawEvent.objects.filter(block=block))
+        if new_minutes != block.minutes:
+            Block.objects.filter(id=block_id).update(minutes=new_minutes)
+        return new_minutes
+    except Block.DoesNotExist:
+        return 0
+
+
+# =============================================================================
+# CLEANUP FUNCTIONS
+# =============================================================================
+
+def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) -> Dict[str, int]:
+    """Find and remove duplicate blocks."""
+    if isinstance(user, str):
+        try:
+            user = User.objects.get(username=user)
+        except User.DoesNotExist:
+            return {'error': 'User not found'}
+    
+    if day is None:
+        day = timezone.localdate()
+    
+    blocks = list(Block.objects.filter(user=user, day=day).order_by('start'))
+    
+    to_delete = []
+    checked = set()
+    
+    for i, b1 in enumerate(blocks):
+        if b1.id in checked:
+            continue
+        
+        for b2 in blocks[i+1:]:
+            if b2.id in checked:
+                continue
+            
+            if _app_key(b1) != _app_key(b2):
+                continue
+            
+            if not (b1.start and b1.end and b2.start and b2.end):
+                continue
+            
+            overlap_start = max(b1.start, b2.start)
+            overlap_end = min(b1.end, b2.end)
+            
+            if overlap_start >= overlap_end:
+                continue
+            
+            overlap_seconds = (overlap_end - overlap_start).total_seconds()
+            b1_seconds = (b1.end - b1.start).total_seconds()
+            b2_seconds = (b2.end - b2.start).total_seconds()
+            
+            smaller_seconds = min(b1_seconds, b2_seconds)
+            if smaller_seconds > 0 and (overlap_seconds / smaller_seconds) > 0.8:
+                b1_events = RawEvent.objects.filter(block=b1).count()
+                b2_events = RawEvent.objects.filter(block=b2).count()
+                
+                if b1_events > b2_events:
+                    victim = b2
+                elif b2_events > b1_events:
+                    victim = b1
+                elif b1.minutes >= b2.minutes:
+                    victim = b2
+                else:
+                    victim = b1
+                
+                to_delete.append(victim)
+                checked.add(victim.id)
+                logger.info(f"[CLEANUP] Duplicate: {victim.app_name} block {victim.id}")
+    
+    stats = {'checked': len(blocks), 'duplicates': len(to_delete), 'deleted': 0}
+    
+    if not dry_run:
+        for block in to_delete:
+            app = _app_key(block)
+            survivor = Block.objects.filter(
+                user=user, day=day
+            ).exclude(id=block.id).filter(
+                app_name__iexact=block.app_name
+            ).first()
+            
+            if survivor:
+                RawEvent.objects.filter(block=block).update(block=survivor)
+                new_minutes = _calculate_minutes_from_events(
+                    RawEvent.objects.filter(block=survivor)
+                )
+                Block.objects.filter(id=survivor.id).update(minutes=new_minutes)
+            
+            block.delete()
+            stats['deleted'] += 1
+    
+    logger.info(f"[CLEANUP] {stats}")
+    return stats

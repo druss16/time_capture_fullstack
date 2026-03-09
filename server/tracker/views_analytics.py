@@ -111,6 +111,11 @@ def _months_between(start: date, end: date) -> list[date]:
         cur = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
     return result
 
+def _safe_float(v, default: float = 0.0) -> float:
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
 
 # ============================================================================
 # KPI: Realization Rate

@@ -3394,10 +3394,11 @@ def run_agent():
                 tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
                 tracking_thread.start()
             else:
-                # NEW: Check if thread is alive but stuck (not detecting for >2min while not idle)
                 heartbeat_age = time.time() - _last_detect_heartbeat
                 current_idle = mouse_idle_seconds()
-                if heartbeat_age > 120 and current_idle < MOUSE_IDLE_PAUSE_S:
+                # Grace period: don't restart if we just woke from sleep
+                since_wake = time.time() - _wake_idle_bypass_until + 30
+                if heartbeat_age > 120 and current_idle < MOUSE_IDLE_PAUSE_S and since_wake > 60:
                     log(f"[WATCHDOG] ⚠️ Thread alive but no detection for {int(heartbeat_age)}s — restarting")
                     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
                     tracking_thread.start()

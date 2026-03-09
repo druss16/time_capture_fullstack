@@ -454,27 +454,18 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     return created_count + merged_count
 
 def _resolve_billing_rate(org, user, client_id, task_type_id=None):
+    from decimal import Decimal
+    from django.db.models import Q
+
+    default = getattr(org, 'billing_rate_default', None) or Decimal('0')
+
+    if not org:
+        return default
+
     try:
         from tracker.models import BillingRate
     except ImportError:
-        from decimal import Decimal
-        return getattr(org, 'billing_rate_default', None) or Decimal('0')    """
-    Resolve the correct billing rate for a block using priority hierarchy:
-    1. user + client + task_type  (most specific)
-    2. user + client
-    3. client + task_type
-    4. client only
-    5. user only
-    6. org default
-
-    Returns a Decimal.
-    """
-    from tracker.models import BillingRate
-    from django.db.models import Q
-    from decimal import Decimal
-
-    if not org:
-        return Decimal('0')
+        return default
 
     qs = BillingRate.objects.filter(org=org).order_by("-effective_date")
     uid = getattr(user, 'id', None)
@@ -496,8 +487,7 @@ def _resolve_billing_rate(org, user, client_id, task_type_id=None):
         if match:
             return match.rate
 
-    # Fallback to org default
-    return getattr(org, 'billing_rate_default', None) or Decimal('0')
+    return default
 
 def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
     """Create a new block - checks work patterns BEFORE defaulting to idle."""

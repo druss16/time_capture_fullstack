@@ -183,15 +183,51 @@ interface CycleTimeKPI {
   error?:      string;
 }
 
+interface InvoiceProfitService {
+  service: string;
+  hours:   number;
+  cost:    number;
+}
+
+interface InvoiceProfitClient {
+  client_id:       number;
+  client_name:     string;
+  invoiced_amount: number;
+  invoiced_hours:  number;
+  worked_hours:    number;
+  worked_cost:     number;
+  margin:          number;
+  margin_pct:      number;
+  realization:     number | null;
+  invoice_count:   number;
+  services:        InvoiceProfitService[];
+}
+
+interface InvoiceProfitTotals {
+  invoiced_amount: number;
+  worked_cost:     number;
+  margin:          number;
+  margin_pct:      number;
+  worked_hours:    number;
+}
+
+interface InvoiceProfitabilityKPI {
+  clients:      InvoiceProfitClient[];
+  totals:       InvoiceProfitTotals;
+  has_invoices: boolean;
+  error?:       string;
+}
+
 interface DashboardKPIs {
-  realization_rate:     RealizationKPI;
-  billable_utilization: UtilizationKPI;
-  wip_pipeline:         WipKPI;
-  effective_rate:       EffectiveRateKPI;
-  revenue_trend:        RevenueTrendKPI;
-  client_profitability: ProfitabilityKPI;
-  timesheet_compliance: ComplianceKPI;
-  invoice_cycle_time:   CycleTimeKPI;
+  realization_rate:      RealizationKPI;
+  billable_utilization:  UtilizationKPI;
+  wip_pipeline:          WipKPI;
+  effective_rate:        EffectiveRateKPI;
+  revenue_trend:         RevenueTrendKPI;
+  client_profitability:  ProfitabilityKPI;
+  invoice_profitability: InvoiceProfitabilityKPI;
+  timesheet_compliance:  ComplianceKPI;
+  invoice_cycle_time:    CycleTimeKPI;
 }
 
 interface DashboardResponse {
@@ -210,7 +246,6 @@ interface ProfitTableRow    { name: string;  revenue: number; cost: number; marg
 // ─── Auth helper ─────────────────────────────────────────────────────────────
 function _getToken(): string {
   return (
-    localStorage.getItem("auth_token") ||        // ← this is the real key
     localStorage.getItem("tt_auth_token") ||
     localStorage.getItem("authToken") ||
     localStorage.getItem("token") ||
@@ -220,7 +255,7 @@ function _getToken(): string {
 
 // ─── Data fetcher ────────────────────────────────────────────────────────────
 async function fetchDashboard(apiBase: string, period: string): Promise<DashboardResponse> {
-  const url = `${apiBase}/analytics/executive/?period=${period}`;
+  const url = `${apiBase}/api/analytics/executive/?period=${period}`;
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${_getToken()}`,
@@ -469,14 +504,15 @@ export default function ExecutiveDashboard({
   // ── Destructure KPIs ──────────────────────────────────────────────────────
   const kpis       = data?.kpis       ?? ({} as Partial<DashboardKPIs>);
   const meta       = data?.meta       ?? ({} as Partial<DashboardMeta>);
-  const realiz     = (kpis.realization_rate     ?? {}) as Partial<RealizationKPI>;
-  const utiliz     = (kpis.billable_utilization ?? {}) as Partial<UtilizationKPI>;
-  const wip        = (kpis.wip_pipeline         ?? {}) as Partial<WipKPI>;
-  const effRate    = (kpis.effective_rate        ?? {}) as Partial<EffectiveRateKPI>;
-  const revTrend   = (kpis.revenue_trend        ?? {}) as Partial<RevenueTrendKPI>;
-  const profit     = (kpis.client_profitability ?? {}) as Partial<ProfitabilityKPI>;
-  const compliance = (kpis.timesheet_compliance ?? {}) as Partial<ComplianceKPI>;
-  const cycletime  = (kpis.invoice_cycle_time   ?? {}) as Partial<CycleTimeKPI>;
+  const realiz       = (kpis.realization_rate      ?? {}) as Partial<RealizationKPI>;
+  const utiliz       = (kpis.billable_utilization  ?? {}) as Partial<UtilizationKPI>;
+  const wip          = (kpis.wip_pipeline          ?? {}) as Partial<WipKPI>;
+  const effRate      = (kpis.effective_rate         ?? {}) as Partial<EffectiveRateKPI>;
+  const revTrend     = (kpis.revenue_trend         ?? {}) as Partial<RevenueTrendKPI>;
+  const profit       = (kpis.client_profitability  ?? {}) as Partial<ProfitabilityKPI>;
+  const invProfit    = (kpis.invoice_profitability ?? {}) as Partial<InvoiceProfitabilityKPI>;
+  const compliance   = (kpis.timesheet_compliance  ?? {}) as Partial<ComplianceKPI>;
+  const cycletime    = (kpis.invoice_cycle_time    ?? {}) as Partial<CycleTimeKPI>;
 
   const revenueChartData:    RevenueChartRow[]    = mapRevenueTrend(revTrend);
   const wipChartData:        WipChartRow[]        = mapWipBuckets(wip);
@@ -772,6 +808,177 @@ export default function ExecutiveDashboard({
     </>
   );
 
+  // ── Billing tab ───────────────────────────────────────────────────────────
+  const BillingTab = () => {
+    const clients   = invProfit.clients ?? [];
+    const totals    = invProfit.totals;
+    const hasInvoices = invProfit.has_invoices ?? clients.length > 0;
+
+    // Bar chart data: invoiced vs cost per client
+    const barData = clients.map((c) => ({
+      name:     c.client_name.length > 14 ? c.client_name.slice(0, 13) + "…" : c.client_name,
+      fullName: c.client_name,
+      invoiced: c.invoiced_amount,
+      cost:     c.worked_cost,
+      margin:   c.margin,
+    }));
+
+    return (
+      <>
+        <SectionTitle>Invoice Revenue vs. Labor Cost</SectionTitle>
+        <div style={s.card}>
+          {loading ? (
+            <div style={{ height: 280, background: C.navyLt, borderRadius: 8 }} />
+          ) : !hasInvoices ? (
+            <p style={{ color: C.slate, textAlign: "center", padding: 40 }}>
+              No invoices found for this period. Import invoices via Settings → Invoices.
+            </p>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={Math.max(280, clients.length * 48 + 40)}>
+                <BarChart data={barData} layout="vertical" margin={{ left: 10, right: 60, top: 10, bottom: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
+                  <XAxis type="number" tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: C.slate, fontSize: 11 }} />
+                  <YAxis type="category" dataKey="name" tick={{ fill: C.white, fontSize: 12 }} width={130} />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload?.length) return null;
+                      const d = payload[0]?.payload;
+                      return (
+                        <div style={{ background: C.navyMid, border: `1px solid ${C.border}`, padding: "10px 14px", borderRadius: 8 }}>
+                          <div style={{ color: C.gold, fontWeight: 600, marginBottom: 6 }}>{d.fullName}</div>
+                          <div style={{ color: C.teal,  fontSize: 13 }}>Invoiced: ${d.invoiced?.toLocaleString()}</div>
+                          <div style={{ color: C.rose,  fontSize: 13 }}>Cost:     ${d.cost?.toLocaleString()}</div>
+                          <div style={{ color: d.margin >= 0 ? C.teal : C.rose, fontSize: 13, fontWeight: 600 }}>
+                            Margin: ${d.margin?.toLocaleString()}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12, color: C.slate }} />
+                  <Bar dataKey="invoiced" name="Invoiced Revenue" fill={C.teal}  radius={[0, 4, 4, 0] as [number,number,number,number]} />
+                  <Bar dataKey="cost"     name="Labor Cost"       fill={C.rose}  radius={[0, 4, 4, 0] as [number,number,number,number]} />
+                </BarChart>
+              </ResponsiveContainer>
+
+              {/* Summary KPI strip */}
+              {totals && (
+                <div style={{ display: "flex", gap: 32, marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.border}`, flexWrap: "wrap" }}>
+                  {[
+                    { label: "Total Invoiced",   value: `$${totals.invoiced_amount.toLocaleString()}`,  color: C.teal },
+                    { label: "Total Labor Cost",  value: `$${totals.worked_cost.toLocaleString()}`,      color: C.rose },
+                    { label: "Total Margin",      value: `$${totals.margin.toLocaleString()}`,           color: totals.margin >= 0 ? C.teal : C.rose },
+                    { label: "Margin %",          value: `${totals.margin_pct.toFixed(1)}%`,             color: totals.margin_pct >= 30 ? C.teal : totals.margin_pct >= 0 ? C.gold : C.rose },
+                    { label: "Total Hours Worked",value: `${totals.worked_hours.toFixed(1)}h`,           color: C.slate },
+                  ].map((item) => (
+                    <div key={item.label}>
+                      <div style={{ fontSize: 11, color: C.slate, textTransform: "uppercase", letterSpacing: 1 }}>{item.label}</div>
+                      <div style={{ fontSize: 20, fontFamily: "'Cormorant Garamond', serif", color: item.color }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <SectionTitle>Invoice Profitability by Client</SectionTitle>
+        <div style={s.card}>
+          {loading ? (
+            <div style={{ height: 200, background: C.navyLt, borderRadius: 8 }} />
+          ) : clients.length === 0 ? (
+            <p style={{ color: C.slate, textAlign: "center", padding: 40 }}>No data for this period.</p>
+          ) : (
+            <table style={s.table}>
+              <thead>
+                <tr>
+                  {["Client", "Invoiced", "Hours Worked", "Labor Cost", "Margin", "Margin %", "Realization", "Invoices"].map((h) => (
+                    <th key={h} style={s.th}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {clients.map((c) => (
+                  <tr key={c.client_id}>
+                    <td style={s.td}>{c.client_name}</td>
+                    <td style={s.td}>${c.invoiced_amount.toLocaleString()}</td>
+                    <td style={{ ...s.td, color: C.slate }}>{c.worked_hours.toFixed(1)}h</td>
+                    <td style={s.td}>${c.worked_cost.toLocaleString()}</td>
+                    <td style={{ ...s.td, color: c.margin >= 0 ? C.teal : C.rose, fontWeight: 600 }}>
+                      ${c.margin.toLocaleString()}
+                    </td>
+                    <td style={s.td}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ flex: 1, height: 6, background: C.navyLt, borderRadius: 3, minWidth: 60 }}>
+                          <div style={{
+                            width: `${Math.min(100, Math.max(0, c.margin_pct))}%`,
+                            height: "100%",
+                            background: c.margin_pct >= 40 ? C.teal : c.margin_pct >= 20 ? C.gold : C.rose,
+                            borderRadius: 3,
+                          }} />
+                        </div>
+                        <span style={{ fontSize: 12, color: C.slate, minWidth: 38 }}>{c.margin_pct.toFixed(1)}%</span>
+                      </div>
+                    </td>
+                    <td style={{ ...s.td, color: c.realization == null ? C.slate : c.realization >= 100 ? C.teal : c.realization >= 85 ? C.gold : C.rose }}>
+                      {c.realization != null ? `${c.realization.toFixed(1)}%` : "—"}
+                    </td>
+                    <td style={{ ...s.td, color: C.slate, textAlign: "center" }}>{c.invoice_count}</td>
+                  </tr>
+                ))}
+                {totals && (
+                  <tr style={{ borderTop: `2px solid ${C.border}` }}>
+                    <td style={{ ...s.td, color: C.gold, fontWeight: 600 }}>TOTAL</td>
+                    <td style={{ ...s.td, color: C.gold }}>${totals.invoiced_amount.toLocaleString()}</td>
+                    <td style={{ ...s.td, color: C.slate }}>{totals.worked_hours.toFixed(1)}h</td>
+                    <td style={{ ...s.td, color: C.gold }}>${totals.worked_cost.toLocaleString()}</td>
+                    <td style={{ ...s.td, color: totals.margin >= 0 ? C.teal : C.rose, fontWeight: 600 }}>
+                      ${totals.margin.toLocaleString()}
+                    </td>
+                    <td style={{ ...s.td, color: C.gold }}>{totals.margin_pct.toFixed(1)}%</td>
+                    <td style={s.td} />
+                    <td style={s.td} />
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Service breakdown — only if any client has service data */}
+        {clients.some((c) => c.services?.length > 1) && (
+          <>
+            <SectionTitle>Hours by Service Line</SectionTitle>
+            <div style={s.card}>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart
+                  data={clients.filter((c) => c.worked_hours > 0).map((c) => {
+                    const row: Record<string, string | number> = { name: c.client_name };
+                    c.services.forEach((s) => { row[s.service] = s.hours; });
+                    return row;
+                  })}
+                  margin={{ top: 10, right: 20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="name" tick={{ fill: C.white, fontSize: 11 }} />
+                  <YAxis tick={{ fill: C.slate, fontSize: 11 }} tickFormatter={(v: number) => `${v}h`} />
+                  <Tooltip content={<CustomTooltip suffix="h" />} />
+                  <Legend wrapperStyle={{ fontSize: 12, color: C.slate }} />
+                  {Array.from(new Set(clients.flatMap((c) => c.services.map((s) => s.service)))).map((svc, i) => (
+                    <Bar key={svc} dataKey={svc} stackId="a" fill={[C.teal, C.gold, "#a78bfa", "#f97316", C.rose][i % 5]}
+                      radius={i === 0 ? [0,0,0,0] as [number,number,number,number] : [0,0,0,0] as [number,number,number,number]}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        )}
+      </>
+    );
+  };
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div style={s.root}>
@@ -806,7 +1013,7 @@ export default function ExecutiveDashboard({
 
       {/* Tabs */}
       <div style={s.tabs}>
-        {(["overview", "clients", "staff"] as const).map((id) => (
+        {(["overview", "clients", "billing", "staff"] as const).map((id) => (
           <button key={id} style={s.tab(tab === id)} onClick={() => setTab(id)}>
             {id.toUpperCase()}
           </button>
@@ -816,6 +1023,7 @@ export default function ExecutiveDashboard({
       {/* Tab content */}
       {tab === "overview" && <OverviewTab />}
       {tab === "clients"  && <ClientsTab />}
+      {tab === "billing"  && <BillingTab />}
       {tab === "staff"    && <StaffTab />}
     </div>
   );

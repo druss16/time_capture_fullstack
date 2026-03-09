@@ -453,6 +453,47 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     logger.info(f"[COMPACT] Created {created_count}, merged {merged_count}, auto-cat {auto_cat_count}")
     return created_count + merged_count
 
+def _resolve_billing_rate(org, user, client_id, task_type_id=None):
+    """
+    Resolve the correct billing rate for a block using priority hierarchy:
+    1. user + client + task_type  (most specific)
+    2. user + client
+    3. client + task_type
+    4. client only
+    5. user only
+    6. org default
+
+    Returns a Decimal.
+    """
+    from tracker.models import BillingRate
+    from django.db.models import Q
+    from decimal import Decimal
+
+    if not org:
+        return Decimal('0')
+
+    qs = BillingRate.objects.filter(org=org).order_by("-effective_date")
+    uid = getattr(user, 'id', None)
+
+    filters = []
+    if uid and client_id and task_type_id:
+        filters.append(Q(user_id=uid, client_id=client_id, task_type_id=task_type_id))
+    if uid and client_id:
+        filters.append(Q(user_id=uid, client_id=client_id, task_type__isnull=True))
+    if client_id and task_type_id:
+        filters.append(Q(user_id__isnull=True, client_id=client_id, task_type_id=task_type_id))
+    if client_id:
+        filters.append(Q(user_id__isnull=True, client_id=client_id, task_type__isnull=True))
+    if uid:
+        filters.append(Q(user_id=uid, client__isnull=True, task_type__isnull=True))
+
+    for f in filters:
+        match = qs.filter(f).first()
+        if match:
+            return match.rate
+
+    # Fallback to org default
+    return getattr(org, 'billing_rate_default', None) or Decimal('0')
 
 def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
     """Create a new block - checks work patterns BEFORE defaulting to idle."""
@@ -550,8 +591,9 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
         client = get_current_client_for_user(user, device_id=device_id)
 
     # ✅ Calculate billing rate and amount for new blocks
-    from decimal import Decimal
-    billing_rate = getattr(org, 'billing_rate_default', None) or Decimal('0')
+    client_id_for_rate = block_data.get("current_client_id")
+    task_type_id_for_rate = block_data.get("task_type_id")  # None for now, set when task types are tracked
+    billing_rate = _resolve_billing_rate(org, user, client_id_for_rate, task_type_id_for_rate)
     billing_amount = round((minutes / 60) * float(billing_rate), 2)
     
     if is_idle:

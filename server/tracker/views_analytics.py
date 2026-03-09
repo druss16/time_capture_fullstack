@@ -43,6 +43,7 @@ from tracker.models import (
     OrganizationMembership,
     Timesheet,
     EmployeeCostRate,
+    BillingRate,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,28 +55,20 @@ User = get_user_model()
 # ============================================================================
 
 def _get_user_org(user):
-    """Return the user's Organization — prefer owner role, then most recent."""
+    """Return the user's Organization via OrganizationMembership."""
     try:
-        # Prefer the org where this user is owner
-        membership = (
-            OrganizationMembership.objects
-            .filter(user=user, role="owner")
-            .select_related("organization")
-            .first()
-        )
-        # Fallback to any membership
-        if not membership:
-            membership = (
-                OrganizationMembership.objects
-                .filter(user=user)
-                .select_related("organization")
-                .order_by("-id")
-                .first()
-            )
-        return membership.organization if membership else None
+        m = OrganizationMembership.objects.filter(user=user).first()
+        return m.organization if m else None
     except Exception as exc:
         logger.error("[ANALYTICS] get_user_org error: %s", exc)
         return None
+
+
+def _safe_float(v, default: float = 0.0) -> float:
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
 
 
 def _parse_period(period: str) -> tuple[date, date]:
@@ -111,11 +104,6 @@ def _months_between(start: date, end: date) -> list[date]:
         cur = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
     return result
 
-def _safe_float(v, default: float = 0.0) -> float:
-    try:
-        return float(v) if v is not None else default
-    except (TypeError, ValueError):
-        return default
 
 # ============================================================================
 # KPI: Realization Rate
@@ -590,6 +578,190 @@ def _calc_invoice_cycle_time(org, start_date: date, end_date: date) -> dict:
 
 
 # ============================================================================
+# Helper: Resolve BillingRate for a block
+# ============================================================================
+
+def _get_billing_rate(org, user_id: int, client_id: int | None,
+                      task_type_id: int | None) -> Decimal:
+    """
+    Resolve the correct BillingRate using priority hierarchy:
+    1. user + client + task_type  (most specific)
+    2. user + client
+    3. client + task_type
+    4. client only
+    5. user only
+    6. org default
+    """
+    qs = BillingRate.objects.filter(org=org).order_by("-effective_date")
+
+    candidates = []
+
+    # Build filter combinations from most → least specific
+    filters = []
+    if user_id and client_id and task_type_id:
+        filters.append(Q(user_id=user_id, client_id=client_id, task_type_id=task_type_id))
+    if user_id and client_id:
+        filters.append(Q(user_id=user_id, client_id=client_id, task_type__isnull=True))
+    if client_id and task_type_id:
+        filters.append(Q(user_id__isnull=True, client_id=client_id, task_type_id=task_type_id))
+    if client_id:
+        filters.append(Q(user_id__isnull=True, client_id=client_id, task_type__isnull=True))
+    if user_id:
+        filters.append(Q(user_id=user_id, client__isnull=True, task_type__isnull=True))
+
+    for f in filters:
+        match = qs.filter(f).first()
+        if match:
+            return match.rate
+
+    return _safe_float(getattr(org, "billing_rate_default", 0))
+
+
+# ============================================================================
+# KPI: Invoice-based Profitability (Invoice Revenue vs Worked Cost)
+# ============================================================================
+
+def _calc_invoice_profitability(org, start_date: date, end_date: date) -> dict:
+    """
+    True profitability using ACTUAL invoiced revenue (not estimated billing_amount).
+
+    Revenue  = SUM(Invoice.amount) per client in period
+    Cost     = SUM(Block.minutes / 60 × EmployeeCostRate.cost_rate) per client
+    Margin   = Revenue − Cost
+
+    Also computes per-client breakdown by task_type (service line) using
+    BillingRate to show rate mix.
+    """
+    # --- Cost rates per user ---
+    cost_rates: dict[int, float] = {}
+    for cr in (
+        EmployeeCostRate.objects
+        .filter(organization=org)
+        .select_related("user")
+        .order_by("user_id", "-effective_date")
+    ):
+        if cr.user_id not in cost_rates:
+            cost_rates[cr.user_id] = _safe_float(cr.cost_rate)
+
+    default_cost = _safe_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+
+    # --- Invoiced revenue per client ---
+    inv_qs = (
+        Invoice.objects
+        .filter(org=org, invoice_date__gte=start_date,
+                invoice_date__lte=end_date, client__isnull=False)
+        .values("client_id", "client__name")
+        .annotate(
+            invoiced_amount=Coalesce(Sum("amount"), Decimal("0")),
+            invoiced_hours =Coalesce(Sum("hours_billed"), Decimal("0")),
+            invoice_count  =Count("id"),
+        )
+    )
+    invoiced: dict[int, dict] = {}
+    for r in inv_qs:
+        invoiced[r["client_id"]] = {
+            "name":           r["client__name"],
+            "invoiced_amount": _safe_float(r["invoiced_amount"]),
+            "invoiced_hours":  _safe_float(r["invoiced_hours"]),
+            "invoice_count":   r["invoice_count"],
+        }
+
+    # --- Worked cost + hours per client, broken down by task_type ---
+    blocks = (
+        Block.objects
+        .filter(org=org, day__gte=start_date, day__lte=end_date, is_billable=True)
+        .select_related("client", "user", "task_type")
+    )
+
+    worked: dict[int, dict] = defaultdict(lambda: {
+        "name": "", "cost": 0.0, "hours": 0.0,
+        "services": defaultdict(lambda: {"hours": 0.0, "cost": 0.0}),
+    })
+
+    for b in blocks:
+        cid   = b.client_id or 0
+        hours = _safe_float(b.minutes) / 60.0
+        cost  = hours * cost_rates.get(b.user_id, default_cost)
+        svc   = b.task_type.name if b.task_type else "General"
+
+        if b.client:
+            worked[cid]["name"] = b.client.name
+        elif cid == 0:
+            worked[cid]["name"] = "Unassigned"
+
+        worked[cid]["cost"]  += cost
+        worked[cid]["hours"] += hours
+        worked[cid]["services"][svc]["hours"] += hours
+        worked[cid]["services"][svc]["cost"]  += cost
+
+    # --- Merge invoiced + worked ---
+    all_cids = set(invoiced) | {k for k in worked if k != 0}
+    clients  = []
+
+    for cid in all_cids:
+        inv  = invoiced.get(cid, {})
+        wrk  = worked.get(cid, {})
+        name = inv.get("name") or wrk.get("name") or f"Client {cid}"
+
+        invoiced_amt  = inv.get("invoiced_amount", 0.0)
+        invoiced_hrs  = inv.get("invoiced_hours",  0.0)
+        worked_hrs    = wrk.get("hours", 0.0)
+        worked_cost   = wrk.get("cost",  0.0)
+        invoice_count = inv.get("invoice_count", 0)
+
+        margin     = invoiced_amt - worked_cost
+        margin_pct = (margin / invoiced_amt * 100) if invoiced_amt > 0 else 0.0
+
+        # Realization: invoiced hours ÷ worked hours
+        realization = (invoiced_hrs / worked_hrs * 100) if worked_hrs > 0 else None
+
+        # Service breakdown
+        services = [
+            {
+                "service":  svc,
+                "hours":    round(d["hours"], 2),
+                "cost":     round(d["cost"],  2),
+            }
+            for svc, d in wrk.get("services", {}).items()
+        ]
+        services.sort(key=lambda x: -x["hours"])
+
+        clients.append({
+            "client_id":      cid,
+            "client_name":    name,
+            "invoiced_amount": round(invoiced_amt,  2),
+            "invoiced_hours":  round(invoiced_hrs,  2),
+            "worked_hours":    round(worked_hrs,    2),
+            "worked_cost":     round(worked_cost,   2),
+            "margin":          round(margin,        2),
+            "margin_pct":      round(margin_pct,    1),
+            "realization":     round(realization, 1) if realization is not None else None,
+            "invoice_count":   invoice_count,
+            "services":        services,
+        })
+
+    clients.sort(key=lambda x: -x["invoiced_amount"])
+
+    # Totals
+    total_invoiced = sum(c["invoiced_amount"] for c in clients)
+    total_cost     = sum(c["worked_cost"]     for c in clients)
+    total_margin   = total_invoiced - total_cost
+    total_hours    = sum(c["worked_hours"]    for c in clients)
+
+    return {
+        "clients": clients,
+        "totals": {
+            "invoiced_amount": round(total_invoiced, 2),
+            "worked_cost":     round(total_cost,     2),
+            "margin":          round(total_margin,   2),
+            "margin_pct":      round(total_margin / total_invoiced * 100, 1) if total_invoiced > 0 else 0.0,
+            "worked_hours":    round(total_hours, 2),
+        },
+        "has_invoices": len(invoiced) > 0,
+    }
+
+
+# ============================================================================
 # Main View
 # ============================================================================
 
@@ -669,13 +841,14 @@ def executive_dashboard(request):
             "role": membership.role,
         },
         "kpis": {
-            "realization_rate":    _safe(_calc_realization,          org, start_date, end_date),
-            "billable_utilization": _safe(_calc_billable_utilization, org, start_date, end_date),
-            "wip_pipeline":        _safe(_calc_wip,                  org),
-            "effective_rate":      _safe(_calc_effective_rate,        org, start_date, end_date),
-            "revenue_trend":       _safe(_calc_revenue_trend,         org, start_date, end_date),
-            "client_profitability": _safe(_calc_profitability,        org, start_date, end_date),
-            "timesheet_compliance": _safe(_calc_timesheet_compliance, org, start_date, end_date),
-            "invoice_cycle_time":  _safe(_calc_invoice_cycle_time,    org, start_date, end_date),
+            "realization_rate":      _safe(_calc_realization,            org, start_date, end_date),
+            "billable_utilization":  _safe(_calc_billable_utilization,   org, start_date, end_date),
+            "wip_pipeline":          _safe(_calc_wip,                    org),
+            "effective_rate":        _safe(_calc_effective_rate,         org, start_date, end_date),
+            "revenue_trend":         _safe(_calc_revenue_trend,          org, start_date, end_date),
+            "client_profitability":  _safe(_calc_profitability,          org, start_date, end_date),
+            "invoice_profitability": _safe(_calc_invoice_profitability,  org, start_date, end_date),
+            "timesheet_compliance":  _safe(_calc_timesheet_compliance,   org, start_date, end_date),
+            "invoice_cycle_time":    _safe(_calc_invoice_cycle_time,     org, start_date, end_date),
         },
     })

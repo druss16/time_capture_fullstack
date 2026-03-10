@@ -910,7 +910,7 @@ class EmployeeCostRateDetailView(RequireExecutivePlanMixin, APIView):
             'id': rate.id,
             'user': rate.user.id,
             'user_name': rate.user.username,
-            'cost_rate': str(rate.hourly_cost),
+            'cost_rate': str(rate.cost_rate),
             'effective_date': safe_date(rate.effective_date),
         })
     
@@ -928,7 +928,7 @@ class EmployeeCostRateDetailView(RequireExecutivePlanMixin, APIView):
         
         cost_rate = request.data.get('cost_rate') or request.data.get('hourly_cost')
         if cost_rate:
-            rate.hourly_cost = Decimal(str(cost_rate))
+            rate.cost_rate = Decimal(str(cost_rate))
         if 'effective_date' in request.data:
             rate.effective_date = request.data['effective_date']
         
@@ -944,7 +944,7 @@ class EmployeeCostRateDetailView(RequireExecutivePlanMixin, APIView):
             'id': rate.id,
             'user': rate.user.id,
             'user_name': rate.user.username,
-            'cost_rate': str(rate.hourly_cost),
+            'cost_rate': str(rate.cost_rate),
             'effective_date': safe_date(rate.effective_date),
         })
     
@@ -2299,207 +2299,418 @@ def get_seat_usage(request):
 # Fixes: UTF-8 BOM handling from Excel exports
 # ============================================================================
 
+# ============================================================================
+# CSV INVOICE IMPORT — Preview + Commit (two-step)
+# ============================================================================
+
+def _parse_csv_file(csv_file):
+    """
+    Parse uploaded CSV file. Returns (reader, column_map, error_response).
+    Handles UTF-8 BOM, flexible column aliases, required column validation.
+    """
+    raw_content = csv_file.read()
+    try:
+        decoded_file = raw_content.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        decoded_file = raw_content.decode('latin-1')
+
+    reader = csv.DictReader(io.StringIO(decoded_file))
+
+    if reader.fieldnames:
+        reader.fieldnames = [
+            h.lower().strip().replace(' ', '_').replace('\ufeff', '')
+            for h in reader.fieldnames
+        ]
+
+    fieldnames_set = set(reader.fieldnames or [])
+
+    COLUMN_ALIASES = {
+        'client_code':    ['client_code', 'clientcode', 'client', 'code',
+                           'customer_code', 'customercode', 'customer'],
+        'invoice_number': ['invoice_number', 'invoicenumber', 'invoice_no',
+                           'invoiceno', 'invoice', 'inv_number', 'inv_no', 'number', 'doc_number'],
+        'invoice_date':   ['invoice_date', 'invoicedate', 'date', 'inv_date',
+                           'invdate', 'txndate'],
+        'amount':         ['amount', 'total', 'invoice_amount', 'invoiceamount',
+                           'total_amount', 'totalamount', 'value', 'totalamt'],
+        'hours_billed':   ['hours_billed', 'hoursbilled', 'hours', 'billed_hours',
+                           'billedhours', 'qty', 'quantity'],
+        'status':         ['status', 'invoice_status', 'payment_status'],
+    }
+
+    column_map = {}
+    for standard_name, aliases in COLUMN_ALIASES.items():
+        for alias in aliases:
+            if alias in fieldnames_set:
+                column_map[standard_name] = alias
+                break
+
+    required = ['client_code', 'invoice_number', 'invoice_date', 'amount']
+    missing = [col for col in required if col not in column_map]
+
+    if missing:
+        return None, None, {
+            'error': f'Missing required columns: {", ".join(missing)}',
+            'found_columns': list(reader.fieldnames or []),
+            'required_columns': required,
+            'hint': 'CSV must have: client_code (or customer), invoice_number (or invoice_no), invoice_date (or date), amount (or total)',
+        }
+
+    return reader, column_map, None
+
+
+def _parse_row(row, column_map, row_num):
+    """
+    Parse a single CSV row. Returns (parsed_dict, error_str).
+    """
+    from datetime import datetime as dt
+
+    client_code    = (row.get(column_map['client_code']) or '').strip().upper()
+    invoice_number = (row.get(column_map['invoice_number']) or '').strip()
+    date_str       = (row.get(column_map['invoice_date']) or '').strip()
+    amount_str     = (row.get(column_map['amount']) or '').strip()
+    hours_str      = (row.get(column_map.get('hours_billed', '__missing__')) or '').strip()
+    status_str     = (row.get(column_map.get('status', '__missing__')) or '').strip().lower()
+
+    if not all([client_code, invoice_number, date_str, amount_str]):
+        return None, 'Missing required field'
+
+    DATE_FORMATS = [
+        '%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y',
+        '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d',
+        '%m/%d/%y', '%d/%m/%y',
+    ]
+    invoice_date = None
+    for fmt in DATE_FORMATS:
+        try:
+            invoice_date = dt.strptime(date_str, fmt).date()
+            break
+        except ValueError:
+            continue
+    if not invoice_date:
+        return None, f'Invalid date format: {date_str}'
+
+    try:
+        amount = Decimal(amount_str.replace('$', '').replace(',', '')
+                                   .replace('£', '').replace('€', '').strip())
+    except Exception:
+        return None, f'Invalid amount: {amount_str}'
+
+    hours_billed = None
+    if hours_str:
+        try:
+            hours_billed = Decimal(hours_str.replace(',', '').strip())
+        except Exception:
+            pass  # Optional field — don't fail
+
+    # Normalize status
+    status_map = {
+        'paid': 'paid', 'open': 'sent', 'sent': 'sent',
+        'draft': 'draft', 'voided': 'voided', 'void': 'voided',
+        'overdue': 'overdue',
+    }
+    status = status_map.get(status_str, 'sent')
+
+    return {
+        'client_code':    client_code,
+        'invoice_number': invoice_number,
+        'invoice_date':   invoice_date,
+        'amount':         amount,
+        'hours_billed':   hours_billed,
+        'status':         status,
+    }, None
+
+
+MATCH_THRESHOLD = 82  # rapidfuzz score 0–100
+
+
+def _match_client(client_code, clients_by_code, clients_by_name):
+    """
+    Two-tier client matching:
+    1. Exact code match (fast path)
+    2. Fuzzy name/code match via rapidfuzz (fallback)
+
+    Returns (client_or_None, match_score, suggestions_list, needs_review_bool)
+    """
+    from rapidfuzz import fuzz, process
+
+    # Tier 1: exact code match
+    exact = clients_by_code.get(client_code)
+    if exact:
+        return exact, 100, [], False
+
+    # Tier 2: fuzzy match against all client names and codes
+    all_labels = list(clients_by_name.keys())  # "NAME (CODE)" strings
+    if not all_labels:
+        return None, 0, [], True
+
+    results = process.extract(
+        client_code,
+        all_labels,
+        scorer=fuzz.token_sort_ratio,
+        limit=3,
+    )
+
+    suggestions = [
+        {
+            'client_id':   clients_by_name[label].id,
+            'client_name': clients_by_name[label].name,
+            'client_code': clients_by_name[label].code or '',
+            'score':       round(score),
+        }
+        for label, score, _ in results
+        if score >= 50  # Show anything semi-plausible as a suggestion
+    ]
+
+    best_label, best_score, _ = results[0] if results else (None, 0, None)
+
+    if best_score >= MATCH_THRESHOLD and best_label:
+        best_client = clients_by_name[best_label]
+        return best_client, round(best_score), suggestions, False
+
+    return None, round(best_score) if results else 0, suggestions, True
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 @require_professional_plan
 def import_invoices_csv(request):
     """
-    Import invoices from CSV file.
-    Expected columns: client_code, invoice_number, invoice_date, amount, hours_billed
-    
-    Handles:
-    - UTF-8 BOM (from Excel exports)
-    - Various date formats
-    - Flexible column naming
+    PREVIEW step — parse CSV, fuzzy-match clients, return rows for review.
+    No DB writes. Frontend shows this before calling csv_invoice_commit.
     """
-    from .models import Invoice, Client
-    
     org = get_user_org(request.user)
     if not org:
         return Response({'error': 'No organization'}, status=404)
-    
+
     csv_file = request.FILES.get('file')
     if not csv_file:
         return Response({'error': 'No file uploaded'}, status=400)
-    
-    if not csv_file.name.endswith('.csv'):
+    if not csv_file.name.lower().endswith('.csv'):
         return Response({'error': 'File must be a CSV'}, status=400)
-    
+
     try:
-        # Read raw bytes
-        raw_content = csv_file.read()
-        
-        # Decode with BOM handling - utf-8-sig strips BOM automatically
-        try:
-            decoded_file = raw_content.decode('utf-8-sig')
-        except UnicodeDecodeError:
-            # Fallback to latin-1 which accepts any byte
-            decoded_file = raw_content.decode('latin-1')
-        
-        reader = csv.DictReader(io.StringIO(decoded_file))
-        
-        # Normalize headers (strip whitespace, lowercase, replace spaces with underscores)
-        if reader.fieldnames:
-            # Also strip any remaining BOM or invisible characters
-            reader.fieldnames = [
-                h.lower().strip().replace(' ', '_').replace('\ufeff', '') 
-                for h in reader.fieldnames
-            ]
-        
-        # Flexible column matching
-        fieldnames_set = set(reader.fieldnames or [])
-        
-        # Map expected columns to possible variations
-        column_aliases = {
-            'client_code': ['client_code', 'clientcode', 'client', 'code', 'customer_code', 'customercode'],
-            'invoice_number': ['invoice_number', 'invoicenumber', 'invoice_no', 'invoiceno', 'invoice', 'inv_number', 'inv_no', 'number'],
-            'invoice_date': ['invoice_date', 'invoicedate', 'date', 'inv_date', 'invdate'],
-            'amount': ['amount', 'total', 'invoice_amount', 'invoiceamount', 'total_amount', 'totalamount', 'value'],
-            'hours_billed': ['hours_billed', 'hoursbilled', 'hours', 'billed_hours', 'billedhours', 'qty', 'quantity'],
-        }
-        
-        # Find actual column names
-        column_map = {}
-        for standard_name, aliases in column_aliases.items():
-            for alias in aliases:
-                if alias in fieldnames_set:
-                    column_map[standard_name] = alias
-                    break
-        
-        # Validate required columns
-        required = ['client_code', 'invoice_number', 'invoice_date', 'amount']
-        missing = [col for col in required if col not in column_map]
-        
-        if missing:
-            return Response({
-                'error': f'Missing required columns: {", ".join(missing)}',
-                'found_columns': list(reader.fieldnames or []),
-                'required_columns': required,
-                'hint': 'Make sure your CSV has columns for: client_code, invoice_number, invoice_date, amount'
-            }, status=400)
-        
-        # Build client lookup by code (case-insensitive)
+        reader, column_map, err = _parse_csv_file(csv_file)
+        if err:
+            return Response(err, status=400)
+
+        # Build lookup tables
+        all_clients = list(Client.objects.filter(org=org))
         clients_by_code = {
-            c.code.upper(): c for c in Client.objects.filter(org=org, code__isnull=False)
-            if c.code
+            c.code.upper(): c for c in all_clients if c.code
         }
-        
-        imported = []
-        skipped = []
-        errors = []
-        
-        from django.db import transaction
-        with transaction.atomic():
-            for row_num, row in enumerate(reader, start=2):
-                try:
-                    # Get values using mapped column names
-                    client_code = (row.get(column_map['client_code']) or '').strip().upper()
-                    invoice_number = (row.get(column_map['invoice_number']) or '').strip()
-                    invoice_date_str = (row.get(column_map['invoice_date']) or '').strip()
-                    amount_str = (row.get(column_map['amount']) or '').strip()
-                    hours_str = (row.get(column_map.get('hours_billed', '')) or '').strip() if 'hours_billed' in column_map else ''
-                    
-                    if not all([client_code, invoice_number, invoice_date_str, amount_str]):
-                        errors.append({'row': row_num, 'error': 'Missing required field', 'data': dict(row)})
-                        continue
-                    
-                    # Parse date - try multiple formats
-                    invoice_date = None
-                    date_formats = [
-                        '%Y-%m-%d',      # 2026-02-01
-                        '%m/%d/%Y',      # 02/01/2026
-                        '%m-%d-%Y',      # 02-01-2026
-                        '%d/%m/%Y',      # 01/02/2026
-                        '%d-%m-%Y',      # 01-02-2026
-                        '%Y/%m/%d',      # 2026/02/01
-                        '%m/%d/%y',      # 02/01/26
-                        '%d/%m/%y',      # 01/02/26
-                    ]
-                    
-                    for fmt in date_formats:
-                        try:
-                            from datetime import datetime
-                            invoice_date = datetime.strptime(invoice_date_str, fmt).date()
-                            break
-                        except ValueError:
-                            continue
-                    
-                    if not invoice_date:
-                        errors.append({'row': row_num, 'error': f'Invalid date format: {invoice_date_str}', 'data': dict(row)})
-                        continue
-                    
-                    # Parse amount - handle currency symbols and commas
-                    try:
-                        amount_clean = amount_str.replace('$', '').replace(',', '').replace('£', '').replace('€', '').strip()
-                        amount = Decimal(amount_clean)
-                    except:
-                        errors.append({'row': row_num, 'error': f'Invalid amount: {amount_str}', 'data': dict(row)})
-                        continue
-                    
-                    # Parse hours (optional)
-                    hours_billed = None
-                    if hours_str:
-                        try:
-                            hours_billed = Decimal(hours_str.replace(',', '').strip())
-                        except:
-                            pass  # Hours are optional, don't fail on parse error
-                    
-                    # Check for duplicate invoice number
-                    if Invoice.objects.filter(org=org, invoice_number=invoice_number).exists():
-                        skipped.append({'row': row_num, 'invoice_number': invoice_number, 'reason': 'Duplicate invoice number'})
-                        continue
-                    
-                    # Match client by code
-                    client = clients_by_code.get(client_code)
-                    
-                    # Create invoice
-                    invoice = Invoice.objects.create(
-                        org=org,
-                        client=client,
-                        invoice_number=invoice_number,
-                        invoice_date=invoice_date,
-                        amount=amount,
-                        hours_billed=hours_billed,
-                        client_code=client_code,
-                        source='csv',
-                        created_by=request.user,
-                    )
-                    
-                    imported.append({
-                        'row': row_num,
-                        'invoice_number': invoice_number,
-                        'client_code': client_code,
-                        'client_matched': client is not None,
-                        'client_name': client.name if client else None,
-                        'amount': float(amount),
-                        'hours_billed': float(hours_billed) if hours_billed else None,
-                    })
-                    
-                except Exception as e:
-                    errors.append({'row': row_num, 'error': str(e), 'data': dict(row)})
-        
-        unmatched = sum(1 for inv in imported if not inv['client_matched'])
-        
+        # "NAME (CODE)" label for fuzzy matching
+        clients_by_name = {
+            f"{c.name} ({c.code or ''})".strip(): c for c in all_clients
+        }
+
+        existing_invoice_numbers = set(
+            Invoice.objects.filter(org=org)
+            .values_list('invoice_number', flat=True)
+        )
+
+        rows = []
+        parse_errors = []
+
+        for row_num, row in enumerate(reader, start=2):
+            parsed, err = _parse_row(row, column_map, row_num)
+            if err:
+                parse_errors.append({'row': row_num, 'error': err})
+                continue
+
+            client, score, suggestions, needs_review = _match_client(
+                parsed['client_code'], clients_by_code, clients_by_name
+            )
+
+            is_duplicate = parsed['invoice_number'] in existing_invoice_numbers
+
+            rows.append({
+                'row':            row_num,
+                'invoice_number': parsed['invoice_number'],
+                'invoice_date':   parsed['invoice_date'].isoformat(),
+                'amount':         float(parsed['amount']),
+                'hours_billed':   float(parsed['hours_billed']) if parsed['hours_billed'] else None,
+                'status':         parsed['status'],
+                # Client matching
+                'client_code':     parsed['client_code'],
+                'client_id':       client.id if client else None,
+                'client_name':     client.name if client else None,
+                'match_score':     score,
+                'needs_review':    needs_review,
+                'suggestions':     suggestions,
+                # Flags
+                'is_duplicate':    is_duplicate,
+                'will_import':     not is_duplicate and not needs_review,
+            })
+
+        matched      = sum(1 for r in rows if r['client_id'] and not r['needs_review'])
+        unmatched    = sum(1 for r in rows if r['needs_review'])
+        duplicates   = sum(1 for r in rows if r['is_duplicate'])
+        will_import  = sum(1 for r in rows if r['will_import'])
+
         return Response({
-            'success': True,
+            'preview': True,
+            'rows': rows,
+            'parse_errors': parse_errors,
             'summary': {
-                'imported': len(imported),
-                'skipped': len(skipped),
-                'errors': len(errors),
-                'unmatched_clients': unmatched,
+                'total_rows':   len(rows),
+                'will_import':  will_import,
+                'matched':      matched,
+                'unmatched':    unmatched,
+                'duplicates':   duplicates,
+                'parse_errors': len(parse_errors),
             },
-            'imported': imported[:50],  # Limit response size
-            'skipped': skipped[:20],
-            'errors': errors[:20],
         })
-        
+
     except Exception as e:
         import traceback
         return Response({
             'error': f'Failed to process CSV: {str(e)}',
-            'detail': traceback.format_exc()[:500]
+            'detail': traceback.format_exc()[:500],
         }, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def csv_invoice_commit(request):
+    """
+    COMMIT step — write confirmed rows to Invoice model.
+
+    Body: {
+        "rows": [
+            {
+                "invoice_number": "INV-001",
+                "invoice_date":   "2026-02-01",
+                "amount":         1500.00,
+                "hours_billed":   10.0,         // optional
+                "status":         "paid",        // optional, default "sent"
+                "client_code":    "SMITH",
+                "client_id":      42,            // null if still unmatched
+            },
+            ...
+        ]
+    }
+
+    Rows with client_id=null are saved with client=null (unmatched queue).
+    Duplicate invoice_numbers are skipped.
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+
+    rows = request.data.get('rows', [])
+    if not rows:
+        return Response({'error': 'No rows provided'}, status=400)
+
+    # Re-fetch existing invoice numbers to guard against concurrent uploads
+    existing_numbers = set(
+        Invoice.objects.filter(org=org).values_list('invoice_number', flat=True)
+    )
+
+    # Pre-fetch clients once
+    clients_by_id = {
+        c.id: c for c in Client.objects.filter(org=org)
+    }
+
+    imported, skipped, errors = [], [], []
+
+    from django.db import transaction
+    with transaction.atomic():
+        for row in rows:
+            inv_num = (row.get('invoice_number') or '').strip()
+            if not inv_num:
+                errors.append({'invoice_number': inv_num, 'error': 'Missing invoice_number'})
+                continue
+
+            if inv_num in existing_numbers:
+                skipped.append({'invoice_number': inv_num, 'reason': 'Duplicate'})
+                continue
+
+            try:
+                inv_date = row['invoice_date']  # Already ISO string from preview
+                amount   = Decimal(str(row['amount']))
+                hours    = Decimal(str(row['hours_billed'])) if row.get('hours_billed') else None
+                status   = row.get('status', 'sent')
+                client_id = row.get('client_id')
+                client    = clients_by_id.get(client_id) if client_id else None
+
+                invoice = Invoice.objects.create(
+                    org=org,
+                    client=client,
+                    invoice_number=inv_num,
+                    invoice_date=inv_date,
+                    amount=amount,
+                    hours_billed=hours,
+                    status=status,
+                    client_code=row.get('client_code', ''),
+                    source='csv',
+                    created_by=request.user,
+                )
+
+                existing_numbers.add(inv_num)  # Prevent dupes within this batch
+
+                imported.append({
+                    'id':             invoice.id,
+                    'invoice_number': inv_num,
+                    'client_name':    client.name if client else None,
+                    'amount':         float(amount),
+                })
+
+            except Exception as e:
+                errors.append({'invoice_number': inv_num, 'error': str(e)})
+
+    return Response({
+        'success': True,
+        'summary': {
+            'imported':  len(imported),
+            'skipped':   len(skipped),
+            'errors':    len(errors),
+            'unmatched': sum(1 for r in imported if not Invoice.objects.filter(
+                id=r['id']).values_list('client_id', flat=True).first()),
+        },
+        'imported': imported,
+        'skipped':  skipped,
+        'errors':   errors,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@require_professional_plan
+def csv_invoice_template(request):
+    """
+    Download a pre-filled CSV template with the org's active client codes.
+    Makes it easy for firms to fill in their invoice data correctly.
+    """
+    from django.http import HttpResponse
+
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+
+    clients = Client.objects.filter(org=org, is_active=True).order_by('name')
+
+    lines = [
+        '# TimeTracker Invoice Import Template',
+        '# Required columns: client_code, invoice_number, invoice_date, amount',
+        '# Optional columns: hours_billed, status (paid/sent/draft/voided)',
+        '#',
+        'client_code,invoice_number,invoice_date,amount,hours_billed,status',
+    ]
+
+    # Pre-populate one example row per client
+    from django.utils import timezone as tz
+    today = tz.now().date()
+    for client in clients:
+        code = client.code or client.name.upper()[:8].replace(' ', '')
+        lines.append(f'{code},INV-XXXX,{today.isoformat()},0.00,,sent')
+
+    content = '\n'.join(lines)
+    response = HttpResponse(content, content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="invoice_import_template_{org.slug}.csv"'
+    return response
 
 
 @api_view(['GET'])

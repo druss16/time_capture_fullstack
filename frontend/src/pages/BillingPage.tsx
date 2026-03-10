@@ -1,7 +1,7 @@
 /**
  * BillingPage.tsx - With Plan-Based Feature Gating
  * Professional plan: My Timesheet, Approvals
- * Executive plan: All features (Billing, Profitability, History)
+ * Executive plan: All features (Billing, Invoices, Profitability, History)
  * No plan: Show subscribe prompt
  */
 import React, { useState, useEffect, useMemo } from 'react';
@@ -13,12 +13,14 @@ import ClientProfitability from '@/components/ClientProfitability';
 import TimesheetHistory from '@/components/TimesheetHistory';
 import IntegrationPushPanel from '@/components/IntegrationPushPanel';
 import IntegrationInvoicePanel from '@/components/IntegrationInvoicePanel';
+import InvoiceManager from '@/components/InvoiceManager';
 import {
   Clock,
   CheckSquare,
   DollarSign,
   TrendingUp,
   FileText,
+  Receipt,
   ChevronRight,
   Lock,
   Sparkles,
@@ -37,7 +39,7 @@ interface Tab {
   icon: React.ElementType;
   description: string;
   requiredRoles: UserRole[];
-  requiredPlan?: PlanType[]; // plans that can access this tab
+  requiredPlan?: PlanType[];
 }
 
 interface WhoamiResponse {
@@ -56,7 +58,7 @@ interface OrgResponse {
   trial_ends_at: string | null;
 }
 
-const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive']; // professional can see base features
+const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive'];
 const EXECUTIVE_PLANS: PlanType[] = ['executive'];
 
 const ALL_TABS: Tab[] = [
@@ -82,6 +84,14 @@ const ALL_TABS: Tab[] = [
     description: 'Prepare invoices by client',
     requiredRoles: ['owner', 'admin'],
     icon: DollarSign,
+    requiredPlan: EXECUTIVE_PLANS,
+  },
+  {
+    id: 'invoices',
+    label: 'Invoices',
+    description: 'Manage imported and billed invoices',
+    requiredRoles: ['owner', 'admin'],
+    icon: Receipt,
     requiredPlan: EXECUTIVE_PLANS,
   },
   {
@@ -126,7 +136,6 @@ const ContentSkeleton = () => (
 // Subscribe prompt for users with no plan
 const SubscribePrompt: React.FC = () => (
   <div className="relative flex items-center justify-center min-h-[400px]">
-    {/* Blurred background placeholder */}
     <div className="absolute inset-0 overflow-hidden rounded-2xl">
       <div className="w-full h-full bg-gradient-to-br from-slate-100 to-slate-200 opacity-60 blur-sm" />
       <div className="absolute inset-0 p-6 opacity-30 blur-[2px]">
@@ -143,8 +152,6 @@ const SubscribePrompt: React.FC = () => (
         </div>
       </div>
     </div>
-
-    {/* Subscribe overlay */}
     <div className="relative z-10 text-center p-8 bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border-2 border-red-200 max-w-md">
       <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
         <AlertTriangle className="w-8 h-8 text-red-500" />
@@ -168,13 +175,11 @@ const SubscribePrompt: React.FC = () => (
   </div>
 );
 
-// Upgrade prompt component for locked features (Executive)
+// Upgrade prompt for locked Executive features
 const UpgradePrompt: React.FC<{ featureName: string }> = ({ featureName }) => (
   <div className="relative flex items-center justify-center min-h-[400px]">
-    {/* Blurred background placeholder */}
     <div className="absolute inset-0 overflow-hidden rounded-2xl">
       <div className="w-full h-full bg-gradient-to-br from-slate-100 to-slate-200 opacity-60 blur-sm" />
-      {/* Fake content behind blur */}
       <div className="absolute inset-0 p-6 opacity-30 blur-[2px]">
         <div className="h-8 w-48 bg-slate-300 rounded mb-4" />
         <div className="grid grid-cols-3 gap-4 mb-6">
@@ -189,8 +194,6 @@ const UpgradePrompt: React.FC<{ featureName: string }> = ({ featureName }) => (
         </div>
       </div>
     </div>
-
-    {/* Lock overlay */}
     <div className="relative z-10 text-center p-8 bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border-2 border-slate-200 max-w-md">
       <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
         <Lock className="w-8 h-8 text-slate-400" />
@@ -215,21 +218,19 @@ const UpgradePrompt: React.FC<{ featureName: string }> = ({ featureName }) => (
 const BillingPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<string>(searchParams.get('tab') || 'timesheet');
+  const [invoiceFilter, setInvoiceFilter] = useState<string>(searchParams.get('filter') || '');
   const [userInfo, setUserInfo] = useState<WhoamiResponse | null>(null);
   const [orgPlan, setOrgPlan] = useState<PlanType>('none');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // In BillingPage.tsx - update fetchUserInfo
     const fetchUserInfo = async () => {
       try {
         const response = await safeFetchJson<WhoamiResponse>(`${API_BASE}/whoami/`);
         setUserInfo(response);
 
-        // Try to get org plan - multiple fallback methods
         if (response.org_id) {
           try {
-            // Method 1: settings/org (may fail for non-admins)
             const orgResponse = await safeFetchJson<OrgResponse>(`${API_BASE}/settings/org/`);
             const plan = orgResponse.plan;
             if (plan === 'professional' || plan === 'executive') {
@@ -239,20 +240,19 @@ const BillingPage: React.FC = () => {
           } catch (err) {
             console.log('settings/org failed, trying subscription endpoint');
           }
-          
-          // Method 2: Fallback to subscription endpoint (works for all members)
+
           try {
-            const subResponse = await safeFetchJson<any>(`${API_BASE}/billing/subscription/`);
+            const subResponse = await safeFetchJson<any>(`${API_BASE}/billing/subscription-status/`);
             const plan = subResponse?.organization?.plan;
             if (plan === 'professional' || plan === 'executive') {
               setOrgPlan(plan);
               return;
             }
           } catch (err) {
-            console.error('subscription endpoint also failed:', err);
+            console.error('subscription-status endpoint also failed:', err);
           }
         }
-        
+
         setOrgPlan('none');
       } catch (err) {
         console.error('Failed to fetch user info:', err);
@@ -263,54 +263,59 @@ const BillingPage: React.FC = () => {
     };
 
     fetchUserInfo();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const userRole = userInfo?.role || 'member';
   const hasNoPlan = orgPlan === 'none';
 
-  // Filter tabs by role (but show locked tabs for plan restrictions)
   const visibleTabs = useMemo(
     () => ALL_TABS.filter((tab) => tab.requiredRoles.includes(userRole)),
     [userRole]
   );
 
   const isTabLocked = (tab: Tab): boolean => {
-    // If no plan, all tabs are locked
     if (hasNoPlan) return true;
     if (!tab.requiredPlan) return false;
     return !tab.requiredPlan.includes(orgPlan);
   };
 
-  // Prevent landing on a locked tab (e.g. deep link / stale state)
+  // Prevent landing on a locked tab
   useEffect(() => {
-    if (loading) return; // Don't check locks until plan is loaded
+    if (loading) return;
     const tab = ALL_TABS.find((t) => t.id === activeTab);
     if (tab && isTabLocked(tab)) setActiveTab('timesheet');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPlan, loading]);
+
+  // Sync tab + filter from URL when search params change externally
+  // (e.g. IntegrationsTab banner link: ?tab=invoices&filter=conflicts)
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    const filterParam = searchParams.get('filter') || '';
+    if (tabParam && tabParam !== activeTab) setActiveTab(tabParam);
+    setInvoiceFilter(filterParam);
+  }, [searchParams]);
+
+  const handleTabChange = (tabId: string) => {
+    setActiveTab(tabId);
+    setInvoiceFilter(''); // clear filter when navigating away from invoices
+    setSearchParams({ tab: tabId });
+  };
 
   const getLockedFeatureName = (tabId: string): string => {
     switch (tabId) {
-      case 'billing':
-        return 'Client Billing';
-      case 'profitability':
-        return 'Profitability Analysis';
-      case 'history':
-        return 'Timesheet History';
-      default:
-        return 'This Feature';
+      case 'billing':    return 'Client Billing';
+      case 'invoices':   return 'Invoice Management';
+      case 'profitability': return 'Profitability Analysis';
+      case 'history':    return 'Timesheet History';
+      default:           return 'This Feature';
     }
   };
 
   const getPlanLabel = (): string => {
     switch (orgPlan) {
-      case 'executive':
-        return '💎 Executive';
-      case 'professional':
-        return '⭐ Professional';
-      default:
-        return '⚠️ No Plan';
+      case 'executive':    return '💎 Executive';
+      case 'professional': return '⭐ Professional';
+      default:             return '⚠️ No Plan';
     }
   };
 
@@ -318,7 +323,7 @@ const BillingPage: React.FC = () => {
     <div className="flex min-h-[calc(100vh-56px)]">
       {/* Sidebar */}
       <aside className="w-64 bg-white border-r-2 border-slate-200 flex-shrink-0 flex flex-col">
-        {/* Sidebar Header */}
+        {/* Header */}
         <div className="p-4 border-b-2 border-slate-200">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
@@ -344,11 +349,7 @@ const BillingPage: React.FC = () => {
               return (
                 <button
                   key={tab.id}
-                  onClick={() => {
-                      if (locked) return;
-                      setActiveTab(tab.id);
-                      setSearchParams({ tab: tab.id });
-                  }}
+                  onClick={() => { if (!locked) handleTabChange(tab.id); }}
                   className={cn(
                     'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl',
                     'text-sm font-bold transition-all duration-200',
@@ -385,8 +386,8 @@ const BillingPage: React.FC = () => {
                         locked ? 'text-slate-400' : isActive ? 'text-primary/70' : 'text-slate-500'
                       )}
                     >
-                      {locked 
-                        ? (hasNoPlan ? 'Requires subscription' : 'Executive plan') 
+                      {locked
+                        ? (hasNoPlan ? 'Requires subscription' : 'Executive plan')
                         : tab.description}
                     </span>
                   </div>
@@ -407,27 +408,25 @@ const BillingPage: React.FC = () => {
                 orgPlan === 'executive'
                   ? 'bg-primary/10 border-primary/20'
                   : orgPlan === 'professional'
-                  ? 'bg-amber-50 border-amber-200'
-                  : 'bg-red-50 border-red-200'
+                    ? 'bg-amber-50 border-amber-200'
+                    : 'bg-red-50 border-red-200'
               )}
             >
               <p className={cn(
-                'text-xs font-bold', 
-                orgPlan === 'executive' 
-                  ? 'text-primary' 
+                'text-xs font-bold',
+                orgPlan === 'executive'
+                  ? 'text-primary'
                   : orgPlan === 'professional'
-                  ? 'text-amber-700'
-                  : 'text-red-700'
+                    ? 'text-amber-700'
+                    : 'text-red-700'
               )}>
                 {getPlanLabel()}
               </p>
-
               {orgPlan === 'professional' && (
                 <a href="/account/billing" className="text-xs text-amber-600 font-semibold hover:underline">
                   Upgrade for more features
                 </a>
               )}
-
               {hasNoPlan && (
                 <a href="/account/billing" className="text-xs text-red-600 font-semibold hover:underline">
                   Subscribe now
@@ -437,7 +436,7 @@ const BillingPage: React.FC = () => {
           </div>
         )}
 
-        {/* User Info at Bottom */}
+        {/* User Info */}
         {userInfo && (
           <div className="p-4 border-t-2 border-slate-200 bg-slate-50">
             <div className="flex items-center gap-3">
@@ -465,7 +464,6 @@ const BillingPage: React.FC = () => {
         {loading ? (
           <ContentSkeleton />
         ) : hasNoPlan ? (
-          // Show subscribe prompt for users with no plan
           <SubscribePrompt />
         ) : (
           <>
@@ -482,6 +480,15 @@ const BillingPage: React.FC = () => {
                   {activeTab === 'timesheet' && <WeeklyTimesheet />}
                   {activeTab === 'approvals' && <ApprovalQueue />}
                   {activeTab === 'billing' && <ClientSummary />}
+                  {activeTab === 'invoices' && (
+                    <InvoiceManager
+                      filter={invoiceFilter}
+                      onFilterClear={() => {
+                        setInvoiceFilter('');
+                        setSearchParams({ tab: 'invoices' });
+                      }}
+                    />
+                  )}
                   {activeTab === 'profitability' && (
                     <div className="space-y-6">
                       <ClientProfitability />

@@ -708,6 +708,17 @@ class Invoice(models.Model):
         ('xero', 'Xero'),
         ('manual', 'Manual Entry'),
     ]
+
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('sent', 'Sent'),
+        ('paid', 'Paid'),
+        ('voided', 'Voided'),
+        ('overdue', 'Overdue'),
+    ]
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='sent', blank=True)
+
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='manual')
     external_id = models.CharField(max_length=100, blank=True)  # QBO/Xero invoice ID
     

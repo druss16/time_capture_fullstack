@@ -325,6 +325,8 @@ def quickbooks_connect(request):
         'scope': 'com.intuit.quickbooks.accounting',
         'redirect_uri': settings.QUICKBOOKS_REDIRECT_URI,
         'state': state,
+        'prompt': 'select_account',  # ← add this
+
     }
     auth_url = f"https://appcenter.intuit.com/connect/oauth2?{urlencode(params)}"
     return Response({'auth_url': auth_url})

@@ -257,24 +257,36 @@ jobs:
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --wait \
-            --output-format json > notarization_result.json || true
-          
-          SUBMISSION_ID=$(cat notarization_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
-          STATUS=$(cat notarization_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-          
+            --output-format json > submit_result.json
+
+          SUBMISSION_ID=$(cat submit_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
           echo "Submission ID: $SUBMISSION_ID"
-          echo "Status: $STATUS"
-          
-          if [ "$STATUS" != "Accepted" ]; then
-            echo "=== NOTARIZATION LOG ==="
-            xcrun notarytool log "$SUBMISSION_ID" \
+
+          for i in $(seq 1 20); do
+            sleep 30
+            RESULT=$(xcrun notarytool info "$SUBMISSION_ID" \
               --apple-id "$APPLE_ID" \
               --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_PASSWORD"
+              --password "$APPLE_APP_PASSWORD" \
+              --output-format json)
+            STATUS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+            echo "Poll $i: $STATUS"
+            if [ "$STATUS" = "Accepted" ]; then break; fi
+            if [ "$STATUS" = "Invalid" ]; then
+              echo "=== NOTARIZATION LOG ==="
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --team-id "$APPLE_TEAM_ID" \
+                --password "$APPLE_APP_PASSWORD"
+              exit 1
+            fi
+          done
+
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "Notarization timed out after 10 minutes"
             exit 1
           fi
-          
+
           xcrun stapler staple TimeTracker.pkg
       
       - name: Upload Mac artifact

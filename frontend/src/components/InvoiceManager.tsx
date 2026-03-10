@@ -297,7 +297,7 @@ const CsvImportModal: React.FC<{
       const token = getAuthToken();
       const res = await fetch(`${API_BASE}/billing/invoices/import-csv/`, {
         method: 'POST',
-        headers: token ? { Authorization: `Token ${token}` } : {},
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         credentials: 'include',
         body: form,
       });
@@ -363,7 +363,7 @@ const CsvImportModal: React.FC<{
       const res = await fetch(`${API_BASE}/billing/invoices/import-csv/template/`, {
         method: 'GET',
         credentials: 'include',
-        headers: token ? { Authorization: `Token ${token}` } : {},
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       console.log('[template] response status:', res.status);
       if (!res.ok) {
@@ -671,7 +671,7 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
   const token = getAuthToken();
   return {
     'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Token ${token}` } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...extra,
   };
 }
@@ -683,7 +683,7 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
     credentials: 'include',
     headers: {
       ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(token ? { Authorization: `Token ${token}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });

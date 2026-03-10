@@ -134,10 +134,8 @@ const UnmatchedQueue: React.FC<{
     if (!clientId) return;
     setMatching((m) => ({ ...m, [invoiceId]: true }));
     try {
-      const res = await fetch(`${API_BASE}/billing/invoices/match/`, {
+      const res = await authFetch(`${API_BASE}/billing/invoices/match/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
-        credentials: 'include',
         body: JSON.stringify({ invoice_id: invoiceId, client_id: Number(clientId) }),
       });
       if (!res.ok) {
@@ -212,10 +210,8 @@ const ConflictQueue: React.FC<{
   const resolve = async (conflictId: number, resolution: 'accept_source' | 'keep_tt') => {
     setResolving((r) => ({ ...r, [conflictId]: true }));
     try {
-      await fetch(`${API_BASE}/billing/invoices/conflicts/${conflictId}/resolve/`, {
+      await authFetch(`${API_BASE}/billing/invoices/conflicts/${conflictId}/resolve/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
-        credentials: 'include',
         body: JSON.stringify({ resolution }),
       });
       onResolved();
@@ -298,9 +294,10 @@ const CsvImportModal: React.FC<{
     try {
       const form = new FormData();
       form.append('file', file);
+      const token = getAuthToken();
       const res = await fetch(`${API_BASE}/billing/invoices/import-csv/`, {
         method: 'POST',
-        headers: { 'X-CSRFToken': getCsrf() },
+        headers: token ? { Authorization: `Token ${token}` } : {},
         credentials: 'include',
         body: form,
       });
@@ -345,10 +342,8 @@ const CsvImportModal: React.FC<{
     setCommitting(true);
     try {
       const rowsToSend = editedRows.filter((r) => !r.is_duplicate);
-      const res = await fetch(`${API_BASE}/billing/invoices/import-csv/commit/`, {
+      const res = await authFetch(`${API_BASE}/billing/invoices/import-csv/commit/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
-        credentials: 'include',
         body: JSON.stringify({ rows: rowsToSend }),
       });
       const data = await res.json();
@@ -363,9 +358,7 @@ const CsvImportModal: React.FC<{
 
   const downloadTemplate = async () => {
     try {
-      const res = await fetch(`${API_BASE}/billing/invoices/import-csv/template/`, {
-        credentials: 'include',
-      });
+      const res = await authFetch(`${API_BASE}/billing/invoices/import-csv/template/`);
       if (!res.ok) return;
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -643,13 +636,38 @@ const CsvImportModal: React.FC<{
 
 // ─── CSRF helper ─────────────────────────────────────────────────────────────
 
-function getCsrf(): string {
-  const fromCookie = document.cookie
-    .split('; ')
-    .find((row) => row.startsWith('csrftoken='))
-    ?.split('=')[1];
-  if (fromCookie) return fromCookie;
-  return (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content || '';
+// Token auth — frontend/API are cross-domain so cookies don't work.
+// All requests must carry Authorization: Token <token> from localStorage.
+function getAuthToken(): string {
+  return (
+    localStorage.getItem('auth_token') ||
+    localStorage.getItem('tt_auth_token') ||
+    localStorage.getItem('authToken') ||
+    localStorage.getItem('token') ||
+    ''
+  );
+}
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const token = getAuthToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Token ${token}` } : {}),
+    ...extra,
+  };
+}
+
+async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const token = getAuthToken();
+  return fetch(url, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(token ? { Authorization: `Token ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -697,8 +715,6 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
   }, []);
 
   useEffect(() => {
-    // Ensure CSRF cookie is set before any POST
-    fetch(`${API_BASE}/get-csrf/`, { credentials: 'include' });
     fetchAll();
   }, [fetchAll]);
 
@@ -706,10 +722,9 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
     if (!window.confirm('Delete this invoice? This cannot be undone.')) return;
     setDeleting((d) => ({ ...d, [invoiceId]: true }));
     try {
-      await fetch(`${API_BASE}/billing/invoices/${invoiceId}/delete/`, {
+      await authFetch(`${API_BASE}/billing/invoices/${invoiceId}/delete/`, {
         method: 'DELETE',
-        headers: { 'X-CSRFToken': getCsrf() },
-        credentials: 'include',
+      });
       });
       setInvoices((inv) => inv.filter((i) => i.id !== invoiceId));
     } finally {

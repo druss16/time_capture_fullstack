@@ -3005,14 +3005,7 @@ def run_agent():
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
-            sync.on_update = _on_sync_with_switcher
-            _original_on_sync = sync.on_update
-            def _on_sync_with_switcher():
-                if _original_on_sync:
-                    _original_on_sync()
-                ai_switcher.update_clients(sync.clients)
-            sync.on_update = _on_sync_with_switcher
-
+            sync.on_update = _on_sync_with_switcher        
         log(f"[AI-SWITCH] ✅ Initialized")
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
@@ -3165,6 +3158,7 @@ def run_agent():
                             time.sleep(POLL_SECONDS * 3)
                         else:
                             time.sleep(POLL_SECONDS)
+                        _last_detect_heartbeat = time.time()  # ← ADD THIS
                         consecutive_errors = 0
                         continue
 
@@ -3183,6 +3177,7 @@ def run_agent():
                             log(f"[MEETING] In meeting ({current_sig[0]}), skipping idle check "
                                 f"(mouse idle {int(idle)}s, dwell {int(now - dwell_start)}s)")
                         time.sleep(POLL_SECONDS)
+                        _last_detect_heartbeat = time.time()  # ← ADD HERE TOO
                         consecutive_errors = 0
                         continue
 
@@ -3395,11 +3390,17 @@ def run_agent():
                 tracking_thread.start()
             else:
                 heartbeat_age = time.time() - _last_detect_heartbeat
-                current_idle = mouse_idle_seconds()
-                # Grace period: don't restart if we just woke from sleep
-                since_wake = time.time() - _wake_idle_bypass_until + 30
-                if heartbeat_age > 120 and current_idle < MOUSE_IDLE_PAUSE_S and since_wake > 60:
+                since_wake = time.time() - (_wake_idle_bypass_until - 30)
+                
+                # Only skip if we JUST woke (grace period)
+                if since_wake < 60:
+                    continue
+                    
+                # Frozen for 10+ minutes regardless of idle state = real hang
+                if heartbeat_age > 600:
                     log(f"[WATCHDOG] ⚠️ Thread alive but no detection for {int(heartbeat_age)}s — restarting")
+                    subprocess.run(["pkill", "-f", "osascript"], capture_output=True)
+                    time.sleep(1)
                     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
                     tracking_thread.start()
 

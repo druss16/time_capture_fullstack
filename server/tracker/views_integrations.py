@@ -34,6 +34,7 @@ from .models import (
     Client,
     Block,
     BillingRate,
+    InvoiceConflict,
 )
 
 logger = logging.getLogger(__name__)

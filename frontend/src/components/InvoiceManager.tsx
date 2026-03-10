@@ -708,6 +708,8 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
 
   const [deleting, setDeleting] = useState<Record<number, boolean>>({});
 
+  const [syncing, setSyncing] = useState(false);
+
   // When filter prop changes (e.g. from URL), sync into state
   useEffect(() => {
     if (filter === 'conflicts') setMatchedFilter('unmatched'); // show relevant rows
@@ -747,6 +749,17 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
       setInvoices((inv) => inv.filter((i) => i.id !== invoiceId));
     } finally {
       setDeleting((d) => ({ ...d, [invoiceId]: false }));
+    }
+  };
+
+  const handleSyncQB = async () => {
+    setSyncing(true);
+    try {
+      await authFetch(`${API_BASE}/integrations/qb/sync-invoices/`, { method: 'POST' });
+      await new Promise(r => setTimeout(r, 2000)); // give Celery a moment
+      await fetchAll();
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -790,6 +803,14 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
             Refresh
           </button>
           <button
+            onClick={handleSyncQB}
+            disabled={syncing}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-bold text-slate-600 border-2 border-slate-200 rounded-xl hover:bg-slate-100 transition-colors disabled:opacity-50"
+          >
+            {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4 text-green-600" />}
+            {syncing ? 'Syncing…' : 'Sync QB'}
+          </button>
+          <button
             onClick={() => setShowImport(true)}
             className="flex items-center gap-2 px-4 py-2 text-sm font-bold bg-primary text-white rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25"
           >
@@ -797,7 +818,6 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
             Import CSV
           </button>
         </div>
-      </div>
 
       {/* Conflict queue (shown when filter=conflicts or conflicts exist) */}
       {(filter === 'conflicts' || conflicts.length > 0) && conflicts.length > 0 && (

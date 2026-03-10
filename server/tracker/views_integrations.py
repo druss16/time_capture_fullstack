@@ -1485,3 +1485,12 @@ def resolve_invoice_conflict(request, conflict_id):
     conflict.save()
 
     return Response({'success': True, 'final_amount': str(conflict.invoice.amount)})
+
+
+# views_integrations.py
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def manual_sync_invoices(request):
+    from tracker.tasks import reconcile_qb_invoices
+    reconcile_qb_invoices.delay()
+    return Response({'status': 'sync started'})

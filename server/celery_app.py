@@ -181,7 +181,7 @@ app.conf.beat_schedule = {
 
     'qb-reconcile-sync': {
         'task': 'tracker.tasks.reconcile_qb_invoices',
-        'schedule': crontab(hour='*/4'),  # Every 4 hours
+        'schedule': crontab(hour='*/4', minute=0),  # ← add minute=0
         'options': {'expires': 3600},
     },
 

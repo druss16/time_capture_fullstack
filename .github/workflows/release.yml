@@ -252,7 +252,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         working-directory: mac_agent
-        run: |
+        drun: |
           xcrun notarytool submit TimeTracker.pkg \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \

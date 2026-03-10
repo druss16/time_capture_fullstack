@@ -356,8 +356,18 @@ const CsvImportModal: React.FC<{
     }
   };
 
-  const downloadTemplate = () => {
-    window.location.href = `${API_BASE}/billing/invoices/import-csv/template/`;
+  const downloadTemplate = async () => {
+    const res = await fetch(`${API_BASE}/billing/invoices/import-csv/template/`, {
+      credentials: 'include',   // ← sends the session cookie
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'invoice_import_template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (

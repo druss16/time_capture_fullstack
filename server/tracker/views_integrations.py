@@ -434,8 +434,11 @@ def quickbooks_customers(request):
 
     customers = data.get('QueryResponse', {}).get('Customer', [])
     existing_qb_ids = set(
-        Client.objects.filter(org=org, quickbooks_id__isnull=False)
-        .values_list('quickbooks_id', flat=True)
+        Client.objects.filter(
+            org=org, 
+            quickbooks_id__isnull=False,
+            quickbooks_realm_id=integration.realm_id
+        ).values_list('quickbooks_id', flat=True)
     )
 
     clients = [{
@@ -488,14 +491,16 @@ def quickbooks_import(request):
         name_match = Client.objects.filter(org=org, name__iexact=name).first()
         if name_match:
             name_match.quickbooks_id = qb_id
+            name_match.quickbooks_realm_id = integration.realm_id  # ← add
             name_match.imported_from = 'quickbooks'
-            name_match.save(update_fields=['quickbooks_id', 'imported_from'])
+            name_match.save(update_fields=['quickbooks_id', 'quickbooks_realm_id', 'imported_from'])
             imported.append({'id': name_match.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': True})
             continue
 
         try:
             client = Client.objects.create(
                 org=org, name=name, quickbooks_id=qb_id,
+                quickbooks_realm_id=integration.realm_id,  # ← add
                 imported_from='quickbooks', is_active=True,
             )
             imported.append({'id': client.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': False})

@@ -564,6 +564,8 @@ class Client(models.Model):
         default='',
         help_text='Integration source this client was imported from'
     )
+
+    quickbooks_realm_id = models.CharField(max_length=50, blank=True, null=True)
     
     # ═══════════════════════════════════════════════════════════════════════
     
@@ -716,7 +718,7 @@ class Invoice(models.Model):
         ('voided', 'Voided'),
         ('overdue', 'Overdue'),
     ]
-    
+
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='sent', blank=True)
 
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='manual')

@@ -909,9 +909,9 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
                     <td className="px-4 py-3 text-center">
                       <span className={cn(
                         'text-xs px-2.5 py-0.5 rounded-full font-bold',
-                        STATUS_COLORS[inv.status] || 'bg-slate-100 text-slate-600'
+                        STATUS_COLORS[inv.status ?? ''] || 'bg-slate-100 text-slate-600'
                       )}>
-                        {inv.status.charAt(0).toUpperCase() + inv.status.slice(1)}
+                        {inv.status ? inv.status.charAt(0).toUpperCase() + inv.status.slice(1) : 'Unknown'}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">

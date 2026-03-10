@@ -3006,17 +3006,18 @@ def run_agent():
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
             sync.on_update = _on_sync_with_switcher
-                    
+
         log(f"[AI-SWITCH] ✅ Initialized")
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
     except Exception as e:
         log(f"[AI-SWITCH] Init failed: {e}")
 
+    _tracking_stop_event = threading.Event()
+
+
     # === TRACKING LOOP FUNCTION ===
-    # === TRACKING LOOP FUNCTION ===
-    # === TRACKING LOOP FUNCTION ===
-    # === TRACKING LOOP FUNCTION ===
+
     def tracking_loop():
         global _last_subscription_check, _subscription_active
         nonlocal _last_detect_heartbeat
@@ -3044,7 +3045,7 @@ def run_agent():
         MEETING_FLUSH_INTERVAL = 300  # Flush every 5 minutes during meetings
 
         try:
-            while True:
+            while not _tracking_stop_event.is_set():
                 try:
                     # === SUBSCRIPTION CHECK ===
                     if not _subscription_active:
@@ -3382,32 +3383,30 @@ def run_agent():
     # === WATCHDOG: Restart tracking if it dies ===
     # In watchdog:
     def watchdog():
-        nonlocal tracking_thread
+        nonlocal tracking_thread, _tracking_stop_event
         while True:
             time.sleep(30)
             if not tracking_thread.is_alive():
                 log("[WATCHDOG] ⚠️ Thread dead - restarting")
+                _tracking_stop_event = threading.Event()
                 tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
                 tracking_thread.start()
             else:
                 heartbeat_age = time.time() - _last_detect_heartbeat
                 since_wake = time.time() - (_wake_idle_bypass_until - 30)
-                
-                # Only skip if we JUST woke (grace period)
                 if since_wake < 60:
                     continue
-                    
-                # Frozen for 10+ minutes regardless of idle state = real hang
                 if heartbeat_age > 600:
-                    log(f"[WATCHDOG] ⚠️ Thread alive but no detection for {int(heartbeat_age)}s — restarting")
+                    log(f"[WATCHDOG] ⚠️ Restarting frozen thread")
                     subprocess.run(["pkill", "-f", "osascript"], capture_output=True)
-                    time.sleep(1)
+                    _tracking_stop_event.set()  # ← signal old thread to exit
+                    time.sleep(2)               # ← give it time to die
+                    _tracking_stop_event = threading.Event()  # ← fresh event
                     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
                     tracking_thread.start()
-
-    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
-    watchdog_thread.start()
-    log("[WATCHDOG] Started watchdog thread")
+        watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+        watchdog_thread.start()
+        log("[WATCHDOG] Started watchdog thread")
 
     # === RUN GUI IN MAIN THREAD ===
     if gui_menu_bar and GUI_AVAILABLE:

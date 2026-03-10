@@ -36,6 +36,8 @@ import { cn } from '@/lib/design-system';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
+const [conflictCount, setConflictCount] = useState(0);
+
 
 // ===============================
 // TYPES — match actual backend response from integrations_status()
@@ -474,7 +476,13 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
               </div>
               <p className="font-bold text-slate-900 text-sm">
                 {status.last_synced
-                  ? new Date(status.last_synced).toLocaleDateString()
+                  ? (() => {
+                      const diff = Math.floor((Date.now() - new Date(status.last_synced).getTime()) / 1000);
+                      if (diff < 60) return `${diff}s ago`;
+                      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+                      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+                      return new Date(status.last_synced).toLocaleDateString();
+                    })()
                   : 'Never'}
               </p>
             </div>
@@ -553,14 +561,20 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   const [loading, setLoading] = useState(true);
   const [statusData, setStatusData] = useState<IntegrationStatusResponse | null>(null);
   const [importProvider, setImportProvider] = useState<'quickbooks' | 'xero' | null>(null);
+  const [conflictCount, setConflictCount] = useState(0);
 
   const fetchIntegrations = useCallback(async () => {
     try {
-      // FIX: was /integrations/ → now /integrations/status/
       const data = await safeFetchJson<IntegrationStatusResponse>(
         `${API_BASE}/integrations/status/`
       );
       setStatusData(data);
+      try {
+        const conflicts = await safeFetchJson<{ count: number }>(
+          `${API_BASE}/billing/invoices/conflicts/`
+        );
+        setConflictCount(conflicts.count || 0);
+      } catch (_) {}
     } catch (err: any) {
       console.error('Failed to load integrations:', err);
     } finally {
@@ -667,6 +681,29 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
           </p>
         </div>
       </div>
+
+      {/* Conflict Banner */}
+      {conflictCount > 0 && (
+        <div className="mb-4 p-4 bg-amber-50 border-2 border-amber-200 rounded-xl flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-bold text-amber-800">
+                {conflictCount} invoice{conflictCount !== 1 ? 's' : ''} need review
+              </p>
+              <p className="text-xs text-amber-600 mt-0.5">
+                QuickBooks amounts differ from what's in TimeTracker
+              </p>
+            </div>
+          </div>
+          
+            <a href="/billing?tab=invoices&filter=conflicts"
+            className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 text-white rounded-lg font-bold text-xs hover:bg-amber-700 transition-colors"
+          >
+            Review <ArrowRight className="w-3 h-3" />
+          </a>
+        </div>
+      )}
 
       {/* Provider Cards */}
       <div className="space-y-4">

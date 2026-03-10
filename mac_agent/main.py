@@ -3005,7 +3005,8 @@ def run_agent():
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
-            sync.on_update = _on_sync_with_switcher        
+            sync.on_update = _on_sync_with_switcher
+                    
         log(f"[AI-SWITCH] ✅ Initialized")
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")

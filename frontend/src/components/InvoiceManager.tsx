@@ -650,13 +650,21 @@ const CsvImportModal: React.FC<{
 // Token auth — frontend/API are cross-domain so cookies don't work.
 // All requests must carry Authorization: Token <token> from localStorage.
 function getAuthToken(): string {
-  return (
+  const token =
     localStorage.getItem('auth_token') ||
     localStorage.getItem('tt_auth_token') ||
     localStorage.getItem('authToken') ||
     localStorage.getItem('token') ||
-    ''
-  );
+    localStorage.getItem('access_token') ||
+    localStorage.getItem('accessToken') ||
+    localStorage.getItem('jwt') ||
+    '';
+
+  if (!token) {
+    console.warn('[InvoiceManager] No auth token found. localStorage keys:', Object.keys(localStorage));
+  }
+
+  return token;
 }
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {

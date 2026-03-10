@@ -1395,40 +1395,43 @@ def quickbooks_webhook(request):
     from tracker.tasks import sync_single_qb_invoice
 
     # ── CloudEvents format (new) ──
-    if isinstance(data, list):
-        for event in data:
-            realm_id = event.get('intuitaccountid')
-            entity_id = event.get('intuitentityid')
-            event_type = event.get('type', '')  # e.g. "qbo.invoice.created.v1"
+    from tracker.tasks import sync_single_qb_invoice
 
-            if not realm_id or not entity_id:
-                continue
-
-            # Parse entity and operation from type string
-            # "qbo.invoice.created.v1" → entity=Invoice, operation=Create
-            parts = event_type.split('.')  # ['qbo', 'invoice', 'created', 'v1']
-            if len(parts) < 3:
-                continue
-
-            entity_name = parts[1].capitalize()   # 'invoice' → 'Invoice'
-            operation = parts[2].capitalize()     # 'created' → 'Created'
-
-            # Normalize to match your task's expected values
-            op_map = {'Created': 'Create', 'Updated': 'Update', 'Deleted': 'Delete', 'Voided': 'Void'}
-            operation = op_map.get(operation, operation)
-
-            if entity_name == 'Invoice' and entity_id:
-                sync_single_qb_invoice.delay(realm_id, entity_id, operation)
-                logger.info(f"QB webhook (CloudEvents): queued Invoice {entity_id} ({operation})")
-
-    # ── Legacy format (old) — keep until May 15 2026 ──
-    elif isinstance(data, dict):
+    # Normalize to always be a list regardless of format
+    if isinstance(data, dict) and 'eventNotifications' in data:
+        # ── Legacy format ──
         for notification in data.get('eventNotifications', []):
             realm_id = notification.get('realmId')
             for entity in notification.get('dataChangeEvent', {}).get('entities', []):
                 if entity.get('name') == 'Invoice' and entity.get('id'):
                     sync_single_qb_invoice.delay(realm_id, entity['id'], entity.get('operation', 'Update'))
                     logger.info(f"QB webhook (legacy): queued Invoice {entity['id']}")
+
+    else:
+        # ── CloudEvents format — normalize single object or array into a list ──
+        events = data if isinstance(data, list) else [data]
+
+        for event in events:
+            realm_id = event.get('intuitaccountid')
+            entity_id = event.get('intuitentityid')
+            event_type = event.get('type', '')
+
+            if not realm_id or not entity_id or not event_type:
+                continue
+
+            parts = event_type.split('.')  # 'qbo.invoice.created.v1'
+            if len(parts) < 3:
+                continue
+
+            entity_name = parts[1].capitalize()  # 'invoice' → 'Invoice'
+            operation = parts[2].capitalize()    # 'created' → 'Created'
+
+            op_map = {'Created': 'Create', 'Updated': 'Update', 'Deleted': 'Delete', 'Voided': 'Void', 'Merged': 'Merge'}
+            operation = op_map.get(operation, operation)
+
+            if entity_name == 'Invoice':
+                sync_single_qb_invoice.delay(realm_id, entity_id, operation)
+                logger.info(f"QB webhook (CloudEvents): queued Invoice {entity_id} ({operation})")
 
     return HttpResponse(status=200)
 

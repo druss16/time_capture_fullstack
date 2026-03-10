@@ -1679,3 +1679,76 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
     integration.last_synced_at = timezone.now()
     integration.save(update_fields=['last_synced_at'])
     logger.info(f"QB webhook: synced invoice {doc_number} for {client.name}")
+
+
+@shared_task
+def reconcile_qb_invoices():
+    """
+    Fallback reconciliation — catches any invoices missed by webhook.
+    Runs every 4 hours. Much cheaper than the old poll-only approach.
+    """
+    from tracker.models import Integration, Organization
+    from tracker.views_integrations import quickbooks_pull_invoices
+    from datetime import date, timedelta
+
+    integrations = Integration.objects.filter(
+        provider='quickbooks',
+        is_connected=True,
+    ).select_related('organization')
+
+    for integration in integrations:
+        try:
+            # Pull last 7 days as a rolling window
+            end = date.today().isoformat()
+            start = (date.today() - timedelta(days=7)).isoformat()
+            
+            from tracker.views_integrations import qb_api_call
+            query = (
+                f"SELECT * FROM Invoice WHERE TxnDate >= '{start}' "
+                f"AND TxnDate <= '{end}' ORDERBY TxnDate MAXRESULTS 1000"
+            )
+            data, err = qb_api_call(integration, 'GET', '/query', params={'query': query})
+            if err:
+                continue
+
+            invoices = data.get('QueryResponse', {}).get('Invoice', [])
+            logger.info(f"QB reconcile: {len(invoices)} invoices for org {integration.organization_id}")
+
+            # Reuse your existing upsert logic
+            from tracker.models import Invoice as InvoiceModel, Client
+            from decimal import Decimal
+
+            qb_map = {c.quickbooks_id: c for c in Client.objects.filter(
+                org=integration.organization, quickbooks_id__isnull=False
+            )}
+
+            for inv in invoices:
+                qb_customer_id = inv.get('CustomerRef', {}).get('value')
+                client = qb_map.get(qb_customer_id)
+                if not client:
+                    continue
+
+                total = Decimal(str(inv.get('TotalAmt', 0)))
+                balance = Decimal(str(inv.get('Balance', 0)))
+                doc_number = inv.get('DocNumber') or f"QBO-{inv.get('Id')}"
+
+                InvoiceModel.objects.update_or_create(
+                    org=integration.organization,
+                    external_id=str(inv.get('Id')),
+                    defaults={
+                        'invoice_number': doc_number,
+                        'client': client,
+                        'client_name': client.name,
+                        'invoice_date': inv.get('TxnDate', end),
+                        'amount': total,
+                        'status': 'paid' if balance == 0 else 'sent',
+                        'source': 'quickbooks',
+                        'hours_billed': None,
+                    }
+                )
+
+            integration.last_synced_at = timezone.now()
+            integration.save(update_fields=['last_synced_at'])
+
+        except Exception as e:
+            logger.error(f"QB reconcile failed for org {integration.organization_id}: {e}")

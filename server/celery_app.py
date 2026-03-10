@@ -174,6 +174,17 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute='*/45'),
         'options': {'expires': 2700},
     },
+
+    # =========================================================================
+    # INTEGRATIONS - QB RECONCILE (Fallback for missed webhooks)
+    # =========================================================================
+
+    'qb-reconcile-sync': {
+        'task': 'tracker.tasks.reconcile_qb_invoices',
+        'schedule': crontab(hour='*/4'),  # Every 4 hours
+        'options': {'expires': 3600},
+    },
+
 }
 
 # ============================================================================
@@ -257,3 +268,4 @@ def setup_periodic_tasks(sender, **kwargs):
     └── 6:00 AM   📈 Generate daily summaries
     """)
     print("=" * 80)
+

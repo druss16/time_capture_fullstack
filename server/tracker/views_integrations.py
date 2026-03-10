@@ -1437,6 +1437,14 @@ def quickbooks_webhook(request):
     return HttpResponse(status=200)
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def invoice_conflicts_count(request):
+    org = get_user_org(request.user)
+    from .models import InvoiceConflict
+    count = InvoiceConflict.objects.filter(org=org, resolved=False).count()
+    return Response({'count': count})
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

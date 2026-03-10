@@ -24,7 +24,7 @@ from django.utils import timezone
 from django.db import transaction
 from django.db.models import Sum, Q
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from urllib.parse import urlencode
 from django.http import HttpResponse
@@ -331,6 +331,7 @@ def quickbooks_connect(request):
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])  # ← add this
 def quickbooks_callback(request):
     code = request.GET.get('code')
     state = request.GET.get('state')

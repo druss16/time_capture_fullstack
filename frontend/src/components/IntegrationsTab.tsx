@@ -36,7 +36,6 @@ import { cn } from '@/lib/design-system';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
-const [conflictCount, setConflictCount] = useState(0);
 
 
 // ===============================

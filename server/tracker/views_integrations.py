@@ -303,7 +303,7 @@ def fetch_xero_tenant_id(integration):
 # ============================================================================
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def quickbooks_connect(request):
     org = get_user_org(request.user)
     if not org:

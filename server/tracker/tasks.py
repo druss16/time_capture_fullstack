@@ -18,6 +18,8 @@ from django.db.models import Sum
 from datetime import timedelta
 import logging
 from decimal import Decimal
+from datetime import date
+
 
 logger = logging.getLogger(__name__)
 

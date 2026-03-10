@@ -2747,6 +2747,7 @@ def list_invoices(request):
         'client_name': inv.client.name if inv.client else inv.client_code,
         'client_code': inv.client_code,
         'source': inv.source,
+        'status': inv.status or 'sent',   # ← ADD THIS
         'matched': inv.client is not None,
     } for inv in invoices.order_by('-invoice_date')[:500]]
     

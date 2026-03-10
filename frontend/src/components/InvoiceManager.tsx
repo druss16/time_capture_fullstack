@@ -134,12 +134,17 @@ const UnmatchedQueue: React.FC<{
     if (!clientId) return;
     setMatching((m) => ({ ...m, [invoiceId]: true }));
     try {
-      await fetch(`${API_BASE}/billing/invoices/match/`, {
+      const res = await fetch(`${API_BASE}/billing/invoices/match/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
         credentials: 'include',
         body: JSON.stringify({ invoice_id: invoiceId, client_id: Number(clientId) }),
       });
+      if (!res.ok) {
+        const err = await res.json();
+        console.error('Match failed:', err);
+        return;
+      }
       onMatched();
     } finally {
       setMatching((m) => ({ ...m, [invoiceId]: false }));
@@ -357,17 +362,23 @@ const CsvImportModal: React.FC<{
   };
 
   const downloadTemplate = async () => {
-    const res = await fetch(`${API_BASE}/billing/invoices/import-csv/template/`, {
-      credentials: 'include',   // ← sends the session cookie
-    });
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'invoice_import_template.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const res = await fetch(`${API_BASE}/billing/invoices/import-csv/template/`, {
+        credentials: 'include',
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'invoice_import_template.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Template download failed:', e);
+    }
   };
 
   return (
@@ -633,10 +644,12 @@ const CsvImportModal: React.FC<{
 // ─── CSRF helper ─────────────────────────────────────────────────────────────
 
 function getCsrf(): string {
-  return document.cookie
+  const fromCookie = document.cookie
     .split('; ')
     .find((row) => row.startsWith('csrftoken='))
-    ?.split('=')[1] || '';
+    ?.split('=')[1];
+  if (fromCookie) return fromCookie;
+  return (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content || '';
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -683,7 +696,11 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
     }
   }, []);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => {
+    // Ensure CSRF cookie is set before any POST
+    fetch(`${API_BASE}/get-csrf/`, { credentials: 'include' });
+    fetchAll();
+  }, [fetchAll]);
 
   const handleDelete = async (invoiceId: number) => {
     if (!window.confirm('Delete this invoice? This cannot be undone.')) return;
@@ -921,7 +938,7 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
                         'text-xs px-2.5 py-0.5 rounded-full font-bold',
                         STATUS_COLORS[inv.status ?? ''] || 'bg-slate-100 text-slate-600'
                       )}>
-                        {inv.status ? inv.status.charAt(0).toUpperCase() + inv.status.slice(1) : 'Unknown'}
+                        {inv.status ? inv.status.charAt(0).toUpperCase() + inv.status.slice(1) : 'Sent'}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">

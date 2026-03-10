@@ -358,8 +358,19 @@ const CsvImportModal: React.FC<{
 
   const downloadTemplate = async () => {
     try {
-      const res = await authFetch(`${API_BASE}/billing/invoices/import-csv/template/`);
-      if (!res.ok) return;
+      const token = getAuthToken();
+      console.log('[template] token found:', !!token);
+      const res = await fetch(`${API_BASE}/billing/invoices/import-csv/template/`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: token ? { Authorization: `Token ${token}` } : {},
+      });
+      console.log('[template] response status:', res.status);
+      if (!res.ok) {
+        const text = await res.text();
+        console.error('[template] error body:', text);
+        return;
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -724,7 +735,6 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
     try {
       await authFetch(`${API_BASE}/billing/invoices/${invoiceId}/delete/`, {
         method: 'DELETE',
-      });
       });
       setInvoices((inv) => inv.filter((i) => i.id !== invoiceId));
     } finally {

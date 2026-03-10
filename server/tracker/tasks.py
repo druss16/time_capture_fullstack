@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.db.models import Sum
 from datetime import timedelta
 import logging
+from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 

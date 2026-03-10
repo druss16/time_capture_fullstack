@@ -480,6 +480,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
                       if (diff < 60) return `${diff}s ago`;
                       if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
                       if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+                      if (diff < 2592000) return `${Math.floor(diff / 86400)}d ago`;  // ← add this
                       return new Date(status.last_synced).toLocaleDateString();
                     })()
                   : 'Never'}

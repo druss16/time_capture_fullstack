@@ -348,7 +348,7 @@ QUICKBOOKS_CLIENT_SECRET = os.environ.get('QUICKBOOKS_CLIENT_SECRET', default=''
 QUICKBOOKS_REDIRECT_URI = os.environ.get('QUICKBOOKS_REDIRECT_URI', default='')
 QUICKBOOKS_API_BASE = os.getenv('QUICKBOOKS_API_BASE', 'https://quickbooks.api.intuit.com')
 
-
+QB_WEBHOOK_VERIFIER_TOKEN = env('QB_WEBHOOK_VERIFIER_TOKEN', default='')
 
 # Xero
 XERO_CLIENT_ID = os.environ.get('XERO_CLIENT_ID', default='')

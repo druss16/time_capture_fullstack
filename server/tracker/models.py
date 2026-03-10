@@ -883,6 +883,8 @@ class Integration(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    last_synced_at = models.DateTimeField(null=True, blank=True)
     
     class Meta:
         unique_together = ['organization', 'provider']
@@ -901,6 +903,29 @@ class Project(models.Model):
         return f"{self.name} ({self.client.name})"
 
 
+class InvoiceConflict(models.Model):
+    """Tracks invoice amount discrepancies between TimeTracker and billing source."""
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='invoice_conflicts')
+    invoice = models.ForeignKey('Invoice', on_delete=models.CASCADE, related_name='conflicts')
+    tt_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    source_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    source = models.CharField(max_length=50)  # 'quickbooks', 'xero', 'csv'
+    detected_at = models.DateTimeField(auto_now_add=True)
+    resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='resolved_conflicts'
+    )
+    resolution = models.CharField(
+        max_length=20, blank=True,
+        choices=[('accept_source', 'Accept source'), ('keep_tt', 'Keep TimeTracker')]
+    )
+
+    class Meta:
+        ordering = ['-detected_at']
+
+
 class Task(models.Model):
     org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="tasks")
@@ -909,7 +934,6 @@ class Task(models.Model):
 
     def __str__(self):
         return f"{self.name}"
-
 
 
  # tracker/models.py
@@ -2487,3 +2511,4 @@ class DeviceProvisioningMap(models.Model):
         self.status = 'failed'
         self.error_message = error
         self.save()
+

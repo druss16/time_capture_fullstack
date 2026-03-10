@@ -781,18 +781,10 @@ def quickbooks_pull_invoices(request):
             doc_number = inv.get('doc_number', '') or f"QBO-{qb_invoice_id}"
             inv_date = inv.get('date', end_date)
             total = Decimal(str(inv.get('total', 0)))
-            
-            # Estimate hours from amount ÷ default rate
-            default_rate = Decimal('150.00')
-            try:
-                if hasattr(org, 'billing_rate_default') and org.billing_rate_default:
-                    default_rate = Decimal(str(org.billing_rate_default))
-            except Exception:
-                pass
-            
-            estimated_hours = (total / default_rate).quantize(Decimal('0.01')) if default_rate > 0 else Decimal('0')
 
             try:
+                # REMOVE the estimated_hours calculation entirely
+                # REPLACE with:
                 InvoiceModel.objects.update_or_create(
                     org=org,
                     invoice_number=doc_number,
@@ -801,9 +793,10 @@ def quickbooks_pull_invoices(request):
                         'client_name': cust_data.get('customer_name', ''),
                         'invoice_date': inv_date,
                         'amount': total,
-                        'hours_billed': estimated_hours,
+                        'hours_billed': None,   # Real hours come from time blocks, not reverse math
                         'source': 'quickbooks',
                         'external_id': qb_invoice_id,
+                        'status': 'paid' if inv.get('balance', 1) == 0 else 'sent',
                         'created_by': request.user,
                     }
                 )
@@ -814,6 +807,9 @@ def quickbooks_pull_invoices(request):
     logger.info(f"Saved {saved_count} QBO invoices for org {org.id}")
 
     results.sort(key=lambda x: x['total_billed'], reverse=True)
+
+    integration.last_synced_at = timezone.now()
+    integration.save(update_fields=['last_synced_at'])
 
     return Response({
         'period': {'start': start_date, 'end': end_date},
@@ -1357,3 +1353,110 @@ def integrations_status(request):
     }
 
     return Response({'integrations': integrations, 'client_stats': client_stats})
+
+
+import hmac, hashlib, base64, json
+from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponse
+
+# ============================================================================
+# QuickBooks Webhook (add to urls.py: path('integrations/qb/webhook/', quickbooks_webhook))
+# ============================================================================
+
+@csrf_exempt
+def quickbooks_webhook(request):
+    if request.method != 'POST':
+        return HttpResponse(status=405)
+
+    signature = request.headers.get('intuit-signature', '')
+    payload = request.body
+
+    try:
+        expected = base64.b64encode(
+            hmac.new(
+                settings.QB_WEBHOOK_VERIFIER_TOKEN.encode(),
+                payload,
+                hashlib.sha256
+            ).digest()
+        ).decode()
+    except Exception as e:
+        logger.error(f"QB webhook signature error: {e}")
+        return HttpResponse(status=401)
+
+    if not hmac.compare_digest(expected, signature):
+        logger.warning("QB webhook: invalid signature")
+        return HttpResponse(status=401)
+
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return HttpResponse(status=400)
+
+    from tracker.tasks import sync_single_qb_invoice
+
+    # ── CloudEvents format (new) ──
+    if isinstance(data, list):
+        for event in data:
+            realm_id = event.get('intuitaccountid')
+            entity_id = event.get('intuitentityid')
+            event_type = event.get('type', '')  # e.g. "qbo.invoice.created.v1"
+
+            if not realm_id or not entity_id:
+                continue
+
+            # Parse entity and operation from type string
+            # "qbo.invoice.created.v1" → entity=Invoice, operation=Create
+            parts = event_type.split('.')  # ['qbo', 'invoice', 'created', 'v1']
+            if len(parts) < 3:
+                continue
+
+            entity_name = parts[1].capitalize()   # 'invoice' → 'Invoice'
+            operation = parts[2].capitalize()     # 'created' → 'Created'
+
+            # Normalize to match your task's expected values
+            op_map = {'Created': 'Create', 'Updated': 'Update', 'Deleted': 'Delete', 'Voided': 'Void'}
+            operation = op_map.get(operation, operation)
+
+            if entity_name == 'Invoice' and entity_id:
+                sync_single_qb_invoice.delay(realm_id, entity_id, operation)
+                logger.info(f"QB webhook (CloudEvents): queued Invoice {entity_id} ({operation})")
+
+    # ── Legacy format (old) — keep until May 15 2026 ──
+    elif isinstance(data, dict):
+        for notification in data.get('eventNotifications', []):
+            realm_id = notification.get('realmId')
+            for entity in notification.get('dataChangeEvent', {}).get('entities', []):
+                if entity.get('name') == 'Invoice' and entity.get('id'):
+                    sync_single_qb_invoice.delay(realm_id, entity['id'], entity.get('operation', 'Update'))
+                    logger.info(f"QB webhook (legacy): queued Invoice {entity['id']}")
+
+    return HttpResponse(status=200)
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def resolve_invoice_conflict(request, conflict_id):
+    """Accept source amount or keep TimeTracker amount."""
+    org = get_user_org(request.user)
+    resolution = request.data.get('resolution')  # 'accept_source' or 'keep_tt'
+
+    if resolution not in ('accept_source', 'keep_tt'):
+        return error_response('Invalid resolution')
+
+    try:
+        conflict = InvoiceConflict.objects.get(id=conflict_id, org=org, resolved=False)
+    except InvoiceConflict.DoesNotExist:
+        return error_response('Conflict not found', 404)
+
+    if resolution == 'accept_source':
+        conflict.invoice.amount = conflict.source_amount
+        conflict.invoice.save(update_fields=['amount'])
+
+    conflict.resolved = True
+    conflict.resolved_at = timezone.now()
+    conflict.resolved_by = request.user
+    conflict.resolution = resolution
+    conflict.save()
+
+    return Response({'success': True, 'final_amount': str(conflict.invoice.amount)})

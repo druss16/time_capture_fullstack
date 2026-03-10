@@ -238,6 +238,8 @@ urlpatterns = [
     path('integrations/quickbooks/push-time/', views_integrations.quickbooks_push_time, name='quickbooks-push-time'),
     path('integrations/quickbooks/push-status/<str:task_id>/', views_integrations.quickbooks_push_status, name='quickbooks-push-status'),
     path('integrations/quickbooks/invoices/', views_integrations.quickbooks_pull_invoices, name='quickbooks-invoices'),
+    path('integrations/qb/webhook/', views_integrations.quickbooks_webhook),
+
 
 
     # Xero

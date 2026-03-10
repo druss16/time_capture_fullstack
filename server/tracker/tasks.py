@@ -1587,3 +1587,95 @@ def check_payment_grace_periods():
         logger.info(f"[GRACE] Expired for {org.name}, deactivated {deactivated} devices")
     
     return {'expired_orgs': expired_orgs.count(), 'devices_deactivated': total_deactivated}
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=30)
+def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
+    """
+    Targeted sync of a single QB invoice triggered by webhook.
+    Much cheaper than a full pull — fetches one invoice by ID.
+    """
+    from tracker.models import Integration, Invoice as InvoiceModel, Client, InvoiceConflict
+    from tracker.views_integrations import qb_api_call, refresh_quickbooks_token
+
+    try:
+        integration = Integration.objects.get(
+            realm_id=realm_id,
+            provider='quickbooks',
+            is_connected=True,
+        )
+    except Integration.DoesNotExist:
+        logger.warning(f"QB webhook: no connected integration for realm {realm_id}")
+        return
+
+    org = integration.organization
+
+    # Handle deletes/voids
+    if operation in ('Delete', 'Void'):
+        updated = InvoiceModel.objects.filter(
+            org=org, external_id=invoice_id
+        ).update(status='voided')
+        logger.info(f"QB webhook: marked invoice {invoice_id} as voided ({updated} rows)")
+        return
+
+    # Fetch the single invoice
+    data, err = qb_api_call(integration, 'GET', f'/invoice/{invoice_id}')
+    if err:
+        logger.error(f"QB webhook: failed to fetch invoice {invoice_id}: {err}")
+        try:
+            raise self.retry()
+        except self.MaxRetriesExceededError:
+            pass
+        return
+
+    inv = data.get('Invoice', {})
+    if not inv:
+        return
+
+    qb_customer_id = inv.get('CustomerRef', {}).get('value')
+    client = Client.objects.filter(org=org, quickbooks_id=qb_customer_id).first()
+    if not client:
+        logger.info(f"QB webhook: invoice {invoice_id} — no matching TT client for QB customer {qb_customer_id}")
+        return  # Will surface in unmatched invoice queue
+
+    total = Decimal(str(inv.get('TotalAmt', 0)))
+    balance = Decimal(str(inv.get('Balance', 0)))
+    doc_number = inv.get('DocNumber') or f"QBO-{invoice_id}"
+    inv_date = inv.get('TxnDate', str(date.today()))
+
+    # Conflict detection — don't silently overwrite an existing amount change
+    existing = InvoiceModel.objects.filter(org=org, external_id=str(invoice_id)).first()
+    if existing and existing.amount != total and existing.status not in ('voided',):
+        InvoiceConflict.objects.update_or_create(
+            org=org,
+            invoice=existing,
+            defaults={
+                'tt_amount': existing.amount,
+                'source_amount': total,
+                'source': 'quickbooks',
+                'detected_at': timezone.now(),
+                'resolved': False,
+            }
+        )
+        logger.info(f"QB webhook: conflict flagged on invoice {doc_number} — ${existing.amount} → ${total}")
+        return  # Hold for user review
+
+    InvoiceModel.objects.update_or_create(
+        org=org,
+        external_id=str(invoice_id),
+        defaults={
+            'invoice_number': doc_number,
+            'client': client,
+            'client_name': client.name,
+            'invoice_date': inv_date,
+            'amount': total,
+            'status': 'paid' if balance == 0 else 'sent',
+            'source': 'quickbooks',
+            'hours_billed': None,
+        }
+    )
+
+    # Update sync timestamp
+    integration.last_synced_at = timezone.now()
+    integration.save(update_fields=['last_synced_at'])
+    logger.info(f"QB webhook: synced invoice {doc_number} for {client.name}")

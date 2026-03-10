@@ -221,6 +221,10 @@ urlpatterns = [
     path('billing/clients/update-billed/', views_billing.update_client_billed, name='update-client-billed'),
     path('billing/export/worked-hours/', views_billing.export_worked_hours_csv, name='export-worked-hours'),
     path('billing/realization/', views_billing.realization_with_editable, name='realization-editable'),
+
+    path('billing/invoices/conflicts/', views_integrations.invoice_conflicts_count),
+    path('billing/invoices/conflicts/<int:conflict_id>/resolve/', views_integrations.resolve_invoice_conflict),
+
         
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),

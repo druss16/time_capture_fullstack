@@ -970,8 +970,11 @@ def xero_contacts(request):
 
     contacts = data.get('Contacts', [])
     existing_xero_ids = set(
-        Client.objects.filter(org=org, xero_id__isnull=False)
-        .values_list('xero_id', flat=True)
+        Client.objects.filter(
+            org=org,
+            xero_id__isnull=False,
+            xero_tenant_id=integration.tenant_id
+        ).values_list('xero_id', flat=True)
     )
 
     clients = [{
@@ -1029,14 +1032,16 @@ def xero_import(request):
         name_match = Client.objects.filter(org=org, name__iexact=name).first()
         if name_match:
             name_match.xero_id = xero_id
+            name_match.xero_tenant_id = integration.tenant_id
             name_match.imported_from = 'xero'
-            name_match.save(update_fields=['xero_id', 'imported_from'])
+            name_match.save(update_fields=['xero_id', 'xero_tenant_id', 'imported_from'])
             imported.append({'id': name_match.id, 'name': name, 'xero_id': xero_id, 'linked_existing': True})
             continue
 
         try:
             client = Client.objects.create(
                 org=org, name=name, xero_id=xero_id,
+                xero_tenant_id=integration.tenant_id,
                 imported_from='xero', is_active=True,
             )
             imported.append({'id': client.id, 'name': name, 'xero_id': xero_id, 'linked_existing': False})

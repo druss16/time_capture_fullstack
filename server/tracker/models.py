@@ -566,6 +566,8 @@ class Client(models.Model):
     )
 
     quickbooks_realm_id = models.CharField(max_length=50, blank=True, null=True)
+    xero_tenant_id = models.CharField(max_length=50, blank=True, null=True)
+
     
     # ═══════════════════════════════════════════════════════════════════════
     

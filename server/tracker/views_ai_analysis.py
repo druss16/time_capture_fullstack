@@ -20,22 +20,42 @@ logger = logging.getLogger(__name__)
 
 def _get_org_for_request(request):
     """
-    Resolve the org for the authenticated user.
-    Mirrors the logic in views_analytics._get_user_org but takes the full request.
+    Resolve org from the Bearer token in the Authorization header.
+    This view is a plain Django view (not DRF APIView), so request.user is
+    AnonymousUser even after BearerAuth runs — we must parse the token ourselves.
     Returns (org, error_response) — error_response is None on success.
     """
-    from tracker.models import OrganizationMembership
-    user = getattr(request, "user", None)
-    if user is None or not getattr(user, "is_authenticated", False):
-        # Also check device-key auth which sets request.auth_user
-        user = getattr(request, "auth_user", None)
-    if not user:
+    from tracker.models import AuthToken, OrganizationMembership
+    from django.utils import timezone
+
+    # --- 1. Extract raw token string ---
+    auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+    token_str = None
+    if auth_header.startswith("Bearer "):
+        token_str = auth_header[7:].strip()
+    elif auth_header.startswith("Token "):
+        token_str = auth_header[6:].strip()
+
+    if not token_str:
+        logger.warning("[AI-ANALYSIS] No Bearer token in request")
         return None, JsonResponse({"error": "Authentication required."}, status=401)
 
-    # Prefer org where user is owner, fall back to latest membership
+    # --- 2. Look up AuthToken ---
+    try:
+        auth_token = AuthToken.objects.select_related("user").get(token=token_str)
+    except AuthToken.DoesNotExist:
+        logger.warning("[AI-ANALYSIS] Token not found")
+        return None, JsonResponse({"error": "Invalid token."}, status=401)
+
+    if auth_token.expires_at and auth_token.expires_at < timezone.now():
+        logger.warning("[AI-ANALYSIS] Token expired")
+        return None, JsonResponse({"error": "Token expired."}, status=401)
+
+    user = auth_token.user
+
+    # --- 3. Resolve org (owner-preference) ---
     qs = OrganizationMembership.objects.filter(user=user).select_related("organization").order_by("-id")
-    owner_membership = qs.filter(role="owner").first()
-    membership = owner_membership or qs.first()
+    membership = qs.filter(role="owner").first() or qs.first()
     if not membership:
         return None, JsonResponse({"error": "No organization found for this user."}, status=404)
 

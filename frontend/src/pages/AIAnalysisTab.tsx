@@ -189,7 +189,7 @@ export default function AIAnalysisTab({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/api/analytics/ai-analysis/`, {
+      const res = await fetch(`${apiBase}/analytics/ai-analysis/`, {
         method: "POST",
         headers: {
           "Content-Type":  "application/json",

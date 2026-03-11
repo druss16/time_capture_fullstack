@@ -2392,40 +2392,16 @@ def run_agent():
         from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification
         
         def on_wake(notification):
-            log("[WAKE] System woke from sleep - resetting connections")
-            _wake_event.set()
             global _wake_idle_bypass_until
-            _wake_idle_bypass_until = time.time() + 30  # 30s grace period after wake
-            from update_checker import notify_wake
-            notify_wake()
+            _wake_idle_bypass_until = time.time() + 30
+            log("[WAKE] System woke — scheduling process restart in 5s")
             
-            # Reset the control check timer so we don't stall
-            global _last_control_check
-            _last_control_check = 0.0
+            def _restart():
+                time.sleep(5)  # let network come up
+                log("[WAKE] Restarting process via os.execv()")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
             
-            # Retry network with backoff (WiFi may not be ready yet)
-            def _reconnect():
-                for attempt in range(5):
-                    try:
-                        time.sleep(3 * (attempt + 1))
-                        api_key_val = config.get("api_key") or API_KEY
-                        if api_key_val and API_BASE:
-                            url = f"{API_BASE}/agents/hello2/"
-                            headers = api_headers(os_user, hostname)
-                            payload = {
-                                "hostname": hostname,
-                                "app_version": APP_VERSION,
-                                "device_id": device_id,
-                                "os_username": os_user,
-                            }
-                            http_post_json(url, payload, headers, timeout=5)
-                            log(f"[WAKE] ✅ Reconnected to server (attempt {attempt + 1})")
-                            return
-                    except Exception as e:
-                        log(f"[WAKE] Reconnect attempt {attempt + 1}/5 failed: {e}")
-                log("[WAKE] ⚠️ All reconnect attempts failed - will retry on next event post")
-            
-            threading.Thread(target=_reconnect, daemon=True).start()
+            threading.Thread(target=_restart, daemon=True).start()
             
         nc = NSWorkspace.sharedWorkspace().notificationCenter()
         nc.addObserverForName_object_queue_usingBlock_(

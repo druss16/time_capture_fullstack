@@ -18,6 +18,8 @@ import {
   ResponsiveContainer, TooltipProps,
 } from "recharts";
 
+import AIAnalysisTab from "./AIAnalysisTab";
+
 // ─── Design tokens ─────────────────────────────────────────────────────────
 const C = {
   navy:    "#0d1b2a",
@@ -775,7 +777,6 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
   return (
     <div style={s.root}>
       <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
-
       <div style={s.header}>
         <div>
           <div style={s.title}>Executive Dashboard</div>
@@ -789,17 +790,16 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
           {meta.generated_at && <span style={{ fontSize: 11, color: C.slate }}>Generated {new Date(meta.generated_at).toLocaleTimeString()}</span>}
         </div>
       </div>
-
       <div style={s.tabs}>
-        {(["overview", "clients", "billing", "staff"] as const).map((id) => (
+        {(["overview", "clients", "billing", "staff", "analysis"] as const).map((id) => (
           <button key={id} style={s.tabStyle(tab === id)} onClick={() => setTab(id)}>{id.toUpperCase()}</button>
         ))}
       </div>
-
       {tab === "overview" && <OverviewTab />}
       {tab === "clients"  && <ClientsTab />}
       {tab === "billing"  && <BillingTab />}
       {tab === "staff"    && <StaffTab />}
+      {tab === "analysis" && <AIAnalysisTab data={data} apiBase={apiBase} />}
     </div>
   );
 }

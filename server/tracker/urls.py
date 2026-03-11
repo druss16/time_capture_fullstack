@@ -330,5 +330,8 @@ urlpatterns = [
 
     path("analytics/executive/", views_analytics.executive_dashboard, name="analytics-executive"),
 
+    # tracker/urls.py — add this line:
+    path("analytics/ai-analysis/", views_ai_analysis.ai_analysis),
+
 
 ]

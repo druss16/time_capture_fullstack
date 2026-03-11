@@ -15,9 +15,31 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from tracker.views_analytics import _get_user_org  # reuse auth helper
-
 logger = logging.getLogger(__name__)
+
+
+def _get_org_for_request(request):
+    """
+    Resolve the org for the authenticated user.
+    Mirrors the logic in views_analytics._get_user_org but takes the full request.
+    Returns (org, error_response) — error_response is None on success.
+    """
+    from tracker.models import Membership
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        # Also check device-key auth which sets request.auth_user
+        user = getattr(request, "auth_user", None)
+    if not user:
+        return None, JsonResponse({"error": "Authentication required."}, status=401)
+
+    # Prefer org where user is owner, fall back to latest membership
+    qs = Membership.objects.filter(user=user).select_related("organization").order_by("-id")
+    owner_membership = qs.filter(role="owner").first()
+    membership = owner_membership or qs.first()
+    if not membership:
+        return None, JsonResponse({"error": "No organization found for this user."}, status=404)
+
+    return membership.organization, None
 
 
 def _build_prompt(kpis: dict, meta: dict) -> str:
@@ -154,7 +176,7 @@ def ai_analysis(request):
         return resp
 
     try:
-        org, error_response = _get_user_org(request)
+        org, error_response = _get_org_for_request(request)
         if error_response:
             return error_response
 

@@ -1643,6 +1643,8 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
 
     total = Decimal(str(inv.get('TotalAmt', 0)))
     balance = Decimal(str(inv.get('Balance', 0)))
+    email_status = inv.get('EmailStatus', 'NotSet')
+    status = 'paid' if balance == 0 else ('sent' if email_status == 'EmailSent' else 'draft')
     doc_number = inv.get('DocNumber') or f"QBO-{invoice_id}"
     inv_date = inv.get('TxnDate', str(date.today()))
 
@@ -1672,7 +1674,7 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
             'client_name': client.name,
             'invoice_date': inv_date,
             'amount': total,
-            'status': 'paid' if balance == 0 else 'sent',
+            'status': status,
             'source': 'quickbooks',
             'hours_billed': None,
         }
@@ -1733,6 +1735,8 @@ def reconcile_qb_invoices():
 
                 total = Decimal(str(inv.get('TotalAmt', 0)))
                 balance = Decimal(str(inv.get('Balance', 0)))
+                email_status = inv.get('EmailStatus', 'NotSet')
+                status = 'paid' if balance == 0 else ('sent' if email_status == 'EmailSent' else 'draft')
                 doc_number = inv.get('DocNumber') or f"QBO-{inv.get('Id')}"
 
                 InvoiceModel.objects.update_or_create(
@@ -1744,7 +1748,7 @@ def reconcile_qb_invoices():
                         'client_name': client.name,
                         'invoice_date': inv.get('TxnDate', end),
                         'amount': total,
-                        'status': 'paid' if balance == 0 else 'sent',
+                        'status': 'status',
                         'source': 'quickbooks',
                         'hours_billed': None,
                     }

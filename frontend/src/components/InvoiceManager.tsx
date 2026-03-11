@@ -818,6 +818,7 @@ const InvoiceManager: React.FC<Props> = ({ filter = '', onFilterClear }) => {
             Import CSV
           </button>
         </div>
+      </div>
 
       {/* Conflict queue (shown when filter=conflicts or conflicts exist) */}
       {(filter === 'conflicts' || conflicts.length > 0) && conflicts.length > 0 && (

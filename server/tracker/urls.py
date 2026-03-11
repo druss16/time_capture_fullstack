@@ -251,7 +251,7 @@ urlpatterns = [
     path('integrations/quickbooks/invoices/', views_integrations.quickbooks_pull_invoices, name='quickbooks-invoices'),
     path('integrations/qb/webhook/', views_integrations.quickbooks_webhook),
 
-    path('integrations/qb/sync-invoices/', manual_sync_invoices),
+    path('integrations/qb/sync-invoices/', views_integrations.manual_sync_invoices),
 
 
 

@@ -1748,7 +1748,7 @@ def reconcile_qb_invoices():
                         'client_name': client.name,
                         'invoice_date': inv.get('TxnDate', end),
                         'amount': total,
-                        'status': 'status',
+                        'status': status,
                         'source': 'quickbooks',
                         'hours_billed': None,
                     }

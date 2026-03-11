@@ -2393,13 +2393,13 @@ def run_agent():
         
         def on_wake(notification):
             global _wake_idle_bypass_until
+            log("[WAKE] System woke — exiting for LaunchAgent restart")
             _wake_idle_bypass_until = time.time() + 30
-            log("[WAKE] System woke — scheduling process restart in 5s")
             
             def _restart():
-                time.sleep(5)  # let network come up
-                log("[WAKE] Restarting process via os.execv()")
-                os.execv(sys.executable, [sys.executable] + sys.argv)
+                time.sleep(5)
+                log("[WAKE] Forcing exit — LaunchAgent will restart cleanly")
+                os._exit(1)  # Non-zero → LaunchAgent restarts automatically
             
             threading.Thread(target=_restart, daemon=True).start()
             

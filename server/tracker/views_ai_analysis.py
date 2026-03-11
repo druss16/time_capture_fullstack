@@ -24,7 +24,7 @@ def _get_org_for_request(request):
     Mirrors the logic in views_analytics._get_user_org but takes the full request.
     Returns (org, error_response) — error_response is None on success.
     """
-    from tracker.models import Membership
+    from tracker.models import OrganizationMembership
     user = getattr(request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):
         # Also check device-key auth which sets request.auth_user
@@ -33,7 +33,7 @@ def _get_org_for_request(request):
         return None, JsonResponse({"error": "Authentication required."}, status=401)
 
     # Prefer org where user is owner, fall back to latest membership
-    qs = Membership.objects.filter(user=user).select_related("organization").order_by("-id")
+    qs = OrganizationMembership.objects.filter(user=user).select_related("organization").order_by("-id")
     owner_membership = qs.filter(role="owner").first()
     membership = owner_membership or qs.first()
     if not membership:

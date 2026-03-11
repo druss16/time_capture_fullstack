@@ -2749,7 +2749,7 @@ def list_invoices(request):
         'source': inv.source,
         'status': inv.status or 'sent',   # ← ADD THIS
         'matched': inv.client is not None,
-    } for inv in invoices.order_by('-invoice_date')[:500]]
+    } for inv in invoices.order_by('-invoice_date', '-id')[:500]]
     
     return Response({
         'invoices': data,

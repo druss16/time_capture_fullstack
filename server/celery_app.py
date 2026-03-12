@@ -185,6 +185,20 @@ app.conf.beat_schedule = {
         'options': {'expires': 3600},
     },
 
+
+    # =========================================================================
+    # DATABASE CLEANSE - PURGE RAW EVENTS AND LOG QUEUE HEALTH
+    # =========================================================================
+
+    "purge-raw-events": {
+        "task": "tracker.tasks.purge_processed_raw_events",
+        "schedule": crontab(hour=2, minute=0),  # 2am daily
+    },
+    "queue-health-check": {
+        "task": "tracker.tasks.log_queue_health",
+        "schedule": crontab(minute="*/15"),  # every 15 minutes
+    },
+
 }
 
 # ============================================================================

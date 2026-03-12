@@ -1759,3 +1759,50 @@ def reconcile_qb_invoices():
 
         except Exception as e:
             logger.error(f"QB reconcile failed for org {integration.organization_id}: {e}")
+
+
+from celery import shared_task
+from django.utils import timezone
+from datetime import timedelta
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@shared_task
+def purge_processed_raw_events():
+    """
+    Delete raw events older than 90 days that have already been
+    rolled into a block. Safe to run nightly — never deletes
+    unprocessed events regardless of age.
+    """
+    from tracker.models import RawEvent
+
+    cutoff = timezone.now() - timedelta(days=90)
+    deleted, _ = RawEvent.objects.filter(
+        ts_utc__lt=cutoff,
+        block_id__isnull=False  # only purge if already processed into a block
+    ).delete()
+    logger.info(f"purge_processed_raw_events: deleted {deleted} rows")
+    return deleted
+
+
+@shared_task
+def log_queue_health():
+    """
+    Warn if Celery tasks are backing up in the queue.
+    Upgrade the worker instance if pending count stays above 10.
+    """
+    from django_celery_results.models import TaskResult
+
+    pending = TaskResult.objects.filter(
+        status='PENDING',
+        date_created__lt=timezone.now() - timedelta(seconds=30)
+    ).count()
+
+    if pending > 10:
+        logger.warning(f"log_queue_health: {pending} tasks pending >30s — consider upgrading Celery worker")
+    else:
+        logger.info(f"log_queue_health: queue healthy ({pending} tasks pending)")
+
+    return pending

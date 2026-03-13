@@ -30,6 +30,8 @@ import { useCategories } from '@/hooks/useCategories';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
+const [nonBillableHours, setNonBillableHours] = useState(0);
+
 
 type Category = { name: string; hours: number; block_count: number; sample_activities: string[]; };
 type ClientTime = { client_id: number | null; client: string; total_hours: number; categories: Category[]; };
@@ -40,6 +42,7 @@ type ParsedActivity = { blockId: number | null; title: string; raw: string; };
 type TodayTimeResponse = {
   clients: ClientTime[];
   billable_hours: number;
+  non_billable_hours: number;  // ✅ ADD
   global_hours: number;
   date: string;
 };
@@ -142,6 +145,7 @@ export default function DailyReview() {
       const json = await safeFetchJson<TodayTimeResponse>(`${API_BASE}/today-time/?date=${date}`);
       setTimeSummary(json.clients || []);
       setBillableHours(json.billable_hours || 0);  // ADD THIS STATE
+      setNonBillableHours(json.non_billable_hours || 0);  // ✅ ADD
     } catch (err: any) { setErr(err?.message || 'Failed to load'); setTimeSummary([]); }
     finally { setBusy(false); }
   }, [date]);
@@ -342,16 +346,25 @@ export default function DailyReview() {
               >
                 <RefreshCw className={cn('w-4 h-4', busy && 'animate-spin')} />
               </button>
-              
-              {/* Billable Total */}
-              <div className="px-4 py-2 bg-primary/10 border-2 border-primary/20 rounded-xl">
+
+            {/* ✅ REPLACE old billable pill with this */}
+            <div className="flex items-center bg-muted border-2 border-border rounded-xl overflow-hidden divide-x-2 divide-border">
+              <div className="px-4 py-2 flex items-center gap-1.5">
                 <span className="text-xl font-extrabold text-primary">{billableHours.toFixed(2)}h</span>
-                <span className="text-primary font-semibold text-sm ml-1.5">billable</span>
+                <span className="text-primary/70 font-semibold text-xs uppercase tracking-wide">billable</span>
+              </div>
+              <div className="px-4 py-2 flex items-center gap-1.5">
+                <span className="text-xl font-extrabold text-slate-400">{nonBillableHours.toFixed(2)}h</span>
+                <span className="text-slate-400 font-semibold text-xs uppercase tracking-wide">non-bill</span>
+              </div>
+              <div className="px-4 py-2 flex items-center gap-1.5">
+                <span className="text-xl font-extrabold text-slate-700">
+                  {(billableHours + nonBillableHours).toFixed(2)}h
+                </span>
+                <span className="text-slate-500 font-semibold text-xs uppercase tracking-wide">total</span>
               </div>
             </div>
           </div>
-        </div>
-      </div>
 
       {/* ===== CONTENT ===== */}
       <div className="p-6">

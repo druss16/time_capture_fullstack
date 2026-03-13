@@ -4195,6 +4195,8 @@ def today_time(request):
     
     total_minutes = 0.0
     billable_minutes = 0.0
+    non_billable_minutes = 0.0
+
     
     for ev in event_durations:
         client_name = ev['client_name']
@@ -4234,6 +4236,8 @@ def today_time(request):
         total_minutes += minutes
         if ev['is_billable']:
             billable_minutes += minutes
+        else:
+            non_billable_minutes += minutes  # ✅ ADD
     
     # =========================================================================
     # STEP 4: Build response with clean formatting
@@ -4283,6 +4287,7 @@ def today_time(request):
         'clients': result,
         'global_hours': round(total_minutes / 60, 2),
         'billable_hours': round(billable_minutes / 60, 2),
+        'non_billable_hours': round(non_billable_minutes / 60, 2),
         'date': target_date.isoformat(),
     })
 

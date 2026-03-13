@@ -31,6 +31,14 @@ import { useCategories } from '@/hooks/useCategories';
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
+const formatHours = (hours: number): string => {  // ✅ ADD HERE
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+};
+
 
 type Category = { name: string; hours: number; block_count: number; sample_activities: string[]; };
 type ClientTime = { client_id: number | null; client: string; total_hours: number; categories: Category[]; };
@@ -348,15 +356,15 @@ export default function DailyReview() {
               </button>
               <div className="flex items-center bg-muted border-2 border-border rounded-xl overflow-hidden divide-x-2 divide-border">
                 <div className="px-4 py-2 flex items-center gap-1.5">
-                  <span className="text-xl font-extrabold text-primary">{billableHours.toFixed(2)}h</span>
+                  <span className="text-xl font-extrabold text-primary">{formatHours(billableHours)}</span>
                   <span className="text-primary/70 font-semibold text-xs uppercase tracking-wide">billable</span>
                 </div>
                 <div className="px-4 py-2 flex items-center gap-1.5">
-                  <span className="text-xl font-extrabold text-slate-400">{nonBillableHours.toFixed(2)}h</span>
+                  <span className="text-xl font-extrabold text-slate-400">{formatHours(nonBillableHours)}</span>
                   <span className="text-slate-400 font-semibold text-xs uppercase tracking-wide">non-bill</span>
                 </div>
                 <div className="px-4 py-2 flex items-center gap-1.5">
-                  <span className="text-xl font-extrabold text-slate-700">{(billableHours + nonBillableHours).toFixed(2)}h</span>
+                  <span className="text-xl font-extrabold text-slate-700">{formatHours(billableHours + nonBillableHours)}</span>
                   <span className="text-slate-500 font-semibold text-xs uppercase tracking-wide">total</span>
                 </div>
               </div>
@@ -451,7 +459,7 @@ export default function DailyReview() {
                           </span>
                         </div>
                         <span className={cn('text-2xl font-extrabold', colors.hours)}>
-                          {(isUnassigned ? client.total_hours : billable).toFixed(2)}h
+                          {formatHours(isUnassigned ? client.total_hours : billable)}
                         </span>
                       </button>
 
@@ -472,7 +480,7 @@ export default function DailyReview() {
                                     <span className="text-sm text-slate-500 font-semibold">({cat.sample_activities.length})</span>
                                   </div>
                                   <span className={cn('font-extrabold text-lg', catNonBillable ? 'text-slate-400' : 'text-emerald-600')}>
-                                    {cat.hours.toFixed(2)}h
+                                    {formatHours(cat.hours)}
                                   </span>
                                 </div>
 

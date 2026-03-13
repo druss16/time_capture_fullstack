@@ -298,6 +298,281 @@ export default function DailyReview() {
       <div className="sticky top-0 z-10 bg-card border-b-2 border-border shadow-sm">
         <div className="px-6 py-4">
           <div className="flex items-center justify-between flex-wrap gap-3">
+
+            {/* Left: Tabs + Add Time */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center bg-muted p-1 rounded-xl">
+                <button
+                  onClick={() => setActiveTab('summary')}
+                  className={cn(
+                    'px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2',
+                    activeTab === 'summary' ? 'bg-card text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  )}
+                >
+                  <BarChart3 className="w-4 h-4" />
+                  Summary
+                </button>
+                <button
+                  onClick={() => setActiveTab('categorize')}
+                  className={cn(
+                    'px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2',
+                    activeTab === 'categorize' ? 'bg-card text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  )}
+                >
+                  <Edit3 className="w-4 h-4" />
+                  Categorize
+                  {uncategorizedCount > 0 && (
+                    <span className="bg-warning text-warning-foreground text-xs font-bold rounded-full px-2 py-0.5 min-w-[20px]">
+                      {uncategorizedCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+              <ManualTimeEntry defaultDate={date} onSuccess={handleRefresh} />
+            </div>
+
+            {/* Right: Date + Refresh + Stats */}
+            <div className="flex items-center gap-3">
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="px-3 py-2 rounded-lg bg-muted border-2 border-border text-sm font-semibold text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+              />
+              <button
+                onClick={handleRefresh}
+                disabled={busy}
+                className="p-2.5 text-slate-500 hover:text-slate-900 hover:bg-muted rounded-lg disabled:opacity-50 transition-all"
+              >
+                <RefreshCw className={cn('w-4 h-4', busy && 'animate-spin')} />
+              </button>
+              <div className="flex items-center bg-muted border-2 border-border rounded-xl overflow-hidden divide-x-2 divide-border">
+                <div className="px-4 py-2 flex items-center gap-1.5">
+                  <span className="text-xl font-extrabold text-primary">{billableHours.toFixed(2)}h</span>
+                  <span className="text-primary/70 font-semibold text-xs uppercase tracking-wide">billable</span>
+                </div>
+                <div className="px-4 py-2 flex items-center gap-1.5">
+                  <span className="text-xl font-extrabold text-slate-400">{nonBillableHours.toFixed(2)}h</span>
+                  <span className="text-slate-400 font-semibold text-xs uppercase tracking-wide">non-bill</span>
+                </div>
+                <div className="px-4 py-2 flex items-center gap-1.5">
+                  <span className="text-xl font-extrabold text-slate-700">{(billableHours + nonBillableHours).toFixed(2)}h</span>
+                  <span className="text-slate-500 font-semibold text-xs uppercase tracking-wide">total</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      {/* ===== CONTENT ===== */}
+      <div className="p-6">
+        {activeTab === 'summary' && uncategorizedCount > 0 && (
+          <div className="mb-4 px-4 py-3 bg-warning/10 border-2 border-warning/30 rounded-xl flex items-center justify-between">
+            <div className="flex items-center gap-2 text-amber-700 font-bold">
+              <AlertTriangle className="w-5 h-5" />
+              {uncategorizedCount} blocks need categorization
+            </div>
+            <button
+              onClick={() => setActiveTab('categorize')}
+              className="px-4 py-2 bg-warning text-warning-foreground font-bold rounded-lg hover:opacity-90 transition-all"
+            >
+              Categorize
+            </button>
+          </div>
+        )}
+
+        {err && (
+          <div className="mb-4 px-4 py-3 bg-destructive/10 border-2 border-destructive/30 rounded-xl text-red-700 font-semibold">
+            {err}
+          </div>
+        )}
+
+        {activeTab === 'summary' ? (
+          <>
+            {timeSummary.length > 1 && (
+              <div className="mb-3 flex justify-end">
+                <button
+                  onClick={() => {
+                    if (collapsedClients.size === 0) {
+                      setCollapsedClients(new Set(timeSummary.map(c => `${c.client_id}-${c.client}`)));
+                    } else {
+                      setCollapsedClients(new Set());
+                    }
+                  }}
+                  className="text-sm text-slate-600 hover:text-slate-900 font-semibold px-3 py-1.5 rounded-lg hover:bg-muted transition-all"
+                >
+                  {collapsedClients.size === 0 ? 'Collapse All' : 'Expand All'}
+                </button>
+              </div>
+            )}
+
+            {busy && timeSummary.length === 0 ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map(i => (
+                  <div key={i} className={cn(SKELETON.card, 'h-32')} />
+                ))}
+              </div>
+            ) : timeSummary.length > 0 ? (
+              <div className="space-y-3">
+                {timeSummary.map((client, clientIndex) => {
+                  const billable = getClientBillableHours(client);
+                  const isUnassigned = isUnassignedClient(client.client);
+                  const clientKey = `${client.client_id}-${client.client}`;
+                  const isCollapsed = collapsedClients.has(clientKey);
+                  const colors = isUnassigned
+                    ? { bg: 'bg-slate-100', border: 'border-slate-300', accent: 'bg-slate-200', text: 'text-slate-500', hours: 'text-slate-500' }
+                    : getClientColor(clientIndex);
+
+                  return (
+                    <div
+                      key={clientKey}
+                      className={cn(
+                        'rounded-2xl border-2 overflow-hidden shadow-sm transition-all duration-200',
+                        'hover:shadow-md hover:-translate-y-0.5',
+                        colors.bg, colors.border,
+                        isUnassigned && 'opacity-70'
+                      )}
+                    >
+                      <button
+                        onClick={() => toggleClient(clientKey)}
+                        className={cn('w-full px-4 py-3 flex items-center justify-between', colors.accent)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center', isUnassigned ? 'bg-slate-300' : 'bg-white/70')}>
+                            {isCollapsed ? <ChevronRight className={cn('w-4 h-4', colors.text)} /> : <ChevronDown className={cn('w-4 h-4', colors.text)} />}
+                          </div>
+                          <span className={cn('font-extrabold text-lg tracking-tight', isUnassigned ? 'text-slate-500' : 'text-slate-900')}>
+                            {client.client}
+                          </span>
+                          <span className="text-sm text-slate-600 font-semibold">
+                            {client.categories.length} {client.categories.length === 1 ? 'category' : 'categories'}
+                          </span>
+                        </div>
+                        <span className={cn('text-2xl font-extrabold', colors.hours)}>
+                          {(isUnassigned ? client.total_hours : billable).toFixed(2)}h
+                        </span>
+                      </button>
+
+                      {!isCollapsed && (
+                        <div className="bg-white">
+                          {client.categories.map((cat) => {
+                            const catNonBillable = isNonBillable(cat.name);
+                            const catKey = `${client.client_id}-${cat.name}`;
+                            const isExpanded = expandedCategories.has(catKey);
+
+                            return (
+                              <div key={cat.name} className={cn('border-t border-slate-200', catNonBillable && 'opacity-50')}>
+                                <div className="px-4 py-3 flex items-center justify-between">
+                                  <div className="flex items-center gap-3 ml-10">
+                                    <span className={cn('font-bold text-base', catNonBillable ? 'text-slate-500' : 'text-slate-800')}>
+                                      {cat.name}
+                                    </span>
+                                    <span className="text-sm text-slate-500 font-semibold">({cat.sample_activities.length})</span>
+                                  </div>
+                                  <span className={cn('font-extrabold text-lg', catNonBillable ? 'text-slate-400' : 'text-emerald-600')}>
+                                    {cat.hours.toFixed(2)}h
+                                  </span>
+                                </div>
+
+                                {cat.sample_activities.length > 0 && (
+                                  <div className="px-4 pb-3 ml-10">
+                                    {cat.sample_activities.length > 3 && (
+                                      <button onClick={() => toggleCategory(catKey)} className="text-sm text-primary font-bold mb-2">
+                                        {isExpanded ? '▼ Less' : `▶ All ${cat.sample_activities.length}`}
+                                      </button>
+                                    )}
+                                    <ul className="space-y-2">
+                                      {(isExpanded ? cat.sample_activities : cat.sample_activities.slice(0, 3)).map((activity, idx) => {
+                                        const parsed = parseActivity(activity);
+                                        const activityKey = `${client.client_id}-${cat.name}-${idx}`;
+                                        const isEditing = editingBlock?.activityKey === activityKey;
+
+                                        return (
+                                          <li key={idx} className="flex items-center gap-2 group">
+                                            <span className="text-slate-400 font-bold">→</span>
+                                            {isEditing ? (
+                                              <div className="flex items-center gap-2 flex-wrap">
+                                                <select value={selectedClientId || ''} onChange={(e) => setSelectedClientId(e.target.value ? parseInt(e.target.value) : null)} className={DESIGN_SYSTEM.components.inputCompact}>
+                                                  <option value="">Client</option>
+                                                  {availableClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                                </select>
+                                                <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className={DESIGN_SYSTEM.components.inputCompact}>
+                                                  {(availableClients.find(c => c.id === selectedClientId)?.name === 'Internal'
+                                                    ? INTERNAL_CATEGORIES
+                                                    : dynamicCategories
+                                                  ).map(n => <option key={n} value={n}>{n}</option>)}
+                                                </select>
+                                                <button onClick={handleSaveCategory} disabled={isUpdating} className="p-1.5 bg-success text-success-foreground rounded-lg"><Check className="w-4 h-4" /></button>
+                                                <button onClick={handleCancelEdit} className="p-1.5 bg-muted rounded-lg"><X className="w-4 h-4" /></button>
+                                              </div>
+                                            ) : (
+                                              <>
+                                                <span className="text-slate-700 font-medium flex-1 truncate">{parsed.title}</span>
+                                                {parsed.blockId && (
+                                                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onClick={() => handleEditClick(parsed.blockId!, activityKey, cat.name, client.client_id)} className="p-1.5 hover:bg-primary/10 rounded-lg"><Pencil className="w-3.5 h-3.5 text-primary" /></button>
+                                                    <button onClick={() => handleDeleteBlock(parsed.blockId!, parsed.title)} disabled={deletingBlockId === parsed.blockId} className="p-1.5 hover:bg-destructive/10 rounded-lg"><Trash2 className="w-3.5 h-3.5 text-destructive" /></button>
+                                                  </div>
+                                                )}
+                                              </>
+                                            )}
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : !busy ? (
+              <div className="text-center py-16 bg-card rounded-2xl border-2 border-border">
+                <FileQuestion className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+                <h3 className="text-lg font-bold text-slate-800 mb-1">No time tracked yet</h3>
+                <p className="text-slate-600 font-medium">Activity appears automatically as you work, or add time manually.</p>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <ManualCategorization onComplete={handleCategorizationComplete} />
+        )}
+      </div>
+
+      {showManualEntry && (
+        <ManualTimeEntry
+          isOpen={showManualEntry}
+          onClose={() => {
+            setShowManualEntry(false);
+            setManualEntry({ client_id: null, description: '', hours: 0, date: todayIso() });
+          }}
+          onSuccess={() => {
+            setShowManualEntry(false);
+            setManualEntry({ client_id: null, description: '', hours: 0, date: todayIso() });
+            loadTimeSummary();
+            showToast('Time entry added', 'success');
+          }}
+          defaultDate={date}
+          preSelectedClientId={manualEntry.client_id}
+        />
+      )}
+    </div>
+  );
+}
+    <div className="min-h-full bg-background">
+      {toast && <Toast message={toast.message} type={toast.type} />}
+
+      {/* ===== TOP TOOLBAR ===== */}
+      <div className="sticky top-0 z-10 bg-card border-b-2 border-border shadow-sm">
+        <div className="px-6 py-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             {/* Left: Tabs + Add Time */}
             <div className="flex items-center gap-3">
               <div className="flex items-center bg-muted p-1 rounded-xl">

@@ -30,7 +30,6 @@ import { useCategories } from '@/hooks/useCategories';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
-const [nonBillableHours, setNonBillableHours] = useState(0);
 
 
 type Category = { name: string; hours: number; block_count: number; sample_activities: string[]; };
@@ -84,6 +83,7 @@ export default function DailyReview() {
   const [availableClients, setAvailableClients] = useState<ClientOption[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const [billableHours, setBillableHours] = useState(0);
+  const [nonBillableHours, setNonBillableHours] = useState(0);
   // Add these with your other useState declarations
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [manualEntry, setManualEntry] = useState<{
@@ -568,6 +568,6 @@ export default function DailyReview() {
           />
         )}
 
-        </div> <-- Final closing div
+        </div>
   );
 }

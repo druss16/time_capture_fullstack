@@ -259,7 +259,7 @@ export default function AIAnalysisTab({
           <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 24, padding: "18px 24px", background: C.navyMid, border: `1px solid ${C.border}`, borderRadius: 12 }}>
             <div style={{ width: 20, height: 20, border: `2px solid ${C.gold}`, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            <span style={{ color: C.slate, fontSize: 14 }}>Analyzing your firm data with GPT-4o-mini…</span>
+            <span style={{ color: C.slate, fontSize: 14 }}>Analyzing your firm data…</span>
           </div>
           <AnalysisSkeleton />
         </div>

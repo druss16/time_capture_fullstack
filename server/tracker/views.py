@@ -4132,6 +4132,8 @@ def today_time(request):
     # Duration = time until next event (capped at 3 min)
     # =========================================================================
     IDLE_CAP_SECONDS = 180  # 3 minutes - matches agent's MOUSE_IDLE_PAUSE_S
+    NON_BILLABLE_CATEGORIES = {'personal/non-billable', 'idle', 'uncategorized'}
+
     
     event_durations = []
     for i, event in enumerate(events):
@@ -4170,6 +4172,7 @@ def today_time(request):
             'client_name': client_name,
             'category': category,
             'is_idle': is_idle,
+            'is_billable': bool(client_id) and category.lower() not in NON_BILLABLE_CATEGORIES,  # ✅ ADD HERE
             'app_name': event.app_name or 'Unknown',
             'window_title': event.window_title or '',
             'url': event.url or '',  # ✅ NEW: Include URL for better formatting
@@ -4229,7 +4232,7 @@ def today_time(request):
         
         # Track totals
         total_minutes += minutes
-        if ev['client_id'] and not ev['is_idle']:
+        if ev['is_billable']:
             billable_minutes += minutes
     
     # =========================================================================

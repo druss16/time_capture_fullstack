@@ -568,6 +568,6 @@ export default function DailyReview() {
           />
         )}
 
-        </div>  // <-- Final closing div
+        </div> <-- Final closing div
   );
 }

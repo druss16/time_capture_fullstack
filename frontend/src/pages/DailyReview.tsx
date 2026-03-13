@@ -365,6 +365,8 @@ export default function DailyReview() {
               </div>
             </div>
           </div>
+        </div> {/* end sticky toolbar */}
+
 
       {/* ===== CONTENT ===== */}
       <div className="p-6">

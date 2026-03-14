@@ -193,7 +193,7 @@ class MobileRecentView(APIView):
 
         blocks = (
             Block.objects
-            .filter(user=request.user, org=org)
+            .filter(user=request.user, org=org, hostname='mobile')
             .select_related('client')
             .order_by('-start')[:10]
         )

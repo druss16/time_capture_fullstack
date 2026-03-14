@@ -22,4 +22,5 @@ urlpatterns = [
     path('eula/', TemplateView.as_view(template_name='legal/eula.html'), name='eula'),
     path('privacy/', TemplateView.as_view(template_name='legal/privacy.html'), name='privacy'),
     path('api/deploy/', include('tracker.urls_deployment')),
+    path('api/mobile/', include('mobile.urls')),  # ← add this
 ]

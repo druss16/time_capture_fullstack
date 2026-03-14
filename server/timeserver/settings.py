@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "tracker.apps.TrackerConfig",
     "django_celery_results",
     "django_celery_beat",
+    "mobile",
 ]
 
 SITE_ID = 1

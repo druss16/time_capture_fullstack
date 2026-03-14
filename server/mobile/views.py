@@ -156,7 +156,7 @@ class MobileStopView(APIView):
         block.categorized_by = 'manual'
         block.categorized_at = timezone.now()
 
-        category = category_name if category_name else 'Manual Entry'
+        category = category_name if category_name else 'Meeting'
         hours = max(duration_seconds / 3600, 1/60)
         block.category_hours = {category: round(hours, 4)}
 

@@ -14,12 +14,11 @@ import ClientPicker from '../../components/ClientPicker';
 import { Colors, FontSizes, Spacing, Radius } from '../../utils/theme';
 import type { RootStackParamList } from '../../types';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { useIsFocused } from '@react-navigation/native';
 
 
 type Nav = StackNavigationProp<RootStackParamList>;
 
-const QUICK_CATEGORIES = ['Meeting', 'Phone Call', 'Tax Review', 'Admin', 'Research', 'Email'];
+const QUICK_CATEGORIES = ['Meeting', 'Phone Call', 'Site Visit', 'Admin'];
 
 export default function RecordingScreen() {
   const navigation = useNavigation<any>();
@@ -33,7 +32,6 @@ export default function RecordingScreen() {
   const [stopping, setStopping] = useState(false);
   const blinkAnim = useRef(new Animated.Value(1)).current;
   const tickInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const isFocused = useIsFocused();
 
 
   // Voice entry
@@ -41,13 +39,12 @@ export default function RecordingScreen() {
 
   // Tick every second
   useEffect(() => {
-    if (isFocused) {
-      tickInterval.current = setInterval(tick, 1000);
-    }
-    return () => { 
-      if (tickInterval.current) clearInterval(tickInterval.current); 
+    if (!isRunning) return;
+    tickInterval.current = setInterval(tick, 1000);
+    return () => {
+      if (tickInterval.current) clearInterval(tickInterval.current);
     };
-  }, [isFocused]);
+  }, [isRunning]);
 
   // Blink the live dot
   useEffect(() => {
@@ -78,9 +75,8 @@ export default function RecordingScreen() {
     : QUICK_CATEGORIES;
 
   async function handleStop() {
-    if (stopping) return;
+    setStopping(false); // always reset first
     try {
-      setStopping(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       if (tickInterval.current) clearInterval(tickInterval.current);
 
@@ -88,20 +84,24 @@ export default function RecordingScreen() {
         ? Math.floor((Date.now() - start_time) / 1000)
         : elapsed_seconds;
 
-      // Capture entry_id BEFORE localStop() clears the store
       const savedEntryId = entry_id;
+      const savedCategory = category_name;
+      const savedClientId = client_id;
+      const savedClientName = client_name;
 
       cancelTimerAlert();
       await localStop();
 
       navigation.getParent()?.navigate('Save', {
-        entry_id: savedEntryId!,
+        entry_id: savedEntryId,
         duration_seconds: duration,
-        category_name: category_name ?? null,   // ← add this
-        client_id: client_id ?? null,           // ← add this
-        client_name: client_name ?? null,       // ← add this
+        category_name: savedCategory,
+        client_id: savedClientId,
+        client_name: savedClientName,
       });
-    } catch {
+    } catch (e) {
+      console.log('handleStop error:', e);
+    } finally {
       setStopping(false);
     }
   }

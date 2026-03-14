@@ -26,7 +26,7 @@ export default function SettingsScreen({ onLogout }: Props) {
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Account</Text>
         <View style={styles.card}>
-          <View style={styles.row}><Text style={styles.label}>Dashboard</Text><Text style={styles.val}>app.mavops.ai</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Dashboard</Text><Text style={styles.val}>timetracker.mavops.ai</Text></View>
           <View style={[styles.row, { borderBottomWidth: 0 }]}>
             <Text style={styles.label}>Version</Text>
             <Text style={styles.val}>1.0.0</Text>

@@ -103,7 +103,12 @@ export default function SaveScreen() {
     }
   }
 
-  const categories = recents?.categories ?? [];
+  const categories = [
+    { id: 0, name: 'Meeting', is_billable_default: true },
+    { id: 1, name: 'Phone Call', is_billable_default: true },
+    { id: 2, name: 'Site Visit', is_billable_default: true },
+    { id: 3, name: 'Admin', is_billable_default: true },
+  ];
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>

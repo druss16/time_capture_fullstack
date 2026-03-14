@@ -1,0 +1,68 @@
+{
+  "expo": {
+    "name": "TimeTracker",
+    "slug": "timetracker-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#112240"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "ai.mavops.timetracker",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "TimeTracker reads your calendar to suggest clients for active meetings.",
+        "NSMicrophoneUsageDescription": "TimeTracker uses your microphone for AI voice entry logging.",
+        "UIBackgroundModes": ["fetch", "remote-notification"]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#112240"
+      },
+      "package": "ai.mavops.timetracker",
+      "versionCode": 1,
+      "permissions": [
+        "READ_CALENDAR",
+        "RECORD_AUDIO",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-task-manager",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#1D9E75"
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Allow TimeTracker to read your calendar to suggest clients."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow TimeTracker to record audio for voice time entries."
+        }
+      ]
+    ],
+    "extra": {
+      "apiBaseUrl": "https://timetracker-api-k375.onrender.com/api",
+      "eas": {
+        "projectId": "YOUR_EAS_PROJECT_ID"
+      }
+    }
+  }
+}

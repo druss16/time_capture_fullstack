@@ -4282,6 +4282,68 @@ def today_time(request):
             'total_hours': round(client_total_minutes / 60, 2),
             'categories': categories,
         })
+
+    # =========================================================================
+    # STEP 5: Merge in mobile blocks (no RawEvents — must add separately)
+    # =========================================================================
+    # =========================================================================
+    # STEP 5: Merge in mobile blocks (no RawEvents — must add separately)
+    # =========================================================================
+    mobile_blocks = Block.objects.filter(
+        user=user,
+        org=get_user_org(user),
+        hostname='mobile',
+        start__gte=start_utc,
+        start__lt=end_utc,
+        is_categorized=True,
+        client__isnull=False,
+    ).select_related('client')
+
+    for block in mobile_blocks:
+        b_client_name = block.client.name
+        b_minutes = block.minutes or 0
+        b_hours = round(b_minutes / 60, 2)
+        b_cat = (
+            list(block.category_hours.keys())[0]
+            if isinstance(block.category_hours, dict) and block.category_hours
+            else 'Manual Entry'
+        )
+        b_title = f"Mobile - {block.notes or b_cat} ({b_minutes}m)"
+
+        # Find existing client in result (result uses key 'client' not 'client_name')
+        existing = next((r for r in result if r['client'] == b_client_name), None)
+
+        if existing:
+            existing_cat = next((c for c in existing['categories'] if c['name'] == b_cat), None)
+            if existing_cat:
+                existing_cat['hours'] = round(existing_cat['hours'] + b_hours, 2)
+                existing_cat['block_count'] += 1
+                existing_cat['sample_activities'].insert(0, f"[id:{block.id}] {b_title}")
+            else:
+                existing['categories'].append({
+                    'name': b_cat,
+                    'hours': b_hours,
+                    'block_count': 1,
+                    'unique_activities': 1,
+                    'sample_activities': [f"[id:{block.id}] {b_title}"],
+                })
+            existing['total_hours'] = round(existing['total_hours'] + b_hours, 2)
+        else:
+            result.append({
+                'client_id': block.client_id,
+                'client': b_client_name,
+                'total_hours': b_hours,
+                'categories': [{
+                    'name': b_cat,
+                    'hours': b_hours,
+                    'block_count': 1,
+                    'unique_activities': 1,
+                    'sample_activities': [f"[id:{block.id}] {b_title}"],
+                }],
+            })
+
+        billable_minutes += b_minutes
+        total_minutes += b_minutes
     
     return Response({
         'clients': result,

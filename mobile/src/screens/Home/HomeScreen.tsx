@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  Animated, ScrollView, ActivityIndicator,
+  Animated, ScrollView, ActivityIndicator, StatusBar,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
@@ -10,7 +10,6 @@ import { useTimerStore, formatDuration } from '../../store/timerStore';
 import { startTimer, getMobileRecents, getAISuggestion } from '../../api/client';
 import { scheduleTimerAlert } from '../../utils/backgroundTimer';
 import { useCalendarEvents } from '../../hooks/useCalendarEvents';
-import { Colors, FontSizes, Spacing, Radius } from '../../utils/theme';
 import type { RootStackParamList } from '../../types';
 import type { StackNavigationProp } from '@react-navigation/stack';
 
@@ -21,36 +20,30 @@ export default function HomeScreen() {
   const { isRunning, startTimer: localStart } = useTimerStore();
   const [starting, setStarting] = useState(false);
 
-  // Pulse animation rings
   const ring1 = useRef(new Animated.Value(0)).current;
   const ring2 = useRef(new Animated.Value(0)).current;
+  const ring3 = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const pulse = () => {
+    const animate = (anim: Animated.Value, delay: number) => {
       Animated.loop(
         Animated.sequence([
-          Animated.timing(ring1, { toValue: 1, duration: 1800, useNativeDriver: true }),
-          Animated.timing(ring1, { toValue: 0, duration: 0, useNativeDriver: true }),
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 2400, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0, duration: 0, useNativeDriver: true }),
         ]),
       ).start();
-      setTimeout(() => {
-        Animated.loop(
-          Animated.sequence([
-            Animated.timing(ring2, { toValue: 1, duration: 1800, useNativeDriver: true }),
-            Animated.timing(ring2, { toValue: 0, duration: 0, useNativeDriver: true }),
-          ]),
-        ).start();
-      }, 500);
     };
-    pulse();
+    animate(ring1, 0);
+    animate(ring2, 600);
+    animate(ring3, 1200);
   }, []);
 
-  const ringScale1 = ring1.interpolate({ inputRange: [0, 1], outputRange: [1, 1.6] });
-  const ringOpacity1 = ring1.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] });
-  const ringScale2 = ring2.interpolate({ inputRange: [0, 1], outputRange: [1, 2] });
-  const ringOpacity2 = ring2.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0] });
+  const makeRingStyle = (anim: Animated.Value, maxScale: number) => ({
+    transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, maxScale] }) }],
+    opacity: anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, 0.15, 0] }),
+  });
 
-  // Data queries
   const { data: recents } = useQuery({
     queryKey: ['mobile-recents'],
     queryFn: getMobileRecents,
@@ -64,11 +57,9 @@ export default function HomeScreen() {
     retry: false,
   });
 
-  const { events: calEvents } = useCalendarEvents();
-
   async function handleTap() {
     if (isRunning) {
-      navigation.navigate('Main'); // goes to Recording tab
+      navigation.navigate('Main', { screen: 'Recording' } as any);
       return;
     }
     try {
@@ -78,111 +69,64 @@ export default function HomeScreen() {
       const client_name = aiSuggestion?.client_name ?? undefined;
       const draft = await startTimer(client_id);
       localStart(draft.entry_id, client_id ?? null, client_name ?? null);
-      if (client_name) {
-        scheduleTimerAlert(client_name, draft.entry_id);
-      }
-      navigation.navigate('Main', { screen: 'Recording' });
-    } catch (e) {
-      // If server unreachable, start locally — will sync on stop
+      if (client_name) scheduleTimerAlert(client_name, draft.entry_id);
+      navigation.navigate('Main', { screen: 'Recording' } as any);
+    } catch {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     } finally {
       setStarting(false);
     }
   }
 
-  async function handleAcceptSuggestion() {
-    if (!aiSuggestion?.client_id) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    try {
-      setStarting(true);
-      const draft = await startTimer(aiSuggestion.client_id);
-      localStart(draft.entry_id, aiSuggestion.client_id, aiSuggestion.client_name);
-      if (aiSuggestion.client_name) {
-        scheduleTimerAlert(aiSuggestion.client_name, draft.entry_id);
-      }
-      navigation.navigate('Main');
-    } finally {
-      setStarting(false);
-    }
-  }
-
-  // Upcoming calendar event within 15 minutes
-  const upcomingEvent = calEvents.find((e) => {
-    const diff = (new Date(e.startDate).getTime() - Date.now()) / 60000;
-    return diff >= -5 && diff <= 15;
-  });
-
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" />
 
-      {/* AI suggestion banner */}
+      {/* AI suggestion pill */}
       {aiSuggestion && aiSuggestion.confidence > 0.6 && !isRunning && (
-        <View style={styles.aiBanner}>
-          <View style={styles.aiDot} />
-          <Text style={styles.aiText} numberOfLines={2}>
-            {aiSuggestion.reason}
-          </Text>
-          <TouchableOpacity onPress={handleAcceptSuggestion} style={styles.aiYes}>
-            <Text style={styles.aiYesText}>Start</Text>
-          </TouchableOpacity>
+        <View style={styles.suggestionPill}>
+          <View style={styles.pillDot} />
+          <Text style={styles.pillText} numberOfLines={1}>{aiSuggestion.reason}</Text>
         </View>
       )}
 
-      {/* Calendar event banner */}
-      {upcomingEvent && !aiSuggestion && !isRunning && (
-        <View style={styles.aiBanner}>
-          <View style={styles.aiDot} />
-          <Text style={styles.aiText} numberOfLines={2}>
-            "{upcomingEvent.title}" is coming up
-            {upcomingEvent.suggested_client_name ? ` — ${upcomingEvent.suggested_client_name}` : ''}
-          </Text>
-          <TouchableOpacity
-            onPress={() => {
-              if (upcomingEvent.suggested_client_id) {
-                startTimer(upcomingEvent.suggested_client_id).then((d) => {
-                  localStart(d.entry_id, upcomingEvent.suggested_client_id, upcomingEvent.suggested_client_name);
-                });
-              }
-            }}
-            style={styles.aiYes}
-          >
-            <Text style={styles.aiYesText}>Start</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      {/* Big button */}
+      <View style={styles.buttonArea}>
+        <Animated.View style={[styles.ring, makeRingStyle(ring1, 2.2)]} />
+        <Animated.View style={[styles.ring, makeRingStyle(ring2, 2.8)]} />
+        <Animated.View style={[styles.ring, makeRingStyle(ring3, 3.4)]} />
 
-      {/* The big button */}
-      <View style={styles.btnArea}>
-        <TouchableOpacity onPress={handleTap} activeOpacity={0.85} disabled={starting}>
-          <View style={styles.btnOuter}>
-            <Animated.View
-              style={[styles.ring, { transform: [{ scale: ringScale1 }], opacity: ringOpacity1 }]}
-            />
-            <Animated.View
-              style={[styles.ring, { transform: [{ scale: ringScale2 }], opacity: ringOpacity2 }]}
-            />
-            <View style={styles.btn}>
-              {starting ? (
-                <ActivityIndicator color="#fff" size="large" />
-              ) : (
-                <TimerIcon />
-              )}
+        <TouchableOpacity
+          onPress={handleTap}
+          activeOpacity={0.9}
+          disabled={starting}
+          style={styles.button}
+        >
+          {starting ? (
+            <ActivityIndicator color="#fff" size="large" />
+          ) : (
+            <View style={styles.buttonInner}>
+              <View style={styles.clockFace}>
+                <View style={styles.clockHand} />
+                <View style={styles.clockHandMin} />
+              </View>
             </View>
-          </View>
+          )}
         </TouchableOpacity>
-        <Text style={styles.hint}>
-          {isRunning ? 'Timer running — tap Recording' : 'Tap to start tracking'}
-        </Text>
       </View>
+
+      <Text style={styles.tapLabel}>
+        {isRunning ? 'Timer running' : 'Tap to start'}
+      </Text>
 
       {/* Recent entries */}
       {recents?.entries && recents.entries.length > 0 && (
-        <View style={styles.recents}>
-          <Text style={styles.sectionLabel}>Recent</Text>
-          {recents.entries.slice(0, 5).map((entry, i) => (
-            <View key={entry.id} style={[styles.recentRow, i === 4 && { borderBottomWidth: 0 }]}>
-              <View style={[styles.recentDot, { backgroundColor: dotColor(i) }]} />
-              <View style={styles.recentInfo}>
+        <View style={styles.recentsArea}>
+          <Text style={styles.recentsLabel}>Recent</Text>
+          {recents.entries.slice(0, 4).map((entry, i) => (
+            <View key={entry.id} style={[styles.recentRow, i === 3 && { borderBottomWidth: 0 }]}>
+              <View style={styles.recentDot} />
+              <View style={{ flex: 1 }}>
                 <Text style={styles.recentClient}>{entry.client_name}</Text>
                 <Text style={styles.recentCat}>{entry.category_name}</Text>
               </View>
@@ -191,96 +135,127 @@ export default function HomeScreen() {
           ))}
         </View>
       )}
-    </ScrollView>
-  );
-}
-
-function TimerIcon() {
-  return (
-    <View style={{ alignItems: 'center', justifyContent: 'center', width: 36, height: 36 }}>
-      {/* Simple clock icon in pure RN */}
-      <View style={{ width: 30, height: 30, borderRadius: 15, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
-        <View style={{ position: 'absolute', width: 2, height: 10, backgroundColor: '#fff', borderRadius: 1, top: 4, left: 13 }} />
-        <View style={{ position: 'absolute', width: 8, height: 2, backgroundColor: '#fff', borderRadius: 1, top: 13, left: 13 }} />
-      </View>
     </View>
   );
 }
 
-const dotColors = [Colors.teal, Colors.navy, Colors.tealLight, Colors.textSecondary, Colors.tealDark];
-function dotColor(i: number) { return dotColors[i % dotColors.length]; }
+const BTN = 160;
 
 const styles = StyleSheet.create({
-  scroll: { flex: 1, backgroundColor: Colors.bg },
-  container: { padding: Spacing.lg, paddingTop: Spacing.xl, paddingBottom: 40 },
+  container: {
+    flex: 1,
+    backgroundColor: '#0d1b2e',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
 
-  aiBanner: {
+  suggestionPill: {
+    position: 'absolute',
+    top: 60,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.aiBg,
-    borderWidth: 1,
-    borderColor: Colors.aiBorder,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    marginBottom: Spacing.lg,
-    gap: Spacing.sm,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderRadius: 99,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+    maxWidth: 320,
   },
-  aiDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.teal, flexShrink: 0 },
-  aiText: { flex: 1, fontSize: FontSizes.sm, color: Colors.aiText, lineHeight: 16 },
-  aiYes: {
-    backgroundColor: Colors.teal,
-    borderRadius: Radius.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-  },
-  aiYesText: { color: '#fff', fontSize: FontSizes.xs, fontWeight: '600' },
+  pillDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#5DCAA5' },
+  pillText: { fontSize: 12, color: 'rgba(255,255,255,0.7)', flex: 1 },
 
-  btnArea: { alignItems: 'center', marginVertical: Spacing.xxl },
-  btnOuter: { width: 120, height: 120, alignItems: 'center', justifyContent: 'center' },
+  buttonArea: {
+    width: BTN,
+    height: BTN,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 32,
+  },
   ring: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 1.5,
-    borderColor: Colors.teal,
+    width: BTN,
+    height: BTN,
+    borderRadius: BTN / 2,
+    backgroundColor: '#1D9E75',
   },
-  btn: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: Colors.teal,
+  button: {
+    width: BTN,
+    height: BTN,
+    borderRadius: BTN / 2,
+    backgroundColor: '#1D9E75',
+    borderWidth: 1.5,
+    borderColor: '#0F6E56',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1,
   },
-  hint: { marginTop: Spacing.md, fontSize: FontSizes.sm, color: Colors.textMuted },
-
-  recents: {
-    backgroundColor: Colors.bgCard,
-    borderRadius: Radius.lg,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    padding: Spacing.lg,
+  buttonInner: { alignItems: 'center', justifyContent: 'center' },
+  clockFace: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2.5,
+    borderColor: 'rgba(255,255,255,0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  sectionLabel: {
-    fontSize: FontSizes.xs,
-    color: Colors.textMuted,
+  clockHand: {
+    position: 'absolute',
+    width: 2,
+    height: 13,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 1,
+    top: 4,
+    left: 19,
+  },
+  clockHandMin: {
+    position: 'absolute',
+    width: 11,
+    height: 2,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 1,
+    top: 20,
+    left: 19,
+  },
+
+  tapLabel: {
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.35)',
+    letterSpacing: 0.5,
+    marginBottom: 60,
+  },
+
+  recentsArea: {
+    position: 'absolute',
+    bottom: 40,
+    left: 24,
+    right: 24,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 16,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  recentsLabel: {
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.3)',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: Spacing.sm,
+    letterSpacing: 1,
+    marginBottom: 8,
   },
   recentRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: Spacing.sm,
+    paddingVertical: 9,
     borderBottomWidth: 0.5,
-    borderBottomColor: Colors.border,
-    gap: Spacing.sm,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+    gap: 10,
   },
-  recentDot: { width: 8, height: 8, borderRadius: 4 },
-  recentInfo: { flex: 1 },
-  recentClient: { fontSize: FontSizes.sm, fontWeight: '500', color: Colors.textPrimary },
-  recentCat: { fontSize: FontSizes.xs, color: Colors.textMuted },
-  recentDur: { fontSize: FontSizes.sm, color: Colors.textPrimary },
+  recentDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.2)' },
+  recentClient: { fontSize: 13, fontWeight: '500', color: 'rgba(255,255,255,0.8)' },
+  recentCat: { fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 1 },
+  recentDur: { fontSize: 12, color: 'rgba(255,255,255,0.4)' },
 });

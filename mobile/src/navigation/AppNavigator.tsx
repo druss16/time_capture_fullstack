@@ -12,37 +12,79 @@ import LoginScreen from '../screens/Auth/LoginScreen';
 import { Colors, FontSizes } from '../utils/theme';
 import type { TabParamList, RootStackParamList } from '../types';
 import { useTimerStore } from '../store/timerStore';
+import Svg, { Circle, Path } from 'react-native-svg';
+
 
 const Tab = createBottomTabNavigator<TabParamList>();
 const Stack = createStackNavigator<RootStackParamList>();
 
 function TabIcon({ name, focused }: { name: string; focused: boolean }) {
-  const icons: Record<string, string> = { Home: '⏱', Recording: '●', History: '≡', Settings: '⚙' };
+  const color = focused ? '#1D9E75' : 'rgba(255,255,255,0.35)';
+  const icons: Record<string, React.ReactNode> = {
+    Home: (
+      <Svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <Circle cx="12" cy="12" r="10" stroke={color} strokeWidth="1.8"/>
+        <Path d="M12 7v5l3 3" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
+      </Svg>
+    ),
+    Recording: (
+      <Svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <Circle cx="12" cy="12" r="10" stroke={color} strokeWidth="1.8"/>
+        <Circle cx="12" cy="12" r={focused ? "5" : "4"} fill={focused ? '#1D9E75' : color}/>
+      </Svg>
+    ),
+    History: (
+      <Svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <Path d="M4 6h16M4 12h10M4 18h7" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
+      </Svg>
+    ),
+    Settings: (
+      <Svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <Circle cx="12" cy="12" r="3" stroke={color} strokeWidth="1.8"/>
+        <Path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
+      </Svg>
+    ),
+  };
+
   return (
-    <Text style={{ fontSize: 18, opacity: focused ? 1 : 0.45 }}>{icons[name] ?? '•'}</Text>
+    <View style={{
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: 48,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: focused ? 'rgba(29,158,117,0.15)' : 'transparent',
+    }}>
+      {icons[name]}
+    </View>
   );
 }
-
 function MainTabs() {
   const { isRunning, elapsed_seconds } = useTimerStore();
 
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
-        tabBarActiveTintColor: Colors.teal,
-        tabBarInactiveTintColor: 'rgba(255,255,255,0.45)',
-        tabBarStyle: {
-          backgroundColor: Colors.navy,
-          borderTopWidth: 0,
-          height: 60,
-          paddingBottom: 8,
-        },
-        tabBarLabelStyle: { fontSize: FontSizes.xs },
-        headerStyle: { backgroundColor: Colors.navy },
-        headerTintColor: '#fff',
-        headerTitleStyle: { fontWeight: '500', fontSize: FontSizes.md },
-      })}
+        screenOptions={({ route }) => ({
+          tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
+          tabBarActiveTintColor: '#1D9E75',
+          tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
+          tabBarStyle: {
+            backgroundColor: '#0d1b2e',
+            borderTopWidth: 0.5,
+            borderTopColor: 'rgba(255,255,255,0.06)',
+            height: 72,
+            paddingBottom: 12,
+            paddingTop: 8,
+          },
+          tabBarLabelStyle: {
+            fontSize: 10,
+            letterSpacing: 0.3,
+            fontWeight: '500',
+          },
+          headerStyle: { backgroundColor: Colors.navy },
+          headerTintColor: '#fff',
+          headerTitleStyle: { fontWeight: '500', fontSize: 16 },
+        })}
     >
       <Tab.Screen
         name="Home"

@@ -70,9 +70,7 @@ export default function RecordingScreen() {
     staleTime: 60_000,
   });
 
-  const categories = recents?.categories?.length
-    ? recents.categories.map((c) => c.name)
-    : QUICK_CATEGORIES;
+  const categories = QUICK_CATEGORIES;
 
   async function handleStop() {
     setStopping(false); // always reset first

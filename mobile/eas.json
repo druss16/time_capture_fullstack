@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 10.0.0"
+    "version": ">= 10.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -24,10 +25,11 @@
       "autoIncrement": true,
       "ios": {
         "resourceClass": "m-medium",
+        "image": "latest",
         "credentialsSource": "remote"
       },
       "android": {
-        "buildType": "aab",
+        "buildType": "app-bundle",
         "credentialsSource": "remote"
       }
     }
@@ -35,9 +37,9 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "YOUR_APPLE_ID@email.com",
-        "ascAppId": "YOUR_APP_STORE_CONNECT_APP_ID",
-        "appleTeamId": "YOUR_APPLE_TEAM_ID"
+        "appleId": "druss16@gmail.com",
+        "ascAppId": "6760627465",
+        "appleTeamId": "P3KX4CDFN4"
       },
       "android": {
         "serviceAccountKeyPath": "./google-service-account.json",

@@ -27,7 +27,9 @@ export default function SaveScreen() {
   const [clientId, setClientId] = useState<number | null>(routeClientId ?? timerStore.client_id);
   const [clientName, setClientName] = useState<string | null>(routeClientName ?? timerStore.client_name);
   const [categoryId, setCategoryId] = useState<number | null>(null);
-  const [categoryName, setCategoryName] = useState<string | null>(routeCategory ?? timerStore.category_name);
+  const [categoryName, setCategoryName] = useState<string | null>(
+  routeCategory ?? timerStore.category_name ?? 'Meeting'
+  );
   const [isBillable, setIsBillable] = useState(true);
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
@@ -62,15 +64,6 @@ export default function SaveScreen() {
     }
   }, []);
 
-  // Default category to first billable one
-  useEffect(() => {
-    if (!categoryId && recents?.categories?.length) {
-      const first = recents.categories.find((c) => c.is_billable_default) ?? recents.categories[0];
-      setCategoryId(first.id);
-      setCategoryName(first.name);
-    }
-  }, [recents]);
-
   async function handleSave() {
     if (!clientId) {
       Alert.alert('Select a client', 'Please select a client before saving.');
@@ -95,8 +88,9 @@ export default function SaveScreen() {
       qc.invalidateQueries({ queryKey: ['today-entries'] });
 
       navigation.navigate('Main');
-    } catch (e) {
-      Alert.alert('Save failed', 'Could not save to the server. Entry saved locally and will sync automatically.');
+    } catch (e: any) {
+      console.log('Save error:', e?.response?.data, e?.message);
+      Alert.alert('Save failed', e?.response?.data ? JSON.stringify(e.response.data) : e?.message);
       navigation.navigate('Main');
     } finally {
       setSaving(false);
@@ -144,10 +138,10 @@ export default function SaveScreen() {
             {categories.map((cat) => (
               <TouchableOpacity
                 key={cat.id}
-                style={[styles.catChip, cat.id === categoryId && styles.catChipSel]}
-                onPress={() => { setCategoryId(cat.id); setCategoryName(cat.name); Haptics.selectionAsync(); }}
+                style={[styles.catChip, cat.name === categoryName && styles.catChipSel]}
+                onPress={() => { setCategoryName(cat.name); Haptics.selectionAsync(); }}
               >
-                <Text style={[styles.catChipText, cat.id === categoryId && styles.catChipTextSel]}>
+                <Text style={[styles.catChipText, cat.name === categoryName && styles.catChipTextSel]}>
                   {cat.name}
                 </Text>
               </TouchableOpacity>

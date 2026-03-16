@@ -2,7 +2,7 @@
   "expo": {
     "name": "TimeTracker",
     "slug": "timetracker-mobile",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -18,7 +18,13 @@
       "infoPlist": {
         "NSCalendarsUsageDescription": "TimeTracker reads your calendar to suggest clients for active meetings.",
         "NSMicrophoneUsageDescription": "TimeTracker uses your microphone for AI voice entry logging.",
-        "UIBackgroundModes": ["fetch", "remote-notification"]
+        "UIBackgroundModes": [
+          "fetch",
+          "remote-notification",
+          "fetch",
+          "remote-notification"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -32,7 +38,11 @@
         "READ_CALENDAR",
         "RECORD_AUDIO",
         "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE"
+        "VIBRATE",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "plugins": [
@@ -61,7 +71,7 @@
     "extra": {
       "apiBaseUrl": "https://timetracker-api-k375.onrender.com/api",
       "eas": {
-        "projectId": "YOUR_EAS_PROJECT_ID"
+        "projectId": "6568fb5c-2b1c-4159-89d0-8c44baa14c69"
       }
     }
   }

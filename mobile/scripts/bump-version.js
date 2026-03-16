@@ -1,0 +1,13 @@
+const fs = require('fs');
+const path = require('path');
+const appJsonPath = path.join(__dirname, '..', 'app.json');
+const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+const [major, minor, patch] = appJson.expo.version.split('.').map(Number);
+const type = process.argv[2] || 'patch';
+let newVersion;
+if (type === 'major') newVersion = `${major + 1}.0.0`;
+else if (type === 'minor') newVersion = `${major}.${minor + 1}.0`;
+else newVersion = `${major}.${minor}.${patch + 1}`;
+appJson.expo.version = newVersion;
+fs.writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2));
+console.log('Version bumped to ' + newVersion);

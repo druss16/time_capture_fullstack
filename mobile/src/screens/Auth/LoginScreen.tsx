@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import { login } from '../../api/client';
 import { Colors, FontSizes, Spacing, Radius } from '../../utils/theme';
+import { TimeTrackerIcon, TimeTrackerWordmark } from '../../../TimeTrackerLogo';
 
 interface Props { onLogin: () => void; }
 
@@ -34,10 +35,10 @@ export default function LoginScreen({ onLogin }: Props) {
     >
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.logo}>
-          <View style={styles.logoIcon} />
+        <TimeTrackerIcon size={72} variant="default" />
+        <View style={styles.wordmarkRow}>
+          <TimeTrackerWordmark size="lg" theme="dark" />
         </View>
-        <Text style={styles.appName}>TimeTracker</Text>
         <Text style={styles.byLine}>by MavOps</Text>
       </View>
 
@@ -85,19 +86,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: Spacing.xxl,
   },
-  header: { alignItems: 'center', marginBottom: 48 },
-  logo: {
-    width: 64, height: 64, borderRadius: 32,
-    backgroundColor: Colors.teal,
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 16,
-  },
-  logoIcon: {
-    width: 30, height: 30, borderRadius: 15,
-    borderWidth: 2.5, borderColor: '#fff',
-  },
-  appName: { fontSize: 28, fontWeight: '500', color: '#fff', letterSpacing: 0.5 },
-  byLine: { fontSize: FontSizes.sm, color: 'rgba(255,255,255,0.5)', marginTop: 4 },
+  header: { alignItems: 'center', marginBottom: 48, gap: 16 },
+  wordmarkRow: { marginTop: 4 },
+  byLine: { fontSize: FontSizes.sm, color: 'rgba(255,255,255,0.35)', marginTop: -8 },
 
   form: { width: '100%', gap: Spacing.md },
   input: {

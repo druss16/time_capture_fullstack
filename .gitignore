@@ -206,4 +206,4 @@ coverage.xml
 # Temporary files
 *.tmp
 temp/
-tmp/
+tmp/.expo/

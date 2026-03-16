@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  Animated, ScrollView, ActivityIndicator, StatusBar,
+  Animated, ActivityIndicator, StatusBar,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
@@ -9,11 +9,13 @@ import { useQuery } from '@tanstack/react-query';
 import { useTimerStore, formatDuration } from '../../store/timerStore';
 import { startTimer, getMobileRecents, getAISuggestion } from '../../api/client';
 import { scheduleTimerAlert } from '../../utils/backgroundTimer';
-import { useCalendarEvents } from '../../hooks/useCalendarEvents';
+import { TimeTrackerIcon } from '../../../TimeTrackerLogo';
 import type { RootStackParamList } from '../../types';
 import type { StackNavigationProp } from '@react-navigation/stack';
 
 type Nav = StackNavigationProp<RootStackParamList>;
+
+const BTN = 160;
 
 export default function HomeScreen() {
   const navigation = useNavigation<Nav>();
@@ -23,6 +25,7 @@ export default function HomeScreen() {
   const ring1 = useRef(new Animated.Value(0)).current;
   const ring2 = useRef(new Animated.Value(0)).current;
   const ring3 = useRef(new Animated.Value(0)).current;
+  const buttonScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     const animate = (anim: Animated.Value, delay: number) => {
@@ -37,6 +40,14 @@ export default function HomeScreen() {
     animate(ring1, 0);
     animate(ring2, 600);
     animate(ring3, 1200);
+
+    // Button breathes in sync with rings
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(buttonScale, { toValue: 1.06, duration: 1200, useNativeDriver: true }),
+        Animated.timing(buttonScale, { toValue: 1.0, duration: 1200, useNativeDriver: true }),
+      ]),
+    ).start();
   }, []);
 
   const makeRingStyle = (anim: Animated.Value, maxScale: number) => ({
@@ -90,29 +101,30 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* Big button */}
+      {/* Button + rings */}
       <View style={styles.buttonArea}>
-        <Animated.View style={[styles.ring, makeRingStyle(ring1, 2.2)]} />
-        <Animated.View style={[styles.ring, makeRingStyle(ring2, 2.8)]} />
-        <Animated.View style={[styles.ring, makeRingStyle(ring3, 3.4)]} />
+        {/* Rings — absolutely positioned, never affect layout */}
+        <View style={styles.ringsContainer} pointerEvents="none">
+          <Animated.View style={[styles.ring, makeRingStyle(ring1, 2.2)]} />
+          <Animated.View style={[styles.ring, makeRingStyle(ring2, 2.8)]} />
+          <Animated.View style={[styles.ring, makeRingStyle(ring3, 3.4)]} />
+        </View>
 
-        <TouchableOpacity
-          onPress={handleTap}
-          activeOpacity={0.9}
-          disabled={starting}
-          style={styles.button}
-        >
-          {starting ? (
-            <ActivityIndicator color="#fff" size="large" />
-          ) : (
-            <View style={styles.buttonInner}>
-              <View style={styles.clockFace}>
-                <View style={styles.clockHand} />
-                <View style={styles.clockHandMin} />
-              </View>
-            </View>
-          )}
-        </TouchableOpacity>
+        {/* Button scales in place — no vertical movement */}
+        <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+          <TouchableOpacity
+            onPress={handleTap}
+            activeOpacity={0.9}
+            disabled={starting}
+            style={styles.button}
+          >
+            {starting ? (
+              <ActivityIndicator color="#fff" size="large" />
+            ) : (
+              <TimeTrackerIcon size={BTN} variant="default" />
+            )}
+          </TouchableOpacity>
+        </Animated.View>
       </View>
 
       <Text style={styles.tapLabel}>
@@ -139,8 +151,6 @@ export default function HomeScreen() {
   );
 }
 
-const BTN = 160;
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -149,7 +159,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 24,
   },
-
   suggestionPill: {
     position: 'absolute',
     top: 60,
@@ -162,9 +171,8 @@ const styles = StyleSheet.create({
     gap: 8,
     maxWidth: 320,
   },
-  pillDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#5DCAA5' },
+  pillDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#2bb5a0' },
   pillText: { fontSize: 12, color: 'rgba(255,255,255,0.7)', flex: 1 },
-
   buttonArea: {
     width: BTN,
     height: BTN,
@@ -172,60 +180,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 32,
   },
+  ringsContainer: {
+    position: 'absolute',
+    width: BTN,
+    height: BTN,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   ring: {
     position: 'absolute',
     width: BTN,
     height: BTN,
     borderRadius: BTN / 2,
-    backgroundColor: '#1D9E75',
+    backgroundColor: '#2bb5a0',
   },
   button: {
     width: BTN,
     height: BTN,
     borderRadius: BTN / 2,
-    backgroundColor: '#1D9E75',
-    borderWidth: 1.5,
-    borderColor: '#0F6E56',
-    alignItems: 'center',
-    justifyContent: 'center',
+    overflow: 'hidden',
     zIndex: 1,
   },
-  buttonInner: { alignItems: 'center', justifyContent: 'center' },
-  clockFace: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2.5,
-    borderColor: 'rgba(255,255,255,0.9)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  clockHand: {
-    position: 'absolute',
-    width: 2,
-    height: 13,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    borderRadius: 1,
-    top: 4,
-    left: 19,
-  },
-  clockHandMin: {
-    position: 'absolute',
-    width: 11,
-    height: 2,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    borderRadius: 1,
-    top: 20,
-    left: 19,
-  },
-
   tapLabel: {
     fontSize: 15,
     color: 'rgba(255,255,255,0.35)',
     letterSpacing: 0.5,
     marginBottom: 60,
   },
-
   recentsArea: {
     position: 'absolute',
     bottom: 40,

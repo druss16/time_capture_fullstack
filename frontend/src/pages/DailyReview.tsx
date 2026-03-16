@@ -1,6 +1,7 @@
 /**
  * DailyReview.tsx - Top toolbar layout
  * STRONGER FONTS - darker text, bolder weights
+ * + needs_review flag support for mobile entries
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -15,7 +16,8 @@ import {
   X, 
   Trash2,
   AlertTriangle,
-  FileQuestion
+  FileQuestion,
+  Smartphone,
 } from "lucide-react";
 import { todayIso } from "@/lib/utils/date";
 import { primeCsrf } from "@/lib/csrf";
@@ -31,7 +33,7 @@ import { useCategories } from '@/hooks/useCategories';
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
-const formatHours = (hours: number): string => {  // ✅ ADD HERE
+const formatHours = (hours: number): string => {
   const h = Math.floor(hours);
   const m = Math.round((hours - h) * 60);
   if (h === 0) return `${m}m`;
@@ -40,18 +42,19 @@ const formatHours = (hours: number): string => {  // ✅ ADD HERE
 };
 
 
-type Category = { name: string; hours: number; block_count: number; sample_activities: string[]; };
+type Category = { name: string; hours: number; block_count: number; sample_activities: string[]; needs_review?: boolean; };
 type ClientTime = { client_id: number | null; client: string; total_hours: number; categories: Category[]; };
 type ClientOption = { id: number; name: string; };
 type ParsedActivity = { blockId: number | null; title: string; raw: string; };
+type FlaggedBlock = { block_id: number; client_name: string; review_reason: string; minutes: number; start: string; };
 
-// ADD THIS:
 type TodayTimeResponse = {
   clients: ClientTime[];
   billable_hours: number;
-  non_billable_hours: number;  // ✅ ADD
+  non_billable_hours: number;
   global_hours: number;
   date: string;
+  flagged_blocks: FlaggedBlock[];
 };
 
 // Toast Component
@@ -65,6 +68,46 @@ const Toast = ({ message, type }: { message: string; type: 'success' | 'error' }
     {message}
   </div>
 );
+
+// Flagged block banner
+const FlaggedBanner = ({
+  flagged,
+  onDismiss,
+}: {
+  flagged: FlaggedBlock[];
+  onDismiss: (blockId: number) => void;
+}) => {
+  if (flagged.length === 0) return null;
+  return (
+    <div className="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 overflow-hidden">
+      <div className="px-4 py-2 bg-amber-100 border-b border-amber-200 flex items-center gap-2">
+        <Smartphone className="w-4 h-4 text-amber-600" />
+        <span className="text-amber-800 font-bold text-sm">
+          {flagged.length} mobile {flagged.length === 1 ? 'entry needs' : 'entries need'} review
+        </span>
+      </div>
+      <div className="divide-y divide-amber-100">
+        {flagged.map((f) => (
+          <div key={f.block_id} className="px-4 py-3 flex items-start justify-between gap-4">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-amber-900">{f.client_name} — {formatHours(f.minutes / 60)}</p>
+                <p className="text-xs text-amber-700 mt-0.5">{f.review_reason}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => onDismiss(f.block_id)}
+              className="shrink-0 px-3 py-1.5 text-xs font-bold bg-amber-200 hover:bg-amber-300 text-amber-900 rounded-lg transition-all"
+            >
+              Looks correct
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 export default function DailyReview() {
   const me = useWhoAmI();
@@ -80,7 +123,7 @@ export default function DailyReview() {
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const { categories: dynamicCategories, industryType } = useCategories();
-  
+  const [flaggedBlocks, setFlaggedBlocks] = useState<FlaggedBlock[]>([]);
 
   const [editingBlock, setEditingBlock] = useState<{ blockId: number; activityKey: string; currentCategory: string; currentClientId: number | null; } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -92,7 +135,6 @@ export default function DailyReview() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [billableHours, setBillableHours] = useState(0);
   const [nonBillableHours, setNonBillableHours] = useState(0);
-  // Add these with your other useState declarations
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [manualEntry, setManualEntry] = useState<{
     client_id: number | null;
@@ -107,13 +149,12 @@ export default function DailyReview() {
   });
 
   const INTERNAL_CATEGORIES = [
-  "Idle", "Personal/Non-Billable",
-  "Administration", "Team Meetings", "Training/Professional Development",
-  "Business Development/Sales", "Hiring/HR", "Company Planning",
-  "Internal Projects", "Marketing (Own Firm)", "IT/Tech Support",
-  "Finance/Accounting (Own Firm)", "PTO/Time Off", "Email/Communication",
-];
-
+    "Idle", "Personal/Non-Billable",
+    "Administration", "Team Meetings", "Training/Professional Development",
+    "Business Development/Sales", "Hiring/HR", "Company Planning",
+    "Internal Projects", "Marketing (Own Firm)", "IT/Tech Support",
+    "Finance/Accounting (Own Firm)", "PTO/Time Off", "Email/Communication",
+  ];
 
   useEffect(() => { if (!user && whoami) setUser(whoami); }, [whoami, user]);
   useEffect(() => { (async () => { try { await primeCsrf(API_BASE); } catch {} })(); }, []);
@@ -128,7 +169,6 @@ export default function DailyReview() {
     if (match) return { blockId: parseInt(match[1]), title: activity.replace(/\[id:\d+\]\s*/, '').trim(), raw: activity };
     return { blockId: null, title: activity, raw: activity };
   };
-
 
   const loadClients = useCallback(async () => {
     for (const url of [`${API_BASE}/options/clients/`, `${API_BASE}/clients/list`, `${API_BASE}/clients/list/`]) {
@@ -146,19 +186,27 @@ export default function DailyReview() {
     }
   }, [timeSummary, availableClients.length]);
 
-  // Update loadTimeSummary (around line 111)
   const loadTimeSummary = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
       const json = await safeFetchJson<TodayTimeResponse>(`${API_BASE}/today-time/?date=${date}`);
       setTimeSummary(json.clients || []);
-      setBillableHours(json.billable_hours || 0);  // ADD THIS STATE
-      setNonBillableHours(json.non_billable_hours || 0);  // ✅ ADD
+      setBillableHours(json.billable_hours || 0);
+      setNonBillableHours(json.non_billable_hours || 0);
+      setFlaggedBlocks(json.flagged_blocks || []);
     } catch (err: any) { setErr(err?.message || 'Failed to load'); setTimeSummary([]); }
     finally { setBusy(false); }
   }, [date]);
 
-
+  const handleDismissReview = async (blockId: number) => {
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${blockId}/dismiss-review/`, { method: 'POST' });
+      setFlaggedBlocks(prev => prev.filter(f => f.block_id !== blockId));
+      showToast('Entry confirmed', 'success');
+    } catch {
+      showToast('Failed to dismiss', 'error');
+    }
+  };
 
   const loadUncategorizedCount = useCallback(async () => {
     try {
@@ -167,71 +215,37 @@ export default function DailyReview() {
     } catch {}
   }, [date]);
 
-
   const runAIClassification = useCallback(async () => {
     try {
       const response = await safeFetchJson<any[]>(`${API_BASE}/blocks/suggestions/`);
       if (Array.isArray(response)) {
         const autoSaved = response.filter(r => r.ai_suggestion?.auto_saved).length;
-        if (autoSaved > 0) {
-          console.log(`[AI] Auto-categorized ${autoSaved} blocks`);
-          loadTimeSummary();
-          loadUncategorizedCount();
-        }
+        if (autoSaved > 0) { loadTimeSummary(); loadUncategorizedCount(); }
       }
-    } catch (err) {
-      console.warn('[AI] Classification skipped:', err);
-    }
+    } catch {}
   }, [loadTimeSummary, loadUncategorizedCount]);
 
   useEffect(() => {
-    const t = setTimeout(() => { 
-      loadTimeSummary(); 
-      loadUncategorizedCount(); 
-      loadClients(); 
-      // Categories now come from useCategories hook automatically
-    }, 200);
+    const t = setTimeout(() => { loadTimeSummary(); loadUncategorizedCount(); loadClients(); }, 200);
     return () => clearTimeout(t);
   }, [loadTimeSummary, loadUncategorizedCount, loadClients]);
 
-  // And update the interval useEffect to also run AI:
   useEffect(() => {
-    const interval = setInterval(() => { 
-      loadTimeSummary(); 
-      loadUncategorizedCount();
-      runAIClassification();  // <-- ADD THIS
-    }, 2 * 60 * 1000);
+    const interval = setInterval(() => { loadTimeSummary(); loadUncategorizedCount(); runAIClassification(); }, 2 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
-  // Check for auto-open params on mount
-
-  // Check for date param on mount (from notification deep link)
   useEffect(() => {
     const dateParam = searchParams.get('date');
-    if (dateParam) {
-      setDate(dateParam);
-    }
+    if (dateParam) setDate(dateParam);
   }, [searchParams]);
 
-  // Check for auto-open params on mount
   useEffect(() => {
     const shouldAdd = searchParams.get('add') === 'true';
     const preSelectedClientId = searchParams.get('client_id');
-    
     if (shouldAdd) {
-      // Pre-fill the client if provided
-      if (preSelectedClientId) {
-        setManualEntry(prev => ({
-          ...prev,
-          client_id: parseInt(preSelectedClientId),
-        }));
-      }
-      
-      // Open the modal
+      if (preSelectedClientId) setManualEntry(prev => ({ ...prev, client_id: parseInt(preSelectedClientId) }));
       setShowManualEntry(true);
-      
-      // Clear the params so refresh doesn't re-open
       searchParams.delete('add');
       searchParams.delete('client_id');
       setSearchParams(searchParams, { replace: true });
@@ -286,8 +300,7 @@ export default function DailyReview() {
   const isPersonalCategory = (n: string) => n.toLowerCase().includes('personal');
   const isNonBillable = (n: string) => isIdleCategory(n) || isUncategorizedCategory(n) || isPersonalCategory(n);
 
-
-  const getClientBillableHours = (client: ClientTime) => 
+  const getClientBillableHours = (client: ClientTime) =>
     client.categories.filter(cat => !isNonBillable(cat.name)).reduce((sum, cat) => sum + cat.hours, 0);
 
   const toggleClient = (key: string) => setCollapsedClients(prev => {
@@ -341,6 +354,13 @@ export default function DailyReview() {
 
             {/* Right: Date + Refresh + Stats */}
             <div className="flex items-center gap-3">
+              {/* Flagged badge in toolbar */}
+              {flaggedBlocks.length > 0 && (
+                <div className="flex items-center gap-1.5 px-3 py-2 bg-amber-50 border-2 border-amber-300 rounded-xl">
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  <span className="text-amber-800 font-bold text-sm">{flaggedBlocks.length} flagged</span>
+                </div>
+              )}
               <input
                 type="date"
                 value={date}
@@ -376,6 +396,10 @@ export default function DailyReview() {
 
       {/* ===== CONTENT ===== */}
       <div className="p-6">
+
+        {/* Flagged mobile entries banner */}
+        <FlaggedBanner flagged={flaggedBlocks} onDismiss={handleDismissReview} />
+
         {activeTab === 'summary' && uncategorizedCount > 0 && (
           <div className="mb-4 px-4 py-3 bg-warning/10 border-2 border-warning/30 rounded-xl flex items-center justify-between">
             <div className="flex items-center gap-2 text-amber-700 font-bold">
@@ -477,6 +501,13 @@ export default function DailyReview() {
                                     <span className={cn('font-bold text-base', catNonBillable ? 'text-slate-500' : 'text-slate-800')}>
                                       {cat.name}
                                     </span>
+                                    {/* Flag icon if mobile entry needs review */}
+                                    {cat.needs_review && (
+                                      <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-100 border border-amber-300 rounded-full text-xs font-bold text-amber-700">
+                                        <AlertTriangle className="w-3 h-3" />
+                                        Review
+                                      </span>
+                                    )}
                                     <span className="text-sm text-slate-500 font-semibold">({cat.sample_activities.length})</span>
                                   </div>
                                   <span className={cn('font-extrabold text-lg', catNonBillable ? 'text-slate-400' : 'text-emerald-600')}>

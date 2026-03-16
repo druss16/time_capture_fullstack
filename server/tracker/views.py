@@ -4286,9 +4286,8 @@ def today_time(request):
     # =========================================================================
     # STEP 5: Merge in mobile blocks (no RawEvents — must add separately)
     # =========================================================================
-    # =========================================================================
-    # STEP 5: Merge in mobile blocks (no RawEvents — must add separately)
-    # =========================================================================
+    flagged_blocks = []  # collect needs_review entries for the dashboard
+ 
     mobile_blocks = Block.objects.filter(
         user=user,
         org=get_user_org(user),
@@ -4298,60 +4297,92 @@ def today_time(request):
         is_categorized=True,
         client__isnull=False,
     ).select_related('client')
-
+ 
     for block in mobile_blocks:
         b_client_name = block.client.name
-        b_minutes = block.minutes or 0
-        b_hours = round(b_minutes / 60, 2)
-        b_cat = (
+        b_minutes     = block.minutes or 0
+        b_hours       = round(b_minutes / 60, 2)
+        b_cat         = (
             list(block.category_hours.keys())[0]
             if isinstance(block.category_hours, dict) and block.category_hours
             else 'Manual Entry'
         )
         b_title = f"Mobile - {block.notes or b_cat} ({b_minutes}m)"
-
-        # Find existing client in result (result uses key 'client' not 'client_name')
+ 
+        # Collect flagged entries for the UI
+        if getattr(block, 'needs_review', False):
+            flagged_blocks.append({
+                'block_id':      block.id,
+                'client_name':   b_client_name,
+                'review_reason': getattr(block, 'review_reason', ''),
+                'minutes':       b_minutes,
+                'start':         block.start.isoformat(),
+            })
+ 
         existing = next((r for r in result if r['client'] == b_client_name), None)
-
+ 
         if existing:
             existing_cat = next((c for c in existing['categories'] if c['name'] == b_cat), None)
             if existing_cat:
-                existing_cat['hours'] = round(existing_cat['hours'] + b_hours, 2)
+                existing_cat['hours']        = round(existing_cat['hours'] + b_hours, 2)
                 existing_cat['block_count'] += 1
                 existing_cat['sample_activities'].insert(0, f"[id:{block.id}] {b_title}")
             else:
                 existing['categories'].append({
-                    'name': b_cat,
-                    'hours': b_hours,
-                    'block_count': 1,
+                    'name':              b_cat,
+                    'hours':             b_hours,
+                    'block_count':       1,
                     'unique_activities': 1,
+                    'needs_review':      getattr(block, 'needs_review', False),
                     'sample_activities': [f"[id:{block.id}] {b_title}"],
                 })
             existing['total_hours'] = round(existing['total_hours'] + b_hours, 2)
         else:
             result.append({
-                'client_id': block.client_id,
-                'client': b_client_name,
+                'client_id':   block.client_id,
+                'client':      b_client_name,
                 'total_hours': b_hours,
-                'categories': [{
-                    'name': b_cat,
-                    'hours': b_hours,
-                    'block_count': 1,
+                'categories':  [{
+                    'name':              b_cat,
+                    'hours':             b_hours,
+                    'block_count':       1,
                     'unique_activities': 1,
+                    'needs_review':      getattr(block, 'needs_review', False),
                     'sample_activities': [f"[id:{block.id}] {b_title}"],
                 }],
             })
-
+ 
         billable_minutes += b_minutes
-        total_minutes += b_minutes
-    
+        total_minutes    += b_minutes
+ 
     return Response({
-        'clients': result,
-        'global_hours': round(total_minutes / 60, 2),
-        'billable_hours': round(billable_minutes / 60, 2),
+        'clients':           result,
+        'global_hours':      round(total_minutes / 60, 2),
+        'billable_hours':    round(billable_minutes / 60, 2),
         'non_billable_hours': round(non_billable_minutes / 60, 2),
-        'date': target_date.isoformat(),
+        'date':              target_date.isoformat(),
+        'flagged_blocks':    flagged_blocks,  # ← NEW: needs_review entries
     })
+
+# ── Add this new view to views.py ─────────────────────────────────────────────
+ 
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def dismiss_block_review(request, block_id):
+    """
+    POST /api/blocks/<block_id>/dismiss-review/
+    Clears needs_review + review_reason on a Block.
+    """
+    try:
+        block = Block.objects.get(id=block_id, user=request.user)
+    except Block.DoesNotExist:
+        return Response({'error': 'Block not found'}, status=404)
+ 
+    block.needs_review  = False
+    block.review_reason = ''
+    block.save(update_fields=['needs_review', 'review_reason'])
+ 
+    return Response({'ok': True, 'block_id': block_id})
 
 
 def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):

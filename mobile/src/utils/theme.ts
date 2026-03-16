@@ -1,15 +1,15 @@
 export const Colors = {
   // Primary brand — matches web app nav exactly
-  navy: '#112240',
-  navyLight: '#1a3055',
-  navyDark: '#0c1a30',
+  navy: '#131f2e',
+  navyLight: '#1a2b3c',
+  navyDark: '#0d1520',
 
-  // Accent — the teal green from the web app
-  teal: '#1D9E75',
-  tealLight: '#5DCAA5',
-  tealLighter: '#e1f5ee',
-  tealDark: '#0F6E56',
-  tealDarker: '#085041',
+  // Accent — TimeTracker brand teal
+  teal: '#2bb5a0',
+  tealLight: '#3dcfb8',
+  tealLighter: '#e0f5f2',
+  tealDark: '#229688',
+  tealDarker: '#1a7a6e',
 
   // Functional
   danger: '#E24B4A',
@@ -23,15 +23,15 @@ export const Colors = {
   bgCard: '#ffffff',
   border: '#e8ecef',
   borderMid: '#d0d5dd',
-  textPrimary: '#112240',
+  textPrimary: '#131f2e',
   textSecondary: '#556070',
   textMuted: '#9aa5b1',
 
   // AI accent
-  aiGreen: '#1D9E75',
-  aiBg: '#e1f5ee',
-  aiBorder: '#5DCAA5',
-  aiText: '#085041',
+  aiGreen: '#2bb5a0',
+  aiBg: '#e0f5f2',
+  aiBorder: '#3dcfb8',
+  aiText: '#1a7a6e',
 };
 
 export const FontSizes = {

@@ -333,5 +333,7 @@ urlpatterns = [
     # tracker/urls.py — add this line:
     path("analytics/ai-analysis/", views_ai_analysis.ai_analysis),
 
+    path('blocks/<int:block_id>/dismiss-review/', views.dismiss_block_review),
+
 
 ]

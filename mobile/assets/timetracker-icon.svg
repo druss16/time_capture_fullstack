@@ -1,0 +1,30 @@
+<svg width="1024" height="1024" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1a2b3c"/>
+      <stop offset="100%" stop-color="#152638"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <!-- Arc track -->
+  <circle cx="32" cy="32" r="20" stroke="#1e3a52" stroke-width="4.5" fill="none"/>
+  <!-- Progress arc ~270deg -->
+  <circle cx="32" cy="32" r="20"
+    stroke="#2bb5a0"
+    stroke-width="4.5"
+    fill="none"
+    stroke-linecap="round"
+    stroke-dasharray="94.2 125.6"
+    stroke-dashoffset="31.4"
+    transform="rotate(-90 32 32)"/>
+  <!-- Teal badge fill -->
+  <circle cx="32" cy="32" r="11" fill="#2bb5a0"/>
+  <!-- White checkmark -->
+  <polyline points="25.5,32 30,36.5 38.5,26.5"
+    stroke="white"
+    stroke-width="2.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"/>
+</svg>

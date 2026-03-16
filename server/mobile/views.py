@@ -117,6 +117,10 @@ class MobileStopView(APIView):
     """POST /api/mobile/stop/"""
     permission_classes = [IsAuthenticated]
 
+    CALENDAR_BUFFER_SECS = 15 * 60   # 15 min grace window vs calendar
+    FLAG_DURATION_SECS   = 4 * 3600  # flag anything over 4 hours
+    HARD_CAP_SECS        = 8 * 3600  # hard cap — require confirmation
+
     def post(self, request):
         org = get_user_org(request.user)
         if not org:
@@ -129,11 +133,26 @@ class MobileStopView(APIView):
         category_name    = request.data.get('category_name', '')
         note             = request.data.get('note', '')
         is_billable      = bool(request.data.get('is_billable', True))
+        force_save       = bool(request.data.get('force_save', False))
 
+        # Calendar context from mobile app
+        calendar_start_str = request.data.get('calendar_event_start')
+        calendar_end_str   = request.data.get('calendar_event_end')
+        calendar_title     = request.data.get('calendar_event_title', '')
+
+        # ── Hard cap: >8 hours requires explicit user confirmation ────────────
+        if duration_seconds > self.HARD_CAP_SECS and not force_save:
+            hours = round(duration_seconds / 3600, 1)
+            return Response({
+                'requires_confirmation': True,
+                'reason': f'Timer ran for {hours} hours — did you forget to stop it?',
+                'duration_seconds': duration_seconds,
+            }, status=200)
+
+        # ── Resolve block ─────────────────────────────────────────────────────
         try:
             block = Block.objects.get(id=entry_id, user=request.user)
         except Block.DoesNotExist:
-            # Started offline — create fresh
             block = Block(
                 user=request.user,
                 org=org,
@@ -156,8 +175,8 @@ class MobileStopView(APIView):
         block.categorized_by = 'manual'
         block.categorized_at = timezone.now()
 
-        category = category_name if category_name else 'Meeting'
-        hours = max(duration_seconds / 3600, 1/60)
+        category             = category_name if category_name else 'Meeting'
+        hours                = max(duration_seconds / 3600, 1/60)
         block.category_hours = {category: round(hours, 4)}
 
         if client_id:
@@ -166,19 +185,125 @@ class MobileStopView(APIView):
             except Client.DoesNotExist:
                 pass
 
+        # ── Mobile wins: absorb/trim all overlapping desktop blocks ───────────
+        # Mobile = intentional. Desktop = passive. Mobile always wins.
+        absorbed_count = 0
+        if block.client and block.start and block.end:
+            desktop_overlaps = Block.objects.filter(
+                user=request.user,
+                org=org,
+                client=block.client,
+                start__lt=block.end,
+                end__gt=block.start,
+            ).exclude(hostname='mobile').exclude(id=block.id if block.id else 0)
+
+            for db in desktop_overlaps:
+                db_start = db.start
+                db_end   = db.end
+
+                # Case 1: Desktop fully inside mobile window → delete (absorbed)
+                if db_start >= block.start and db_end <= block.end:
+                    db.delete()
+                    absorbed_count += 1
+
+                # Case 2: Desktop starts before, ends inside → trim desktop end
+                elif db_start < block.start and db_end <= block.end:
+                    db.end     = block.start
+                    db.minutes = max(1, round((db.end - db.start).total_seconds() / 60))
+                    db.save()
+
+                # Case 3: Desktop starts inside, ends after → trim desktop start
+                elif db_start >= block.start and db_end > block.end:
+                    db.start   = block.end
+                    db.minutes = max(1, round((db.end - db.start).total_seconds() / 60))
+                    db.day     = db.start.date()
+                    db.save()
+
+                # Case 4: Desktop fully wraps mobile → split into before + after
+                elif db_start < block.start and db_end > block.end:
+                    # Trim existing to before portion
+                    db.end     = block.start
+                    db.minutes = max(1, round((db.end - db.start).total_seconds() / 60))
+                    db.save()
+
+                    # Create after portion as new block
+                    after_secs = (db_end - block.end).total_seconds()
+                    if after_secs > 60:
+                        Block.objects.create(
+                            user=db.user,
+                            org=db.org,
+                            client=db.client,
+                            start=block.end,
+                            end=db_end,
+                            minutes=max(1, round(after_secs / 60)),
+                            day=block.end.date(),
+                            hostname=db.hostname,
+                            device_id=db.device_id,
+                            title=db.title,
+                            notes=db.notes,
+                            category_hours=db.category_hours,
+                            is_categorized=db.is_categorized,
+                            categorized_by=db.categorized_by,
+                        )
+
+        # ── Calendar validation ───────────────────────────────────────────────
+        needs_review  = False
+        review_reason = ''
+
+        cal_start = None
+        cal_end   = None
+
+        if calendar_start_str and calendar_end_str:
+            try:
+                cal_start = datetime.fromisoformat(calendar_start_str.replace('Z', '+00:00'))
+                cal_end   = datetime.fromisoformat(calendar_end_str.replace('Z', '+00:00'))
+            except (TypeError, ValueError):
+                pass
+
+        if cal_start and cal_end:
+            diff_from_end = (block.end - cal_end).total_seconds()  # + over, - under
+
+            if diff_from_end > self.CALENDAR_BUFFER_SECS:
+                over_min      = round(diff_from_end / 60)
+                needs_review  = True
+                review_reason = (
+                    f'Timer ran {over_min}min past your "{calendar_title}" meeting '
+                    f'(ended {cal_end.strftime("%-I:%M %p")}) — did the meeting run long?'
+                )
+            elif diff_from_end < -self.CALENDAR_BUFFER_SECS:
+                short_min     = round(abs(diff_from_end) / 60)
+                needs_review  = True
+                review_reason = (
+                    f'Timer stopped {short_min}min before your "{calendar_title}" meeting '
+                    f'was scheduled to end — did you leave early?'
+                )
+
+        # ── Duration guardrail: flag >4 hours ─────────────────────────────────
+        if duration_seconds > self.FLAG_DURATION_SECS and not needs_review:
+            hours_tracked = round(duration_seconds / 3600, 1)
+            needs_review  = True
+            review_reason = (
+                f'Long session: {hours_tracked}h tracked — please confirm this is correct.'
+            )
+
+        # ── Save ──────────────────────────────────────────────────────────────
+        block.needs_review  = needs_review
+        block.review_reason = review_reason
         block.save()
 
         return Response({
-            'id':            block.id,
-            'client_name':   block.client.name if block.client else None,
-            'category_name': category_name,
-            'minutes':       block.minutes,
-            'start':         block.start.isoformat(),
-            'end':           block.end.isoformat(),
-            'notes':         block.notes,
-            'approved':      block.approved,
+            'id':               block.id,
+            'client_name':      block.client.name if block.client else None,
+            'category_name':    category_name,
+            'minutes':          block.minutes,
+            'start':            block.start.isoformat(),
+            'end':              block.end.isoformat(),
+            'notes':            block.notes,
+            'approved':         block.approved,
+            'needs_review':     needs_review,
+            'review_reason':    review_reason,
+            'absorbed_desktop': absorbed_count,
         })
-
 
 # ── 3. Recent blocks + clients + categories ───────────────────────────────────
 

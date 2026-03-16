@@ -4,6 +4,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { getStoredToken } from './src/api/client';
 import { useTimerStore } from './src/store/timerStore';
 import { setupNotifications, registerBackgroundTask } from './src/utils/backgroundTimer';
+import { syncPendingSaves } from './src/utils/offlineSync';
 import AppNavigator from './src/navigation/AppNavigator';
 import { View, ActivityIndicator } from 'react-native';
 import { Colors } from './src/utils/theme';
@@ -22,9 +23,17 @@ export default function App() {
       try {
         const token = await getStoredToken();
         setIsLoggedIn(!!token);
-        await restoreTimer();          // restore any in-flight timer
+        await restoreTimer();
         await setupNotifications();
         await registerBackgroundTask();
+
+        // Retry any saves that failed due to network/version issues
+        if (token) {
+          syncPendingSaves().then(({ synced, failed }) => {
+            if (synced > 0) console.log(`[App] Auto-synced ${synced} offline entry(s)`);
+            if (failed > 0) console.warn(`[App] ${failed} entry(s) still pending`);
+          });
+        }
       } finally {
         setLoading(false);
       }

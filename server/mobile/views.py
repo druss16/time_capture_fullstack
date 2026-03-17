@@ -289,7 +289,7 @@ class MobileStopView(APIView):
         # ── Save ──────────────────────────────────────────────────────────────
         block.needs_review  = needs_review
         block.review_reason = review_reason
-        block.save()
+        block.save(force_update=True)
 
         return Response({
             'id':               block.id,

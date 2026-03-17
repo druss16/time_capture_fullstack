@@ -111,7 +111,7 @@ export default function HomeScreen() {
         </View>
 
         {/* Button scales in place — no vertical movement */}
-        <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+        <Animated.View style={{ transform: [{ scale: buttonScale }] }} pointerEvents="box-none">
           <TouchableOpacity
             onPress={handleTap}
             activeOpacity={0.9}

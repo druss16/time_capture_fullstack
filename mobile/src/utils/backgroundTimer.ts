@@ -20,60 +20,70 @@ export async function setupNotifications() {
   });
 }
 
-// ─── Schedule a cascade of timer alerts ──────────────────────────────────────
-// Fires at: 2h, 4h, 5h, 6h, 7h, 8h + end of day 6pm nudge
+// ─── Schedule timer alerts ────────────────────────────────────────────────────
+// Only schedules alerts for thresholds that haven't been reached yet.
+// e.g. if timer already ran 3h, only schedules 4h, 5h, 6h, 7h, 8h + 6pm
 
-export async function scheduleTimerAlert(client_name: string, entry_id: number) {
+export async function scheduleTimerAlert(
+  client_name: string,
+  entry_id: number,
+  alreadyElapsedSeconds: number = 0,
+) {
   await Notifications.cancelAllScheduledNotificationsAsync();
 
   const label = client_name ?? 'a timer';
+  const alreadyElapsedHours = alreadyElapsedSeconds / 3600;
 
   const alerts = [
     {
-      seconds: 2 * 3600,
+      hours: 2,
       title: 'Timer still running',
       body: `Still tracking ${label}? Tap to stop or keep going.`,
     },
     {
-      seconds: 4 * 3600,
+      hours: 4,
       title: '4 hours tracked',
       body: `${label} timer has been running 4 hours — still with them?`,
     },
     {
-      seconds: 5 * 3600,
+      hours: 5,
       title: '5 hours — double check',
       body: `${label} timer running 5h. Did you forget to stop it?`,
     },
     {
-      seconds: 6 * 3600,
+      hours: 6,
       title: '⚠️ 6 hours tracked',
       body: `Timer still running for ${label}. Tap to stop now.`,
     },
     {
-      seconds: 7 * 3600,
+      hours: 7,
       title: '⚠️ 7 hours — please check',
       body: `${label} has been tracking for 7 hours. Is this correct?`,
     },
     {
-      seconds: 8 * 3600,
+      hours: 8,
       title: '🚨 8 hours — timer may be stuck',
       body: `${label} timer running for 8 hours. Tap to stop before you overbill.`,
     },
   ];
 
   for (const alert of alerts) {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: alert.title,
-        body: alert.body,
-        data: { entry_id, action: 'timer_alert' },
-        sound: true,
-      },
-      trigger: { seconds: alert.seconds },
-    });
+    // Only schedule if we haven't passed this threshold yet
+    if (alreadyElapsedHours < alert.hours) {
+      const secsFromNow = (alert.hours - alreadyElapsedHours) * 3600;
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: alert.title,
+          body: alert.body,
+          data: { entry_id, action: 'timer_alert' },
+          sound: true,
+        },
+        trigger: { seconds: Math.floor(secsFromNow) },
+      });
+    }
   }
 
-  // End of day alert — if timer is still running at 6pm today
+  // End of day alert at 6pm — only if timer started before 6pm today
   const now = new Date();
   const sixPm = new Date();
   sixPm.setHours(18, 0, 0, 0);
@@ -96,7 +106,7 @@ export async function cancelTimerAlert() {
   await Notifications.cancelAllScheduledNotificationsAsync();
 }
 
-// ─── Background fetch task (checks for stale timers) ─────────────────────────
+// ─── Background fetch task ────────────────────────────────────────────────────
 
 TaskManager.defineTask(TIMER_CHECK_TASK, async () => {
   try {
@@ -109,24 +119,27 @@ TaskManager.defineTask(TIMER_CHECK_TASK, async () => {
     }
 
     const elapsed = (Date.now() - timer.start_time) / 1000 / 3600;
+    const lastNotifiedHour = timer.lastNotifiedHour || 0;
+    const currentHour = Math.floor(elapsed);
 
-    // Fire immediate alerts for thresholds that may have been missed
-    // (e.g. phone was off, background task was delayed)
-    const missedThresholds = [2, 4, 6, 8].filter((h) => elapsed > h);
-
-    if (missedThresholds.length > 0) {
-      const hours = Math.round(elapsed);
+    // Only fire if we've crossed a new hour threshold above 2h
+    // and haven't notified for this hour yet
+    if (elapsed > 2 && currentHour > lastNotifiedHour) {
       await Notifications.scheduleNotificationAsync({
         content: {
           title: elapsed > 8
             ? '🚨 Timer running very long'
-            : `⚠️ ${hours}h timer still running`,
-          body: `${timer.client_name ?? 'Timer'} has been running ${hours}h. Did you forget to stop it?`,
+            : `⚠️ ${currentHour}h timer still running`,
+          body: `${timer.client_name ?? 'Timer'} has been running ${currentHour}h. Did you forget to stop it?`,
           data: { action: 'timer_alert' },
           sound: true,
         },
         trigger: null, // immediate
       });
+
+      // Mark this hour as notified
+      timer.lastNotifiedHour = currentHour;
+      await SecureStore.setItemAsync(TIMER_KEY, JSON.stringify(timer));
     }
 
     return BackgroundFetch.BackgroundFetchResult.NewData;
@@ -138,11 +151,11 @@ TaskManager.defineTask(TIMER_CHECK_TASK, async () => {
 export async function registerBackgroundTask() {
   try {
     await BackgroundFetch.registerTaskAsync(TIMER_CHECK_TASK, {
-      minimumInterval: 15 * 60, // check every 15 minutes
+      minimumInterval: 15 * 60,
       stopOnTerminate: false,
       startOnBoot: true,
     });
   } catch {
-    // Already registered — fine
+    // Already registered
   }
 }

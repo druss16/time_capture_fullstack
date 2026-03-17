@@ -4,7 +4,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Notifications from 'expo-notifications';
 import { getStoredToken } from './src/api/client';
 import { useTimerStore } from './src/store/timerStore';
-import { setupNotifications, registerBackgroundTask } from './src/utils/backgroundTimer';
+import { setupNotifications, registerBackgroundTask, scheduleTimerAlert } from './src/utils/backgroundTimer';
 import { syncPendingSaves } from './src/utils/offlineSync';
 import {
   setupMeetingNotificationCategory,
@@ -52,10 +52,18 @@ export default function App() {
             if (synced > 0) console.log(`[App] Auto-synced ${synced} offline entry(s)`);
           });
 
+          // Re-schedule timer alerts based on already-elapsed time
+          // (handles app restart mid-session correctly)
+          const timerState = useTimerStore.getState();
+          if (timerState.isRunning && timerState.client_name && timerState.start_time && timerState.entry_id) {
+            const alreadyElapsed = Math.floor((Date.now() - timerState.start_time) / 1000);
+            scheduleTimerAlert(timerState.client_name, timerState.entry_id, alreadyElapsed);
+          }
+
           // Register calendar background check
           await registerCalendarCheckTask();
 
-          // Run an immediate check on launch
+          // Run an immediate calendar check on launch
           checkCalendarAndNotify();
         }
       } finally {
@@ -70,7 +78,7 @@ export default function App() {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       handleMeetingNotificationTap(response, {
         onStartTimer: async (clientId, clientName, eventStart, eventEnd, eventTitle) => {
-          if (isRunning) return; // Already tracking
+          if (isRunning) return;
           try {
             const draft = await apiStartTimer(clientId ?? undefined);
             localStart(draft.entry_id, clientId, clientName);
@@ -79,12 +87,10 @@ export default function App() {
           }
         },
         onStopTimer: (clientId, clientName) => {
-          // Navigate to save screen — handled by AppNavigator
           console.log('[App] Meeting ended notification tapped');
         },
       });
     });
-
     return () => sub.remove();
   }, [isRunning]);
 

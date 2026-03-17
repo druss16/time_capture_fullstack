@@ -71,7 +71,7 @@ export default function HomeScreen() {
       const client_name = aiSuggestion?.client_name ?? undefined;
       const draft = await startTimer(client_id);
       localStart(draft.entry_id, client_id ?? null, client_name ?? null);
-      if (client_name) scheduleTimerAlert(client_name, draft.entry_id);
+      if (client_name) scheduleTimerAlert(client_name, draft.entry_id, 0);
       navigation.navigate('Main', { screen: 'Recording' } as any);
     } catch (e: any) {
       Alert.alert('Error', e?.response?.data?.detail || e?.message || 'Failed to start timer');

@@ -9,7 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTimerStore, formatDuration } from '../../store/timerStore';
 import { startTimer, getMobileRecents, getAISuggestion } from '../../api/client';
 import { scheduleTimerAlert } from '../../utils/backgroundTimer';
-import { TimeTrackerIcon } from '../../../TimeTrackerLogo';
+// import { TimeTrackerIcon } from '../../../TimeTrackerLogo';
 import type { RootStackParamList } from '../../types';
 import type { StackNavigationProp } from '@react-navigation/stack';
 
@@ -108,7 +108,7 @@ export default function HomeScreen() {
           {starting ? (
             <ActivityIndicator color="#fff" size="large" />
           ) : (
-            <TimeTrackerIcon size={BTN} variant="default" />
+            <View style={{ width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: 'white' }} />
           )}
         </TouchableOpacity>
       </View>

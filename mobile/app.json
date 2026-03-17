@@ -2,7 +2,7 @@
   "expo": {
     "name": "TimeTracker",
     "slug": "timetracker-mobile",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/timetracker-icon-1024.png",
     "userInterfaceStyle": "automatic",
@@ -11,6 +11,10 @@
       "resizeMode": "contain",
       "backgroundColor": "#131f2e"
     },
+    "updates": {
+      "url": "https://u.expo.dev/6568fb5c-2b1c-4159-89d0-8c44baa14c69"
+    },
+    "runtimeVersion": "1.0.3",
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "ai.mavops.timetracker",
@@ -19,12 +23,6 @@
         "NSCalendarsUsageDescription": "TimeTracker reads your calendar to suggest clients for active meetings.",
         "NSMicrophoneUsageDescription": "TimeTracker uses your microphone for AI voice entry logging.",
         "UIBackgroundModes": [
-          "fetch",
-          "remote-notification",
-          "fetch",
-          "remote-notification",
-          "fetch",
-          "remote-notification",
           "fetch",
           "remote-notification"
         ],
@@ -46,14 +44,6 @@
         "android.permission.READ_CALENDAR",
         "android.permission.WRITE_CALENDAR",
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
-        "READ_CALENDAR",
-        "RECORD_AUDIO",
-        "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE",
-        "android.permission.READ_CALENDAR",
-        "android.permission.WRITE_CALENDAR",
-        "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
@@ -61,10 +51,16 @@
       "expo-secure-store",
       "expo-task-manager",
       [
+        "expo-live-activity",
+        {
+          "enablePushNotifications": false
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./assets/timetracker-icon-1024.png",
-          "color": "#1D9E75"
+          "color": "#2bb5a0"
         }
       ],
       [
@@ -86,12 +82,6 @@
       "eas": {
         "projectId": "6568fb5c-2b1c-4159-89d0-8c44baa14c69"
       }
-    },
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
-    "updates": {
-      "url": "https://u.expo.dev/6568fb5c-2b1c-4159-89d0-8c44baa14c69"
     }
   }
 }

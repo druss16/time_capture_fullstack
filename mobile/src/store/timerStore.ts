@@ -1,11 +1,15 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import type { TimerState } from '../types';
+import {
+  startLiveActivity,
+  updateLiveActivity,
+  stopLiveActivity,
+} from '../utils/liveActivity';
 
 const TIMER_KEY = 'tt_active_timer';
 
 interface TimerStore extends TimerState {
-  // Actions
   startTimer: (entry_id: number, client_id?: number | null, client_name?: string | null) => void;
   stopTimer: () => Promise<{ entry_id: number; duration_seconds: number }>;
   setClient: (id: number, name: string) => void;
@@ -37,15 +41,20 @@ export const useTimerStore = create<TimerStore>((set, get) => ({
       elapsed_seconds: 0,
     };
     set(state);
-    // Persist so we survive app kill
     SecureStore.setItemAsync(TIMER_KEY, JSON.stringify(state));
+
+    // Start Live Activity pill on Dynamic Island / lock screen
+    startLiveActivity(client_name, start_time, entry_id);
   },
 
   stopTimer: async () => {
-    const { entry_id, start_time, elapsed_seconds } = get();
+    const { entry_id, start_time, elapsed_seconds, client_name } = get();
     const duration = start_time
       ? Math.floor((Date.now() - start_time) / 1000)
       : elapsed_seconds;
+
+    // Stop Live Activity pill
+    await stopLiveActivity(client_name, duration);
 
     set({
       isRunning: false,
@@ -62,6 +71,11 @@ export const useTimerStore = create<TimerStore>((set, get) => ({
     set({ client_id: id, client_name: name });
     const current = get();
     SecureStore.setItemAsync(TIMER_KEY, JSON.stringify(current));
+
+    // Update Live Activity with new client name
+    if (current.isRunning && current.start_time) {
+      updateLiveActivity(name, current.start_time);
+    }
   },
 
   setCategory: (id, name) => {
@@ -83,9 +97,11 @@ export const useTimerStore = create<TimerStore>((set, get) => ({
       if (saved.isRunning && saved.start_time) {
         const elapsed = Math.floor((Date.now() - saved.start_time) / 1000);
         set({ ...saved, elapsed_seconds: elapsed });
+
+        // Re-attach Live Activity if timer was running when app was killed
+        startLiveActivity(saved.client_name, saved.start_time, saved.entry_id!);
       }
     } catch {
-      // storage corrupt — clear it
       SecureStore.deleteItemAsync(TIMER_KEY);
     }
   },

@@ -25,7 +25,6 @@ export default function HomeScreen() {
   const ring1 = useRef(new Animated.Value(0)).current;
   const ring2 = useRef(new Animated.Value(0)).current;
   const ring3 = useRef(new Animated.Value(0)).current;
-  const buttonScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     const animate = (anim: Animated.Value, delay: number) => {
@@ -40,14 +39,6 @@ export default function HomeScreen() {
     animate(ring1, 0);
     animate(ring2, 600);
     animate(ring3, 1200);
-
-    // Button breathes in sync with rings
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(buttonScale, { toValue: 1.06, duration: 1200, useNativeDriver: true }),
-        Animated.timing(buttonScale, { toValue: 1.0, duration: 1200, useNativeDriver: true }),
-      ]),
-    ).start();
   }, []);
 
   const makeRingStyle = (anim: Animated.Value, maxScale: number) => ({
@@ -69,6 +60,7 @@ export default function HomeScreen() {
   });
 
   async function handleTap() {
+    console.log('handleTap called, isRunning:', isRunning);
     if (isRunning) {
       navigation.navigate('Main', { screen: 'Recording' } as any);
       return;
@@ -82,7 +74,8 @@ export default function HomeScreen() {
       localStart(draft.entry_id, client_id ?? null, client_name ?? null);
       if (client_name) scheduleTimerAlert(client_name, draft.entry_id);
       navigation.navigate('Main', { screen: 'Recording' } as any);
-    } catch {
+    } catch (e) {
+      console.log('handleTap error:', e);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     } finally {
       setStarting(false);
@@ -93,7 +86,6 @@ export default function HomeScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* AI suggestion pill */}
       {aiSuggestion && aiSuggestion.confidence > 0.6 && !isRunning && (
         <View style={styles.suggestionPill}>
           <View style={styles.pillDot} />
@@ -101,37 +93,31 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* Button + rings */}
+      {/* Rings behind button — purely decorative */}
       <View style={styles.buttonArea}>
-        {/* Rings — absolutely positioned, never affect layout */}
-        <View style={styles.ringsContainer} pointerEvents="none">
-          <Animated.View style={[styles.ring, makeRingStyle(ring1, 2.2)]} />
-          <Animated.View style={[styles.ring, makeRingStyle(ring2, 2.8)]} />
-          <Animated.View style={[styles.ring, makeRingStyle(ring3, 3.4)]} />
-        </View>
+        <Animated.View style={[styles.ring, makeRingStyle(ring1, 2.2)]} pointerEvents="none" />
+        <Animated.View style={[styles.ring, makeRingStyle(ring2, 2.8)]} pointerEvents="none" />
+        <Animated.View style={[styles.ring, makeRingStyle(ring3, 3.4)]} pointerEvents="none" />
 
-        {/* Button scales in place — no vertical movement */}
-        <Animated.View style={{ transform: [{ scale: buttonScale }] }} pointerEvents="box-none">
-          <TouchableOpacity
-            onPress={handleTap}
-            activeOpacity={0.9}
-            disabled={starting}
-            style={styles.button}
-          >
-            {starting ? (
-              <ActivityIndicator color="#fff" size="large" />
-            ) : (
-              <TimeTrackerIcon size={BTN} variant="default" />
-            )}
-          </TouchableOpacity>
-        </Animated.View>
+        {/* Button sits on top — nothing wrapping it */}
+        <TouchableOpacity
+          onPress={handleTap}
+          activeOpacity={0.85}
+          disabled={starting}
+          style={styles.button}
+        >
+          {starting ? (
+            <ActivityIndicator color="#fff" size="large" />
+          ) : (
+            <TimeTrackerIcon size={BTN} variant="default" />
+          )}
+        </TouchableOpacity>
       </View>
 
       <Text style={styles.tapLabel}>
         {isRunning ? 'Timer running' : 'Tap to start'}
       </Text>
 
-      {/* Recent entries */}
       {recents?.entries && recents.entries.length > 0 && (
         <View style={styles.recentsArea}>
           <Text style={styles.recentsLabel}>Recent</Text>
@@ -180,13 +166,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 32,
   },
-  ringsContainer: {
-    position: 'absolute',
-    width: BTN,
-    height: BTN,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   ring: {
     position: 'absolute',
     width: BTN,
@@ -199,7 +178,8 @@ const styles = StyleSheet.create({
     height: BTN,
     borderRadius: BTN / 2,
     overflow: 'hidden',
-    zIndex: 1,
+    zIndex: 10,
+    elevation: 10,
   },
   tapLabel: {
     fontSize: 15,

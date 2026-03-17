@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  Animated, ActivityIndicator, StatusBar,
+  Animated, ActivityIndicator, StatusBar, Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
@@ -74,8 +74,9 @@ export default function HomeScreen() {
       localStart(draft.entry_id, client_id ?? null, client_name ?? null);
       if (client_name) scheduleTimerAlert(client_name, draft.entry_id);
       navigation.navigate('Main', { screen: 'Recording' } as any);
-    } catch (e) {
+    } catch (e: any) {
       console.log('handleTap error:', e);
+      Alert.alert('Error', e?.response?.status + ' ' + JSON.stringify(e?.response?.data) || e?.message || 'unknown error');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     } finally {
       setStarting(false);
@@ -93,13 +94,11 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* Rings behind button — purely decorative */}
       <View style={styles.buttonArea}>
         <Animated.View style={[styles.ring, makeRingStyle(ring1, 2.2)]} pointerEvents="none" />
         <Animated.View style={[styles.ring, makeRingStyle(ring2, 2.8)]} pointerEvents="none" />
         <Animated.View style={[styles.ring, makeRingStyle(ring3, 3.4)]} pointerEvents="none" />
 
-        {/* Button sits on top — nothing wrapping it */}
         <TouchableOpacity
           onPress={handleTap}
           activeOpacity={0.85}

@@ -6785,7 +6785,7 @@ def sync_check(request):
     org = membership.organization
     
     # Get latest update timestamps
-    latest_client = Client.objects.filter(organization=org).order_by('-updated_at').first()
+    latest_client = Client.objects.filter(org=org).order_by('-updated_at').first()
     
     return Response({
         'clients_updated': latest_client.updated_at if latest_client else None,

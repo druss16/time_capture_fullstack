@@ -204,7 +204,7 @@ def _get_org_clients(org):
     from .models import Client  # Adjust import path
 
     clients = Client.objects.filter(
-        organization=org, is_active=True
+        org=org, is_active=True
     ).values("id", "name", "aliases")
 
     return [
@@ -439,7 +439,7 @@ def _log_classification(org, device, title, result):
         from .models import AIClassificationLog  # Optional model
 
         AIClassificationLog.objects.create(
-            organization=org,
+            org=org,
             device=device,
             title=title[:500],
             client_id=result.get("client_id"),

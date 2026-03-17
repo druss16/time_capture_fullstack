@@ -43,7 +43,7 @@ const NotFound = lazy(() => import("./NotFound"));
 const BillingPage = lazy(() => import("./BillingPage"));
 const WhiteGloveOnboarding = lazy(() => import("./settings/WhiteGloveOnboarding"));
 const ExecutiveDashboard = lazy(() => import("./ExecutiveDashboard"));
-
+const Home = lazy(() => import("./Home"));
 
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -241,7 +241,7 @@ export default function App() {
                 {/* ============================================ */}
                 {/* Root Redirect                               */}
                 {/* ============================================ */}
-                <Route path="/" element={<Navigate to="/daily" replace />} />
+                <Route path="/" element={<Home />} />
 
                 {/* ============================================ */}
                 {/* Public Auth Routes                          */}

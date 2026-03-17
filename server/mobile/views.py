@@ -210,21 +210,21 @@ class MobileStopView(APIView):
                 elif db_start < block.start and db_end <= block.end:
                     db.end     = block.start
                     db.minutes = max(1, round((db.end - db.start).total_seconds() / 60))
-                    db.save()
+                    db.save(force_update=True)
 
                 # Case 3: Desktop starts inside, ends after → trim desktop start
                 elif db_start >= block.start and db_end > block.end:
                     db.start   = block.end
                     db.minutes = max(1, round((db.end - db.start).total_seconds() / 60))
                     db.day     = db.start.date()
-                    db.save()
+                    db.save(force_update=True)
 
                 # Case 4: Desktop fully wraps mobile → split into before + after
                 elif db_start < block.start and db_end > block.end:
                     # Trim existing to before portion
                     db.end     = block.start
                     db.minutes = max(1, round((db.end - db.start).total_seconds() / 60))
-                    db.save()
+                    db.save(force_update=True)
 
                     # Create after portion as new block
                     after_secs = (db_end - block.end).total_seconds()

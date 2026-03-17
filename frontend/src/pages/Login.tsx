@@ -77,9 +77,7 @@ export default function Login() {
 
         {/* Logo */}
         <div className="relative z-10 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center ring-1 ring-white/25">
-            <Clock className="w-5 h-5 text-white" />
-          </div>
+          <img src="/timetracker-icon-mono-white.svg" alt="TimeTracker" className="w-10 h-10" />
           <div className="leading-none">
             <p className="text-[17px] font-bold text-white tracking-tight">TimeTracker</p>
             <p className="text-[11px] text-white/50 mt-0.5">by MavOps</p>
@@ -126,31 +124,15 @@ export default function Login() {
             ))}
           </div>
 
-          {/* Before / after bar */}
-          <div className="space-y-4">
-            <p className="text-[11px] font-semibold text-white/40 tracking-[0.12em] uppercase">Billable time captured</p>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-[13px] text-white/40 font-medium">Without TimeTracker</span>
-                  <span className="text-[15px] text-white/40 font-black">~75%</span>
-                </div>
-                <div className="h-4 rounded-full bg-white/10 overflow-hidden">
-                  <div className="w-[75%] h-full rounded-full bg-white/25" />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-[15px] text-white font-bold">With TimeTracker</span>
-                  <span className="text-[22px] text-emerald-300 font-black leading-none">~98%</span>
-                </div>
-                <div className="h-4 rounded-full bg-white/10 overflow-hidden">
-                  <div className="w-[98%] h-full rounded-full bg-emerald-400" />
-                </div>
-              </div>
-            </div>
-            <p className="text-[12px] text-white/35 italic">That gap is real revenue walking out the door.</p>
-          </div>
+          {/* Testimonial */}
+          <blockquote className="border-l-4 border-white/25 pl-5 space-y-2">
+            <p className="text-[16px] text-white/75 italic leading-relaxed font-medium">
+              "We were leaving hours of billable time on the table every week and didn't even know it. TimeTracker fixed that in the first month."
+            </p>
+            <p className="text-[11px] text-white/40 font-bold tracking-widest uppercase">
+              — Partner, Meridian CPA Group
+            </p>
+          </blockquote>
 
 
         </div>
@@ -166,9 +148,7 @@ export default function Login() {
 
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
-              <Clock className="w-5 h-5 text-white" />
-            </div>
+            <img src="/timetracker-icon-circle.svg" alt="TimeTracker" className="w-10 h-10" />
             <span className="text-xl font-bold text-foreground">TimeTracker</span>
           </div>
 

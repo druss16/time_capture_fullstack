@@ -1041,6 +1041,21 @@ class Block(models.Model):
     locked = models.BooleanField(default=False)
 
     # ===============================
+    # Mobile review flags
+    # ===============================
+    needs_review = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Flagged for manual review — timer vs calendar discrepancy or unusual duration',
+    )
+    review_reason = models.CharField(
+        max_length=500,
+        blank=True,
+        default='',
+        help_text='Human-readable reason why this entry was flagged for review',
+    )
+
+    # ===============================
     # Soft delete
     # ===============================
     objects = ActiveBlockManager()  # Default excludes deleted

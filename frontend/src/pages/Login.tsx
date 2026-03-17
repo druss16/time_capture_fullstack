@@ -11,8 +11,6 @@ const STATS = [
   { value: "2-way", label: "QuickBooks\n& Xero sync" },
 ];
 
-
-
 export default function Login() {
   const nav = useNavigate();
   const loc = useLocation();
@@ -67,7 +65,7 @@ export default function Login() {
       {/* Left Panel */}
       <div
         className="hidden lg:flex lg:w-[52%] flex-col justify-between p-14 relative overflow-hidden"
-        style={{ background: "linear-gradient(145deg, #0d9e91 0%, #0a7c70 60%, #085f57 100%)" }}
+        style={{ background: "linear-gradient(145deg, #2B9D90 0%, #1F7269 60%, #174F4A 100%)" }}
       >
         {/* Background blobs */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
@@ -102,7 +100,6 @@ export default function Login() {
             <p className="text-[15px] text-white/60 leading-relaxed">
               TimeTracker is an AI-powered time intelligence platform built exclusively for CPA firms.
             </p>
-
           </div>
 
           {/* Icon rows */}
@@ -133,8 +130,6 @@ export default function Login() {
               — Partner, Meridian CPA Group
             </p>
           </blockquote>
-
-
         </div>
 
         <p className="relative z-10 text-[11px] text-white/30">

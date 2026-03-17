@@ -9,7 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTimerStore, formatDuration } from '../../store/timerStore';
 import { startTimer, getMobileRecents, getAISuggestion } from '../../api/client';
 import { scheduleTimerAlert } from '../../utils/backgroundTimer';
-// import { TimeTrackerIcon } from '../../../TimeTrackerLogo';
+import { TimeTrackerIcon } from '../../../TimeTrackerLogo';
 import type { RootStackParamList } from '../../types';
 import type { StackNavigationProp } from '@react-navigation/stack';
 
@@ -19,7 +19,7 @@ const BTN = 160;
 
 export default function HomeScreen() {
   const navigation = useNavigation<Nav>();
-  const { isRunning, startTimer: localStart } = useTimerStore();
+  const { isRunning, startTimer: localStart, client_id: activeClientId } = useTimerStore();
   const [starting, setStarting] = useState(false);
 
   const ring1 = useRef(new Animated.Value(0)).current;
@@ -60,7 +60,6 @@ export default function HomeScreen() {
   });
 
   async function handleTap() {
-    console.log('handleTap called, isRunning:', isRunning);
     if (isRunning) {
       navigation.navigate('Main', { screen: 'Recording' } as any);
       return;
@@ -75,25 +74,38 @@ export default function HomeScreen() {
       if (client_name) scheduleTimerAlert(client_name, draft.entry_id);
       navigation.navigate('Main', { screen: 'Recording' } as any);
     } catch (e: any) {
-      console.log('handleTap error:', e);
-      Alert.alert('Error', e?.response?.status + ' ' + JSON.stringify(e?.response?.data) || e?.message || 'unknown error');
+      Alert.alert('Error', e?.response?.data?.detail || e?.message || 'Failed to start timer');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     } finally {
       setStarting(false);
     }
   }
 
+  // Only show AI suggestion if:
+  // - Not already running a timer
+  // - No client already selected
+  // - Confidence is high enough
+  // - Suggestion is for a different client than "Internal"
+  const showAiPill =
+    aiSuggestion &&
+    aiSuggestion.confidence > 0.6 &&
+    !isRunning &&
+    !activeClientId &&
+    aiSuggestion.client_name?.toLowerCase() !== 'internal';
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {aiSuggestion && aiSuggestion.confidence > 0.6 && !isRunning && (
+      {/* AI suggestion pill — only shown when relevant */}
+      {showAiPill && (
         <View style={styles.suggestionPill}>
           <View style={styles.pillDot} />
           <Text style={styles.pillText} numberOfLines={1}>{aiSuggestion.reason}</Text>
         </View>
       )}
 
+      {/* Button + rings */}
       <View style={styles.buttonArea}>
         <Animated.View style={[styles.ring, makeRingStyle(ring1, 2.2)]} pointerEvents="none" />
         <Animated.View style={[styles.ring, makeRingStyle(ring2, 2.8)]} pointerEvents="none" />
@@ -108,7 +120,7 @@ export default function HomeScreen() {
           {starting ? (
             <ActivityIndicator color="#fff" size="large" />
           ) : (
-            <View style={{ width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: 'white' }} />
+            <TimeTrackerIcon size={BTN} variant="default" />
           )}
         </TouchableOpacity>
       </View>

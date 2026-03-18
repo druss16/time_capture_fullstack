@@ -185,7 +185,6 @@ const PIPELINE_SVG = `<svg width="100%" viewBox="0 0 680 300" xmlns="http://www.
 <circle cx="512" cy="33" r="3" fill="#febc2e" opacity="0.85"/>
 <circle cx="522" cy="33" r="3" fill="#28c840" opacity="0.85"/>
 <rect x="534" y="27" width="112" height="10" rx="5" fill="rgba(255,255,255,0.08)"/>
-<text font-family="sans-serif" font-size="6" fill="rgba(255,255,255,0.4)" x="590" y="35" text-anchor="middle">app.timetracker.io</text>
 <text font-family="sans-serif" font-size="9.5" font-weight="800" fill="#0D1F1E" x="502" y="58">My Timesheet</text>
 <text font-family="sans-serif" font-size="7" fill="#7A9E9A" x="502" y="69">Mon Mar 17 · auto-categorized</text>
 <rect x="492" y="73" width="162" height="11" fill="#F4FAFA"/>
@@ -508,7 +507,7 @@ export default function Home() {
           </div>
           <div className="nav-right">
             <Link to="/login" className="nav-signin">Sign in</Link>
-            <a href="mailto:info@mavops.ai?subject=TimeTracker%20Access%20Request" className="btn-primary">
+            <a href="/request-access" className="btn-primary">
               Request Access <ChevronRight size={14} />
             </a>
           </div>
@@ -533,7 +532,7 @@ export default function Home() {
               TimeTracker is an AI-powered time intelligence platform that eliminates manual timesheets, captures every billable minute, and gives firm leaders the margin data to grow with confidence.
             </p>
             <div className="hero-btns">
-              <a href="mailto:info@mavops.ai?subject=TimeTracker%20Access%20Request" className="btn-hero-primary">
+              <a href="/request-access" className="btn-hero-primary">
                 Get Started <ArrowRight size={16} />
               </a>
               <a href="#how-it-works" className="btn-hero-ghost">
@@ -663,7 +662,7 @@ export default function Home() {
                   </li>
                 ))}
               </ul>
-              <a href="mailto:info@mavops.ai?subject=TimeTracker%20Access%20Request" className="plan-cta">
+              <a href="/request-access" className="plan-cta">
                 Get Started
               </a>
             </div>
@@ -677,7 +676,7 @@ export default function Home() {
         <div className="cta-inner">
           <h2>Start capturing every billable minute</h2>
           <p>Join CPA firms that have eliminated manual timesheets and unlocked clearer profitability with TimeTracker.</p>
-          <a href="mailto:info@mavops.ai?subject=TimeTracker%20Access%20Request" className="btn-hero-primary">
+          <a href="/request-access" className="btn-hero-primary">
             Request Access <ArrowRight size={16} />
           </a>
         </div>

@@ -1,6 +1,6 @@
 // Login.tsx - Clean redesign, left panel trimmed to breathe
 import { useEffect, useState, useRef } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, Link } from "react-router-dom";
 import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
 import { useAuth } from "@/auth/AuthProvider";
 import { Eye, EyeOff, Clock, ArrowRight, Check } from "lucide-react";
@@ -74,7 +74,7 @@ export default function Login() {
         </div>
 
         {/* Logo */}
-        <div className="relative z-10 flex items-center gap-2">
+        <div className="relative z-10 flex items-center gap-3">
           <img src="/timetracker-icon-mono-white.svg" alt="TimeTracker" className="w-10 h-10" />
           <div className="leading-none">
             <p className="text-[17px] font-bold text-white tracking-tight">TimeTracker</p>
@@ -220,12 +220,12 @@ export default function Login() {
             <div className="flex-1 h-px bg-border/50" />
           </div>
 
-          <a
-            href="mailto:info@mavops.ai?subject=TimeTracker%20Access%20Request&body=Hi%2C%20I%27d%20like%20to%20learn%20more%20about%20TimeTracker%20for%20my%20CPA%20firm."
+          <Link
+            to="/request-access"
             className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl border-2 border-primary/30 text-primary text-sm font-semibold hover:bg-primary/5 hover:border-primary/60 transition-all"
           >
             Request Access <ArrowRight className="w-4 h-4" />
-          </a>
+          </Link>
 
           <p className="text-center text-xs text-muted-foreground">
             Questions?{" "}

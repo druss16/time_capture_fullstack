@@ -74,13 +74,13 @@ export default function Login() {
         </div>
 
         {/* Logo */}
-        <div className="relative z-10 flex items-center gap-3">
+        <Link to="/" className="relative z-10 flex items-center gap-3 w-fit">
           <img src="/timetracker-icon-mono-white.svg" alt="TimeTracker" className="w-10 h-10" />
           <div className="leading-none">
             <p className="text-[17px] font-bold text-white tracking-tight">TimeTracker</p>
             <p className="text-[11px] text-white/50 mt-0.5">by MavOps</p>
           </div>
-        </div>
+        </Link>
 
         {/* Hero copy */}
         <div className="relative z-10 space-y-10">

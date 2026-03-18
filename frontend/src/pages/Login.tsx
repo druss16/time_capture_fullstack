@@ -74,7 +74,7 @@ export default function Login() {
         </div>
 
         {/* Logo */}
-        <div className="relative z-10 flex items-center gap-3">
+        <div className="relative z-10 flex items-center gap-2">
           <img src="/timetracker-icon-mono-white.svg" alt="TimeTracker" className="w-10 h-10" />
           <div className="leading-none">
             <p className="text-[17px] font-bold text-white tracking-tight">TimeTracker</p>

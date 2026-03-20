@@ -416,17 +416,105 @@ def _union_minutes_from_blocks(block_list):
     return round(total_seconds / 60, 2)  # Return MINUTES
 
 
+# ── weekly_timesheet_view — event-based, matches today_time exactly ──────────
+#
+# Uses the same RAW EVENT logic as today_time:
+# - Duration = time to next event, capped at 3 minutes
+# - Client/category from the event's linked block
+# - Aggregated by (client_id, task_type_id) per day
+#
+# Replace weekly_timesheet_view in views_billing.py with this:
+# ─────────────────────────────────────────────────────────────────────────────
+
+from django.utils.timezone import localtime, make_aware
+import datetime as dt_module
+from collections import defaultdict
+from datetime import timezone as dt_timezone
+
+
+IDLE_CAP_SECONDS = 180  # 3 min cap — matches today_time and agent
+
+
+def _get_event_minutes_for_week(user, week_start, week_end):
+    """
+    Run today_time's event-based attribution across an entire week.
+    Returns: dict of {(client_id, client_name, task_type_id, task_type_name, is_billable, day_str): minutes}
+    """
+    from tracker.models import RawEvent
+
+    tz = timezone.get_current_timezone()
+    start_local = timezone.make_aware(
+        dt_module.datetime.combine(week_start, dt_module.time.min), tz
+    )
+    end_local = timezone.make_aware(
+        dt_module.datetime.combine(week_end, dt_module.time.max), tz
+    )
+    start_utc = start_local.astimezone(dt_timezone.utc)
+    end_utc   = end_local.astimezone(dt_timezone.utc)
+
+    # Fetch all events for the week in one query
+    events = list(RawEvent.objects.filter(
+        user=user,
+        ts_utc__gte=start_utc,
+        ts_utc__lt=end_utc,
+    ).select_related(
+        'block', 'block__client', 'block__task_type'
+    ).order_by('ts_utc'))
+
+    # Deleted block IDs
+    deleted_block_ids = set(
+        Block.objects.filter(user=user, deleted_at__isnull=False)
+        .values_list('id', flat=True)
+    )
+
+    # Accumulate minutes per (client_id, task_type_id, day_str)
+    # key: (client_id, client_name, task_type_id, task_type_name, is_billable, day_str)
+    minute_map = defaultdict(float)
+
+    for i, event in enumerate(events):
+        # Duration capped at 3 min
+        if i + 1 < len(events):
+            gap = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+            duration_min = min(gap, IDLE_CAP_SECONDS) / 60.0
+        else:
+            duration_min = 3.0
+
+        block = event.block
+        if block and block.id in deleted_block_ids:
+            block = None
+
+        if block and block.client_id:
+            client_id   = block.client_id
+            client_name = block.client.name if block.client else 'Unassigned'
+            task_type_id   = block.task_type_id
+            task_type_name = block.task_type.name if block.task_type else 'General'
+            is_billable = block.is_billable
+        else:
+            client_id      = None
+            client_name    = 'Unassigned'
+            task_type_id   = None
+            task_type_name = 'General'
+            is_billable    = False
+
+        day_str = localtime(event.ts_utc).date().isoformat()
+
+        key = (client_id, client_name, task_type_id, task_type_name, is_billable, day_str)
+        minute_map[key] += duration_min
+
+    return minute_map
+
+
 @api_view(['GET'])
 def weekly_timesheet_view(request):
     """
     Employee-facing weekly timesheet grid.
-    Shows HOURS per client/task per day — union of spans, no double-counting.
+    Uses event-based attribution (same as Daily Review / today_time).
+    Numbers will match the Daily Review exactly.
     """
     org = get_user_org(request.user)
     if not org:
         return Response({'error': 'No organization'}, status=400)
 
-    # ── Week range ────────────────────────────────────────────────────────────
     week_start_param = request.query_params.get('week_start')
     if week_start_param:
         try:
@@ -439,57 +527,44 @@ def weekly_timesheet_view(request):
     week_start = get_monday(week_start)
     week_end   = week_start + timedelta(days=6)
 
-    # ── Timesheet record ──────────────────────────────────────────────────────
     timesheet, _ = Timesheet.get_or_create_for_date(org, request.user, week_start)
 
-    # ── Fetch blocks ──────────────────────────────────────────────────────────
-    start_dt = make_aware(dt_module.datetime.combine(week_start, dt_module.time.min))
-    end_dt   = make_aware(dt_module.datetime.combine(week_end,   dt_module.time.max))
-
-    blocks = list(Block.objects.filter(
-        org=org,
-        user=request.user,
-        start__gte=start_dt,
-        start__lte=end_dt,
-        deleted_at__isnull=True,
-    ).select_related('client', 'task_type').order_by('start'))
-
-    # ── Build grid: {(client_id, task_type_id): {day_str: [blocks]}} ─────────
     day_strings = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
 
-    raw_grid: dict[tuple, dict] = {}
+    # Get event-based minutes for the whole week
+    minute_map = _get_event_minutes_for_week(request.user, week_start, week_end)
 
-    for block in blocks:
-        if not block.start:
+    # Build grid keyed by (client_id, task_type_id)
+    grid = {}  # (client_id, task_type_id) → {meta, day_minutes}
+
+    for (client_id, client_name, task_type_id, task_type_name, is_billable, day_str), minutes in minute_map.items():
+        if day_str not in day_strings:
             continue
-        key     = (block.client_id, block.task_type_id)
-        day_str = localtime(block.start).date().isoformat()
 
-        if key not in raw_grid:
-            raw_grid[key] = {
-                'client_id':      block.client_id,
-                'client_name':    block.client.name if block.client else 'Unassigned',
-                'task_type_id':   block.task_type_id,
-                'task_type_name': block.task_type.name if block.task_type else 'General',
-                'is_billable':    block.is_billable,
-                'day_blocks':     {d: [] for d in day_strings},
+        key = (client_id, task_type_id)
+
+        if key not in grid:
+            grid[key] = {
+                'client_id':      client_id,
+                'client_name':    client_name,
+                'task_type_id':   task_type_id,
+                'task_type_name': task_type_name,
+                'is_billable':    is_billable,
+                'day_minutes':    {d: 0.0 for d in day_strings},
             }
 
-        if day_str in raw_grid[key]['day_blocks']:
-            raw_grid[key]['day_blocks'][day_str].append(block)
+        grid[key]['day_minutes'][day_str] += minutes
 
-    # ── Convert block lists → union hours per day ─────────────────────────────
+    # Convert to response format
     grid_entries = []
-    for key, data in raw_grid.items():
-        day_hours  = {}
-        row_minutes = Decimal('0')
+    for key, data in grid.items():
+        day_hours   = {}
+        row_minutes = 0.0
 
         for day_str in day_strings:
-            day_block_list = data['day_blocks'][day_str]
-            minutes = _union_minutes_from_blocks(day_block_list)
-            hours   = round(Decimal(str(minutes)) / 60, 2)
-            day_hours[day_str] = hours
-            row_minutes += Decimal(str(minutes))
+            m = data['day_minutes'][day_str]
+            day_hours[day_str] = round(m / 60, 2)
+            row_minutes += m
 
         grid_entries.append({
             'client_id':      data['client_id'],
@@ -501,17 +576,19 @@ def weekly_timesheet_view(request):
             'total':          round(row_minutes / 60, 2),
         })
 
-    # ── Daily totals — union across ALL blocks for each day ───────────────────
-    daily_totals = {}
-    for day_str in day_strings:
-        day_all_blocks = [b for b in blocks if b.start and b.start.date().isoformat() == day_str]
-        minutes = _union_minutes_from_blocks(day_all_blocks)
-        daily_totals[day_str] = round(Decimal(str(minutes)) / 60, 2)
+    # Sort: billable first, then by client name
+    grid_entries.sort(key=lambda e: (not e['is_billable'], e['client_name'] or ''))
 
-    grand_total    = round(sum(daily_totals.values()), 2)
-    billable_total = round(
-        sum(e['total'] for e in grid_entries if e['is_billable']), 2
-    )
+    # Daily totals
+    daily_totals = {d: 0.0 for d in day_strings}
+    for (_, _, _, _, _, day_str), minutes in minute_map.items():
+        if day_str in daily_totals:
+            daily_totals[day_str] += minutes
+
+    daily_totals_hours = {d: round(m / 60, 2) for d, m in daily_totals.items()}
+
+    grand_total    = round(sum(daily_totals_hours.values()), 2)
+    billable_total = round(sum(e['total'] for e in grid_entries if e['is_billable']), 2)
 
     return Response({
         'week_start':       week_start.isoformat(),
@@ -522,7 +599,7 @@ def weekly_timesheet_view(request):
         'submitted_at':     timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
         'rejection_reason': timesheet.rejection_reason or '',
         'entries':          grid_entries,
-        'daily_totals':     daily_totals,
+        'daily_totals':     daily_totals_hours,
         'grand_total':      grand_total,
         'billable_total':   billable_total,
     })

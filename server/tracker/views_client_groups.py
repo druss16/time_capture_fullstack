@@ -322,27 +322,32 @@ def client_groups_assign_team(request, group_id):
     deleted = 0
     
     with transaction.atomic():
-        for client in clients:
-            if mode == 'replace':
-                # Remove existing assignments for this client
-                deleted_count, _ = ClientAssignment.objects.filter(
-                    organization=org, client=client
-                ).exclude(user_id__in=user_ids).delete()
-                deleted += deleted_count
-            
-            # Add new assignments
-            for user_id in user_ids:
-                assignment, was_created = ClientAssignment.objects.get_or_create(
-                    organization=org,
-                    client=client,
-                    user_id=user_id,
-                    defaults={'assigned_by': request.user}
-                )
-                if was_created:
-                    created += 1
-                else:
-                    updated += 1
-    
+        if mode == 'replace':
+            ClientAssignment.objects.filter(
+                organization=org,
+                client__in=clients
+            ).exclude(user_id__in=user_ids).delete()
+
+        # Build all assignment objects at once
+        assignments = [
+            ClientAssignment(
+                organization=org,
+                client=client,
+                user_id=user_id,
+                assigned_by=request.user,
+            )
+            for client in clients
+            for user_id in user_ids
+        ]
+
+        # Single DB call, ignores duplicates
+        created_objs = ClientAssignment.objects.bulk_create(
+            assignments,
+            ignore_conflicts=True,
+            batch_size=500,
+        )
+        created = len(created_objs)
+
     return Response({
         'success': True,
         'group_name': group.name,

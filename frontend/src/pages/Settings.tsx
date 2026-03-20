@@ -103,6 +103,7 @@ type Client = {
   code: string;
   is_active: boolean;
   visibility: 'all' | 'assigned' | 'confidential';
+  aliases: string[];
   created_at: string;
 };
 
@@ -1145,7 +1146,7 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
   const [showAdd, setShowAdd] = useState(false);
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', code: '', visibility: 'all' });
+  const [form, setForm] = useState({ name: '', code: '', visibility: 'all', aliases: [] as string[] });
   const [saving, setSaving] = useState(false);
 
   const [selectedClientIds, setSelectedClientIds] = useState<Set<number>>(new Set());
@@ -1170,7 +1171,7 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
 
   const clearSelection = () => setSelectedClientIds(new Set());
   const selectedClients = clients.filter(c => selectedClientIds.has(c.id));
-  const resetForm = () => { setForm({ name: '', code: '', visibility: 'all' }); setShowAdd(false); setEditingId(null); };
+  const resetForm = () => { setForm({ name: '', code: '', visibility: 'all', aliases: [] }); setShowAdd(false); setEditingId(null); };
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
@@ -1194,7 +1195,7 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
 
   const handleEdit = (client: Client) => {
     if (!canManageClients) return;
-    setForm({ name: client.name, code: client.code || '', visibility: client.visibility || 'all' });
+    setForm({ name: client.name, code: client.code || '', visibility: client.visibility || 'all', aliases: client.aliases || [] });
     setEditingId(client.id);
     setShowAdd(true);
   };
@@ -1292,6 +1293,43 @@ function ClientsTab({ clients, currentUserRole, users, onRefresh, onSuccess, onE
                 <option value="assigned">Assigned Users Only</option>
                 <option value="confidential">Confidential</option>
               </select>
+            </div>
+            {/* existing 3 fields stay the same, add this below them */}
+            <div className="col-span-3">
+              <label className="block text-sm font-bold text-slate-800 mb-2">
+                AI Aliases
+                <span className="ml-2 text-xs font-normal text-slate-500">Alternative names the AI uses for matching (e.g. "D&F", "TL Wall")</span>
+              </label>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {form.aliases.map((alias, i) => (
+                  <span key={i} className="flex items-center gap-1.5 bg-primary/10 text-primary px-3 py-1 rounded-full text-sm font-bold">
+                    {alias}
+                    <button
+                      onClick={() => setForm({ ...form, aliases: form.aliases.filter((_, j) => j !== i) })}
+                      className="hover:text-red-500 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Type alias and press Enter..."
+                  className="flex-1 border-2 border-slate-200 rounded-xl px-4 py-2 text-slate-900 font-medium focus:border-primary focus:outline-none transition-all text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const val = (e.target as HTMLInputElement).value.trim();
+                      if (val && !form.aliases.includes(val)) {
+                        setForm({ ...form, aliases: [...form.aliases, val] });
+                        (e.target as HTMLInputElement).value = '';
+                      }
+                    }
+                  }}
+                />
+              </div>
             </div>
           </div>
           <div className="flex gap-3 mt-4">

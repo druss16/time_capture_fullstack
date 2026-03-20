@@ -317,8 +317,6 @@ def client_groups_assign_team(request, group_id):
             'client_count': 0,
         }, status=400)
     
-    created = 0
-    updated = 0
     deleted = 0
     
     with transaction.atomic():
@@ -354,7 +352,6 @@ def client_groups_assign_team(request, group_id):
         'clients_affected': len(clients),
         'users_assigned': len(user_ids),
         'assignments_created': created,
-        'assignments_updated': updated,
         'assignments_removed': deleted if mode == 'replace' else 0,
         'mode': mode,
         'message': f'Assigned {len(user_ids)} user(s) to {len(clients)} client(s) in "{group.name}"',

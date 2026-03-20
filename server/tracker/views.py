@@ -6318,6 +6318,8 @@ def settings_clients(request):
                 "name": client.name,
                 "code": client.code or "",
                 "is_active": client.is_active if hasattr(client, 'is_active') else True,
+                "visibility": getattr(client, 'visibility', 'all') or 'all',
+                "aliases": client.aliases or [],   # ADD THIS
                 "created_at": client.created_at.isoformat() if hasattr(client, 'created_at') and client.created_at else "",
             })
         return Response(result)
@@ -6337,6 +6339,8 @@ def settings_clients(request):
             org=org,
             name=name,
             code=code or None,
+            visibility=request.data.get("visibility", "all"),
+            aliases=request.data.get("aliases", []),  # ADD THIS
         )
         
         return Response({
@@ -6370,6 +6374,11 @@ def settings_client_detail(request, client_id):
             client.code = request.data["code"].strip().upper() or None
         if "is_active" in request.data:
             client.is_active = bool(request.data["is_active"])
+        if "visibility" in request.data:
+            client.visibility = request.data["visibility"]
+        if "aliases" in request.data:                          # ADD THIS
+            aliases = request.data["aliases"]
+            client.aliases = aliases if isinstance(aliases, list) else []
         client.save()
         
         return Response({

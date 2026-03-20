@@ -352,16 +352,57 @@ def approval_queue(request):
 # WEEKLY TIMESHEET VIEW (EMPLOYEE)
 # ===============================
 
+# ── views_billing.py patch ────────────────────────────────────────────────────
+#
+# PROBLEM: weekly_timesheet_view sums block.minutes directly, causing
+#          double-counting when blocks overlap (same clock time, different apps).
+#
+# FIX: Use union of time spans per client/task, same as today_time does.
+#
+# REPLACE your existing weekly_timesheet_view with this version:
+# ─────────────────────────────────────────────────────────────────────────────
+
+from datetime import timedelta, date
+from decimal import Decimal
+from collections import defaultdict
+
+
+def _union_hours(spans):
+    """
+    Given a list of (start_dt, end_dt) tuples, return the total hours
+    of the UNION of all spans (no double-counting of overlapping time).
+    """
+    if not spans:
+        return Decimal('0')
+
+    # Sort by start time
+    sorted_spans = sorted(spans, key=lambda x: x[0])
+    merged = []
+    cur_start, cur_end = sorted_spans[0]
+
+    for start, end in sorted_spans[1:]:
+        if start <= cur_end:
+            # Overlapping — extend current span
+            cur_end = max(cur_end, end)
+        else:
+            merged.append((cur_start, cur_end))
+            cur_start, cur_end = start, end
+    merged.append((cur_start, cur_end))
+
+    total_seconds = sum((e - s).total_seconds() for s, e in merged)
+    return Decimal(str(round(total_seconds / 3600, 4)))
+
+
 @api_view(['GET'])
 def weekly_timesheet_view(request):
     """
     Employee-facing weekly timesheet grid.
-    Shows hours per client/task per day.
+    Shows hours per client/task per day using UNION of spans (no double-counting).
     """
     org = get_user_org(request.user)
     if not org:
         return Response({'error': 'No organization'}, status=400)
-    
+
     # Get week
     week_start_param = request.query_params.get('week_start')
     if week_start_param:
@@ -371,61 +412,108 @@ def weekly_timesheet_view(request):
             return Response({'error': 'Invalid date format'}, status=400)
     else:
         week_start = get_monday(timezone.now().date())
-    
+
     week_start = get_monday(week_start)
     week_end = week_start + timedelta(days=6)
-    
+
     # Get or create timesheet
     timesheet, _ = Timesheet.get_or_create_for_date(org, request.user, week_start)
-    
-    # Get blocks for this week
+
+    # Get blocks for this week — need start/end datetimes for span calculation
+    from django.utils.timezone import make_aware
+    import datetime as dt_module
+
+    start_dt = make_aware(dt_module.datetime.combine(week_start, dt_module.time.min))
+    end_dt   = make_aware(dt_module.datetime.combine(week_end, dt_module.time.max))
+
     blocks = Block.objects.filter(
         org=org,
         user=request.user,
-        day__gte=week_start,
-        day__lte=week_end
-    ).select_related('client', 'task_type')
-    
-    # Build grid: group by client+task_type, then by day
-    grid = {}
-    for block in blocks:
-        key = (block.client_id, block.task_type_id)
-        if key not in grid:
-            grid[key] = {
-                'client_id': block.client_id,
-                'client_name': block.client.name if block.client else 'Unassigned',
-                'task_type_id': block.task_type_id,
-                'task_type_name': block.task_type.name if block.task_type else 'General',
-                'is_billable': block.is_billable,
-                'days': {(week_start + timedelta(days=i)).isoformat(): Decimal('0') for i in range(7)},
-                'total': Decimal('0'),
-            }
-        
-        day_key = block.day.isoformat()
-        hours = Decimal(block.minutes or 0) / 60
-        grid[key]['days'][day_key] += hours
-        grid[key]['total'] += hours
-    
-    # Calculate daily totals
-    daily_totals = {(week_start + timedelta(days=i)).isoformat(): Decimal('0') for i in range(7)}
-    for row in grid.values():
-        for day, hours in row['days'].items():
-            daily_totals[day] += hours
-    
-    return Response({
-        'week_start': week_start.isoformat(),
-        'week_end': week_end.isoformat(),
-        'timesheet_id': timesheet.id,
-        'status': timesheet.status,
-        'auto_submitted': timesheet.auto_submitted,  # ← NEW
-        'submitted_at': timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,  # ← NEW
-        'rejection_reason': timesheet.rejection_reason or '',  # ← NEW
-        'entries': list(grid.values()),
-        'daily_totals': daily_totals,
-        'grand_total': sum(daily_totals.values()),
-        'billable_total': sum(r['total'] for r in grid.values() if r['is_billable']),
-    })
+        start__gte=start_dt,
+        start__lte=end_dt,
+        deleted_at__isnull=True,
+    ).select_related('client', 'task_type').order_by('start')
 
+    # Build grid using UNION of spans per (client, task_type, day)
+    # Structure: grid[key] = {'meta': ..., 'days': {date_str: [(start, end), ...]}}
+    grid_spans = {}
+
+    for block in blocks:
+        if not block.start or not block.end:
+            continue
+
+        key = (block.client_id, block.task_type_id)
+        day_str = block.start.date().isoformat()
+
+        if key not in grid_spans:
+            grid_spans[key] = {
+                'client_id':      block.client_id,
+                'client_name':    block.client.name if block.client else 'Unassigned',
+                'task_type_id':   block.task_type_id,
+                'task_type_name': block.task_type.name if block.task_type else 'General',
+                'is_billable':    block.is_billable,
+                'days':           {
+                    (week_start + timedelta(days=i)).isoformat(): []
+                    for i in range(7)
+                },
+            }
+
+        # Store the actual span for this day
+        if day_str in grid_spans[key]['days']:
+            grid_spans[key]['days'][day_str].append((block.start, block.end))
+
+    # Convert spans → union hours per day
+    grid = {}
+    for key, data in grid_spans.items():
+        day_hours = {}
+        row_total = Decimal('0')
+
+        for day_str, spans in data['days'].items():
+            hours = _union_hours(spans)
+            day_hours[day_str] = hours
+            row_total += hours
+
+        grid[key] = {
+            'client_id':      data['client_id'],
+            'client_name':    data['client_name'],
+            'task_type_id':   data['task_type_id'],
+            'task_type_name': data['task_type_name'],
+            'is_billable':    data['is_billable'],
+            'days':           day_hours,
+            'total':          round(row_total, 2),
+        }
+
+    # Daily totals — also use union across ALL blocks for that day
+    # (so the day total doesn't double-count either)
+    daily_spans = defaultdict(list)
+    for block in blocks:
+        if block.start and block.end:
+            day_str = block.start.date().isoformat()
+            daily_spans[day_str].append((block.start, block.end))
+
+    daily_totals = {}
+    for i in range(7):
+        day_str = (week_start + timedelta(days=i)).isoformat()
+        daily_totals[day_str] = round(_union_hours(daily_spans.get(day_str, [])), 2)
+
+    grand_total    = round(sum(daily_totals.values()), 2)
+    billable_total = round(
+        sum(row['total'] for row in grid.values() if row['is_billable']), 2
+    )
+
+    return Response({
+        'week_start':       week_start.isoformat(),
+        'week_end':         week_end.isoformat(),
+        'timesheet_id':     timesheet.id,
+        'status':           timesheet.status,
+        'auto_submitted':   timesheet.auto_submitted,
+        'submitted_at':     timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
+        'rejection_reason': timesheet.rejection_reason or '',
+        'entries':          list(grid.values()),
+        'daily_totals':     daily_totals,
+        'grand_total':      grand_total,
+        'billable_total':   billable_total,
+    })
 # ===============================
 # CLIENT SUMMARY VIEW (MANAGER/BILLING)
 # ===============================

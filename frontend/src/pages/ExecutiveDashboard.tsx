@@ -4,10 +4,9 @@
  * Auth: reads token from localStorage key "auth_token"
  * Fallback chain: auth_token → tt_auth_token → authToken → token
  *
- * New features this version:
- *  - ⤢  Expand button on every chart card → fullscreen modal (Escape or click outside to close)
- *  - ↓ CSV export on all tabular/chart cards → client-side download, no server needed
- *  - ⓘ  Info tooltip on every card (unchanged from previous)
+ * Plan gating:
+ *  - ANALYSIS tab: Executive plan only (hidden/locked for Professional)
+ *  - All other tabs: Professional + Executive
  */
 
 import { useState, useEffect, useCallback, ReactNode, CSSProperties } from "react";
@@ -33,6 +32,10 @@ const C = {
   white:   "#f1f5f9",
   border:  "rgba(201,168,76,0.15)",
 } as const;
+
+// ─── Plan gate helper ───────────────────────────────────────────────────────
+const isExecutivePlan = (plan: string | undefined): boolean =>
+  plan === "executive" || plan?.startsWith("trial") === true;
 
 type StatusKey = "excellent" | "good" | "warning" | "critical" | "no_data";
 const STATUS_COLOR: Record<StatusKey, string> = {
@@ -156,7 +159,6 @@ function InfoCard({ children, infoKey, title, expandContent, csvData, csvFilenam
   return (
     <>
       <div style={{ background: C.navyMid, border: `1px solid ${C.border}`, borderRadius: 12, padding: "24px", marginBottom: 16, position: "relative", ...style }}>
-        {/* top-right control strip */}
         <div style={{ position: "absolute", top: 14, right: 14, display: "flex", gap: 7, alignItems: "center", zIndex: 10 }}>
           {canCSV && (
             <button
@@ -251,7 +253,7 @@ function CustomTooltip({ active, payload, label, prefix = "", suffix = "" }: Too
   );
 }
 
-// ─── Reusable chart renderers (shared between card and modal) ────────────────
+// ─── Reusable chart renderers ────────────────────────────────────────────────
 function RevenueChart({ data, height = 260 }: { data: { month: string; revenue: number }[]; height?: number }) {
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -423,6 +425,44 @@ function buildStyles() {
   };
 }
 
+// ─── Upgrade wall (shown inside ANALYSIS tab for non-executive plans) ────────
+function AnalysisUpgradeWall({ plan }: { plan: string | undefined }) {
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", alignItems: "center",
+      justifyContent: "center", padding: "80px 32px", textAlign: "center", gap: 24,
+      background: `radial-gradient(ellipse at center, ${C.navyMid} 0%, ${C.navy} 70%)`,
+      border: `1px solid ${C.border}`, borderRadius: 16,
+    }}>
+      <div style={{ fontSize: 52 }}>🔒</div>
+      <h2 style={{
+        fontFamily: "'Cormorant Garamond', serif", fontSize: 30,
+        color: C.gold, margin: 0,
+      }}>
+        Executive Plan Required
+      </h2>
+      <p style={{ color: C.slate, fontSize: 15, maxWidth: 440, lineHeight: 1.7, margin: 0 }}>
+        AI Firm Analysis is available on the Executive plan. Get instant, actionable
+        insights based on your real firm data — wins, warnings, and exactly what to do next.
+      </p>
+      <a
+        href="/account/billing"
+        style={{
+          padding: "13px 36px", borderRadius: 8, background: C.gold,
+          color: C.navy, textDecoration: "none", fontWeight: 700,
+          fontFamily: "'DM Mono', monospace", fontSize: 14, letterSpacing: 1,
+          boxShadow: `0 0 32px ${C.gold}44`,
+        }}
+      >
+        Upgrade to Executive
+      </a>
+      <span style={{ fontSize: 11, color: C.slate }}>
+        Current plan: {plan ?? "professional"}
+      </span>
+    </div>
+  );
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-k375.onrender.com" }: { apiBase?: string }) {
   const [period, setPeriod]   = useState<PeriodValue>("12m");
@@ -450,7 +490,9 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
   const compliance = (kpis.timesheet_compliance  ?? {}) as Partial<ComplianceKPI>;
   const cycletime  = (kpis.invoice_cycle_time    ?? {}) as Partial<CycleTimeKPI>;
 
-  // chart data derived from API
+  const canAccessAnalysis = isExecutivePlan(meta.plan);
+
+  // chart data
   const revData    = (revTrend.trend ?? []).map((t) => ({ month: t.month_label || t.month, revenue: t.revenue, invoices: t.invoice_count }));
   const wipData    = !wip.buckets ? [] : [
     { name: "0–30 days", value: wip.buckets["0_30"] || 0 },
@@ -790,16 +832,60 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
           {meta.generated_at && <span style={{ fontSize: 11, color: C.slate }}>Generated {new Date(meta.generated_at).toLocaleTimeString()}</span>}
         </div>
       </div>
-      <div style={s.tabs}>
-        {(["overview", "clients", "billing", "staff", "analysis"] as const).map((id) => (
-          <button key={id} style={s.tabStyle(tab === id)} onClick={() => setTab(id)}>{id.toUpperCase()}</button>
-        ))}
-      </div>
-      {tab === "overview" && <OverviewTab />}
-      {tab === "clients"  && <ClientsTab />}
-      {tab === "billing"  && <BillingTab />}
-      {tab === "staff"    && <StaffTab />}
-      {tab === "analysis" && <AIAnalysisTab data={data} apiBase={apiBase} />}
+
+      {/* ── Page-level plan gate — blocks all tabs for non-executive ── */}
+      {!loading && !canAccessAnalysis ? (
+        <div style={{
+          display: "flex", flexDirection: "column", alignItems: "center",
+          justifyContent: "center", padding: "80px 32px", textAlign: "center", gap: 24,
+          background: `radial-gradient(ellipse at center, ${C.navyMid} 0%, ${C.navy} 70%)`,
+          border: `1px solid ${C.border}`, borderRadius: 16,
+        }}>
+          <div style={{ fontSize: 52 }}>🔒</div>
+          <h2 style={{
+            fontFamily: "'Cormorant Garamond', serif", fontSize: 30,
+            color: C.gold, margin: 0,
+          }}>
+            Executive Plan Required
+          </h2>
+          <p style={{ color: C.slate, fontSize: 15, maxWidth: 460, lineHeight: 1.7, margin: 0 }}>
+            The Executive Dashboard — including KPI analytics, client profitability,
+            staff utilization, and AI firm analysis — is available on the Executive plan.
+          </p>
+          <a
+            href="/account/billing"
+            style={{
+              padding: "13px 36px", borderRadius: 8, background: C.gold,
+              color: C.navy, textDecoration: "none", fontWeight: 700,
+              fontFamily: "'DM Mono', monospace", fontSize: 14, letterSpacing: 1,
+              boxShadow: `0 0 32px ${C.gold}44`,
+            }}
+          >
+            Upgrade to Executive
+          </a>
+          <span style={{ fontSize: 11, color: C.slate }}>
+            Current plan: {meta.plan ?? "professional"}
+          </span>
+        </div>
+      ) : (
+        <>
+          {/* ── Tab bar ── */}
+          <div style={s.tabs}>
+            {(["overview", "clients", "billing", "staff", "analysis"] as const).map((id) => (
+              <button key={id} style={s.tabStyle(tab === id)} onClick={() => setTab(id)}>
+                {id.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          {/* ── Tab content ── */}
+          {tab === "overview"  && <OverviewTab />}
+          {tab === "clients"   && <ClientsTab />}
+          {tab === "billing"   && <BillingTab />}
+          {tab === "staff"     && <StaffTab />}
+          {tab === "analysis"  && <AIAnalysisTab data={data} apiBase={apiBase} period={period} />}
+        </>
+      )}
     </div>
   );
 }

@@ -5687,9 +5687,8 @@ def delete_project(request, project_id):
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
 def recategorize_block(request, block_id):
-    """Move a block to a different category."""
     try:
-        block = Block.objects.get(id=block_id, user=request.user)
+        block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
     except Block.DoesNotExist:
         return Response({"error": "Block not found"}, status=404)
     

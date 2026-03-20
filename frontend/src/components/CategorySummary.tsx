@@ -434,22 +434,21 @@ function ActivityRow({
       draggable={!!parsed.blockId && !isSelected}
       onDragStart={handleDragStart}
       onDragOver={onDragOver}
-      onMouseDown={parsed.blockId ? (e) => {
-        // Clicking anywhere on the row toggles selection
-        // but not if clicking the Move button or popover
+      onClick={parsed.blockId ? (e) => {
+        // Single click on row toggles selection
+        // but not if clicking the Move button, popover, or grip handle
         const target = e.target as HTMLElement;
         if (target.closest("button") || target.closest("[data-popover]")) return;
         setCheckboxActive(true);
-        handleCheckboxClick(e);
+        handleCheckboxClick(e as any);
         setTimeout(() => setCheckboxActive(false), 300);
       } : undefined}
       className={cn(
-        "flex items-center gap-2 group/item rounded-lg px-2 py-2 transition-all relative",
-        parsed.blockId && !isSelected && "cursor-grab",
+        "flex items-center gap-2 group/item rounded-lg px-2 py-2 transition-all relative select-none",
+        parsed.blockId && !isSelected && "cursor-grab active:cursor-grabbing hover:bg-slate-50",
         parsed.blockId && isSelected && "cursor-pointer",
         isBeingDragged && "opacity-30 bg-slate-100",
         isSelected && !isBeingDragged && "bg-primary/8 ring-1 ring-primary/30",
-        !isBeingDragged && !isSelected && parsed.blockId && "hover:bg-slate-50"
       )}
       style={{ listStyle: "none" }}
     >
@@ -469,9 +468,9 @@ function ActivityRow({
         <span className="w-5 flex-shrink-0" />
       )}
 
-      {/* Drag handle — only when not selected */}
+      {/* Drag handle — subtle hint that row is draggable */}
       {parsed.blockId && !isSelected ? (
-        <GripVertical className="w-3.5 h-3.5 text-slate-300 group-hover/item:text-slate-500 flex-shrink-0 transition-colors" />
+        <GripVertical className="w-3.5 h-3.5 text-slate-200 group-hover/item:text-slate-400 flex-shrink-0 transition-colors" />
       ) : (
         <span className="w-3.5 flex-shrink-0" />
       )}

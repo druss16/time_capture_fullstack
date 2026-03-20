@@ -431,40 +431,45 @@ function ActivityRow({
 
   return (
     <li
-      draggable={!!parsed.blockId}
+      draggable={!!parsed.blockId && !isSelected}
       onDragStart={handleDragStart}
       onDragOver={onDragOver}
+      onMouseDown={parsed.blockId ? (e) => {
+        // Clicking anywhere on the row toggles selection
+        // but not if clicking the Move button or popover
+        const target = e.target as HTMLElement;
+        if (target.closest("button") || target.closest("[data-popover]")) return;
+        setCheckboxActive(true);
+        handleCheckboxClick(e);
+        setTimeout(() => setCheckboxActive(false), 300);
+      } : undefined}
       className={cn(
-        "flex items-center gap-2 group/item rounded-lg px-2 py-1.5 transition-all relative",
-        parsed.blockId && "cursor-grab",
+        "flex items-center gap-2 group/item rounded-lg px-2 py-2 transition-all relative",
+        parsed.blockId && !isSelected && "cursor-grab",
+        parsed.blockId && isSelected && "cursor-pointer",
         isBeingDragged && "opacity-30 bg-slate-100",
         isSelected && !isBeingDragged && "bg-primary/8 ring-1 ring-primary/30",
-        !isBeingDragged && !isSelected && "hover:bg-slate-50"
+        !isBeingDragged && !isSelected && parsed.blockId && "hover:bg-slate-50"
       )}
       style={{ listStyle: "none" }}
     >
-      {/* Checkbox — always visible on hover, visible when selected */}
+      {/* Checkbox — larger hit area, always visible on hover */}
       {parsed.blockId ? (
-        <button
-          onMouseDown={(e) => { setCheckboxActive(true); handleCheckboxClick(e); }}
-          onMouseUp={() => setTimeout(() => setCheckboxActive(false), 300)}
+        <div
           className={cn(
-            "flex-shrink-0 transition-all",
-            isSelected
-              ? "opacity-100"
-              : "opacity-0 group-hover/item:opacity-100"
+            "flex-shrink-0 w-5 h-5 flex items-center justify-center transition-all",
+            isSelected ? "opacity-100" : "opacity-0 group-hover/item:opacity-100"
           )}
-          title="Select (shift+click for range)"
         >
           {isSelected
-            ? <CheckSquare className="w-3.5 h-3.5 text-primary" />
-            : <Square className="w-3.5 h-3.5 text-slate-400" />}
-        </button>
+            ? <CheckSquare className="w-4 h-4 text-primary" />
+            : <Square className="w-4 h-4 text-slate-400" />}
+        </div>
       ) : (
-        <span className="w-3.5 flex-shrink-0" />
+        <span className="w-5 flex-shrink-0" />
       )}
 
-      {/* Drag handle — shown when not selected */}
+      {/* Drag handle — only when not selected */}
       {parsed.blockId && !isSelected ? (
         <GripVertical className="w-3.5 h-3.5 text-slate-300 group-hover/item:text-slate-500 flex-shrink-0 transition-colors" />
       ) : (

@@ -462,7 +462,7 @@ def weekly_timesheet_view(request):
         if not block.start:
             continue
         key     = (block.client_id, block.task_type_id)
-        day_str = block.start.date().isoformat()
+        day_str = localtime(block.start).date().isoformat()
 
         if key not in raw_grid:
             raw_grid[key] = {

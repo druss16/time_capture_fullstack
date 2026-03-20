@@ -504,12 +504,24 @@ def _get_event_minutes_for_week(user, week_start, week_end):
     return minute_map
 
 
+# ── weekly_timesheet_view — event-based, matches today_time exactly ──────────
+# Replace weekly_timesheet_view in views_billing.py with this entire function.
+# Also ensure this import is at top of views_billing.py:
+#   from django.utils.timezone import localtime
+# ─────────────────────────────────────────────────────────────────────────────
+
+import datetime as dt_module
+from datetime import timezone as dt_timezone
+from django.utils.timezone import localtime
+
+IDLE_CAP_SECONDS = 180  # 3-min cap, matches today_time and agent
+
+
 @api_view(['GET'])
 def weekly_timesheet_view(request):
     """
-    Employee-facing weekly timesheet grid.
-    Uses event-based attribution (same as Daily Review / today_time).
-    Numbers will match the Daily Review exactly.
+    Event-based weekly timesheet. Matches Daily Review exactly.
+    Mobile blocks merged separately (same as today_time Step 5).
     """
     org = get_user_org(request.user)
     if not org:
@@ -526,82 +538,124 @@ def weekly_timesheet_view(request):
 
     week_start = get_monday(week_start)
     week_end   = week_start + timedelta(days=6)
+    day_strings = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
 
     timesheet, _ = Timesheet.get_or_create_for_date(org, request.user, week_start)
 
-    day_strings = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
+    tz = timezone.get_current_timezone()
+    start_local = timezone.make_aware(dt_module.datetime.combine(week_start, dt_module.time.min), tz)
+    end_local   = timezone.make_aware(dt_module.datetime.combine(week_end, dt_module.time.max), tz)
+    start_utc   = start_local.astimezone(dt_timezone.utc)
+    end_utc     = end_local.astimezone(dt_timezone.utc)
 
-    # Get event-based minutes for the whole week
-    minute_map = _get_event_minutes_for_week(request.user, week_start, week_end)
+    # ── Raw events for the week ───────────────────────────────────────────────
+    from tracker.models import RawEvent
+    events = list(RawEvent.objects.filter(
+        user=request.user,
+        ts_utc__gte=start_utc,
+        ts_utc__lt=end_utc,
+    ).select_related('block', 'block__client', 'block__task_type').order_by('ts_utc'))
 
-    # Build grid keyed by (client_id, task_type_id)
-    grid = {}  # (client_id, task_type_id) → {meta, day_minutes}
+    deleted_block_ids = set(
+        Block.objects.filter(user=request.user, deleted_at__isnull=False)
+        .values_list('id', flat=True)
+    )
 
-    for (client_id, client_name, task_type_id, task_type_name, is_billable, day_str), minutes in minute_map.items():
+    grid = {}
+
+    # ── Event-based attribution (3-min cap) ───────────────────────────────────
+    for i, event in enumerate(events):
+        if i + 1 < len(events):
+            gap = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+            duration_min = min(gap, IDLE_CAP_SECONDS) / 60.0
+        else:
+            duration_min = 3.0
+
+        block = event.block
+        if block and block.id in deleted_block_ids:
+            block = None
+
+        if block and block.client_id:
+            client_id      = block.client_id
+            client_name    = block.client.name if block.client else 'Unassigned'
+            task_type_id   = block.task_type_id
+            task_type_name = block.task_type.name if block.task_type else 'General'
+            is_billable    = block.is_billable
+        else:
+            client_id = None; client_name = 'Unassigned'
+            task_type_id = None; task_type_name = 'General'; is_billable = False
+
+        day_str = localtime(event.ts_utc).date().isoformat()
         if day_str not in day_strings:
             continue
 
         key = (client_id, task_type_id)
-
         if key not in grid:
             grid[key] = {
-                'client_id':      client_id,
-                'client_name':    client_name,
-                'task_type_id':   task_type_id,
-                'task_type_name': task_type_name,
-                'is_billable':    is_billable,
-                'day_minutes':    {d: 0.0 for d in day_strings},
+                'client_id': client_id, 'client_name': client_name,
+                'task_type_id': task_type_id, 'task_type_name': task_type_name,
+                'is_billable': is_billable,
+                'day_minutes': {d: 0.0 for d in day_strings},
             }
+        grid[key]['day_minutes'][day_str] += duration_min
 
+    # ── Mobile blocks (no raw events) ────────────────────────────────────────
+    for block in Block.objects.filter(
+        user=request.user, org=org, hostname='mobile',
+        start__gte=start_utc, start__lte=end_utc,
+        is_categorized=True, client__isnull=False, deleted_at__isnull=True,
+    ).select_related('client', 'task_type'):
+        day_str = localtime(block.start).date().isoformat()
+        if day_str not in day_strings:
+            continue
+        key = (block.client_id, block.task_type_id)
+        minutes = float(block.minutes or 0)
+        if key not in grid:
+            grid[key] = {
+                'client_id': block.client_id,
+                'client_name': block.client.name,
+                'task_type_id': block.task_type_id,
+                'task_type_name': block.task_type.name if block.task_type else 'General',
+                'is_billable': block.is_billable,
+                'day_minutes': {d: 0.0 for d in day_strings},
+            }
         grid[key]['day_minutes'][day_str] += minutes
 
-    # Convert to response format
+    # ── Build response ────────────────────────────────────────────────────────
     grid_entries = []
-    for key, data in grid.items():
-        day_hours   = {}
+    for data in grid.values():
+        day_hours = {}
         row_minutes = 0.0
-
         for day_str in day_strings:
             m = data['day_minutes'][day_str]
             day_hours[day_str] = round(m / 60, 2)
             row_minutes += m
-
         grid_entries.append({
-            'client_id':      data['client_id'],
-            'client_name':    data['client_name'],
-            'task_type_id':   data['task_type_id'],
-            'task_type_name': data['task_type_name'],
-            'is_billable':    data['is_billable'],
-            'days':           day_hours,
-            'total':          round(row_minutes / 60, 2),
+            'client_id': data['client_id'], 'client_name': data['client_name'],
+            'task_type_id': data['task_type_id'], 'task_type_name': data['task_type_name'],
+            'is_billable': data['is_billable'],
+            'days': day_hours, 'total': round(row_minutes / 60, 2),
         })
 
-    # Sort: billable first, then by client name
     grid_entries.sort(key=lambda e: (not e['is_billable'], e['client_name'] or ''))
 
-    # Daily totals
     daily_totals = {d: 0.0 for d in day_strings}
-    for (_, _, _, _, _, day_str), minutes in minute_map.items():
-        if day_str in daily_totals:
-            daily_totals[day_str] += minutes
+    for data in grid.values():
+        for d, m in data['day_minutes'].items():
+            daily_totals[d] += m
 
     daily_totals_hours = {d: round(m / 60, 2) for d, m in daily_totals.items()}
-
     grand_total    = round(sum(daily_totals_hours.values()), 2)
     billable_total = round(sum(e['total'] for e in grid_entries if e['is_billable']), 2)
 
     return Response({
-        'week_start':       week_start.isoformat(),
-        'week_end':         week_end.isoformat(),
-        'timesheet_id':     timesheet.id,
-        'status':           timesheet.status,
-        'auto_submitted':   timesheet.auto_submitted,
-        'submitted_at':     timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
+        'week_start': week_start.isoformat(), 'week_end': week_end.isoformat(),
+        'timesheet_id': timesheet.id, 'status': timesheet.status,
+        'auto_submitted': timesheet.auto_submitted,
+        'submitted_at': timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
         'rejection_reason': timesheet.rejection_reason or '',
-        'entries':          grid_entries,
-        'daily_totals':     daily_totals_hours,
-        'grand_total':      grand_total,
-        'billable_total':   billable_total,
+        'entries': grid_entries, 'daily_totals': daily_totals_hours,
+        'grand_total': grand_total, 'billable_total': billable_total,
     })
 # ===============================
 # CLIENT SUMMARY VIEW (MANAGER/BILLING)

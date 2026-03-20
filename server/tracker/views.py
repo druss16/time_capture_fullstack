@@ -4123,15 +4123,6 @@ def today_time(request):
         ts_utc__lt=end_utc,
     ).select_related('block', 'block__client').order_by('ts_utc'))
     
-    # Build set of deleted block IDs upfront so we can check efficiently
-    from django.db.models import Q
-    deleted_block_ids = set(
-        Block.objects.filter(
-            user=user,
-            deleted_at__isnull=False,
-        ).values_list('id', flat=True)
-    )
-    
     if not events:
         # Fallback to blocks if no events (e.g., manual entries)
         return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
@@ -4143,6 +4134,7 @@ def today_time(request):
     IDLE_CAP_SECONDS = 180  # 3 minutes - matches agent's MOUSE_IDLE_PAUSE_S
     NON_BILLABLE_CATEGORIES = {'personal/non-billable', 'idle', 'uncategorized'}
 
+    
     event_durations = []
     for i, event in enumerate(events):
         if i + 1 < len(events):
@@ -4154,11 +4146,6 @@ def today_time(request):
         
         # Get client and category from linked block
         block = event.block
-
-        # ✅ FIX: treat soft-deleted blocks as unassigned
-        if block and block.id in deleted_block_ids:
-            block = None
-
         if block:
             client_id = block.client_id
             client_name = block.client.name if block.client else 'Unassigned'
@@ -4185,10 +4172,10 @@ def today_time(request):
             'client_name': client_name,
             'category': category,
             'is_idle': is_idle,
-            'is_billable': bool(client_id) and category.lower() not in NON_BILLABLE_CATEGORIES,
+            'is_billable': bool(client_id) and category.lower() not in NON_BILLABLE_CATEGORIES,  # ✅ ADD HERE
             'app_name': event.app_name or 'Unknown',
             'window_title': event.window_title or '',
-            'url': event.url or '',
+            'url': event.url or '',  # ✅ NEW: Include URL for better formatting
             'block_id': block.id if block else None,
         })
     
@@ -4202,13 +4189,14 @@ def today_time(request):
             'minutes': 0.0,
             'block_count': 0,
             'blocks_seen': set(),
-            'by_activity': {},
+            'by_activity': {},  # ✅ RENAMED: by_title → by_activity (keyed by clean title)
         })
     })
     
     total_minutes = 0.0
     billable_minutes = 0.0
     non_billable_minutes = 0.0
+
     
     for ev in event_durations:
         client_name = ev['client_name']
@@ -4224,7 +4212,7 @@ def today_time(request):
             cat_data['blocks_seen'].add(ev['block_id'])
             cat_data['block_count'] += 1
         
-        # Use display formatter for clean title
+        # ✅ NEW: Use display formatter for clean title
         formatted = format_block_for_display({
             'app_name': ev['app_name'],
             'window_title': ev['window_title'],
@@ -4249,7 +4237,7 @@ def today_time(request):
         if ev['is_billable']:
             billable_minutes += minutes
         else:
-            non_billable_minutes += minutes
+            non_billable_minutes += minutes  # ✅ ADD
     
     # =========================================================================
     # STEP 4: Build response with clean formatting
@@ -4274,7 +4262,7 @@ def today_time(request):
                 mins = info['minutes']
                 time_str = format_duration(mins)
                 
-                # Clean format with block ID for editing
+                # ✅ Clean format with block ID for editing
                 if info['id']:
                     aggregated_samples.append(f"[id:{info['id']}] {clean_title} ({time_str})")
                 else:
@@ -4298,7 +4286,7 @@ def today_time(request):
     # =========================================================================
     # STEP 5: Merge in mobile blocks (no RawEvents — must add separately)
     # =========================================================================
-    flagged_blocks = []
+    flagged_blocks = []  # collect needs_review entries for the dashboard
  
     mobile_blocks = Block.objects.filter(
         user=user,
@@ -4308,7 +4296,6 @@ def today_time(request):
         start__lt=end_utc,
         is_categorized=True,
         client__isnull=False,
-        deleted_at__isnull=True,  # ✅ FIX: exclude soft-deleted blocks
     ).select_related('client')
  
     for block in mobile_blocks:
@@ -4369,12 +4356,12 @@ def today_time(request):
         total_minutes    += b_minutes
  
     return Response({
-        'clients':            result,
-        'global_hours':       round(total_minutes / 60, 2),
-        'billable_hours':     round(billable_minutes / 60, 2),
+        'clients':           result,
+        'global_hours':      round(total_minutes / 60, 2),
+        'billable_hours':    round(billable_minutes / 60, 2),
         'non_billable_hours': round(non_billable_minutes / 60, 2),
-        'date':               target_date.isoformat(),
-        'flagged_blocks':     flagged_blocks,
+        'date':              target_date.isoformat(),
+        'flagged_blocks':    flagged_blocks,  # ← NEW: needs_review entries
     })
 
 # ── Add this new view to views.py ─────────────────────────────────────────────

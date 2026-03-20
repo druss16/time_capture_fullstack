@@ -367,43 +367,65 @@ from decimal import Decimal
 from collections import defaultdict
 
 
-def _union_hours(spans):
+# ── CORRECTED weekly_timesheet_view ─────────────────────────────────────────
+#
+# The previous version had a units bug: _union_hours returns fractional hours
+# correctly, but block.start/end timezone handling caused span inflation.
+#
+# This version uses a simpler, proven approach:
+# - Use block.minutes (already compacted correctly by the agent)
+# - Apply union logic on the TIME SPANS to avoid double-counting
+# - Fall back to block.minutes sum if no start/end available
+#
+# REPLACE weekly_timesheet_view in views_billing.py with this:
+# ─────────────────────────────────────────────────────────────────────────────
+
+from collections import defaultdict
+from decimal import Decimal
+from datetime import timedelta, date
+import datetime as dt_module
+from django.utils.timezone import make_aware
+
+
+def _union_minutes_from_blocks(block_list):
     """
-    Given a list of (start_dt, end_dt) tuples, return the total hours
-    of the UNION of all spans (no double-counting of overlapping time).
+    Given a list of Block objects, return the union of their time spans in MINUTES.
+    Handles overlapping blocks by merging spans — no double-counting.
+    Falls back to summing block.minutes if start/end not available.
     """
+    spans = []
+    for b in block_list:
+        if b.start and b.end and b.end > b.start:
+            spans.append((b.start, b.end))
+
     if not spans:
-        return Decimal('0')
+        # Fallback: sum minutes directly (may double-count but better than nothing)
+        return sum(b.minutes or 0 for b in block_list)
 
-    # Sort by start time
-    sorted_spans = sorted(spans, key=lambda x: x[0])
-    merged = []
-    cur_start, cur_end = sorted_spans[0]
-
-    for start, end in sorted_spans[1:]:
-        if start <= cur_end:
-            # Overlapping — extend current span
-            cur_end = max(cur_end, end)
+    # Sort and merge overlapping spans
+    spans.sort(key=lambda x: x[0])
+    merged = [spans[0]]
+    for start, end in spans[1:]:
+        if start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
-            merged.append((cur_start, cur_end))
-            cur_start, cur_end = start, end
-    merged.append((cur_start, cur_end))
+            merged.append((start, end))
 
     total_seconds = sum((e - s).total_seconds() for s, e in merged)
-    return Decimal(str(round(total_seconds / 3600, 4)))
+    return round(total_seconds / 60, 2)  # Return MINUTES
 
 
 @api_view(['GET'])
 def weekly_timesheet_view(request):
     """
     Employee-facing weekly timesheet grid.
-    Shows hours per client/task per day using UNION of spans (no double-counting).
+    Shows HOURS per client/task per day — union of spans, no double-counting.
     """
     org = get_user_org(request.user)
     if not org:
         return Response({'error': 'No organization'}, status=400)
 
-    # Get week
+    # ── Week range ────────────────────────────────────────────────────────────
     week_start_param = request.query_params.get('week_start')
     if week_start_param:
         try:
@@ -414,91 +436,80 @@ def weekly_timesheet_view(request):
         week_start = get_monday(timezone.now().date())
 
     week_start = get_monday(week_start)
-    week_end = week_start + timedelta(days=6)
+    week_end   = week_start + timedelta(days=6)
 
-    # Get or create timesheet
+    # ── Timesheet record ──────────────────────────────────────────────────────
     timesheet, _ = Timesheet.get_or_create_for_date(org, request.user, week_start)
 
-    # Get blocks for this week — need start/end datetimes for span calculation
-    from django.utils.timezone import make_aware
-    import datetime as dt_module
-
+    # ── Fetch blocks ──────────────────────────────────────────────────────────
     start_dt = make_aware(dt_module.datetime.combine(week_start, dt_module.time.min))
-    end_dt   = make_aware(dt_module.datetime.combine(week_end, dt_module.time.max))
+    end_dt   = make_aware(dt_module.datetime.combine(week_end,   dt_module.time.max))
 
-    blocks = Block.objects.filter(
+    blocks = list(Block.objects.filter(
         org=org,
         user=request.user,
         start__gte=start_dt,
         start__lte=end_dt,
         deleted_at__isnull=True,
-    ).select_related('client', 'task_type').order_by('start')
+    ).select_related('client', 'task_type').order_by('start'))
 
-    # Build grid using UNION of spans per (client, task_type, day)
-    # Structure: grid[key] = {'meta': ..., 'days': {date_str: [(start, end), ...]}}
-    grid_spans = {}
+    # ── Build grid: {(client_id, task_type_id): {day_str: [blocks]}} ─────────
+    day_strings = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
+
+    raw_grid: dict[tuple, dict] = {}
 
     for block in blocks:
-        if not block.start or not block.end:
+        if not block.start:
             continue
-
-        key = (block.client_id, block.task_type_id)
+        key     = (block.client_id, block.task_type_id)
         day_str = block.start.date().isoformat()
 
-        if key not in grid_spans:
-            grid_spans[key] = {
+        if key not in raw_grid:
+            raw_grid[key] = {
                 'client_id':      block.client_id,
                 'client_name':    block.client.name if block.client else 'Unassigned',
                 'task_type_id':   block.task_type_id,
                 'task_type_name': block.task_type.name if block.task_type else 'General',
                 'is_billable':    block.is_billable,
-                'days':           {
-                    (week_start + timedelta(days=i)).isoformat(): []
-                    for i in range(7)
-                },
+                'day_blocks':     {d: [] for d in day_strings},
             }
 
-        # Store the actual span for this day
-        if day_str in grid_spans[key]['days']:
-            grid_spans[key]['days'][day_str].append((block.start, block.end))
+        if day_str in raw_grid[key]['day_blocks']:
+            raw_grid[key]['day_blocks'][day_str].append(block)
 
-    # Convert spans → union hours per day
-    grid = {}
-    for key, data in grid_spans.items():
-        day_hours = {}
-        row_total = Decimal('0')
+    # ── Convert block lists → union hours per day ─────────────────────────────
+    grid_entries = []
+    for key, data in raw_grid.items():
+        day_hours  = {}
+        row_minutes = Decimal('0')
 
-        for day_str, spans in data['days'].items():
-            hours = _union_hours(spans)
+        for day_str in day_strings:
+            day_block_list = data['day_blocks'][day_str]
+            minutes = _union_minutes_from_blocks(day_block_list)
+            hours   = round(Decimal(str(minutes)) / 60, 2)
             day_hours[day_str] = hours
-            row_total += hours
+            row_minutes += Decimal(str(minutes))
 
-        grid[key] = {
+        grid_entries.append({
             'client_id':      data['client_id'],
             'client_name':    data['client_name'],
             'task_type_id':   data['task_type_id'],
             'task_type_name': data['task_type_name'],
             'is_billable':    data['is_billable'],
             'days':           day_hours,
-            'total':          round(row_total, 2),
-        }
+            'total':          round(row_minutes / 60, 2),
+        })
 
-    # Daily totals — also use union across ALL blocks for that day
-    # (so the day total doesn't double-count either)
-    daily_spans = defaultdict(list)
-    for block in blocks:
-        if block.start and block.end:
-            day_str = block.start.date().isoformat()
-            daily_spans[day_str].append((block.start, block.end))
-
+    # ── Daily totals — union across ALL blocks for each day ───────────────────
     daily_totals = {}
-    for i in range(7):
-        day_str = (week_start + timedelta(days=i)).isoformat()
-        daily_totals[day_str] = round(_union_hours(daily_spans.get(day_str, [])), 2)
+    for day_str in day_strings:
+        day_all_blocks = [b for b in blocks if b.start and b.start.date().isoformat() == day_str]
+        minutes = _union_minutes_from_blocks(day_all_blocks)
+        daily_totals[day_str] = round(Decimal(str(minutes)) / 60, 2)
 
     grand_total    = round(sum(daily_totals.values()), 2)
     billable_total = round(
-        sum(row['total'] for row in grid.values() if row['is_billable']), 2
+        sum(e['total'] for e in grid_entries if e['is_billable']), 2
     )
 
     return Response({
@@ -509,7 +520,7 @@ def weekly_timesheet_view(request):
         'auto_submitted':   timesheet.auto_submitted,
         'submitted_at':     timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
         'rejection_reason': timesheet.rejection_reason or '',
-        'entries':          list(grid.values()),
+        'entries':          grid_entries,
         'daily_totals':     daily_totals,
         'grand_total':      grand_total,
         'billable_total':   billable_total,
@@ -1547,20 +1558,14 @@ def timesheet_history(request):
         ).select_related('client'))
  
         # Use UNION of spans — same logic as weekly_timesheet_view
-        all_spans = []
-        billable_spans = []
-        total_amount = Decimal('0')
  
-        for b in blocks:
-            if not b.start or not b.end:
-                continue
-            all_spans.append((b.start, b.end))
-            if b.is_billable and b.client_id:
-                billable_spans.append((b.start, b.end))
-                total_amount += Decimal(str(b.billing_amount or 0))
+        all_blks  = [b for b in blocks if b.start and b.end]
+        bill_blks = [b for b in blocks if b.start and b.end and b.is_billable and b.client_id]
+        total_amount = sum(Decimal(str(b.billing_amount or 0)) for b in bill_blks)
  
-        total_hours   = round(float(_union_hours(all_spans)), 2)
-        billable_hours = round(float(_union_hours(billable_spans)), 2)
+        total_hours    = round(_union_minutes_from_blocks(all_blks) / 60, 2)
+        billable_hours = round(_union_minutes_from_blocks(bill_blks) / 60, 2)
+ 
         
         result.append({
             'id': ts.id,

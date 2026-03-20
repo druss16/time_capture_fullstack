@@ -2,7 +2,7 @@
  * DailyReview.tsx
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   RefreshCw,
   Edit3,
@@ -88,6 +88,8 @@ const Toast = ({
     {message}
   </div>
 );
+
+/** Remove all sample_activities referencing a given blockId from timeSummary */
 
 export default function DailyReview() {
   const me = useWhoAmI();
@@ -181,6 +183,10 @@ export default function DailyReview() {
     }
   }, [date]);
 
+  /**
+   * Optimistically remove a deleted block from the local summary immediately,
+   * then do a background refresh to sync with server.
+   */
   const handleDismissReview = async (blockId: number) => {
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/dismiss-review/`, {

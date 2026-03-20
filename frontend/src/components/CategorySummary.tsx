@@ -16,7 +16,6 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
-  Trash2,
   AlertTriangle,
   Smartphone,
   FileQuestion,
@@ -212,13 +211,12 @@ function InlineMovePicker({
 // ─── Floating Selection Bar ─────────────────────────────────────────────────────
 
 function SelectionBar({
-  count, clients, categories, onMove, onDelete, onClear,
+  count, clients, categories, onMove, onClear,
 }: {
   count: number;
   clients: ClientOption[];
   categories: string[];
   onMove: (clientId: number | null, category: string) => void;
-  onDelete: () => void;
   onClear: () => void;
 }) {
   const [showPopover, setShowPopover] = useState(false);
@@ -256,17 +254,6 @@ function SelectionBar({
         )}
       </div>
 
-      {/* Delete selected */}
-      <button
-        onClick={onDelete}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 rounded-xl text-sm font-bold hover:opacity-90 transition-all"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
-        Delete
-      </button>
-
-      <div className="w-px h-5 bg-white/20" />
-
       {/* Deselect all */}
       <button
         onClick={onClear}
@@ -283,7 +270,7 @@ function SelectionBar({
 
 function ActivityList({
   activities, client, categoryName, allClients, allCategories,
-  onMove, onDelete, onCrossMove, draggingBlockId,
+  onMove, onCrossMove, draggingBlockId,
   selectedIds, onToggleSelect,
 }: {
   activities: string[];
@@ -292,7 +279,6 @@ function ActivityList({
   allClients: ClientOption[];
   allCategories: string[];
   onMove: (blockId: number, clientId: number | null, category: string) => Promise<void>;
-  onDelete: (blockId: number, title: string) => void;
   onCrossMove: (blockId: number, clientId: number | null, category: string) => Promise<void>;
   draggingBlockId: number | null;
   selectedIds: Set<number>;
@@ -361,7 +347,6 @@ function ActivityList({
               allClients={allClients}
               allCategories={allCategories}
               onMove={onMove}
-              onDelete={onDelete}
               isBeingDragged={isBeingDragged}
               isSelected={isSelected}
               onDragOver={(e) => handleRowDragOver(e, idx)}
@@ -391,7 +376,7 @@ function ActivityList({
 
 function ActivityRow({
   activity, client, categoryName, allClients, allCategories,
-  onMove, onDelete, isBeingDragged, isSelected, onDragOver, onToggleSelect,
+  onMove, isBeingDragged, isSelected, onDragOver, onToggleSelect,
 }: {
   activity: string;
   client: ClientTime;
@@ -399,7 +384,6 @@ function ActivityRow({
   allClients: ClientOption[];
   allCategories: string[];
   onMove: (blockId: number, clientId: number | null, category: string) => Promise<void>;
-  onDelete: (blockId: number, title: string) => void;
   isBeingDragged: boolean;
   isSelected: boolean;
   onDragOver: (e: React.DragEvent) => void;
@@ -505,12 +489,6 @@ function ActivityRow({
           >
             Move
           </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(parsed.blockId!, parsed.title); }}
-            className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
-          >
-            <Trash2 className="w-3.5 h-3.5 text-slate-300 hover:text-red-400 transition-colors" />
-          </button>
           {showPopover && (
             <MovePopover
               clients={allClients}
@@ -532,7 +510,7 @@ function ActivityRow({
 
 function CategorySection({
   cat, client, allClients, allCategories,
-  onMoveActivity, onMoveAll, onDeleteActivity,
+  onMoveActivity, onMoveAll,
   draggingBlockId,
   onCatDragOver, onCatDragLeave, onCatDrop, isCatDropTarget,
   selectedIds, onToggleSelect,
@@ -541,7 +519,6 @@ function CategorySection({
   allClients: ClientOption[]; allCategories: string[];
   onMoveActivity: (blockId: number, clientId: number | null, category: string) => Promise<void>;
   onMoveAll: (blockIds: number[], clientId: number | null, category: string) => Promise<void>;
-  onDeleteActivity: (blockId: number, title: string) => void;
   draggingBlockId: number | null;
   onCatDragOver: (e: React.DragEvent) => void;
   onCatDragLeave: () => void;
@@ -640,7 +617,6 @@ function CategorySection({
           allClients={allClients}
           allCategories={allCategories}
           onMove={onMoveActivity}
-          onDelete={onDeleteActivity}
           onCrossMove={onMoveActivity}
           draggingBlockId={draggingBlockId}
           selectedIds={selectedIds}
@@ -780,36 +756,7 @@ export default function CategorySummary({
     }
   }, [moveActivity, onRefresh, showToast]);
 
-  const deleteMany = useCallback(async () => {
-    const rowKeys = Array.from(selectedIds);
-    if (!rowKeys.length) return;
-    // Extract blockIds from rowKeys (format: "blockId-idx")
-    const ids = rowKeys.map(k => parseInt(k.split("-")[0])).filter(n => !isNaN(n) && n > 0);
-    const uniqueIds = [...new Set(ids)];
-    if (!uniqueIds.length) return;
-    if (!confirm(`Delete ${uniqueIds.length} selected activit${uniqueIds.length !== 1 ? "ies" : "y"}?`)) return;
-    try {
-      await Promise.all(uniqueIds.map((id) =>
-        safeFetchJson(`${API_BASE}/blocks/${id}/delete/`, { method: "DELETE" })
-      ));
-      showToast(`Deleted ${ids.length} activit${ids.length !== 1 ? "ies" : "y"}`, "success");
-      clearSelection();
-      onRefresh();
-    } catch (e: any) {
-      showToast(e?.message || "Delete failed", "error");
-    }
-  }, [selectedIds, clearSelection, onRefresh, showToast]);
 
-  const deleteSingle = useCallback(async (blockId: number, title: string) => {
-    if (!confirm(`Delete "${title}"?`)) return;
-    try {
-      await safeFetchJson(`${API_BASE}/blocks/${blockId}/delete/`, { method: "DELETE" });
-      showToast("Deleted", "success");
-      onRefresh();
-    } catch (e: any) {
-      showToast(e?.message || "Delete failed", "error");
-    }
-  }, [onRefresh, showToast]);
 
   // ── Category / client drop ────────────────────────────────────────────────
 
@@ -947,7 +894,6 @@ export default function CategorySummary({
                         allCategories={availableCategories}
                         onMoveActivity={moveSingle}
                         onMoveAll={moveMany}
-                        onDeleteActivity={deleteSingle}
                         draggingBlockId={draggingBlockId}
                         onCatDragOver={makeCatDragOver(catKey)}
                         onCatDragLeave={() => setCatDropTarget(null)}
@@ -971,7 +917,6 @@ export default function CategorySummary({
         clients={availableClients}
         categories={availableCategories}
         onMove={(clientId, category) => moveMany(Array.from(selectedIds) as any, clientId, category)}
-        onDelete={deleteMany}
         onClear={clearSelection}
       />
     </div>

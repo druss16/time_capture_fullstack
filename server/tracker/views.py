@@ -5843,7 +5843,7 @@ def delete_block(request, block_id):
     """
     Soft-delete a time block and unlink all its RawEvents.
     Unlinking events means they won't appear in today_time at all
-    (they'll have no block reference → skipped in aggregation).
+    (no block reference → treated as unlinked background noise).
     """
     user = request.user
 
@@ -5859,12 +5859,10 @@ def delete_block(request, block_id):
         "client": block.client.name if block.client else "Unassigned",
     }
 
-    # Soft-delete the block
-    block.deleted_at = timezone.now()
-    block.save(force_update=True)
+    # Soft-delete the block (bypasses model save() override)
+    Block.objects.filter(id=block_id, user=user).update(deleted_at=timezone.now())
 
-    # ✅ Unlink all RawEvents that reference this block
-    # This makes them invisible in today_time (no block → skipped)
+    # Unlink RawEvents — once block=None, today_time skips them entirely
     RawEvent.objects.filter(block_id=block_id, user=user).update(block=None)
 
     return Response({
@@ -5873,6 +5871,52 @@ def delete_block(request, block_id):
         **block_info
     })
 
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def recategorize_block(request, block_id):
+    """
+    Move a block to a different category and/or client.
+    Only works on non-deleted blocks.
+    """
+    try:
+        block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
+    except Block.DoesNotExist:
+        return Response({"error": "Block not found"}, status=404)
+
+    new_category = request.data.get('category')
+    new_client_id = request.data.get('client_id')
+
+    if not new_category:
+        return Response({"error": "category required"}, status=400)
+
+    # Track old category for response
+    old_category = list(block.category_hours.keys())[0] if block.category_hours else None
+
+    # Calculate duration in hours
+    duration = (block.end - block.start).total_seconds() / 3600 if block.end and block.start else 0
+    block.category_hours = {new_category: round(duration, 2)}
+
+    # Mark as user correction
+    block.categorized_by = 'correction'
+    block.categorized_at = timezone.now()
+
+    # Optionally update client
+    if new_client_id:
+        try:
+            block.client = Client.objects.get(id=new_client_id)
+        except Client.DoesNotExist:
+            pass
+
+    # force_update=True bypasses immutability protection on model save()
+    block.save(force_update=True)
+
+    return Response({
+        "success": True,
+        "block_id": block.id,
+        "old_category": old_category,
+        "new_category": new_category,
+    })
 
 @api_view(["POST"])
 @permission_classes([AllowAny])  # No auth - uses org token

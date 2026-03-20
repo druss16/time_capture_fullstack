@@ -61,7 +61,12 @@ interface StatusBadgeProps {
 
 const formatHours = (hours: number | string): string => {
   const num = parseFloat(String(hours)) || 0;
-  return num.toFixed(2);
+  if (num === 0) return '0.00';
+  const h = Math.floor(num);
+  const m = Math.round((num - h) * 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
 };
 
 const getMonday = (date: Date): Date => {

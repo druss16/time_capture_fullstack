@@ -377,6 +377,18 @@ jobs:
           files-folder-recurse: true
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+
+      - name: Generate SHA512 hashes
+        working-directory: windows_agent
+        shell: pwsh
+        run: |
+          Write-Host "=== SHA512 HASHES ==="
+          Write-Host "TimeTracker-Windows-Setup.exe:"
+          (Get-FileHash "Output\TimeTracker-Windows-Setup.exe" -Algorithm SHA512).Hash
+          Write-Host "TimeTracker.exe:"
+          (Get-FileHash "dist\TimeTracker\TimeTracker.exe" -Algorithm SHA512).Hash
+          Write-Host "TimeTrackerAgent.exe:"
+          (Get-FileHash "dist\TimeTrackerAgent\TimeTrackerAgent.exe" -Algorithm SHA512).Hash
       
       - name: Package for Intune
         working-directory: windows_agent

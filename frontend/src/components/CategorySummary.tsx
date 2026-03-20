@@ -716,14 +716,19 @@ export default function CategorySummary({
 
   // ── API ───────────────────────────────────────────────────────────────────
 
-  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string) => {
+  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string): Promise<boolean> => {
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ category, client_id: clientId }),
       });
+      return true;
     } catch (e: any) {
+      // 404 = block was deleted or doesn't exist — skip silently
+      if (e?.status === 404 || e?.message?.includes("404") || e?.message?.includes("Not found")) {
+        return false;
+      }
       throw e;
     }
   }, []);
@@ -737,8 +742,13 @@ export default function CategorySummary({
     blockIds = [...new Set(resolvedIds)];
     if (!blockIds.length) return;
     try {
-      await Promise.all(blockIds.map((id) => moveActivity(id, clientId, category)));
-      showToast(`Moved ${blockIds.length} activit${blockIds.length !== 1 ? "ies" : "y"}`, "success");
+      const results = await Promise.all(blockIds.map((id) => moveActivity(id, clientId, category)));
+      const moved = results.filter(Boolean).length;
+      if (moved > 0) {
+        showToast(`Moved ${moved} activit${moved !== 1 ? "ies" : "y"}`, "success");
+      } else {
+        showToast("Nothing to move — blocks may have been removed", "error");
+      }
       clearSelection();
       onRefresh();
     } catch (e: any) {

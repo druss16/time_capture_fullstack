@@ -1530,21 +1530,37 @@ def timesheet_history(request):
     
     for ts in timesheets:
         week_end = ts.week_start + timedelta(days=6)
-        
-        # Calculate totals FROM BLOCKS (not cached fields)
-        blocks = Block.objects.filter(
+ 
+        # Get blocks with actual start/end datetimes for span calculation
+        import datetime as dt_module
+        from django.utils.timezone import make_aware
+ 
+        start_dt = make_aware(dt_module.datetime.combine(ts.week_start, dt_module.time.min))
+        end_dt   = make_aware(dt_module.datetime.combine(week_end, dt_module.time.max))
+ 
+        blocks = list(Block.objects.filter(
             org=org,
             user=ts.user,
-            day__gte=ts.week_start,
-            day__lte=week_end,
-        )
-        
-        total_minutes = sum(b.minutes or 0 for b in blocks)
-        billable_minutes = sum(b.minutes or 0 for b in blocks if b.is_billable and b.client_id)
-        total_amount = sum(Decimal(str(b.billing_amount or 0)) for b in blocks if b.is_billable and b.client_id)
-        
-        total_hours = round(total_minutes / 60, 2)
-        billable_hours = round(billable_minutes / 60, 2)
+            start__gte=start_dt,
+            start__lte=end_dt,
+            deleted_at__isnull=True,
+        ).select_related('client'))
+ 
+        # Use UNION of spans — same logic as weekly_timesheet_view
+        all_spans = []
+        billable_spans = []
+        total_amount = Decimal('0')
+ 
+        for b in blocks:
+            if not b.start or not b.end:
+                continue
+            all_spans.append((b.start, b.end))
+            if b.is_billable and b.client_id:
+                billable_spans.append((b.start, b.end))
+                total_amount += Decimal(str(b.billing_amount or 0))
+ 
+        total_hours   = round(float(_union_hours(all_spans)), 2)
+        billable_hours = round(float(_union_hours(billable_spans)), 2)
         
         result.append({
             'id': ts.id,

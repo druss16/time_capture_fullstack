@@ -122,6 +122,25 @@ function AccountLayoutWrapper() {
   return <AccountLayout role={role} />;
 }
 
+/**
+ * HomeOrRedirect - If already authenticated, skip the marketing page and go straight to dashboard
+ */
+function HomeOrRedirect() {
+  const [checking, setChecking] = useState(true);
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    safeFetchJson(`${API_BASE}/whoami/`)
+      .then((data: any) => setAuthed(data?.is_authenticated === true))
+      .catch(() => setAuthed(false))
+      .finally(() => setChecking(false));
+  }, []);
+
+  if (checking) return null; // render nothing while checking — no flash
+  if (authed) return <Navigate to="/daily" replace />;
+  return <Home />;
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -140,8 +159,8 @@ export default function App() {
               }
             >
               <Routes>
-                {/* Public / marketing */}
-                <Route path="/" element={<Home />} />
+                {/* Public / marketing — redirects to /daily if already logged in */}
+                <Route path="/" element={<HomeOrRedirect />} />
                 <Route path="/request-access" element={<RequestAccess />} />
 
                 {/* Auth */}

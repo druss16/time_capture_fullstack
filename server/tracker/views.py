@@ -1045,10 +1045,9 @@ def agents_hello(request):
 def agent_control(request):
     username = (request.GET.get("user") or "").strip()
     host = (request.GET.get("host") or "").strip()
-
     stop, reason, stop_until = False, "", None
-    ship_logs = False  # ← ADD
-
+    ship_logs = False
+    restart = False  # ← ADD
     if username and host:
         try:
             u = User.objects.get(username=username)
@@ -1060,8 +1059,6 @@ def agent_control(request):
                     stop = ac.stop
                 reason = ac.reason
                 stop_until = ac.stop_until
-
-            # ← ADD: check log_requested flag on the device
             device = AgentDevice.objects.filter(
                 user=u, hostname=host, is_active=True
             ).first()
@@ -1069,15 +1066,19 @@ def agent_control(request):
                 ship_logs = True
                 device.log_requested = False
                 device.save(update_fields=['log_requested'])
-
+            # ← ADD
+            if device and device.restart_requested:
+                restart = True
+                device.restart_requested = False
+                device.save(update_fields=['restart_requested'])
         except User.DoesNotExist:
             pass
-
     return Response({
         "stop": stop,
         "reason": reason,
         "stop_until": stop_until.isoformat() if stop_until else None,
-        "ship_logs": ship_logs,  # ← ADD
+        "ship_logs": ship_logs,
+        "restart": restart,  # ← ADD
     })
 
 

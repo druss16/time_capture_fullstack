@@ -173,6 +173,7 @@ export default function MavOpsAdmin() {
   const [loading, setLoading] = useState(false);
   const [requestingDevice, setRequestingDevice] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
+  const [restartingDevice, setRestartingDevice] = useState<string | null>(null);
 
   const handleUnlock = () => { sessionStorage.setItem("mavops_admin", "1"); setUnlocked(true); };
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
@@ -252,6 +253,15 @@ export default function MavOpsAdmin() {
       flash("✓ Log request sent — switch to Logs tab in ~15s.");
     } catch { flash("Failed to request logs."); }
     finally { setRequestingDevice(null); }
+  };
+
+  const restartDevice = async (hostname: string) => {
+    setRestartingDevice(hostname);
+    try {
+      await apiFetch("/mavops/restart-device/", { method: "POST", body: JSON.stringify({ device_id: hostname }) });
+      flash("✓ Restart queued — agent will restart within 10s.");
+    } catch { flash("Failed to restart device."); }
+    finally { setRestartingDevice(null); }
   };
 
   const resolveError = async (id: number) => {
@@ -388,6 +398,14 @@ export default function MavOpsAdmin() {
                       style={{ background: requestingDevice === d.device_id ? "#222" : "#2b9d90", border: "none", color: "#fff", padding: "6px 14px", fontSize: 12, cursor: "pointer", ...mono }}>
                       {requestingDevice === d.device_id ? "requesting…" : "request logs"}
                     </button>
+
+                    <button
+                      onClick={() => restartDevice(d.machine_name)}
+                      disabled={restartingDevice === d.machine_name}
+                      style={{ background: "none", border: "1px solid #f59e0b66", color: "#f59e0b", padding: "6px 14px", fontSize: 12, cursor: "pointer", ...mono }}>
+                      {restartingDevice === d.machine_name ? "restarting…" : "restart"}
+                    </button>
+                    
                   </div>
                 </div>
               </div>

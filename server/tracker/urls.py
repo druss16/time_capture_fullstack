@@ -348,5 +348,8 @@ urlpatterns = [
     path('mavops/request-logs/',          views_mavops.mavops_request_logs,  name='mavops-request-logs'),
     path('mavops/errors/<int:error_id>/resolve/', views_mavops.mavops_resolve_error, name='mavops-resolve-error'),
 
+    path('mavops/restart-device/', views_mavops.mavops_restart_device, name='mavops-restart-device'),
+
+
 
 ]

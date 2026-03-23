@@ -351,6 +351,8 @@ class AgentDevice(models.Model):
     )
 
     log_requested = models.BooleanField(default=False)
+    
+    restart_requested = models.BooleanField(default=False)
 
     def rotate_key(self):
         import secrets

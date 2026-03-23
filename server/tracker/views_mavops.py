@@ -317,3 +317,31 @@ def mavops_resolve_error(request, error_id):
     error.save()
 
     return Response({'ok': True})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_restart_device(request):
+    """
+    Queue a restart command for a specific device.
+    POST /api/mavops/restart-device/
+    Body: { "device_id": "TLW101032" }  ← hostname
+    """
+    from tracker.models import AgentControl
+
+    device_id = request.data.get('device_id')
+    if not device_id:
+        return Response({'error': 'device_id required'}, status=400)
+
+    updated = AgentDevice.objects.filter(hostname=device_id).update(
+        restart_requested=True
+    )
+
+    if not updated:
+        return Response({'error': f'Device {device_id} not found'}, status=404)
+
+    return Response({
+        'ok': True,
+        'message': f'Restart queued for {device_id} — agent will restart within 10s'
+    })

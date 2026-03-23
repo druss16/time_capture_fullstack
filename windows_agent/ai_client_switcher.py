@@ -670,6 +670,7 @@ class AIClientSwitcher:
 
         sensitivity = self.config["ai_sensitivity"]
         self._matchers = _build_client_matchers(clients, sensitivity)
+        self._client_patterns: List[Dict] = []  # Tier 0 org-admin rules
         self._learned = LearnedRules()
         self._cache = PatternCache(
             self.config["pattern_cache_file"],
@@ -764,6 +765,19 @@ class AIClientSwitcher:
         )
         logger.info(f"[AI-SWITCH] Updated: {len(self._clients)} clients")
 
+    def update_client_patterns(self, patterns: list):
+        """
+        Called when sync delivers org-level ClientPattern rules.
+        These are Tier 0 — checked before regex matching.
+        Sorted by weight descending so highest-priority rules win.
+        """
+        self._client_patterns = sorted(
+            patterns or [],
+            key=lambda p: p.get('weight', 0),
+            reverse=True
+        )
+        logger.info(f"[AI-SWITCH] Updated {len(self._client_patterns)} client patterns (Tier 0)")
+
     def set_current_client(self, client_id: int, client_name: str):
         self._current_client_id = client_id
         self._current_client_name = client_name
@@ -822,6 +836,51 @@ class AIClientSwitcher:
     def get_last_switch(self) -> Optional[SwitchEvent]:
         return self._switch_history[-1] if self._switch_history else None
 
+
+    def _tier0_pattern_match(self, app_name: str, title: str) -> Optional['ClientMatch']:
+        """
+        Check org-admin ClientPattern rules (Tier 0).
+        match_type='app'   → match against app_name
+        match_type='title' → match against window title
+        Returns highest-weight match or None.
+        """
+        search_app   = (app_name or '').lower()
+        search_title = (title or '').lower()
+     
+        for rule in self._client_patterns:  # already sorted by weight desc
+            pattern = (rule.get('pattern') or '').lower()
+            if not pattern:
+                continue
+            match_type  = rule.get('match_type', 'title')
+            client_name = rule.get('client_name', '')
+     
+            # Find the client_id by name from our client list
+            client = next(
+                (c for c in self._clients if c.get('name') == client_name),
+                None
+            )
+            if not client:
+                continue
+     
+            hit = False
+            if match_type == 'app' and pattern in search_app:
+                hit = True
+            elif match_type == 'title' and pattern in search_title:
+                hit = True
+     
+            if hit:
+                # Weight 100 → confidence 1.0, weight 50 → confidence 0.5
+                confidence = min(1.0, rule.get('weight', 100) / 100.0)
+                return ClientMatch(
+                    client_id=client['id'],
+                    client_name=client_name,
+                    confidence=confidence,
+                    match_method='org_rule',
+                    matched_token=pattern,
+                    reasoning=f"Org rule: {match_type}='{pattern}' → {client_name}",
+                )
+        return None
+
     # =================================================================
     # Detection Pipeline
     # =================================================================
@@ -832,6 +891,14 @@ class AIClientSwitcher:
             search = f"{title} {file_path}" if file_path else title
             cur_id = self._current_client_id
             sensitivity = self.config["ai_sensitivity"]
+
+            # --- Tier 0: Org-admin ClientPattern rules (highest priority) ---
+            if self._client_patterns:
+                tier0_hit = self._tier0_pattern_match(app_name, title)
+                if tier0_hit and tier0_hit.client_id != cur_id:
+                    self.stats["regex"] += 1
+                    self._queue_switch(tier0_hit)
+                    return
 
             # --- Tier 1a: Pattern cache ---
             cached = self._cache.get(title)

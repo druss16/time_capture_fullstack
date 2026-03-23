@@ -1622,6 +1622,8 @@ class ClientPattern(models.Model):
         ("path", "File path segment"),
         ("keyword", "Keyword"),
         ("regex", "Regex"),
+        ("app", "App name"),        # ← ADD
+        ("title", "Window title"),  # ← ADD
     ]
     client_name = models.CharField(max_length=255)
     match_type = models.CharField(max_length=20, choices=MATCH_TYPES)

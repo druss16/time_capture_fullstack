@@ -1697,6 +1697,8 @@ def run_agent():
                 if _original_on_sync:
                     _original_on_sync()
                 ai_switcher.update_clients(sync.clients)
+                if hasattr(sync, 'client_patterns') and sync.client_patterns:
+                    ai_switcher.update_client_patterns(sync.client_patterns)  # ← NEW
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)

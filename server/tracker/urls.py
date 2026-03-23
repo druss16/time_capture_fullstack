@@ -335,5 +335,7 @@ urlpatterns = [
 
     path('blocks/<int:block_id>/dismiss-review/', views.dismiss_block_review),
 
+    path('sync/client-patterns/', views_sync.sync_client_patterns, name='sync-client-patterns'),
+
 
 ]

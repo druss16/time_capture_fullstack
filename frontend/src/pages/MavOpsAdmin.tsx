@@ -62,7 +62,8 @@ interface ErrorSummary {
 }
 
 // ─── Password Gate ─────────────────────────────────────────────────────────────
-const ADMIN_PASSWORD = import.meta.env.VITE_MAVOPS_ADMIN_PASSWORD || "mavops2024!";
+const ADMIN_PASSWORD = import.meta.env.VITE_MAVOPS_ADMIN_PASSWORD ?? "";
+
 
 function PasswordGate({ onUnlock }: { onUnlock: () => void }) {
   const [input, setInput] = useState("");
@@ -155,7 +156,7 @@ function LogModal({ log, onClose }: { log: AgentLog; onClose: () => void }) {
 export default function MavOpsAdmin() {
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
-  const [tokenInput, setTokenInput] = useState("");
+  const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
   const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors">("orgs");
 
   const [filterOrg, setFilterOrg] = useState<number | null>(null);
@@ -175,6 +176,11 @@ export default function MavOpsAdmin() {
 
   const handleUnlock = () => { sessionStorage.setItem("mavops_admin", "1"); setUnlocked(true); };
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
+
+  // Auto-connect if token already in localStorage
+  useEffect(() => {
+    if (token && tab === "orgs") loadOrgs();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const apiFetch = useCallback(async (path: string, opts: RequestInit = {}) => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts.headers as any || {}) };

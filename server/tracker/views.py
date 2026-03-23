@@ -7231,7 +7231,7 @@ def receive_agent_logs(request):
             .order_by('-created_at')
             .values_list('id', flat=True)[10:]
         )
-        AgentLog.objects.filter(id__in=[l.id for l in old_logs]).delete()
+        AgentLog.objects.filter(id__in=old_ids).delete()
  
     except Exception as e:
         return Response({"error": str(e)}, status=500)

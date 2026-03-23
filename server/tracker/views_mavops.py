@@ -45,7 +45,7 @@ def mavops_orgs(request):
         device_count = AgentDevice.objects.filter(
             user__memberships__organization=org,
             is_active=True
-        ).distinct().count()
+        ).values('user_id', 'hostname').distinct().count()
 
         # Last activity — most recent device seen
         last_device = AgentDevice.objects.filter(
@@ -77,35 +77,28 @@ def mavops_orgs(request):
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])
 def mavops_devices(request):
-    """
-    All devices across all orgs.
-    GET /api/mavops/devices/
-    Query params:
-      - org_id: filter by org
-      - active: true/false
-    """
+    org_id = request.GET.get('org_id')
+    active = request.GET.get('active')
+
     qs = AgentDevice.objects.select_related('user').order_by('-last_seen_at')
 
-    org_id = request.GET.get('org_id')
     if org_id:
         qs = qs.filter(user__memberships__organization_id=org_id)
 
-    active = request.GET.get('active')
     if active == 'true':
         qs = qs.filter(is_active=True)
     elif active == 'false':
         qs = qs.filter(is_active=False)
 
-    result = []
-    seen = set()
+    # Dedup: one entry per user+hostname, keep most recent
+    seen = {}
     for device in qs:
-        # Dedupe by user + hostname
         key = (device.user_id, device.hostname)
-        if key in seen:
-            continue
-        seen.add(key)
+        if key not in seen:
+            seen[key] = device  # first = most recent (ordered by -last_seen_at)
 
-        # Get org for this user
+    result = []
+    for device in seen.values():
         membership = OrganizationMembership.objects.filter(
             user=device.user
         ).select_related('organization').first()
@@ -124,6 +117,9 @@ def mavops_devices(request):
             'org_id': membership.organization.id if membership else None,
             'org_name': membership.organization.name if membership else 'Unknown',
         })
+
+    # Sort by last_seen descending
+    result.sort(key=lambda d: d['last_seen'], reverse=True)
 
     return Response({
         'devices': result,

@@ -2086,7 +2086,7 @@ class BlockAuditLog(models.Model):
 class AgentLog(models.Model):
     user        = models.ForeignKey('auth.User', on_delete=models.CASCADE, related_name='agent_logs')
     device      = models.ForeignKey('AgentDevice', on_delete=models.SET_NULL, null=True, blank=True)
-    device_id   = models.CharField(max_length=255, db_index=True)
+    agent_device_id = models.CharField(max_length=255, db_index=True)  # ← renamed
     hostname    = models.CharField(max_length=255)
     platform    = models.CharField(max_length=20, default='unknown')
     app_version = models.CharField(max_length=50, blank=True)
@@ -2094,14 +2094,10 @@ class AgentLog(models.Model):
     log_text    = models.TextField()
     line_count  = models.IntegerField(default=0)
     created_at  = models.DateTimeField(auto_now_add=True, db_index=True)
- 
+
     class Meta:
         ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['device_id', 'created_at']),
-            models.Index(fields=['user', 'created_at']),
-        ]
- 
+
     def __str__(self):
         return f"{self.hostname} ({self.platform}) - {self.created_at}"
 

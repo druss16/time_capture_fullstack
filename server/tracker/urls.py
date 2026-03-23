@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -340,6 +340,13 @@ urlpatterns = [
     path('agent/logs/', views.receive_agent_logs, name='agent-logs-receive'),
     path('agent/logs/view/', views.get_agent_logs, name='agent-logs-view'),
     path('agent/request-logs/', views.request_agent_logs, name='agent-request-logs'),
+
+    path('mavops/orgs/',                  views_mavops.mavops_orgs,          name='mavops-orgs'),
+    path('mavops/devices/',               views_mavops.mavops_devices,       name='mavops-devices'),
+    path('mavops/logs/',                  views_mavops.mavops_logs,          name='mavops-logs'),
+    path('mavops/errors/',                views_mavops.mavops_errors,        name='mavops-errors'),
+    path('mavops/request-logs/',          views_mavops.mavops_request_logs,  name='mavops-request-logs'),
+    path('mavops/errors/<int:error_id>/resolve/', views_mavops.mavops_resolve_error, name='mavops-resolve-error'),
 
 
 ]

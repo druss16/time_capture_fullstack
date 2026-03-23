@@ -7216,7 +7216,7 @@ def receive_agent_logs(request):
         AgentLog.objects.create(
             user=request.user,
             device=device,
-            device_id=device_id or "",
+            agent_device_id=device_id or "",  # ← renamed
             hostname=hostname,
             platform=platform_s,
             app_version=version,
@@ -7224,12 +7224,13 @@ def receive_agent_logs(request):
             log_text=log_text,
             line_count=len(log_lines),
         )
- 
-        # Keep only last 10 logs per device to avoid DB bloat
-        old_logs = AgentLog.objects.filter(
-            user=request.user,
-            device_id=device_id or "",
-        ).order_by('-created_at')[10:]
+
+        # And the cleanup query:
+        old_ids = list(
+            AgentLog.objects.filter(user=request.user, agent_device_id=device_id or "")
+            .order_by('-created_at')
+            .values_list('id', flat=True)[10:]
+        )
         AgentLog.objects.filter(id__in=[l.id for l in old_logs]).delete()
  
     except Exception as e:

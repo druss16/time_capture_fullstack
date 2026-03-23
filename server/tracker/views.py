@@ -1043,14 +1043,12 @@ def agents_hello(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def agent_control(request):
-    """
-    GET ?user=<username>&host=<host>
-    Returns { stop, reason, stop_until }
-    """
     username = (request.GET.get("user") or "").strip()
     host = (request.GET.get("host") or "").strip()
 
     stop, reason, stop_until = False, "", None
+    ship_logs = False  # ← ADD
+
     if username and host:
         try:
             u = User.objects.get(username=username)
@@ -1062,15 +1060,25 @@ def agent_control(request):
                     stop = ac.stop
                 reason = ac.reason
                 stop_until = ac.stop_until
+
+            # ← ADD: check log_requested flag on the device
+            device = AgentDevice.objects.filter(
+                user=u, hostname=host, is_active=True
+            ).first()
+            if device and device.log_requested:
+                ship_logs = True
+                device.log_requested = False
+                device.save(update_fields=['log_requested'])
+
         except User.DoesNotExist:
             pass
 
     return Response({
         "stop": stop,
         "reason": reason,
-        "stop_until": stop_until.isoformat() if stop_until else None
+        "stop_until": stop_until.isoformat() if stop_until else None,
+        "ship_logs": ship_logs,  # ← ADD
     })
-
 
 
 # views.py (raw_events)
@@ -7166,6 +7174,160 @@ def maybe_send_alert(error):
         error_id=error.id,
     )
 
+
+"""
+Agent Log Storage + Retrieval
+"""
+ 
+from django.db import models as db_models
+ 
+ 
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def receive_agent_logs(request):
+    """
+    Receive log lines shipped from agent.
+    POST /api/agent/logs/
+    """
+    from .models import AgentDevice, AgentLog  # adjust import path
+ 
+    device_id  = request.data.get("device_id")
+    hostname   = request.data.get("hostname", "")
+    platform_s = request.data.get("platform", "unknown")
+    version    = request.data.get("app_version", "")
+    trigger    = request.data.get("trigger", "scheduled")
+    log_lines  = request.data.get("log_lines", [])
+ 
+    if not log_lines:
+        return Response({"error": "No log lines"}, status=400)
+ 
+    log_text = "".join(log_lines)
+ 
+    # Store in AgentLog model (see Part 3 for model)
+    try:
+        device = AgentDevice.objects.filter(
+            user=request.user,
+            device_id=device_id
+        ).first()
+ 
+        AgentLog.objects.create(
+            user=request.user,
+            device=device,
+            device_id=device_id or "",
+            hostname=hostname,
+            platform=platform_s,
+            app_version=version,
+            trigger=trigger,
+            log_text=log_text,
+            line_count=len(log_lines),
+        )
+ 
+        # Keep only last 10 logs per device to avoid DB bloat
+        old_logs = AgentLog.objects.filter(
+            user=request.user,
+            device_id=device_id or "",
+        ).order_by('-created_at')[10:]
+        AgentLog.objects.filter(id__in=[l.id for l in old_logs]).delete()
+ 
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+ 
+    return Response({"ok": True, "lines_received": len(log_lines)})
+ 
+ 
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def get_agent_logs(request):
+    """
+    Get recent agent logs for a device.
+    GET /api/agent/logs/?device_id=xxx
+    Admin/owner only.
+    """
+    from .models import AgentLog
+    from tracker.models import OrganizationMembership
+ 
+    # Must be owner/admin
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related('organization').first()
+ 
+    if not membership or membership.role not in ('owner', 'admin'):
+        return Response({'error': 'Permission denied'}, status=403)
+ 
+    org = membership.organization
+ 
+    device_id = request.GET.get('device_id')
+    hostname  = request.GET.get('hostname')
+ 
+    # Get all devices in this org
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    org_user_ids = OrganizationMembership.objects.filter(
+        organization=org
+    ).values_list('user_id', flat=True)
+ 
+    logs_qs = AgentLog.objects.filter(
+        user_id__in=org_user_ids
+    ).select_related('user').order_by('-created_at')
+ 
+    if device_id:
+        logs_qs = logs_qs.filter(device_id=device_id)
+    if hostname:
+        logs_qs = logs_qs.filter(hostname__icontains=hostname)
+ 
+    logs = logs_qs[:20]  # last 20 log shipments
+ 
+    return Response({
+        'logs': [{
+            'id': l.id,
+            'user': l.user.username,
+            'device_id': l.device_id,
+            'hostname': l.hostname,
+            'platform': l.platform,
+            'app_version': l.app_version,
+            'trigger': l.trigger,
+            'line_count': l.line_count,
+            'created_at': l.created_at.isoformat(),
+            'log_text': l.log_text,
+        } for l in logs],
+        'total': logs_qs.count(),
+    })
+ 
+ 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def request_agent_logs(request):
+    """
+    Request an on-demand log ship from a specific device.
+    Sets a flag on the control endpoint that the agent polls.
+    POST /api/agent/request-logs/
+    Body: { "device_id": "xxx" }
+    """
+    from .models import AgentDevice
+    from tracker.models import OrganizationMembership
+ 
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related('organization').first()
+ 
+    if not membership or membership.role not in ('owner', 'admin'):
+        return Response({'error': 'Permission denied'}, status=403)
+ 
+    device_id = request.data.get('device_id')
+    if not device_id:
+        return Response({'error': 'device_id required'}, status=400)
+ 
+    # Set flag on device — agent will pick this up on next control poll
+    updated = AgentDevice.objects.filter(device_id=device_id).update(
+        log_requested=True
+    )
+ 
+    if not updated:
+        return Response({'error': 'Device not found'}, status=404)
+ 
+    return Response({'ok': True, 'message': 'Log request sent — agent will ship within 10s'})
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

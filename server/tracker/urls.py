@@ -337,5 +337,9 @@ urlpatterns = [
 
     path('sync/client-patterns/', views_sync.sync_client_patterns, name='sync-client-patterns'),
 
+    path('agent/logs/', views.receive_agent_logs, name='agent-logs-receive'),
+    path('agent/logs/view/', views.get_agent_logs, name='agent-logs-view'),
+    path('agent/request-logs/', views.request_agent_logs, name='agent-request-logs'),
+
 
 ]

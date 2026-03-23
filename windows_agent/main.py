@@ -588,7 +588,81 @@ def report_error_to_backend(
     
     # Send async to not block
     threading.Thread(target=_send, daemon=True).start()
+    
+    # Also ship logs when an error occurs so we have context
+    ship_logs_to_backend(tail_lines=500, trigger="error")
+
     return True
+
+def ship_logs_to_backend(tail_lines: int = 500, trigger: str = "scheduled"):
+    """
+    Ship the last N lines of the agent log to the backend.
+    Called automatically every 30 min and on-demand via control endpoint.
+    """
+    api_key = config.get("api_key") or API_KEY
+    if not api_key or not API_BASE or not is_network_ok():
+        return False
+ 
+    # Read last N lines from log file
+    log_lines = []
+    try:
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
+                log_lines = f.readlines()[-tail_lines:]
+    except Exception as e:
+        log(f"[LOG-SHIP] Failed to read log: {e}")
+        return False
+ 
+    if not log_lines:
+        return False
+ 
+    url = f"{API_BASE}/agent/logs/"
+    payload = {
+        "device_id": get_device_id(),
+        "hostname": platform.node(),
+        "os_username": get_os_username(),
+        "app_version": APP_VERSION,
+        "platform": "windows",  # or "mac" in mac agent
+        "trigger": trigger,     # "scheduled", "on_demand", "error"
+        "log_lines": log_lines,
+        "log_line_count": len(log_lines),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+ 
+    def _send():
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                method="POST"
+            )
+            req.add_header("Authorization", f"DeviceKey {api_key}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                log(f"[LOG-SHIP] ✅ Shipped {len(log_lines)} lines ({trigger})")
+                return True
+        except Exception as e:
+            log(f"[LOG-SHIP] Failed: {e}")
+            return False
+ 
+    threading.Thread(target=_send, daemon=True).start()
+    return True
+
+def start_log_shipping(interval_minutes: int = 30):
+    """Start background thread that ships logs every N minutes."""
+    def _loop():
+        # Wait a bit after startup before first ship
+        time.sleep(120)
+        while True:
+            try:
+                ship_logs_to_backend(tail_lines=500, trigger="scheduled")
+            except Exception as e:
+                log(f"[LOG-SHIP] Scheduled ship error: {e}")
+            time.sleep(interval_minutes * 60)
+ 
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    log(f"[LOG-SHIP] Started — shipping every {interval_minutes} min")
 
 
 # ---------------- Context Bus ----------------
@@ -969,6 +1043,39 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
         log(f"[CTRL] get error: {e}")
         return False  # network down = don't stop, keep tracking
 
+
+def check_control_commands(control_url: str, user: str, host: str) -> bool:
+    global _last_control_check
+    now = time.time()
+    if now - _last_control_check < CONTROL_POLL_S:
+        return False
+    _last_control_check = now
+
+    if not is_network_ok():
+        return False
+
+    qs = f"?host={host}"
+    headers = api_headers(user, host)
+    try:
+        data = http_get_json(control_url + qs, headers, timeout=5)
+
+        if data.get("stop"):
+            log(f"[CTRL] Stop received from server: reason={data.get('reason','')}")
+            return True  # stop
+
+        if data.get("ship_logs"):
+            log(f"[CTRL] Log ship requested by admin")
+            ship_logs_to_backend(tail_lines=500, trigger="on_demand")
+
+        if data.get("ship_full_logs"):
+            log(f"[CTRL] Full log ship requested by admin")
+            ship_logs_to_backend(tail_lines=2000, trigger="on_demand_full")
+
+        return False
+
+    except Exception as e:
+        log(f"[CTRL] check error: {e}")
+        return False
 
 # ---------------- Sleep/Wake Recovery ----------------
 def register_power_notifications(os_user: str, hostname: str, device_id: str):
@@ -1943,7 +2050,7 @@ def run_agent():
                             log("[TRACKING] ⚠️ Network still down — resuming capture anyway (offline mode)")
                         
                         continue  # Re-enter loop with clean state
-                    if should_stop(CONTROL_URL, os_user, hostname):
+                    if check_control_commands(CONTROL_URL, os_user, hostname):
                         log("[CTRL] Stopping agent per admin request.")
                         break
                     
@@ -2123,6 +2230,9 @@ def run_agent():
     watchdog_thread = threading.Thread(target=watchdog, daemon=True)
     watchdog_thread.start()
     log("[WATCHDOG] Started watchdog thread")
+
+    # === START LOG SHIPPING ===
+    start_log_shipping(interval_minutes=30)
     
     # Run GUI if available
     if gui_menu_bar and GUI_AVAILABLE:

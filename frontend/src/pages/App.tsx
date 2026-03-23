@@ -41,6 +41,7 @@ const ExecutiveDashboard = lazy(() => import("./ExecutiveDashboard"));
 const Home = lazy(() => import("./Home"));
 const RequestAccess = lazy(() => import("./RequestAccess"));
 const Clients = lazy(() => import("./Clients"));
+const MavOpsAdmin = lazy(() => import("./MavOpsAdmin")); // ← NEW
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
@@ -122,9 +123,6 @@ function AccountLayoutWrapper() {
   return <AccountLayout role={role} />;
 }
 
-/**
- * HomeOrRedirect - If already authenticated, skip the marketing page and go straight to dashboard
- */
 function HomeOrRedirect() {
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
@@ -136,7 +134,7 @@ function HomeOrRedirect() {
       .finally(() => setChecking(false));
   }, []);
 
-  if (checking) return null; // render nothing while checking — no flash
+  if (checking) return null;
   if (authed) return <Navigate to="/daily" replace />;
   return <Home />;
 }
@@ -159,7 +157,7 @@ export default function App() {
               }
             >
               <Routes>
-                {/* Public / marketing — redirects to /daily if already logged in */}
+                {/* Public / marketing */}
                 <Route path="/" element={<HomeOrRedirect />} />
                 <Route path="/request-access" element={<RequestAccess />} />
 
@@ -197,6 +195,9 @@ export default function App() {
                 {/* Onboarding */}
                 <Route path="/onboarding" element={<OnboardingWizard />} />
                 <Route path="/onboarding/signup" element={<OnboardingWizard initialStep={1} />} />
+
+                {/* MavOps Internal Admin — standalone, no AppLayout, no auth wrapper */}
+                <Route path="/mavops-admin" element={<MavOpsAdmin />} />
 
                 {/* 404 */}
                 <Route path="*" element={<NotFound />} />

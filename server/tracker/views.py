@@ -6505,6 +6505,8 @@ def settings_devices(request):
             "first_seen": device.created_at.isoformat() if device.created_at else "",
             "last_seen": device.last_seen_at.isoformat() if device.last_seen_at else "",
             "is_active": device.is_active,
+            "device_id": device.device_id,  # ← make sure this line exists
+
         })
     
     return Response(result)

@@ -589,9 +589,6 @@ def report_error_to_backend(
     # Send async to not block
     threading.Thread(target=_send, daemon=True).start()
     
-    # Also ship logs when an error occurs so we have context
-    ship_logs_to_backend(tail_lines=500, trigger="error")
-
     return True
 
 def ship_logs_to_backend(tail_lines: int = 500, trigger: str = "scheduled"):
@@ -1070,6 +1067,15 @@ def check_control_commands(control_url: str, user: str, host: str) -> bool:
         if data.get("ship_full_logs"):
             log(f"[CTRL] Full log ship requested by admin")
             ship_logs_to_backend(tail_lines=2000, trigger="on_demand_full")
+
+        if data.get("restart"):
+            log(f"[CTRL] Restart requested by admin — restarting in 3s")
+            ship_logs_to_backend(tail_lines=500, trigger="pre_restart")
+            def _do_restart():
+                time.sleep(3)
+                log(f"[CTRL] Restarting now...")
+                os._exit(0)
+            threading.Thread(target=_do_restart, daemon=True).start()
 
         return False
 

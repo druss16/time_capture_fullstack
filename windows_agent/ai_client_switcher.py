@@ -892,14 +892,6 @@ class AIClientSwitcher:
             cur_id = self._current_client_id
             sensitivity = self.config["ai_sensitivity"]
 
-            # --- Tier 0: Org-admin ClientPattern rules (highest priority) ---
-            if self._client_patterns:
-                tier0_hit = self._tier0_pattern_match(app_name, title)
-                if tier0_hit and tier0_hit.client_id != cur_id:
-                    self.stats["regex"] += 1
-                    self._queue_switch(tier0_hit)
-                    return
-
             # --- Tier 1a: Pattern cache ---
             cached = self._cache.get(title)
             if cached and cached.get("client_id"):
@@ -940,6 +932,17 @@ class AIClientSwitcher:
                 self.stats["file_conv"] += 1
                 self._queue_switch(file_hit)
                 return
+
+            # --- Tier 0 FALLBACK: Org-admin ClientPattern rules ---
+            # Runs AFTER local matching so known clients are caught by regex first.
+            # Unknown clients (not in client list) fall through here e.g.
+            # "UltraTax → Internal – Tax" for returns not in the client list.
+            if self._client_patterns:
+                tier0_hit = self._tier0_pattern_match(app_name, title)
+                if tier0_hit and tier0_hit.client_id != cur_id:
+                    self.stats["regex"] += 1
+                    self._queue_switch(tier0_hit)
+                    return
 
             # --- Suggestion: confident enough to suggest, not enough to auto-switch ---
             best_local = regex_hit or learned_hit or file_hit

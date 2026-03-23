@@ -4,7 +4,7 @@ update_checker.py — Cross-platform auto-update for TimeTracker agents.
 Features:
   - Startup blocking check for forced updates
   - Background polling every 5 minutes
-  - Windows: shows update dialog, user downloads from browser (AV-safe)
+  - Windows: silent install via /VERYSILENT (signed installer, no user interaction)
   - Mac: AppleScript password prompt, then automatic install
   - Mtime detection: if exe on disk changes, auto-restart into new version
   - Network readiness checks before downloads (prevents post-sleep crashes)
@@ -176,36 +176,67 @@ def _restart_into_new_exe():
 # ============================================================
 
 def _auto_update_windows(download_url: str, latest_version: str) -> bool:
-    """Show update dialog on Windows - let user install via browser download.
-    Silent install is blocked by enterprise AV (Bitdefender ATC etc.)."""
-    try:
-        import ctypes
-        MB_OKCANCEL = 0x01
-        MB_ICONINFORMATION = 0x40
-        MB_TOPMOST = 0x40000
-        MB_SETFOREGROUND = 0x10000
+    """
+    Silently download and install the new version on Windows.
+    Uses Inno Setup /VERYSILENT flag — no user interaction required.
+    Agent auto-restarts via mtime detection after install completes.
+    """
+    import subprocess
+    import tempfile
 
-        result = ctypes.windll.user32.MessageBoxW(
-            0,
-            f"TimeTracker v{latest_version} is available.\n\n"
-            "Click OK to download the update.",
-            "TimeTracker Update Available",
-            MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND
+    exe_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerSetup-{latest_version}.exe")
+
+    try:
+        # Wait for network before downloading
+        if not _wait_for_network(download_url):
+            return False
+
+        print(f"[UPDATE] Downloading v{latest_version} installer...")
+        file_size = _download_with_timeout(download_url, exe_path, timeout=DOWNLOAD_TIMEOUT)
+        print(f"[UPDATE] Downloaded ({file_size:,} bytes) to {exe_path}")
+
+        # Sanity check — installer should be at least 10MB
+        if file_size < 10 * 1024 * 1024:
+            print(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
+            _cleanup_file(exe_path)
+            return False
+
+        # Disable scheduled restart task so old version doesn't relaunch
+        _disable_restart_task()
+
+        print(f"[UPDATE] Installing v{latest_version} silently...")
+        log_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerInstall-{latest_version}.log")
+        result = subprocess.run(
+            [
+                exe_path,
+                "/VERYSILENT",
+                "/NORESTART",
+                "/CLOSEAPPLICATIONS",
+                f"/LOG={log_path}",
+            ],
+            timeout=120,
+            capture_output=True,
         )
 
-        if result == 1:  # IDOK
-            webbrowser.open(download_url)
+        _cleanup_file(exe_path)
 
-        return True  # Mark as handled either way
+        if result.returncode == 0:
+            print(f"[UPDATE] ✅ v{latest_version} installed successfully")
+            return True
+        else:
+            stderr = result.stderr.decode(errors="ignore")[:500]
+            print(f"[UPDATE] ⚠️ Installer exited with code {result.returncode}: {stderr}")
+            # Non-zero doesn't always mean failure with Inno Setup — let mtime confirm
+            return True
 
+    except subprocess.TimeoutExpired:
+        print(f"[UPDATE] Installer timed out after 120s")
+        _cleanup_file(exe_path)
+        return False
     except Exception as e:
-        print(f"[UPDATE] Windows update dialog failed: {e}")
-        # Fallback: just open the browser
-        try:
-            webbrowser.open(download_url)
-        except Exception:
-            pass
-        return True
+        print(f"[UPDATE] Silent install failed: {e}")
+        _cleanup_file(exe_path)
+        return False
 
 
 def _auto_update_mac(download_url: str, latest_version: str) -> bool:
@@ -483,14 +514,22 @@ def check_for_update_blocking(api_base: str, current_version: str):
         url = data.get("download_url", "https://github.com/druss16/timetracker-releases/releases/latest")
 
         if data.get("force"):
-            # Forced: block and require update
+            # Forced: silent install on Windows, blocking dialog on Mac
             if _already_nagged(latest):
                 print(f"[UPDATE] Update to v{latest} available but already notified - running anyway")
                 return
 
             print(f"[UPDATE] Forced update required: {current_version} -> {latest}")
             _mark_nagged(latest, download_ok=False)
-            _show_blocking_dialog(latest, url)
+
+            if sys.platform == "win32":
+                def _bg_forced():
+                    success = _auto_update_windows(url, latest)
+                    if success:
+                        _mark_nagged(latest, download_ok=True)
+                threading.Thread(target=_bg_forced, daemon=True).start()
+            else:
+                _show_blocking_dialog(latest, url)
 
         else:
             # Non-forced: prompt user (Windows) or silent install (Mac)
@@ -587,12 +626,17 @@ def start_background_checker(api_base: str, current_version: str):
                 if _already_nagged(latest):
                     continue
 
-                # -- Path 2: Forced update — block with dialog --
+                # -- Path 2: Forced update — silent on Windows, dialog on Mac --
                 if data.get("force"):
                     print(f"[UPDATE] Forced update detected mid-session: "
                           f"{current_version} -> {latest}")
                     _mark_nagged(latest, download_ok=False)
-                    _show_blocking_dialog(latest, url)
+                    if sys.platform == "win32":
+                        success = _auto_update_windows(url, latest)
+                        if success:
+                            _mark_nagged(latest, download_ok=True)
+                    else:
+                        _show_blocking_dialog(latest, url)
 
                 # -- Path 3: Update prompt (Windows) or silent install (Mac) --
                 else:

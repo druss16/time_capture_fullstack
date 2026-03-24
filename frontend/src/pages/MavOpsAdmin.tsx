@@ -186,13 +186,13 @@ function Btn({ label, onClick, color = T.teal, outline = false, disabled = false
 }) {
   return (
     <button onClick={onClick} disabled={disabled} style={{
-      background: outline ? "transparent" : disabled ? T.textMuted + "33" : color,
+      background: outline ? T.bg : disabled ? T.textMuted + "33" : color,
       border: `1px solid ${disabled ? T.textMuted + "44" : color}`,
       color: outline ? color : disabled ? T.textMuted : "#fff",
-      padding: small ? "4px 10px" : "7px 16px",
-      fontSize: small ? 11 : 12, cursor: disabled ? "default" : "pointer",
+      padding: small ? "5px 12px" : "7px 16px",
+      fontSize: small ? 12 : 13, cursor: disabled ? "default" : "pointer",
       borderRadius: 4, ...mono, opacity: disabled ? 0.6 : 1,
-      whiteSpace: "nowrap" as const,
+      whiteSpace: "nowrap" as const, fontWeight: 500,
     }}>
       {label}
     </button>
@@ -459,7 +459,7 @@ export default function MavOpsAdmin() {
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
                       {(["devices", "logs", "errors"] as const).map(t => (
-                        <Btn key={t} label={t} onClick={() => { setFilterOrg(org.id); setTab(t); }} outline color={T.borderHi} small />
+                        <Btn key={t} label={t} onClick={() => { setFilterOrg(org.id); setTab(t); }} outline color={T.textSub} small />
                       ))}
                     </div>
                   </div>

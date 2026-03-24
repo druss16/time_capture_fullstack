@@ -53,7 +53,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 
 ; Close running apps
 CloseApplications=force
-CloseApplicationsFilter=TimeTracker*.exe,TimeTrackerAgent*.exe
+CloseApplicationsFilter=TimeTracker*.exe,TimeTrackerAgent*.exe,tt_watchdog.exe
 RestartApplications=no
 
 [Languages]
@@ -69,6 +69,7 @@ Type: filesandordirs; Name: "{app}"
 [Files]
 Source: "dist\TimeTracker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "dist\TimeTrackerAgent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\tt_watchdog.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "timetracker.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -81,8 +82,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\TimeTrackerAgent.exe"; Description: "Start TimeTracker Agent"; Flags: nowait postinstall
+Filename: "{app}\tt_watchdog.exe"; Description: "Start TimeTracker Watchdog"; Flags: nowait postinstall runhidden
 
 [UninstallRun]
+Filename: "{app}\tt_watchdog.exe"; Parameters: "--unregister-task"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "UnregisterWatchdog"
+Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "--unregister-task"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "UnregisterTask"
 Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopAgent"
 
 [UninstallDelete]
@@ -192,7 +196,16 @@ begin
     '  <Triggers>' + #13#10 +
     '    <LogonTrigger>' + #13#10 +
     '      <Enabled>true</Enabled>' + #13#10 +
+    '      <Delay>PT5S</Delay>' + #13#10 +
     '    </LogonTrigger>' + #13#10 +
+    '    <RegistrationTrigger>' + #13#10 +
+    '      <Enabled>true</Enabled>' + #13#10 +
+    '      <Repetition>' + #13#10 +
+    '        <Interval>PT2M</Interval>' + #13#10 +
+    '        <Duration>P9999D</Duration>' + #13#10 +
+    '        <StopAtDurationEnd>false</StopAtDurationEnd>' + #13#10 +
+    '      </Repetition>' + #13#10 +
+    '    </RegistrationTrigger>' + #13#10 +
     '  </Triggers>' + #13#10 +
     '  <Principals>' + #13#10 +
     '    <Principal id="Author">' + #13#10 +
@@ -248,6 +261,8 @@ var
   ResultCode: Integer;
 begin
   Exec('schtasks.exe', '/delete /tn "MavOps TimeTracker" /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('schtasks.exe', '/delete /tn "TimeTrackerWatchdog" /f',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   DeleteFile(ExpandConstant('{userstartup}\TimeTracker Agent.lnk'));
 end;
@@ -350,6 +365,7 @@ var
 begin
   Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill', '/F /IM tt_watchdog.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(1500);
 
   if DirExists(ExpandConstant('{localappdata}\TimeTracker')) then
@@ -392,6 +408,7 @@ begin
   begin
     Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('taskkill', '/F /IM tt_watchdog.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(500);
   end;
 

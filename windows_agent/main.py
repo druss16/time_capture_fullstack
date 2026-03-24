@@ -599,8 +599,8 @@ def ship_logs_to_backend(tail_lines: int = 500, trigger: str = "scheduled"):
     api_key = config.get("api_key") or API_KEY
     if not api_key or not API_BASE or not is_network_ok():
         return False
- 
-    # Read last N lines from log file
+
+    # Read last N lines from agent log
     log_lines = []
     try:
         if os.path.exists(LOG_FILE):
@@ -609,23 +609,34 @@ def ship_logs_to_backend(tail_lines: int = 500, trigger: str = "scheduled"):
     except Exception as e:
         log(f"[LOG-SHIP] Failed to read log: {e}")
         return False
- 
+
     if not log_lines:
         return False
- 
+
+    # Also append last 50 lines of watchdog log if it exists
+    watchdog_log = os.path.join(LOG_DIR, "watchdog.log")
+    try:
+        if os.path.exists(watchdog_log):
+            with open(watchdog_log, 'r', encoding='utf-8', errors='replace') as f:
+                watchdog_lines = f.readlines()[-50:]
+            if watchdog_lines:
+                log_lines += ["\n--- WATCHDOG LOG ---\n"] + watchdog_lines
+    except Exception:
+        pass  # non-fatal — don't block main log ship
+
     url = f"{API_BASE}/agent/logs/"
     payload = {
         "device_id": get_device_id(),
         "hostname": platform.node(),
         "os_username": get_os_username(),
         "app_version": APP_VERSION,
-        "platform": "windows",  # or "mac" in mac agent
-        "trigger": trigger,     # "scheduled", "on_demand", "error"
+        "platform": "windows",
+        "trigger": trigger,
         "log_lines": log_lines,
         "log_line_count": len(log_lines),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
- 
+
     def _send():
         try:
             req = urllib.request.Request(
@@ -641,7 +652,7 @@ def ship_logs_to_backend(tail_lines: int = 500, trigger: str = "scheduled"):
         except Exception as e:
             log(f"[LOG-SHIP] Failed: {e}")
             return False
- 
+
     threading.Thread(target=_send, daemon=True).start()
     return True
 
@@ -1200,9 +1211,7 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
 
 
 # ---------------- Startup Task Registration ----------------
-def register_startup_task():
-    """Register a Windows Task Scheduler task to ensure agent starts on logon."""
-    pass
+from startup_task import register_startup_task
 
 
 # ---------------- Event Posting ----------------
@@ -1954,6 +1963,13 @@ def run_agent():
     # === AUTO-START ON LOGON ===
     register_startup_task()
 
+    # === EXTERNAL WATCHDOG TASK ===
+    try:
+        from tt_watchdog import register_watchdog_task
+        register_watchdog_task()
+    except Exception as e:
+        log(f"[WATCHDOG-TASK] Failed to register: {e}")
+
     # === TRACKING LOOP WITH ERROR HANDLING ===
     def tracking_loop():
         global _last_subscription_check, _subscription_active
@@ -2313,6 +2329,14 @@ def cmd_stop():
         print(f"Error stopping agent: {e}")
 
 def main():
+    # Handle uninstaller flag FIRST before anything else
+    if "--unregister-task" in sys.argv:
+        from startup_task import unregister_startup_task
+        from tt_watchdog import unregister_watchdog_task
+        unregister_startup_task()
+        unregister_watchdog_task()
+        sys.exit(0)
+
     if len(sys.argv) >= 2:
         sub = sys.argv[1].lower()
         if sub in ("stop", "kill"):
@@ -2323,7 +2347,7 @@ def main():
             return run_agent()
         print("Usage: main.py [start|stop|status]")
         return
-    run_agent()
 
+    run_agent()
 if __name__ == "__main__":
     main()

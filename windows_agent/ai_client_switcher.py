@@ -33,6 +33,8 @@ AI Sensitivity (org-level admin setting, 0–100):
     suggest_threshold           0.70 → 0.35
   Partial-word matching activates at sensitivity >= 40:
     e.g. "Dauphin" in "Eric Dauphin update" → "Dauphin & Fantacone"
+    
+Addressed False Positives
 """
 
 import json, os, re, time, threading, hashlib, logging, urllib.request, urllib.error

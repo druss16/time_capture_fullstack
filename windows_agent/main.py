@@ -192,8 +192,6 @@ def save_config(cfg: dict):
 
 config = load_config()
 config = merge_deploy_config(config)  # ← Add this line
-print(f"[DEBUG] Config loaded: {config}")
-print(f"[DEBUG] server_device_id = {config.get('server_device_id')}")
 
 # Tunables
 def _get(name, default=None, env=None):
@@ -877,12 +875,8 @@ def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, st
 
 # ---------------- Device Identity ----------------
 def get_device_id():
-    print(f"[DEBUG get_device_id] config.get('server_device_id') = {config.get('server_device_id')}")
     if config.get("server_device_id"):
-        print(f"[DEBUG get_device_id] Returning server_device_id: {config['server_device_id']}")
         return config["server_device_id"]
-    print("[DEBUG get_device_id] Falling back to UUID file")
-    
     try:
         if os.path.exists(DEVICE_ID_FILE):
             with open(DEVICE_ID_FILE, "r") as f:

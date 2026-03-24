@@ -325,7 +325,8 @@ jobs:
         run: |
           python -m PyInstaller --onedir --windowed --name "TimeTracker" --collect-all customtkinter --collect-all CTkMessagebox --hidden-import=customtkinter --hidden-import=CTkMessagebox gui.py
           python -m PyInstaller --onedir --noconsole --name "TimeTrackerAgent" --hidden-import=timetracker_gui --hidden-import=mdm_deploy --hidden-import=version --hidden-import=update_checker --add-data "timetracker_gui.py;." --add-data "mdm_deploy.py;." --add-data "version.py;." --add-data "update_checker.py;." main.py
-      
+          python -m PyInstaller --onefile --noconsole --name "tt_watchdog" tt_watchdog.py
+
       - name: List dist contents
         working-directory: windows_agent
         run: |
@@ -335,6 +336,8 @@ jobs:
           dir dist\TimeTracker
           echo "=== dist/TimeTrackerAgent contents ==="
           dir dist\TimeTrackerAgent
+          echo "=== tt_watchdog.exe ==="
+          dir dist\tt_watchdog.exe
       
       - name: Sign Windows executables
         if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}

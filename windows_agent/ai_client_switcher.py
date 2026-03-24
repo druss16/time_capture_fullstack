@@ -136,6 +136,26 @@ _STOP_WORDS = {
     "tax", "firm", "cpas", "cpa", "associates", "partners", "services",
 }
 
+# Generic UltraTax/TaxWise/Office window titles that should NEVER trigger
+# a client switch — too ambiguous to be meaningful signal
+_GENERIC_TITLE_BLOCKLIST = {
+    # UltraTax generic dialogs
+    "printing status", "print returns", "print status", "ultratax cs",
+    "2025 ultratax cs", "2024 ultratax cs", "2023 ultratax cs",
+    "cflvoutframe", "cflyoutframe", "electronic filing status",
+    "online status", "call summary", "open client", "return list",
+    "confirm", "data sharing - pending updates", "edit note",
+    "field note/tick", "statements from a", "statements from w2",
+    "statements from broker", "dividend income", "dependents",
+    "printing status", "select package",
+    # TaxWise generic
+    "taxwise 2024 on z drive", "taxwise 2023 on z drive",
+    "taxwise 2024", "taxwise 2023",
+    # Generic office/windows
+    "book1 - excel", "book1", "document1 - word",
+    "new tab", "program manager",
+}
+
 
 # =====================================================================
 # Sensitivity → Threshold Mapping
@@ -1190,6 +1210,10 @@ class AIClientSwitcher:
     # =================================================================
 
     def _should_skip(self, title: str, exe_name: str) -> bool:
+        # Block generic dialog titles that cause false positives
+        if title.lower().strip() in _GENERIC_TITLE_BLOCKLIST:
+            return True
+
         if exe_name and exe_name.lower() in self._skip_exes:
             return True
         t = title.lower().strip()
@@ -1197,9 +1221,9 @@ class AIClientSwitcher:
             if pat.search(t):
                 return True
         if t in {"google chrome", "microsoft edge", "brave browser", "firefox",
-                 "microsoft outlook", "mail", "slack", "file explorer",
-                 "microsoft teams", "zoom", "windows powershell",
-                 "command prompt", "terminal", "task manager"}:
+         "microsoft outlook", "mail", "slack", "file explorer",
+         "microsoft teams", "zoom", "windows powershell",
+         "command prompt", "terminal", "task manager"}:
             return True
         return False
 

@@ -1529,6 +1529,8 @@ def repair_device():
 def run_agent():
     """Main agent function with GUI integration"""
     global API_KEY, notif_manager, notif_worker, sync, gui_menu_bar, SERVER_USER_NAME, ai_switcher
+    from watchdog import heartbeat_touch, watchdog as _watchdog
+
 
 
     # === FORCED UPDATE CHECK ===
@@ -1976,6 +1978,7 @@ def run_agent():
         try:
             while True:
                 try:
+                    heartbeat_touch()   # ← add this
                      # === SUBSCRIPTION CHECK ===
                     if not _subscription_active:
                         now = time.time()
@@ -2221,21 +2224,14 @@ def run_agent():
     # === RE-CHECK FOR UPDATES EVERY HOUR ===
     start_background_checker(API_BASE, APP_VERSION)
     
-    # === WATCHDOG: Restart tracking if it dies ===
-    def watchdog():
-        nonlocal tracking_thread
-        while True:
-            time.sleep(30)
-            if not tracking_thread.is_alive():
-                log("[WATCHDOG] ⚠️ Tracking thread died! Restarting...")
-                report_error_to_backend("watchdog", "Tracking thread died, restarting", "")
-                tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
-                tracking_thread.start()
-                log("[WATCHDOG] ✅ Tracking thread restarted")
-    
-    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+    # === WATCHDOG: Restart process if tracking freezes OR dies ===
+    _thread_ref = [tracking_thread]
+    watchdog_thread = threading.Thread(
+        target=_watchdog,
+        args=(_thread_ref, tracking_loop, log, report_error_to_backend),
+        daemon=True,
+    )
     watchdog_thread.start()
-    log("[WATCHDOG] Started watchdog thread")
 
     # === START LOG SHIPPING ===
     start_log_shipping(interval_minutes=30)

@@ -96,6 +96,8 @@ ai_switcher = None  # Will be initialized after GUI setup
 _subscription_active = True
 _subscription_check_interval = 1800  # Re-check every 30 min
 _last_subscription_check = 0.0
+_idle_reading_unchanged_since: float = 0.0
+
 
 def check_subscription_response(http_error):
     """Check if a 403 is subscription_inactive. Returns True if subscription is dead."""
@@ -1986,8 +1988,10 @@ def run_agent():
 
     # === TRACKING LOOP WITH ERROR HANDLING ===
     def tracking_loop():
-        global _last_subscription_check, _subscription_active, _idle_entered_at
+        global _last_subscription_check, _subscription_active, _idle_entered_at, _idle_reading_unchanged_since
         log("[TRACKING] Initializing...")
+        _last_idle_reading = 0.0
+        _last_idle_reading_time = 0.0
         
         try:
             conn = ensure_db()
@@ -2017,23 +2021,60 @@ def run_agent():
                     # assume the counter is corrupted and force-exit idle state.
                     if current_sig == IDLE_SIG and _idle_entered_at > 0:
                         wall_idle_minutes = (time.time() - _idle_entered_at) / 60.0
+
+                        # ── Stale counter detection ──
+                        # If mouse_idle_seconds() returns the same value for >60s,
+                        # GetLastInputInfo is frozen — force-reset immediately
+                        current_idle_reading = mouse_idle_seconds()
+                        now_t = time.time()
+
+                        if abs(current_idle_reading - _last_idle_reading) < 0.5:
+                            # Reading hasn't changed
+                            if _idle_reading_unchanged_since == 0.0:
+                                _idle_reading_unchanged_since = now_t
+                            elif (now_t - _idle_reading_unchanged_since) > 60:  # Frozen for 60s
+                                log(f"[IDLE-WD] ⚠️ GetLastInputInfo frozen at {current_idle_reading:.0f}s "
+                                    f"for {(now_t - _idle_reading_unchanged_since):.0f}s — force-resetting")
+                                report_error_to_backend(
+                                    "idle_stuck_frozen",
+                                    f"GetLastInputInfo frozen at {current_idle_reading:.0f}s",
+                                    context={"frozen_seconds": now_t - _idle_reading_unchanged_since,
+                                             "hostname": hostname}
+                                )
+                                if dwell_start:
+                                    dwell = now_t - dwell_start
+                                    if dwell >= MIN_DWELL_SECONDS:
+                                        write_event(conn, cur, os_user, hostname, IDLE_SIG,
+                                                    ts_override=dwell_start)
+                                current_sig = None
+                                dwell_start = None
+                                _idle_entered_at = 0.0
+                                _idle_reading_unchanged_since = 0.0
+                                continue
+                        else:
+                            # Reading is changing — legitimate idle, reset staleness timer
+                            _idle_reading_unchanged_since = 0.0
+
+                        _last_idle_reading = current_idle_reading
+                        _last_idle_reading_time = now_t
+
+                        # ── Wall clock safety net (catches any other freeze scenario) ──
                         if wall_idle_minutes > _IDLE_WATCHDOG_MAX_MINUTES:
-                            log(f"[IDLE-WD] ⚠️ Idle watchdog triggered — stuck {wall_idle_minutes:.1f} min "
-                                f"(GetLastInputInfo likely stale). Force-resetting idle state.")
+                            log(f"[IDLE-WD] ⚠️ Idle watchdog triggered — stuck {wall_idle_minutes:.1f} min")
                             report_error_to_backend(
                                 "idle_stuck",
-                                f"Idle stuck {wall_idle_minutes:.1f} min — GetLastInputInfo likely stale",
+                                f"Idle stuck {wall_idle_minutes:.1f} min",
                                 context={"wall_idle_minutes": wall_idle_minutes, "hostname": hostname}
                             )
-                            # Write the idle dwell up to now, then exit idle
                             if dwell_start:
-                                dwell = time.time() - dwell_start
+                                dwell = now_t - dwell_start
                                 if dwell >= MIN_DWELL_SECONDS:
                                     write_event(conn, cur, os_user, hostname, IDLE_SIG,
                                                 ts_override=dwell_start)
                             current_sig = None
                             dwell_start = None
                             _idle_entered_at = 0.0
+                            _idle_reading_unchanged_since = 0.0
                             continue
 
                      # === SUBSCRIPTION CHECK ===

@@ -83,6 +83,9 @@ class Organization(models.Model):
             "Admin-only setting."
         ),
     )
+    
+    mouse_idle_pause_seconds = models.IntegerField(default=90)
+
 
     # Metadata
     
@@ -351,7 +354,7 @@ class AgentDevice(models.Model):
     )
 
     log_requested = models.BooleanField(default=False)
-    
+
     restart_requested = models.BooleanField(default=False)
 
     def rotate_key(self):

@@ -256,6 +256,84 @@ begin
   DeleteFile(ExpandConstant('{userstartup}\TimeTracker Agent.lnk'));
 end;
 
+procedure CreateWatchdogTask;
+var
+  ResultCode: Integer;
+  WatchdogPath: String;
+  XmlPath: String;
+  XmlContent: String;
+begin
+  WatchdogPath := ExpandConstant('{app}\tt_watchdog.exe');
+  XmlPath := ExpandConstant('{tmp}\timetracker_watchdog_task.xml');
+
+  XmlContent :=
+    '<?xml version="1.0"?>' + #13#10 +
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
+    '  <RegistrationInfo>' + #13#10 +
+    '    <Description>MavOps TimeTracker Watchdog - restarts agent if it stops or freezes</Description>' + #13#10 +
+    '  </RegistrationInfo>' + #13#10 +
+    '  <Triggers>' + #13#10 +
+    '    <LogonTrigger>' + #13#10 +
+    '      <Enabled>true</Enabled>' + #13#10 +
+    '      <Delay>PT10S</Delay>' + #13#10 +
+    '    </LogonTrigger>' + #13#10 +
+    '    <TimeTrigger>' + #13#10 +
+    '      <Repetition>' + #13#10 +
+    '        <Interval>PT5M</Interval>' + #13#10 +
+    '        <Duration>P9999D</Duration>' + #13#10 +
+    '        <StopAtDurationEnd>false</StopAtDurationEnd>' + #13#10 +
+    '      </Repetition>' + #13#10 +
+    '      <Enabled>true</Enabled>' + #13#10 +
+    '      <StartBoundary>2024-01-01T00:00:00</StartBoundary>' + #13#10 +
+    '    </TimeTrigger>' + #13#10 +
+    '  </Triggers>' + #13#10 +
+    '  <Principals>' + #13#10 +
+    '    <Principal id="Author">' + #13#10 +
+    '      <LogonType>InteractiveToken</LogonType>' + #13#10 +
+    '      <RunLevel>LeastPrivilege</RunLevel>' + #13#10 +
+    '    </Principal>' + #13#10 +
+    '  </Principals>' + #13#10 +
+    '  <Settings>' + #13#10 +
+    '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>' + #13#10 +
+    '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' + #13#10 +
+    '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>' + #13#10 +
+    '    <AllowHardTerminate>true</AllowHardTerminate>' + #13#10 +
+    '    <StartWhenAvailable>true</StartWhenAvailable>' + #13#10 +
+    '    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>' + #13#10 +
+    '    <AllowStartOnDemand>true</AllowStartOnDemand>' + #13#10 +
+    '    <Enabled>true</Enabled>' + #13#10 +
+    '    <Hidden>false</Hidden>' + #13#10 +
+    '    <RunOnlyIfIdle>false</RunOnlyIfIdle>' + #13#10 +
+    '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>' + #13#10 +
+    '    <RestartOnFailure>' + #13#10 +
+    '      <Interval>PT1M</Interval>' + #13#10 +
+    '      <Count>999</Count>' + #13#10 +
+    '    </RestartOnFailure>' + #13#10 +
+    '  </Settings>' + #13#10 +
+    '  <Actions>' + #13#10 +
+    '    <Exec>' + #13#10 +
+    '      <Command>' + WatchdogPath + '</Command>' + #13#10 +
+    '    </Exec>' + #13#10 +
+    '  </Actions>' + #13#10 +
+    '</Task>';
+
+  SaveStringToFile(XmlPath, XmlContent, False);
+
+  Exec('schtasks.exe', '/delete /tn "TimeTrackerWatchdog" /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  Exec('schtasks.exe',
+       '/create /tn "TimeTrackerWatchdog" /xml "' + XmlPath + '" /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if ResultCode = 0 then
+    Log('Watchdog task created successfully')
+  else
+    Log('Watchdog task creation failed with code: ' + IntToStr(ResultCode));
+
+  DeleteFile(XmlPath);
+end;
+
 procedure RemoveScheduledTask;
 var
   ResultCode: Integer;
@@ -416,6 +494,7 @@ begin
     RestoreUserConfig();
     WriteOrgTokenToConfig();
     CreateScheduledTask;
+    CreateWatchdogTask;
   end;
 end;
 

@@ -434,6 +434,12 @@ jobs:
           name: intune-package
           path: windows_agent/Output/*.intunewin
 
+      - name: Upload watchdog script artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchdog-script
+          path: windows_agent/register_watchdog_task.ps1
+
   release:
     needs: [build-mac, build-windows]
     runs-on: ubuntu-latest
@@ -455,6 +461,12 @@ jobs:
         with:
           name: intune-package
           path: ./intune
+
+      - name: Download watchdog script artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: watchdog-script
+          path: ./watchdog-script
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -464,6 +476,7 @@ jobs:
             ./mac/TimeTracker.pkg
             ./windows/TimeTracker-Windows-Setup.exe
             ./intune/install_timetracker.intunewin
+            ./watchdog-script/register_watchdog_task.ps1
           tag_name: ${{ github.ref_name }}
           token: ${{ secrets.RELEASES_PAT }}
           make_latest: true

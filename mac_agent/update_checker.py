@@ -1,10 +1,10 @@
 """
-update_checker.py - Cross-platform auto-update for TimeTracker agents.
+update_checker.py — Cross-platform auto-update for TimeTracker agents.
 
 Features:
   - Startup blocking check for forced updates
   - Background polling every 5 minutes
-  - Silent auto-update: downloads + installs with zero user interaction (Windows)
+  - Windows: silent install via /VERYSILENT (signed installer, no user interaction)
   - Mac: AppleScript password prompt, then automatic install
   - Mtime detection: if exe on disk changes, auto-restart into new version
   - Network readiness checks before downloads (prevents post-sleep crashes)
@@ -15,10 +15,10 @@ Drop this file into both mac_agent/ and windows_agent/.
 Usage in main.py:
     from update_checker import check_for_update_blocking, start_background_checker
 
-    # Call BEFORE starting the agent - blocks until user updates if outdated
+    # Call BEFORE starting the agent — blocks until user updates if outdated
     check_for_update_blocking(API_BASE, APP_VERSION)
 
-    # Call AFTER starting the agent - re-checks every 5 minutes
+    # Call AFTER starting the agent — re-checks every 5 minutes
     start_background_checker(API_BASE, APP_VERSION)
 
     # In your on_wake handler, call:
@@ -48,6 +48,20 @@ POST_WAKE_DELAY = 15           # Extra delay after wake before update checks
 
 # Track whether we recently woke from sleep
 _last_wake_time = 0.0
+
+
+def _log(msg: str):
+    """
+    Route to the main agent logger if available, else print.
+    This ensures [UPDATE] lines appear in agent.log and get shipped
+    to the backend — critical for diagnosing silent update failures
+    on --noconsole Windows builds where print() goes nowhere.
+    """
+    try:
+        import logging
+        logging.getLogger('timetracker').info(msg)
+    except Exception:
+        print(msg, flush=True)
 
 
 def notify_wake():
@@ -87,10 +101,10 @@ def _wait_for_network(test_url: str, max_wait: int = NETWORK_READY_MAX_WAIT) -> 
             return True
         except Exception:
             if attempt == 0:
-                print(f"[UPDATE] Waiting for network ({ping_url})...")
+                _log(f"[UPDATE] Waiting for network ({ping_url})...")
             time.sleep(NETWORK_READY_POLL)
 
-    print(f"[UPDATE] Network not ready after {max_wait}s - skipping download")
+    _log(f"[UPDATE] Network not ready after {max_wait}s - skipping download")
     return False
 
 
@@ -142,7 +156,7 @@ def _restart_into_new_exe():
         return  # Only for frozen builds
 
     exe_path = sys.executable
-    print(f"[UPDATE] Restarting into updated exe: {exe_path}")
+    _log(f"[UPDATE] Restarting into updated exe: {exe_path}")
 
     if sys.platform == "win32":
         import subprocess, tempfile
@@ -163,7 +177,7 @@ def _restart_into_new_exe():
             f.write(f'del "%~f0"\n')
 
         subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)  # CREATE_NO_WINDOW
-        print("[UPDATE] Restart script launched - exiting old process")
+        _log("[UPDATE] Restart script launched - exiting old process")
         os._exit(0)
 
     else:
@@ -172,49 +186,70 @@ def _restart_into_new_exe():
 
 
 # ============================================================
-# SILENT AUTO-UPDATE (download + install)
+# UPDATE ACTIONS (platform-specific)
 # ============================================================
 
 def _auto_update_windows(download_url: str, latest_version: str) -> bool:
-    """Download and silently install update on Windows."""
-    import subprocess, tempfile
+    """
+    Silently download and install the new version on Windows.
+    Uses Inno Setup /VERYSILENT flag — no user interaction required.
+    Agent auto-restarts via mtime detection after install completes.
+    """
+    import subprocess
+    import tempfile
 
-    installer_path = os.path.join(tempfile.gettempdir(), f"TimeTracker-{latest_version}-Setup.exe")
+    exe_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerSetup-{latest_version}.exe")
 
     try:
-        # FIX: Wait for network before downloading
+        # Wait for network before downloading
         if not _wait_for_network(download_url):
             return False
 
-        print(f"[UPDATE] Downloading v{latest_version}...")
+        _log(f"[UPDATE] Downloading v{latest_version} installer...")
+        file_size = _download_with_timeout(download_url, exe_path, timeout=DOWNLOAD_TIMEOUT)
+        _log(f"[UPDATE] Downloaded ({file_size:,} bytes) to {exe_path}")
 
-        # FIX: Use timeout-aware download instead of urlretrieve
-        file_size = _download_with_timeout(download_url, installer_path, timeout=DOWNLOAD_TIMEOUT)
-        print(f"[UPDATE] Downloaded ({file_size:,} bytes) to {installer_path}")
-
-        # Sanity check - installer should be at least 5MB
-        if file_size < 5 * 1024 * 1024:
-            print(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
-            _cleanup_file(installer_path)
+        # Sanity check — installer should be at least 10MB
+        if file_size < 10 * 1024 * 1024:
+            _log(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
+            _cleanup_file(exe_path)
             return False
 
-        # Run Inno Setup installer silently
-        # /VERYSILENT       = no UI at all
-        # /SUPPRESSMSGBOXES = suppress any popups
-        # /NORESTART        = don't reboot
-        # /CLOSEAPPLICATIONS = close running TimeTracker first
-        print(f"[UPDATE] Installing v{latest_version} silently...")
-        subprocess.Popen(
-            [installer_path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
-            creationflags=0x08000000  # CREATE_NO_WINDOW
+        # Disable scheduled restart task so old version doesn't relaunch
+        _disable_restart_task()
+
+        _log(f"[UPDATE] Installing v{latest_version} silently...")
+        log_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerInstall-{latest_version}.log")
+        result = subprocess.run(
+            [
+                exe_path,
+                "/VERYSILENT",
+                "/NORESTART",
+                "/CLOSEAPPLICATIONS",
+                f"/LOG={log_path}",
+            ],
+            timeout=120,
+            capture_output=True,
         )
 
-        print(f"[UPDATE] Installer launched - update will complete momentarily")
-        return True
+        _cleanup_file(exe_path)
 
+        if result.returncode == 0:
+            _log(f"[UPDATE] ✅ v{latest_version} installed successfully")
+            return True
+        else:
+            stderr = result.stderr.decode(errors="ignore")[:500]
+            _log(f"[UPDATE] ⚠️ Installer exited with code {result.returncode}: {stderr}")
+            # Non-zero doesn't always mean failure with Inno Setup — let mtime confirm
+            return True
+
+    except subprocess.TimeoutExpired:
+        _log(f"[UPDATE] Installer timed out after 120s")
+        _cleanup_file(exe_path)
+        return False
     except Exception as e:
-        print(f"[UPDATE] Auto-update failed: {e}")
-        _cleanup_file(installer_path)
+        _log(f"[UPDATE] Silent install failed: {e}")
+        _cleanup_file(exe_path)
         return False
 
 
@@ -225,38 +260,38 @@ def _auto_update_mac(download_url: str, latest_version: str) -> bool:
     pkg_path = os.path.join(tempfile.gettempdir(), f"TimeTracker-{latest_version}.pkg")
 
     try:
-        # FIX: Wait for network before downloading
+        # Wait for network before downloading
         if not _wait_for_network(download_url):
             return False
 
-        print(f"[UPDATE] Downloading v{latest_version}...")
+        _log(f"[UPDATE] Downloading v{latest_version}...")
 
-        # FIX: Use timeout-aware download instead of urlretrieve
+        # Use timeout-aware download instead of urlretrieve
         file_size = _download_with_timeout(download_url, pkg_path, timeout=DOWNLOAD_TIMEOUT)
-        print(f"[UPDATE] Downloaded ({file_size:,} bytes) to {pkg_path}")
+        _log(f"[UPDATE] Downloaded ({file_size:,} bytes) to {pkg_path}")
 
         # Sanity check - pkg should be at least 5MB
         if file_size < 5 * 1024 * 1024:
-            print(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
+            _log(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
             _cleanup_file(pkg_path)
             return False
 
         # Use AppleScript to run installer with admin privileges
-        print(f"[UPDATE] Installing v{latest_version} (will prompt for password)...")
+        _log(f"[UPDATE] Installing v{latest_version} (will prompt for password)...")
         install_script = (
             f'do shell script "installer -pkg '
             f"'{pkg_path}'"
             f' -target /" with administrator privileges with prompt '
             f'"TimeTracker needs to install an update (v{latest_version}).'
-            f'\\n\\nEnter your password to continue."'
+            f'\\\\n\\\\nEnter your password to continue."'
         )
         subprocess.Popen(["osascript", "-e", install_script])
 
-        print(f"[UPDATE] Installer launched - update will complete after password entry")
+        _log(f"[UPDATE] Installer launched - update will complete after password entry")
         return True
 
     except Exception as e:
-        print(f"[UPDATE] Auto-update failed: {e}")
+        _log(f"[UPDATE] Auto-update failed: {e}")
         _cleanup_file(pkg_path)
         return False
 
@@ -285,7 +320,7 @@ def _nag_file() -> str:
 def _already_nagged(version: str) -> bool:
     """
     Check if we already attempted this version.
-    FIX: Also check if the nag is stale (>24h old) - if a previous attempt
+    Also check if the nag is stale (>24h old) — if a previous attempt
     failed mid-download, we should retry rather than permanently skip.
     """
     try:
@@ -296,17 +331,17 @@ def _already_nagged(version: str) -> bool:
                 if data.get("version") != version:
                     return False
 
-                # FIX: Stale nag check - retry after 24 hours regardless
+                # Stale nag check - retry after 24 hours regardless
                 nag_ts = data.get("ts", 0)
                 if time.time() - nag_ts > 86400:  # 24 hours
-                    print(f"[UPDATE] Nag for v{version} is stale (>24h) - will retry")
+                    _log(f"[UPDATE] Nag for v{version} is stale (>24h) - will retry")
                     return False
 
-                # FIX: Check if the download actually succeeded
+                # Check if the download actually succeeded
                 if not data.get("download_ok", False):
                     # Previous attempt failed - retry after 1 hour
                     if time.time() - nag_ts > 3600:
-                        print(f"[UPDATE] Previous download of v{version} failed - retrying")
+                        _log(f"[UPDATE] Previous download of v{version} failed - retrying")
                         return False
 
                 return True
@@ -318,7 +353,7 @@ def _already_nagged(version: str) -> bool:
 def _mark_nagged(version: str, download_ok: bool = False):
     """
     Mark that we have attempted this version.
-    FIX: Track whether the download actually succeeded so we can retry failures.
+    Track whether the download actually succeeded so we can retry failures.
     """
     try:
         path = _nag_file()
@@ -362,11 +397,11 @@ def _disable_restart_task():
             capture_output=True, timeout=5
         )
         if result.returncode == 0:
-            print("[UPDATE] Disabled restart task during update")
+            _log("[UPDATE] Disabled restart task during update")
         else:
-            print(f"[UPDATE] Could not disable task: {result.stderr.decode(errors='ignore').strip()}")
+            _log(f"[UPDATE] Could not disable task: {result.stderr.decode(errors='ignore').strip()}")
     except Exception as e:
-        print(f"[UPDATE] Failed to disable restart task: {e}")
+        _log(f"[UPDATE] Failed to disable restart task: {e}")
 
 
 # ============================================================
@@ -376,7 +411,7 @@ def _disable_restart_task():
 def check_version(api_base: str, current_version: str) -> dict:
     """
     Check for available updates. Returns None on any failure.
-    FIX: Explicit handling for URLError (network not ready after sleep).
+    Explicit handling for URLError (network not ready after sleep).
     """
     plat = "macos" if sys.platform == "darwin" else "windows"
     url = f"{api_base}/agent/version-check/?version={current_version}&platform={plat}"
@@ -387,10 +422,10 @@ def check_version(api_base: str, current_version: str) -> dict:
             return json.loads(resp.read())
     except urllib.error.URLError as e:
         # Network not ready - totally expected after sleep
-        print(f"[UPDATE] Version check failed (network): {e}")
+        _log(f"[UPDATE] Version check failed (network): {e}")
         return None
     except Exception as e:
-        print(f"[UPDATE] Version check failed: {e}")
+        _log(f"[UPDATE] Version check failed: {e}")
         return None
 
 
@@ -408,7 +443,7 @@ def _show_blocking_dialog(latest_version: str, download_url: str):
         try:
             import subprocess
             script = (
-                f'display dialog "TimeTracker v{latest_version} is available.\\n\\n'
+                f'display dialog "TimeTracker v{latest_version} is available.\\\\n\\\\n'
                 f'You must update to continue." '
                 f'buttons {{"Quit", "Download Update"}} default button "Download Update" '
                 f'with title "Update Required" with icon caution'
@@ -420,11 +455,11 @@ def _show_blocking_dialog(latest_version: str, download_url: str):
             if "Download Update" in result.stdout:
                 webbrowser.open(download_url)
 
-            print(f"[UPDATE] Exiting - update required to v{latest_version}")
+            _log(f"[UPDATE] Exiting - update required to v{latest_version}")
             os._exit(0)
 
         except Exception as e:
-            print(f"[UPDATE] osascript dialog failed: {e}")
+            _log(f"[UPDATE] osascript dialog failed: {e}")
             webbrowser.open(download_url)
             os._exit(0)
 
@@ -450,11 +485,11 @@ def _show_blocking_dialog(latest_version: str, download_url: str):
 
             _disable_restart_task()
 
-            print(f"[UPDATE] Exiting - update required to v{latest_version}")
+            _log(f"[UPDATE] Exiting - update required to v{latest_version}")
             os._exit(0)
 
         except Exception as e:
-            print(f"[UPDATE] MessageBox failed: {e}")
+            _log(f"[UPDATE] MessageBox failed: {e}")
             _disable_restart_task()
             webbrowser.open(download_url)
             os._exit(0)
@@ -468,50 +503,60 @@ def check_for_update_blocking(api_base: str, current_version: str):
     """
     Check for updates on startup.
     - Forced update: block with dialog, exit
-    - Regular update: start silent auto-update immediately
+    - Regular update: silent background install
 
-    FIX: Entire function wrapped in try/except - an update check failure
+    Entire function wrapped in try/except — an update check failure
     must NEVER prevent the agent from starting. The tracking loop is
     more important than any update.
     """
     if current_version in ("dev", "0.0.0", ""):
-        print("[UPDATE] Dev build - skipping version check")
+        _log("[UPDATE] Dev build - skipping version check")
         return
 
     try:
         data = check_version(api_base, current_version)
 
         if not data:
-            print("[UPDATE] Could not reach server - skipping update check")
+            _log("[UPDATE] Could not reach server - skipping update check")
             return
 
         if not data.get("update_available"):
+            _log(f"[UPDATE] Up to date (v{current_version})")
             _clear_nag()
             return
 
         latest = data.get("latest_version", "unknown")
         url = data.get("download_url", "https://github.com/druss16/timetracker-releases/releases/latest")
 
+        _log(f"[UPDATE] Update available: v{current_version} → v{latest} (force={data.get('force', False)})")
+
         if data.get("force"):
-            # Forced: block and require update
+            # Forced: silent install on Windows, blocking dialog on Mac
             if _already_nagged(latest):
-                print(f"[UPDATE] Update to v{latest} available but already notified - running anyway")
+                _log(f"[UPDATE] Update to v{latest} available but already notified - running anyway")
                 return
 
-            print(f"[UPDATE] Forced update required: {current_version} -> {latest}")
+            _log(f"[UPDATE] Forced update required: {current_version} -> {latest}")
             _mark_nagged(latest, download_ok=False)
-            _show_blocking_dialog(latest, url)
+
+            if sys.platform == "win32":
+                def _bg_forced():
+                    success = _auto_update_windows(url, latest)
+                    if success:
+                        _mark_nagged(latest, download_ok=True)
+                threading.Thread(target=_bg_forced, daemon=True).start()
+            else:
+                _show_blocking_dialog(latest, url)
 
         else:
-            # Non-forced: silent auto-update on startup too
+            # Non-forced: silent background install
             if _already_nagged(latest):
-                print(f"[UPDATE] v{latest} already queued for install - skipping")
+                _log(f"[UPDATE] v{latest} already queued for install - skipping")
                 return
 
-            print(f"[UPDATE] Auto-updating on startup: {current_version} -> {latest}")
+            _log(f"[UPDATE] Queuing background install of v{latest}...")
 
-            # FIX: Download in background thread so agent starts immediately.
-            # mark_nagged with download_ok=False first, update to True on success.
+            # Run in background thread so agent starts immediately
             def _bg_update():
                 _mark_nagged(latest, download_ok=False)
                 success = False
@@ -521,20 +566,21 @@ def check_for_update_blocking(api_base: str, current_version: str):
                     elif sys.platform == "darwin":
                         success = _auto_update_mac(url, latest)
                 except Exception as e:
-                    print(f"[UPDATE] Background update failed: {e}")
+                    _log(f"[UPDATE] Background update failed: {e}")
                     success = False
 
                 if success:
                     _mark_nagged(latest, download_ok=True)
+                    _log(f"[UPDATE] ✅ v{latest} install complete — will restart on next mtime check")
                 else:
                     # Don't permanently mark as handled - will retry after 1h
-                    print("[UPDATE] Download/install failed - will retry later")
+                    _log("[UPDATE] Download/install failed - will retry later")
 
             threading.Thread(target=_bg_update, daemon=True).start()
 
     except Exception as e:
         # CRITICAL: Never let an update check crash the agent startup
-        print(f"[UPDATE] Startup update check failed (non-fatal): {e}")
+        _log(f"[UPDATE] Startup update check failed (non-fatal): {e}")
         return
 
 
@@ -547,13 +593,13 @@ def start_background_checker(api_base: str, current_version: str):
     Periodically re-check for updates while the agent is running.
 
     Three update paths:
-      1. Mtime detection - exe on disk changed (installer already ran) -> restart
-      2. Forced update - block with dialog, exit
-      3. Silent auto-update - download + install with zero UI (Windows)
+      1. Mtime detection — exe on disk changed (installer already ran) -> restart
+      2. Forced update — block with dialog, exit
+      3. Silent background install
 
-    FIX: Post-wake delay prevents crashes when WiFi is not reconnected yet.
-    FIX: All download paths check network readiness first.
-    FIX: mark_nagged only set to download_ok=True AFTER successful download.
+    Post-wake delay prevents crashes when WiFi is not reconnected yet.
+    All download paths check network readiness first.
+    mark_nagged only set to download_ok=True AFTER successful handling.
     """
     if current_version in ("dev", "0.0.0", ""):
         return
@@ -562,13 +608,13 @@ def start_background_checker(api_base: str, current_version: str):
         while True:
             time.sleep(RECHECK_INTERVAL)
 
-            # -- FIX: Post-wake delay --
+            # -- Post-wake delay --
             # If we just woke from sleep, wait extra time for WiFi to reconnect
             since_wake = _seconds_since_wake()
             if since_wake < POST_WAKE_DELAY:
                 wait = POST_WAKE_DELAY - since_wake
-                print(f"[UPDATE] System just woke {since_wake:.0f}s ago - "
-                      f"waiting {wait:.0f}s for network")
+                _log(f"[UPDATE] System just woke {since_wake:.0f}s ago - "
+                     f"waiting {wait:.0f}s for network")
                 time.sleep(wait)
 
             # -- Path 1: Mtime detection (installer already ran while we were running) --
@@ -576,11 +622,11 @@ def start_background_checker(api_base: str, current_version: str):
                 try:
                     current_mtime = _get_exe_mtime()
                     if current_mtime > _startup_exe_mtime:
-                        print(f"[UPDATE] Exe on disk changed "
-                              f"({_startup_exe_mtime} -> {current_mtime}) - restarting")
+                        _log(f"[UPDATE] Exe on disk changed "
+                             f"({_startup_exe_mtime} -> {current_mtime}) - restarting")
                         _restart_into_new_exe()
                 except Exception as e:
-                    print(f"[UPDATE] Mtime check error: {e}")
+                    _log(f"[UPDATE] Mtime check error: {e}")
 
             try:
                 data = check_version(api_base, current_version)
@@ -598,16 +644,24 @@ def start_background_checker(api_base: str, current_version: str):
                 if _already_nagged(latest):
                     continue
 
-                # -- Path 2: Forced update - block with dialog --
-                if data.get("force"):
-                    print(f"[UPDATE] Forced update detected mid-session: "
-                          f"{current_version} -> {latest}")
-                    _mark_nagged(latest, download_ok=False)
-                    _show_blocking_dialog(latest, url)
+                _log(f"[UPDATE] Background check: update available v{current_version} → v{latest} "
+                     f"(force={data.get('force', False)})")
 
-                # -- Path 3: Silent auto-update --
+                # -- Path 2: Forced update — silent on Windows, dialog on Mac --
+                if data.get("force"):
+                    _log(f"[UPDATE] Forced update detected mid-session: "
+                         f"{current_version} -> {latest}")
+                    _mark_nagged(latest, download_ok=False)
+                    if sys.platform == "win32":
+                        success = _auto_update_windows(url, latest)
+                        if success:
+                            _mark_nagged(latest, download_ok=True)
+                    else:
+                        _show_blocking_dialog(latest, url)
+
+                # -- Path 3: Silent background install --
                 else:
-                    print(f"[UPDATE] Auto-updating: {current_version} -> {latest}")
+                    _log(f"[UPDATE] Starting background install of v{latest}...")
                     _mark_nagged(latest, download_ok=False)
 
                     success = False
@@ -617,19 +671,20 @@ def start_background_checker(api_base: str, current_version: str):
                         elif sys.platform == "darwin":
                             success = _auto_update_mac(url, latest)
                     except Exception as e:
-                        print(f"[UPDATE] Auto-update error: {e}")
+                        _log(f"[UPDATE] Auto-update error: {e}")
                         success = False
 
                     if success:
                         _mark_nagged(latest, download_ok=True)
+                        _log(f"[UPDATE] ✅ v{latest} installed — will restart on next mtime check")
                     else:
-                        # FIX: Don't permanently skip - will retry after 1h
-                        print("[UPDATE] Download/install failed - will retry next cycle")
+                        # Don't permanently skip - will retry after 1h
+                        _log("[UPDATE] Download/install failed - will retry next cycle")
 
             except Exception as e:
-                # FIX: Never let an update check crash the background thread
-                print(f"[UPDATE] Background check error (non-fatal): {e}")
+                # Never let an update check crash the background thread
+                _log(f"[UPDATE] Background check error (non-fatal): {e}")
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
-    print(f"[UPDATE] Background checker running (every {RECHECK_INTERVAL}s)")
+    _log(f"[UPDATE] Background checker running (every {RECHECK_INTERVAL}s)")

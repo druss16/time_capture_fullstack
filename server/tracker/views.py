@@ -7561,7 +7561,7 @@ def agent_version_check(request):
 
     return JsonResponse({
         "update_available": update_needed,
-        "force": False,
+        "force": True,
         "latest_version": latest,
         "download_url": download_url,
     })

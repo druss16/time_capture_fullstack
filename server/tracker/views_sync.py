@@ -333,6 +333,7 @@ def sync_full(request):
     # Org settings relevant to agent
     org_settings = {
         'ai_sensitivity': getattr(org, 'ai_sensitivity', 50) or 50,
+        'mouse_idle_pause_seconds': getattr(org, 'mouse_idle_pause_seconds', 90) or 90,  # ← ADD
     }
 
     return Response({

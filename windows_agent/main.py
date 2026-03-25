@@ -215,7 +215,10 @@ DEVICE_ID_FILE = _get("device_id_file", os.path.join(APPDATA, "TimeTracker", ".d
 
 POLL_SECONDS = int(_get("poll_seconds", 5))
 MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", 15))
-MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", 90))
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", 90))  # mutable — updated by sync
+_IDLE_WATCHDOG_MAX_MINUTES = 30    # Force-reset idle if stuck longer than this
+_IDLE_HARD_CAP_HOURS = 2           # Absolute max idle duration regardless of input
+_idle_entered_at: float = 0.0      # Wall time when we entered idle
 VERBOSE = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
 DB_PATH = _get("db_path", os.getenv("WIN_AGENT_DB")) or DB_PATH_DEFAULT
 CONTEXT_PORT = int(_get("context_port", 7321))
@@ -736,7 +739,12 @@ def ensure_db():
 # ---------------- Windows API Helpers ----------------
 
 def mouse_idle_seconds() -> float:
-    """Get seconds since last mouse/keyboard input using GetLastInputInfo"""
+    """Get seconds since last mouse/keyboard input using GetLastInputInfo.
+    
+    Clamps to _IDLE_HARD_CAP_HOURS to prevent stale dwTime values (seen after
+    screen lock / sleep on some Windows configs) from locking the idle state
+    permanently.
+    """
     if not WIN_API_AVAILABLE:
         return 0.0
     
@@ -752,7 +760,12 @@ def mouse_idle_seconds() -> float:
         
         ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))
         millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
-        return millis / 1000.0
+        raw = millis / 1000.0
+        
+        # Clamp: if GetLastInputInfo returns a stale/corrupted value after
+        # sleep or screen lock, the delta can be days. Cap it so the idle
+        # watchdog can still force-exit below.
+        return min(raw, _IDLE_HARD_CAP_HOURS * 3600)
     except Exception:
         return 0.0
 
@@ -1812,14 +1825,21 @@ def run_agent():
         if sync:
             _original_on_sync = sync.on_update
             def _on_sync_with_switcher():
+                global MOUSE_IDLE_PAUSE_S  # ← move to top
                 if _original_on_sync:
                     _original_on_sync()
                 ai_switcher.update_clients(sync.clients)
                 if hasattr(sync, 'client_patterns') and sync.client_patterns:
-                    ai_switcher.update_client_patterns(sync.client_patterns)  # ← NEW
+                    ai_switcher.update_client_patterns(sync.client_patterns)
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
+                    new_idle_s = sync.org_settings.get("mouse_idle_pause_seconds")
+                    if new_idle_s is not None:
+                        new_idle_s = int(new_idle_s)
+                        if new_idle_s != MOUSE_IDLE_PAUSE_S:
+                            log(f"[SYNC] Idle timeout updated: {MOUSE_IDLE_PAUSE_S}s → {new_idle_s}s")
+                            MOUSE_IDLE_PAUSE_S = new_idle_s
             sync.on_update = _on_sync_with_switcher
 
     except ImportError:
@@ -1966,7 +1986,7 @@ def run_agent():
 
     # === TRACKING LOOP WITH ERROR HANDLING ===
     def tracking_loop():
-        global _last_subscription_check, _subscription_active
+        global _last_subscription_check, _subscription_active, _idle_entered_at
         log("[TRACKING] Initializing...")
         
         try:
@@ -1989,6 +2009,33 @@ def run_agent():
             while True:
                 try:
                     heartbeat_touch()   # ← add this
+
+                    # ── IDLE WATCHDOG: force-exit idle if stuck > 30 min ──────────
+                    # GetLastInputInfo returns stale values on some machines after
+                    # screen lock or sleep (Wendy/Terri pattern). If we've been in
+                    # idle longer than _IDLE_WATCHDOG_MAX_MINUTES wall-clock minutes,
+                    # assume the counter is corrupted and force-exit idle state.
+                    if current_sig == IDLE_SIG and _idle_entered_at > 0:
+                        wall_idle_minutes = (time.time() - _idle_entered_at) / 60.0
+                        if wall_idle_minutes > _IDLE_WATCHDOG_MAX_MINUTES:
+                            log(f"[IDLE-WD] ⚠️ Idle watchdog triggered — stuck {wall_idle_minutes:.1f} min "
+                                f"(GetLastInputInfo likely stale). Force-resetting idle state.")
+                            report_error_to_backend(
+                                "idle_stuck",
+                                f"Idle stuck {wall_idle_minutes:.1f} min — GetLastInputInfo likely stale",
+                                context={"wall_idle_minutes": wall_idle_minutes, "hostname": hostname}
+                            )
+                            # Write the idle dwell up to now, then exit idle
+                            if dwell_start:
+                                dwell = time.time() - dwell_start
+                                if dwell >= MIN_DWELL_SECONDS:
+                                    write_event(conn, cur, os_user, hostname, IDLE_SIG,
+                                                ts_override=dwell_start)
+                            current_sig = None
+                            dwell_start = None
+                            _idle_entered_at = 0.0
+                            continue
+
                      # === SUBSCRIPTION CHECK ===
                     if not _subscription_active:
                         now = time.time()
@@ -2056,19 +2103,6 @@ def run_agent():
                         
                         continue
                         
-                        # Give network a moment to come back (reconnect thread is working)
-                        log("[TRACKING] Waiting for network reconnect...")
-                        for _ in range(60):  # Up to 30 seconds
-                            if is_network_ok():
-                                break
-                            time.sleep(0.5)
-                        
-                        if is_network_ok():
-                            log("[TRACKING] ✅ Network restored — resuming capture")
-                        else:
-                            log("[TRACKING] ⚠️ Network still down — resuming capture anyway (offline mode)")
-                        
-                        continue  # Re-enter loop with clean state
                     if check_control_commands(CONTROL_URL, os_user, hostname):
                         log("[CTRL] Stopping agent per admin request.")
                         break
@@ -2107,6 +2141,7 @@ def run_agent():
                                 if dwell >= MIN_DWELL_SECONDS:
                                     write_event(conn, cur, os_user, hostname, current_sig)
                             current_sig = IDLE_SIG
+                            _idle_entered_at = time.time()           # ← idle watchdog anchor
                             if force_idle:
                                 dwell_start = time.time()
                             else:

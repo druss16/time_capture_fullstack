@@ -290,7 +290,8 @@ def register_watchdog_task():
         # Check if already registered
         result = subprocess.run(
             ["schtasks", "/Query", "/TN", WATCHDOG_TASK_NAME],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, timeout=10,
+            creationflags=_NO_WINDOW,
         )
         if result.returncode == 0:
             log(f"[WATCHDOG-TASK] ✅ Watchdog task already registered")
@@ -311,7 +312,8 @@ def register_watchdog_task():
 
         result = subprocess.run(
             ["schtasks", "/Create", "/TN", WATCHDOG_TASK_NAME, "/XML", tmp.name, "/F"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=30,
+            creationflags=_NO_WINDOW,
         )
         os.unlink(tmp.name)
 
@@ -329,7 +331,8 @@ def unregister_watchdog_task():
     try:
         subprocess.run(
             ["schtasks", "/Delete", "/TN", WATCHDOG_TASK_NAME, "/F"],
-            capture_output=True, timeout=10
+            capture_output=True, timeout=10,
+            creationflags=_NO_WINDOW,
         )
         log(f"[WATCHDOG-TASK] 🗑️ Watchdog task removed")
     except Exception as e:

@@ -228,6 +228,10 @@ CONTROL_POLL_S = int(_get("agent_control_poll_seconds", 10))
 
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 
+# Idle safety limits
+MAX_IDLE_SECONDS = 3600          # 1 hour max idle before force-reset
+IDLE_STUCK_CHECK_SECONDS = 300   # 5 min — re-evaluate if stuck in idle
+
 # Nudge/Guess settings
 NUDGE_ENABLED = bool(_get("nudge_enabled", True))
 GUESS_POLL_SECONDS = int(_get("guess_poll_seconds", 10))
@@ -1125,8 +1129,6 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
         def _on_wake():
             global _last_control_check, _wake_timestamp, _wake_handled
             
-            # Prevent duplicate wake handling
-            # (both PBT_APMRESUMESUSPEND and PBT_APMRESUMEAUTOMATIC fire)
             now = time.time()
             if _wake_handled and (now - _wake_timestamp) < 10:
                 log("[WAKE] Duplicate wake event — skipping")
@@ -1138,11 +1140,19 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
             _wake_timestamp = now
             set_network_ok(False)
             
-            # >>> KEY FIX: Signal the tracking loop to reset <<<
-            _wake_event.set()
+            _wake_event.set()  # Signal tracking loop
 
-            from update_checker import notify_wake   # ← ADD THIS
-            notify_wake()                            # ← ADD THIS
+            try:
+                from update_checker import notify_wake
+                notify_wake()
+            except Exception:
+                pass
+
+            # Windows — signal tracking loop reset, don't exit
+            # Mac — exit so LaunchAgent restarts cleanly
+            if sys.platform == 'darwin':
+                log("[WAKE] Forcing exit — LaunchAgent will restart cleanly")
+                os._exit(1)
 
             def _reconnect():
                 global _wake_handled
@@ -2174,7 +2184,6 @@ def run_agent():
                             if current_sig and dwell_start:
                                 now = time.time()
                                 if force_idle:
-                                    # Lock screen: end dwell at current time
                                     effective_end = now
                                 else:
                                     effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
@@ -2182,7 +2191,6 @@ def run_agent():
                                 if dwell >= MIN_DWELL_SECONDS:
                                     write_event(conn, cur, os_user, hostname, current_sig)
                             current_sig = IDLE_SIG
-                            _idle_entered_at = time.time()           # ← idle watchdog anchor
                             if force_idle:
                                 dwell_start = time.time()
                             else:
@@ -2190,14 +2198,41 @@ def run_agent():
                             if not force_idle:
                                 log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
 
-                        # ── FIX 3: During lock screen idle, sleep longer ──
-                        # No need to poll every 5s when screen is locked
+                        # ── IDLE WATCHDOG: detect stuck idle ──
+                        # If we've been in idle state longer than IDLE_STUCK_CHECK_SECONDS
+                        # but GetLastInputInfo says user is active, force exit idle
+                        if current_sig == IDLE_SIG and dwell_start:
+                            idle_duration = time.time() - dwell_start
+
+                            # Max idle cap — never idle longer than 2 hours
+                            if idle_duration > MAX_IDLE_SECONDS:
+                                log(f"[IDLE] ⚠️ Max idle cap reached ({int(idle_duration)}s) — force resetting")
+                                write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
+                                current_sig = None
+                                dwell_start = None
+                                continue
+
+                            # Stuck idle check — re-read idle timer fresh
+                            if idle_duration > IDLE_STUCK_CHECK_SECONDS:
+                                fresh_idle = mouse_idle_seconds()
+                                if fresh_idle < MOUSE_IDLE_PAUSE_S:
+                                    log(f"[IDLE] ⚠️ Stuck idle detected — fresh idle={int(fresh_idle)}s, forcing exit")
+                                    dwell = time.time() - dwell_start
+                                    if dwell >= MIN_DWELL_SECONDS:
+                                        write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
+                                    current_sig = None
+                                    dwell_start = None
+                                    continue
+                                else:
+                                    log(f"[IDLE] Still genuinely idle after {int(idle_duration)}s (fresh={int(fresh_idle)}s)")
+
                         if force_idle:
-                            time.sleep(POLL_SECONDS * 3)  # 15s instead of 5s
+                            time.sleep(POLL_SECONDS * 3)
                         else:
                             time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
                         continue
+
                     else:
                         if current_sig == IDLE_SIG and dwell_start:
                             if notif_manager:
@@ -2399,6 +2434,17 @@ def cmd_stop():
         print(f"Error stopping agent: {e}")
 
 def main():
+        # ── Single instance lock — prevent duplicate agents ──
+    if sys.platform == 'win32':
+        import msvcrt
+        _lock_path = os.path.join(APPDATA, "TimeTracker", "agent.lock")
+        try:
+            os.makedirs(os.path.dirname(_lock_path), exist_ok=True)
+            _lock_fh = open(_lock_path, 'w')
+            msvcrt.locking(_lock_fh.fileno(), msvcrt.LK_NBLCK, 1)
+        except (IOError, OSError):
+            print("[AGENT] Another instance is already running — exiting.")
+            sys.exit(0)
     # Handle uninstaller flag FIRST before anything else
     if "--unregister-task" in sys.argv:
         from startup_task import unregister_startup_task

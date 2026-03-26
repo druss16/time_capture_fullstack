@@ -47,7 +47,7 @@ TASK_DESCRIPTION = "TimeTracker AI Time Tracking Agent by MavOps"
 
 # How often to check if the task needs re-registration (seconds)
 # Re-register once per day max — avoids hammering schtasks on every startup
-_REREGISTER_INTERVAL = 0
+_REREGISTER_INTERVAL = 0 # change back to on next version 86400
 _last_registered: float = 0.0
 
 
@@ -184,7 +184,9 @@ def _task_exists() -> bool:
     try:
         result = subprocess.run(
             ["schtasks", "/Query", "/TN", TASK_NAME],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, timeout=10,
+            creationflags=_NO_WINDOW,
+
         )
         return result.returncode == 0
     except Exception:
@@ -195,7 +197,9 @@ def _task_is_healthy() -> bool:
     try:
         result = subprocess.run(
             ["schtasks", "/Query", "/TN", TASK_NAME, "/XML"],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, timeout=10,
+            creationflags=_NO_WINDOW,
+
         )
         if result.returncode != 0:
             return False
@@ -239,7 +243,8 @@ def _register_task_xml(xml: str) -> bool:
                 "/XML", tmp.name,
                 "/F",   # Force overwrite if exists
             ],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=30,
+            creationflags=_NO_WINDOW,
         )
 
         if result.returncode == 0:
@@ -358,7 +363,8 @@ def unregister_startup_task():
     try:
         result = subprocess.run(
             ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, timeout=10,
+            creationflags=_NO_WINDOW,
         )
         if result.returncode == 0:
             _log(f"[STARTUP-TASK] 🗑️ Task '{TASK_NAME}' removed")

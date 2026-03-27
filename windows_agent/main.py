@@ -849,30 +849,31 @@ def extract_url_from_browser_title(title: str, exe: str) -> Optional[str]:
     return None
 
 def get_office_file_path(exe: str) -> Optional[str]:
-    """Get currently open file path from Office application via COM."""
-    try:
-        import win32com.client
-        
-        if exe == "excel.exe":
-            xl = win32com.client.Dispatch("Excel.Application")
-            if xl.Workbooks.Count > 0:
-                return xl.ActiveWorkbook.FullName
-        
-        elif exe == "winword.exe":
-            word = win32com.client.Dispatch("Word.Application")
-            if word.Documents.Count > 0:
-                return word.ActiveDocument.FullName
-        
-        elif exe == "powerpnt.exe":
-            ppt = win32com.client.Dispatch("PowerPoint.Application")
-            if ppt.Presentations.Count > 0:
-                return ppt.ActivePresentation.FullName
+    result = [None]
+    def _get():
+        try:
+            import win32com.client
+            if exe == "excel.exe":
+                xl = win32com.client.Dispatch("Excel.Application")
+                if xl.Workbooks.Count > 0:
+                    result[0] = xl.ActiveWorkbook.FullName
+            elif exe == "winword.exe":
+                word = win32com.client.Dispatch("Word.Application")
+                if word.Documents.Count > 0:
+                    result[0] = word.ActiveDocument.FullName
+            elif exe == "powerpnt.exe":
+                ppt = win32com.client.Dispatch("PowerPoint.Application")
+                if ppt.Presentations.Count > 0:
+                    result[0] = ppt.ActivePresentation.FullName
+        except Exception:
+            pass
+    t = threading.Thread(target=_get, daemon=True)
+    t.start()
+    t.join(timeout=3)
+    if t.is_alive():
+        log("[COM] ⚠️ Office COM call timed out — skipping file path")
+    return result[0]
     
-    except Exception:
-        pass
-    
-    return None
-
 def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, str, str]:
     """Check if activity is a development tool."""
     exe = (exe_name or "").lower()

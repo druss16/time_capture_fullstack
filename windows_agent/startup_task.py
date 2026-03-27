@@ -50,6 +50,9 @@ TASK_DESCRIPTION = "TimeTracker AI Time Tracking Agent by MavOps"
 _REREGISTER_INTERVAL = 0 # change back to on next version 86400
 _last_registered: float = 0.0
 
+# Hide terminal windows from end users
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0
+
 
 def _log(msg: str):
     """Use timetracker logger if available, else print."""

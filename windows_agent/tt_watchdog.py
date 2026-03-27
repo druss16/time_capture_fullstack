@@ -61,6 +61,9 @@ APPDATA   = os.environ.get("APPDATA", os.path.expanduser("~"))
 LOG_DIR   = os.path.join(APPDATA, "TimeTracker", "Logs")
 LOG_FILE  = os.path.join(LOG_DIR, "watchdog.log")
 
+# Hide terminal windows from end users
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0
+
 def setup_logging():
     os.makedirs(LOG_DIR, exist_ok=True)
     handler = RotatingFileHandler(

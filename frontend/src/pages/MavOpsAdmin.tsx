@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
 const API = "https://timetracker-api-k375.onrender.com/api";
-const LATEST_VERSION = "1.2.8";
 const SEAT_PRICES: Record<string, number> = { professional: 34.99, executive: 49.99, trial: 0, none: 0 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -98,9 +97,9 @@ function daysUntil(iso: string | null): number | null {
   return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
 }
 function parseVersion(v: string) { return (v || "0").replace(/^v/, "").split(".").map(n => parseInt(n) || 0); }
-function versionStatus(v: string): "current" | "behind" | "outdated" | "dev" {
+function versionStatus(v: string, latest: string): "current" | "behind" | "outdated" | "dev" {
   if (!v || v === "dev" || v === "vdev") return "dev";
-  const cur = parseVersion(v); const lat = parseVersion(LATEST_VERSION);
+  const cur = parseVersion(v); const lat = parseVersion(latest);
   if (JSON.stringify(cur) === JSON.stringify(lat)) return "current";
   if (lat[0] - cur[0] > 0 || lat[1] - cur[1] > 1) return "outdated";
   return "behind";
@@ -119,8 +118,8 @@ function OrgPill({ name }: { name: string }) {
   return <span style={{ display: "inline-block", padding: "2px 10px", background: "#1e2d4a", color: "#7eb3e0", fontSize: 11, border: "1px solid #2d4a6a", borderRadius: 3, fontFamily: "'DM Mono', monospace" }}>{name}</span>;
 }
 
-function VersionBadge({ version }: { version: string }) {
-  const s = versionStatus(version);
+function VersionBadge({ version, latest }: { version: string; latest: string }) {
+  const s = versionStatus(version, latest);
   const colors = { current: T.green, behind: T.yellow, outdated: T.red, dev: T.textMuted };
   const labels = { current: `v${version} ✓`, behind: `v${version} ↑`, outdated: `v${version} !!`, dev: version || "?" };
   return <span style={{ display: "inline-block", padding: "3px 9px", background: colors[s] + "25", color: colors[s], fontSize: 11, borderRadius: 3, border: `1px solid ${colors[s]}44`, ...mono }}>{labels[s]}</span>;
@@ -201,6 +200,7 @@ function Btn({ label, onClick, color = T.teal, outline = false, disabled = false
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 export default function MavOpsAdmin() {
+  const [latestVersion, setLatestVersion] = useState<string>("0.0.0");
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
@@ -229,6 +229,16 @@ export default function MavOpsAdmin() {
   const flash = (m: string, type: "ok" | "err" = "ok") => { setMsg(m); setMsgType(type); setTimeout(() => setMsg(""), 5000); };
 
   useEffect(() => { if (token && tab === "orgs") loadOrgs(); }, []); // eslint-disable-line
+
+  useEffect(() => {
+  fetch("https://api.github.com/repos/druss16/timetracker-releases/releases/latest")
+    .then(r => r.json())
+    .then(d => {
+      const v = (d.tag_name || "").replace(/^v/, "");
+      if (v) setLatestVersion(v);
+    })
+    .catch(() => {}); // fail silently
+}, []);
 
   const apiFetch = useCallback(async (path: string, opts: RequestInit = {}) => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts.headers as any || {}) };
@@ -313,7 +323,7 @@ export default function MavOpsAdmin() {
   // ── Derived ──
   const mrr = calcMRR(orgs);
   const trialsExpiringSoon = orgs.filter(o => { const d = daysUntil(o.trial_ends_at); return d !== null && d <= 7 && d >= 0; });
-  const outdatedDevices = devices.filter(d => versionStatus(d.agent_version) === "outdated");
+  const outdatedDevices = devices.filter(d => versionStatus(d.agent_version, latestVersion) === "outdated");
   const inactiveDevices = devices.filter(d => (Date.now() - new Date(d.last_seen).getTime()) > 7 * 86400000);
   const recentOrgs = [...orgs].filter(o => o.created_at).sort((a, b) => new Date(b.created_at!).getTime() - new Date(a.created_at!).getTime()).slice(0, 5);
 
@@ -383,7 +393,7 @@ export default function MavOpsAdmin() {
             const d = daysUntil(o.trial_ends_at);
             return <span key={o.id} style={{ fontSize: 12, color: T.yellow, ...mono }}>⚠ <strong>{o.name}</strong> trial ends in {d}d</span>;
           })}
-          {outdatedDevices.length > 0 && <span style={{ fontSize: 12, color: T.red, ...mono }}>!! <strong>{outdatedDevices.length}</strong> device{outdatedDevices.length > 1 ? "s" : ""} running outdated agent (latest: v{LATEST_VERSION})</span>}
+          {outdatedDevices.length > 0 && <span style={{ fontSize: 12, color: T.red, ...mono }}>!! <strong>{outdatedDevices.length}</strong> device{outdatedDevices.length > 1 ? "s" : ""} running outdated agent (latest: v{latestVersion})</span>}
           {inactiveDevices.length > 0 && <span style={{ fontSize: 12, color: T.textMuted, ...mono }}>● <strong>{inactiveDevices.length}</strong> device{inactiveDevices.length > 1 ? "s" : ""} inactive 7d+</span>}
         </div>
       )}
@@ -501,7 +511,7 @@ export default function MavOpsAdmin() {
                       </div>
                       <div style={{ display: "flex", gap: 14, alignItems: "center", color: T.textSub, fontSize: 12, ...mono }}>
                         <span>{d.os || "unknown os"}</span>
-                        <VersionBadge version={d.agent_version} />
+                        <VersionBadge version={d.agent_version} latest={latestVersion} />
                         <span>last seen {timeAgo(d.last_seen)}</span>
                         <span style={{ color: T.textMuted }}>{d.device_id?.slice(0, 10)}…</span>
                         <CopyButton text={d.device_id} />

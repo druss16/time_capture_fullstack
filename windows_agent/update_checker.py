@@ -235,12 +235,32 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
         _cleanup_file(exe_path)
 
         if result.returncode == 0:
-            _log(f"[UPDATE] ✅ v{latest_version} installed successfully")
+            _log(f"[UPDATE] ✅ v{latest_version} installed successfully — launching new version")
+            try:
+                new_exe = sys.executable  # same path, new binary on disk
+                subprocess.Popen(
+                    [new_exe],
+                    creationflags=0x08000000,  # CREATE_NO_WINDOW
+                    close_fds=True,
+                )
+                _log(f"[UPDATE] ✅ New agent launched")
+            except Exception as e:
+                _log(f"[UPDATE] ⚠️ Failed to launch new agent: {e}")
             return True
         else:
             stderr = result.stderr.decode(errors="ignore")[:500]
             _log(f"[UPDATE] ⚠️ Installer exited with code {result.returncode}: {stderr}")
             # Non-zero doesn't always mean failure with Inno Setup — let mtime confirm
+            try:
+                new_exe = sys.executable
+                subprocess.Popen(
+                    [new_exe],
+                    creationflags=0x08000000,
+                    close_fds=True,
+                )
+                _log(f"[UPDATE] ✅ New agent launched (non-zero exit)")
+            except Exception as e:
+                _log(f"[UPDATE] ⚠️ Failed to launch new agent: {e}")
             return True
 
     except subprocess.TimeoutExpired:

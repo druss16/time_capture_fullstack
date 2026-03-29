@@ -337,9 +337,12 @@ class PatternLearningService:
         
         # Extract all patterns from this block
         all_patterns = []
-        all_patterns.extend(PatternLearningService.extract_app_patterns(block))
+        # Only learn window_title_prefix and domain patterns — app names and time slots
+        # are generic across all clients and cause false positives (Dewitt/Moose bug)
+        app_patterns = PatternLearningService.extract_app_patterns(block)
+        all_patterns.extend([p for p in app_patterns if p['type'] in ('window_title_prefix', 'domain')])
         all_patterns.extend(PatternLearningService.extract_file_patterns(block))
-        all_patterns.extend(PatternLearningService.extract_time_patterns(block))
+        # ← REMOVED: extract_time_patterns — time slots are never client-specific
         
         stored_count = 0
         corrected_count = 0

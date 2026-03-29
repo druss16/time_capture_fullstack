@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   ChevronDown,
   ChevronRight,
@@ -19,11 +20,12 @@ import {
   AlertTriangle,
   Smartphone,
   FileQuestion,
-  ArrowRight,
   CheckSquare,
   Square,
   X,
   ArrowRightLeft,
+  Lightbulb,
+  MousePointerClick,
 } from "lucide-react";
 import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -33,7 +35,7 @@ const API_BASE = RAW_BASE.endsWith("/api")
   ? RAW_BASE
   : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
-// ─── Types ─────────────────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 export type Category = {
   name: string;
@@ -58,7 +60,7 @@ export type FlaggedBlock = {
 };
 type ParsedActivity = { blockId: number | null; title: string };
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const fmt = (hours: number): string => {
   const h = Math.floor(hours);
@@ -77,14 +79,35 @@ const parse = (activity: string): ParsedActivity => {
 
 const isNonBillable = (name: string) => {
   const n = name.toLowerCase();
-  return n.includes("idle") || n.includes("uncategorized") || n.includes("personal") || n.includes("pto") || n.includes("time off");
+  return (
+    n.includes("idle") ||
+    n.includes("uncategorized") ||
+    n.includes("personal") ||
+    n.includes("pto") ||
+    n.includes("time off")
+  );
 };
 
-// ─── Move Popover ───────────────────────────────────────────────────────────────
+// ─── Client accent colors ─────────────────────────────────────────────────────
+// Each client card gets a left-border accent + subtle header tint.
+// We override the heavy bg-fill approach with a left-border + very light tint.
+const CLIENT_ACCENTS = [
+  { border: "border-l-teal-500",    header: "bg-teal-50",    hours: "text-teal-600"    },
+  { border: "border-l-amber-400",   header: "bg-amber-50",   hours: "text-amber-500"   },
+  { border: "border-l-violet-500",  header: "bg-violet-50",  hours: "text-violet-600"  },
+  { border: "border-l-sky-500",     header: "bg-sky-50",     hours: "text-sky-600"     },
+  { border: "border-l-rose-500",    header: "bg-rose-50",    hours: "text-rose-600"    },
+  { border: "border-l-emerald-500", header: "bg-emerald-50", hours: "text-emerald-600" },
+];
+
+// ─── Move Popover ─────────────────────────────────────────────────────────────
+// Uses createPortal so it renders at document.body — completely outside any
+// parent click handler, stacking context, or event bubble chain.
 
 function MovePopover({
-  clients, categories, currentClientId, currentCategory, label, onApply, onClose,
+  anchorEl, clients, categories, currentClientId, currentCategory, label, onApply, onClose,
 }: {
+  anchorEl?: HTMLElement | null;
   clients: ClientOption[]; categories: string[];
   currentClientId: number | null; currentCategory: string;
   label: string;
@@ -93,58 +116,99 @@ function MovePopover({
 }) {
   const [selClient, setSelClient] = useState<number | null>(currentClientId);
   const [selCat, setSelCat] = useState(currentCategory);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const catRef = useRef<HTMLSelectElement>(null);
 
+  // Position below the anchor element
+  useEffect(() => {
+    const el = anchorEl ?? document.body;
+    const rect = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.right - 268, window.innerWidth - 276));
+    setPos({ top: rect.bottom + window.scrollY + 6, left });
+    setTimeout(() => catRef.current?.focus(), 60);
+  }, []);
+
+  // Close on outside mousedown
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      if (popRef.current && !popRef.current.contains(e.target as Node)) onClose();
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [onClose]);
 
-  return (
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onApply(selClient, selCat); }
+    };
+    document.addEventListener("keydown", handler, true);
+    return () => document.removeEventListener("keydown", handler, true);
+  }, [onClose, onApply, selClient, selCat]);
+
+  const hasChanged = selClient !== currentClientId || selCat !== currentCategory;
+
+  if (!pos) return null;
+
+  return createPortal(
     <div
-      ref={ref}
-      style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 9999, width: 260 }}
-      className="bg-white border-2 border-slate-200 rounded-xl shadow-2xl p-4"
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
+      ref={popRef}
+      data-popover="true"
+      style={{ position: "absolute", top: pos.top, left: pos.left, zIndex: 99999, width: 268 }}
+      className="bg-white border border-slate-200 rounded-xl shadow-2xl p-4"
     >
-      <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">{label}</p>
-      <div className="space-y-2 mb-4">
-        <select
-          value={selClient ?? ""}
-          onChange={(e) => setSelClient(e.target.value ? parseInt(e.target.value) : null)}
-          className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white focus:border-primary focus:outline-none"
-        >
-          <option value="">Unassigned</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <select
-          value={selCat}
-          onChange={(e) => setSelCat(e.target.value)}
-          className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white focus:border-primary focus:outline-none"
-        >
-          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">{label}</p>
+      <div className="space-y-2 mb-3">
+        <div>
+          <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1 block">Client</label>
+          <select
+            value={selClient ?? ""}
+            onChange={(e) => setSelClient(e.target.value ? parseInt(e.target.value) : null)}
+            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none"
+          >
+            <option value="">Unassigned</option>
+            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1 block">Category</label>
+          <select
+            ref={catRef}
+            value={selCat}
+            onChange={(e) => setSelCat(e.target.value)}
+            className="w-full border border-primary/40 rounded-lg px-3 py-2 text-sm font-medium bg-white focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none ring-1 ring-primary/10"
+          >
+            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
       </div>
+      <p className="text-[10px] text-slate-300 mb-3">Press Enter to apply · Escape to cancel</p>
       <div className="flex gap-2">
-        <button onClick={onClose} className="flex-1 py-2 border-2 border-slate-200 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-100 transition-all">
+        <button
+          onClick={() => onClose()}
+          className="flex-1 py-2 border border-slate-200 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+        >
           Cancel
         </button>
         <button
           onClick={() => onApply(selClient, selCat)}
-          className="flex-1 py-2 bg-primary text-white rounded-lg text-sm font-bold hover:opacity-90 shadow-lg shadow-primary/20 transition-all"
+          disabled={!hasChanged}
+          className={cn(
+            "flex-1 py-2 rounded-lg text-sm font-semibold shadow-sm transition-all",
+            hasChanged ? "bg-primary text-white hover:opacity-90" : "bg-slate-100 text-slate-400 cursor-not-allowed"
+          )}
         >
           Apply
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
-// ─── Inline Move Picker (used by SelectionBar, renders above it) ───────────────
+// ─── Inline Move Picker ───────────────────────────────────────────────────────
 
 function InlineMovePicker({
   clients, categories, count, onApply, onClose,
@@ -169,18 +233,18 @@ function InlineMovePicker({
   return (
     <div
       ref={ref}
-      className="absolute bottom-[calc(100%+8px)] left-1/2 -translate-x-1/2 w-64 bg-white border-2 border-slate-200 rounded-xl shadow-2xl p-4"
+      className="absolute bottom-[calc(100%+8px)] left-1/2 -translate-x-1/2 w-64 bg-white border border-slate-200 rounded-xl shadow-xl p-4"
       style={{ zIndex: 9999 }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">
+      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
         Move {count} selected activit{count !== 1 ? "ies" : "y"}
       </p>
       <div className="space-y-2 mb-4">
         <select
           value={selClient ?? ""}
           onChange={(e) => setSelClient(e.target.value ? parseInt(e.target.value) : null)}
-          className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white text-slate-900 focus:border-primary focus:outline-none"
+          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white text-slate-900 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none"
         >
           <option value="">Unassigned</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -188,19 +252,16 @@ function InlineMovePicker({
         <select
           value={selCat}
           onChange={(e) => setSelCat(e.target.value)}
-          className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white text-slate-900 focus:border-primary focus:outline-none"
+          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white text-slate-900 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none"
         >
           {categories.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
       <div className="flex gap-2">
-        <button onClick={onClose} className="flex-1 py-2 border-2 border-slate-200 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-100">
+        <button onClick={onClose} className="flex-1 py-2 border border-slate-200 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
           Cancel
         </button>
-        <button
-          onClick={() => onApply(selClient, selCat)}
-          className="flex-1 py-2 bg-primary text-white rounded-lg text-sm font-bold hover:opacity-90"
-        >
+        <button onClick={() => onApply(selClient, selCat)} className="flex-1 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:opacity-90 transition-all">
           Apply
         </button>
       </div>
@@ -208,7 +269,7 @@ function InlineMovePicker({
   );
 }
 
-// ─── Floating Selection Bar ─────────────────────────────────────────────────────
+// ─── Floating Selection Bar ───────────────────────────────────────────────────
 
 function SelectionBar({
   count, clients, categories, onMove, onClear,
@@ -220,27 +281,23 @@ function SelectionBar({
   onClear: () => void;
 }) {
   const [showPopover, setShowPopover] = useState(false);
-
   if (count === 0) return null;
 
   return (
     <div
-      className="fixed bottom-6 left-1/2 z-50 flex items-center gap-3 px-5 py-3 bg-slate-900 text-white rounded-2xl shadow-2xl"
+      className="fixed bottom-6 left-1/2 z-50 flex items-center gap-3 px-4 py-2.5 bg-slate-900 text-white rounded-2xl shadow-2xl"
       style={{ transform: "translateX(-50%)" }}
     >
-      <span className="text-sm font-bold text-white/90">
+      <span className="text-sm font-semibold text-white/80">
         {count} item{count !== 1 ? "s" : ""} selected
       </span>
-
-      <div className="w-px h-5 bg-white/20" />
-
-      {/* Move selected */}
+      <div className="w-px h-4 bg-white/20" />
       <div className="relative">
         <button
           onClick={() => setShowPopover((v) => !v)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-primary rounded-xl text-sm font-bold hover:opacity-90 transition-all"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-primary rounded-xl text-xs font-bold hover:opacity-90 transition-all"
         >
-          <ArrowRightLeft className="w-3.5 h-3.5" />
+          <ArrowRightLeft className="w-3 h-3" />
           Move selected
         </button>
         {showPopover && (
@@ -253,25 +310,176 @@ function SelectionBar({
           />
         )}
       </div>
-
-      {/* Deselect all */}
       <button
         onClick={onClear}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-sm font-bold text-white/80 transition-all"
+        className="flex items-center gap-1 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-bold text-white/70 transition-all"
       >
-        <X className="w-3.5 h-3.5" />
-        Deselect all
+        <X className="w-3 h-3" />
+        Clear
       </button>
     </div>
   );
 }
 
-// ─── Activity List ──────────────────────────────────────────────────────────────
+// ─── App grouping ─────────────────────────────────────────────────────────────
+// Extract the leading app name from activity titles like "Chrome - Foo (2m)"
+// Known multi-window apps that produce many entries worth grouping.
+
+const APP_PREFIXES = [
+  "Chrome",
+  "Safari",
+  "Firefox",
+  "Edge",
+  "Sublime Text",
+  "VS Code",
+  "Xcode",
+  "Terminal",
+  "iTerm",
+  "Finder",
+  "Excel",
+  "Word",
+  "Outlook",
+  "Slack",
+  "Zoom",
+  "Timetrackeragent",
+];
+
+type AppGroup = {
+  app: string;           // e.g. "Chrome"
+  activities: string[];  // raw activity strings in this group
+  totalMinutes: number;
+};
+
+const extractApp = (title: string): string | null => {
+  for (const prefix of APP_PREFIXES) {
+    if (title.startsWith(prefix + " - ") || title.startsWith(prefix + " · ") || title === prefix) {
+      return prefix;
+    }
+  }
+  return null;
+};
+
+const extractMinutes = (title: string): number => {
+  const m = title.match(/\((\d+)m\)$/);
+  return m ? parseInt(m[1]) : 0;
+};
+
+const stripApp = (title: string, app: string): string => {
+  // Remove "AppName - " or "AppName · " prefix and trailing "(Nm)"
+  return title
+    .replace(new RegExp(`^${app}\\s*[-·]\\s*`), "")
+    .trim();
+};
+
+const groupActivities = (activities: string[]): AppGroup[] => {
+  const groups: Map<string, AppGroup> = new Map();
+  const ungrouped: string[] = [];
+
+  for (const raw of activities) {
+    const { title } = parse(raw);
+    const app = extractApp(title);
+    if (app) {
+      if (!groups.has(app)) groups.set(app, { app, activities: [], totalMinutes: 0 });
+      const g = groups.get(app)!;
+      g.activities.push(raw);
+      g.totalMinutes += extractMinutes(title);
+    } else {
+      ungrouped.push(raw);
+    }
+  }
+
+  // Only group apps that have 2+ entries — single entries stay ungrouped
+  const result: AppGroup[] = [];
+  for (const [app, group] of groups) {
+    if (group.activities.length >= 2) {
+      result.push(group);
+    } else {
+      ungrouped.push(...group.activities);
+    }
+  }
+
+  // Ungrouped items each become their own "group" of 1 (rendered flat)
+  for (const raw of ungrouped) {
+    const { title } = parse(raw);
+    result.push({ app: "", activities: [raw], totalMinutes: extractMinutes(title) });
+  }
+
+  // Sort: multi-activity groups first, then by time desc
+  return result.sort((a, b) => {
+    if (a.activities.length > 1 && b.activities.length === 1) return -1;
+    if (a.activities.length === 1 && b.activities.length > 1) return 1;
+    return b.totalMinutes - a.totalMinutes;
+  });
+};
+
+// ─── App Group Row ────────────────────────────────────────────────────────────
+
+function AppGroupHeader({
+  app, count, totalMinutes, expanded, onToggle,
+  allClients, allCategories, currentClientId, categoryName,
+  blockIds, onMoveAll,
+}: {
+  app: string; count: number; totalMinutes: number; expanded: boolean;
+  onToggle: () => void;
+  allClients: ClientOption[]; allCategories: string[];
+  currentClientId: number | null; categoryName: string;
+  blockIds: number[];
+  onMoveAll: (clientId: number | null, category: string) => void;
+}) {
+  const [showMove, setShowMove] = useState(false);
+
+  return (
+    <li style={{ listStyle: "none" }} className="relative">
+      <div className="flex items-center gap-1.5 px-2 py-1 group/appgrp">
+        <button
+          onClick={onToggle}
+          className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+        >
+          {expanded
+            ? <ChevronDown className="w-3 h-3 text-slate-400 flex-shrink-0" />
+            : <ChevronRight className="w-3 h-3 text-slate-400 flex-shrink-0" />}
+          <span className="text-xs font-bold text-slate-500 truncate">{app}</span>
+          <span className="text-[10px] text-slate-400 font-medium flex-shrink-0">
+            {count} {count === 1 ? "entry" : "entries"} · {totalMinutes}m
+          </span>
+        </button>
+        {/* Move all in group */}
+        {blockIds.length > 0 && (() => {
+          const btnRef = React.createRef<HTMLButtonElement>();
+          return (
+            <div className="relative flex-shrink-0">
+              <button
+                ref={btnRef}
+                onClick={(e) => { e.stopPropagation(); setShowMove((v) => !v); }}
+                className="opacity-0 group-hover/appgrp:opacity-100 px-2 py-0.5 text-[10px] font-semibold border border-slate-200 rounded-md hover:border-primary hover:text-primary text-slate-400 transition-all"
+              >
+                Move all
+              </button>
+              {showMove && (
+                <MovePopover
+                  anchorEl={btnRef.current}
+                  clients={allClients}
+                  categories={allCategories}
+                  currentClientId={currentClientId}
+                  currentCategory={categoryName}
+                  label={`Move all ${count} ${app} entries`}
+                  onApply={(clientId, category) => { setShowMove(false); onMoveAll(clientId, category); }}
+                  onClose={() => setShowMove(false)}
+                />
+              )}
+            </div>
+          );
+        })()}
+      </div>
+    </li>
+  );
+}
+
+// ─── Activity List ────────────────────────────────────────────────────────────
 
 function ActivityList({
   activities, client, categoryName, allClients, allCategories,
-  onMove, onCrossMove, draggingBlockId,
-  selectedIds, onToggleSelect,
+  onMove, onCrossMove, draggingBlockId, selectedIds, onToggleSelect,
 }: {
   activities: string[];
   client: ClientTime;
@@ -284,16 +492,17 @@ function ActivityList({
   selectedIds: Set<number>;
   onToggleSelect: (rowKey: string, idx: number, shift: boolean) => void;
 }) {
-  const PREVIEW = 3;
-  const [showAll, setShowAll] = useState(false);
   const [insertAfterIdx, setInsertAfterIdx] = useState<number | null>(null);
+  // Track which app groups are collapsed — default all expanded
+  const [collapsedApps, setCollapsedApps] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLUListElement>(null);
-  const hasMore = activities.length > PREVIEW;
-  const visible = showAll ? activities : activities.slice(0, PREVIEW);
+
+  // Filter zero-minute, then group by app
+  const nonZero = activities.filter((a) => !/ \(0m\)$/.test(parse(a).title));
+  const groups = groupActivities(nonZero);
 
   const handleRowDragOver = (e: React.DragEvent, idx: number) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setInsertAfterIdx(e.clientY < rect.top + rect.height / 2 ? idx - 1 : idx);
   };
@@ -303,9 +512,7 @@ function ActivityList({
   };
 
   const handleRowDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setInsertAfterIdx(null);
+    e.preventDefault(); e.stopPropagation(); setInsertAfterIdx(null);
     let raw = "";
     try { raw = e.dataTransfer.getData("application/x-block"); } catch {}
     if (!raw) return;
@@ -313,9 +520,8 @@ function ActivityList({
     try { parsed2 = JSON.parse(raw); } catch { return; }
     const { blockId, fromClient, fromCategory } = parsed2;
     if (!blockId) return;
-    if (fromClient !== client.client || fromCategory !== categoryName) {
+    if (fromClient !== client.client || fromCategory !== categoryName)
       await onCrossMove(blockId, client.client_id, categoryName);
-    }
   };
 
   const InsertionLine = () => (
@@ -324,61 +530,100 @@ function ActivityList({
     </li>
   );
 
+  // Flatten all activities for global idx tracking
+  let globalIdx = 0;
+
   return (
     <ul
       ref={listRef}
-      className="pb-3 px-4 space-y-0 ml-8"
+      className="pb-2 px-3 space-y-0 ml-6"
       onDragLeave={handleListDragLeave}
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleRowDrop}
     >
-      {visible.map((activity, idx) => {
-        const parsed = parse(activity);
-        const isBeingDragged = parsed.blockId === draggingBlockId;
-        const rowKey = `${parsed.blockId ?? "no-id"}-${idx}`;
-        const isSelected = selectedIds.has(rowKey);
+      {groups.map((group, groupIdx) => {
+        const isGrouped = group.app && group.activities.length >= 2;
+        const isCollapsed = isGrouped && collapsedApps.has(group.app);
+        const groupBlockIds = group.activities
+          .map((a) => parse(a).blockId)
+          .filter((id): id is number => id !== null);
+
         return (
-          <React.Fragment key={rowKey}>
-            {insertAfterIdx === idx - 1 && <InsertionLine />}
-            <ActivityRow
-              activity={activity}
-              client={client}
-              categoryName={categoryName}
-              allClients={allClients}
-              allCategories={allCategories}
-              onMove={onMove}
-              isBeingDragged={isBeingDragged}
-              isSelected={isSelected}
-              onDragOver={(e) => handleRowDragOver(e, idx)}
-              onToggleSelect={(_shift) => {
-                onToggleSelect(rowKey, idx, false);
-              }}
-            />
-            {insertAfterIdx === idx && idx === visible.length - 1 && <InsertionLine />}
+          <React.Fragment key={group.app || `ungrouped-${groupIdx}`}>
+            {/* App group header — only for multi-entry app groups */}
+            {isGrouped && (
+              <AppGroupHeader
+                app={group.app}
+                count={group.activities.length}
+                totalMinutes={group.totalMinutes}
+                expanded={!isCollapsed}
+                onToggle={() => setCollapsedApps((prev) => {
+                  const next = new Set(prev);
+                  next.has(group.app) ? next.delete(group.app) : next.add(group.app);
+                  return next;
+                })}
+                allClients={allClients}
+                allCategories={allCategories}
+                currentClientId={client.client_id}
+                categoryName={categoryName}
+                blockIds={groupBlockIds}
+                onMoveAll={async (clientId, category) => {
+                  for (const id of groupBlockIds) await onMove(id, clientId, category);
+                }}
+              />
+            )}
+
+            {/* Activity rows — hidden when group is collapsed */}
+            {!isCollapsed && group.activities.map((activity) => {
+              const parsed = parse(activity);
+              const isBeingDragged = parsed.blockId === draggingBlockId;
+              const idx = globalIdx++;
+              const rowKey = `${parsed.blockId ?? "no-id"}-${idx}`;
+              const isSelected = selectedIds.has(rowKey as any);
+
+              // Strip app prefix for display only — raw activity still used for blockId
+              const displayTitle = isGrouped
+                ? parse(activity).title.replace(
+                    new RegExp(`^${group.app}\\s*[-·]\\s*`), ""
+                  ).trim()
+                : undefined;
+
+              return (
+                <React.Fragment key={rowKey}>
+                  {insertAfterIdx === idx - 1 && <InsertionLine />}
+                  <ActivityRow
+                    activity={activity}
+                    displayTitle={displayTitle}
+                    client={client}
+                    categoryName={categoryName}
+                    allClients={allClients}
+                    allCategories={allCategories}
+                    onMove={onMove}
+                    isBeingDragged={isBeingDragged}
+                    isSelected={isSelected}
+                    onDragOver={(e) => handleRowDragOver(e, idx)}
+                    onToggleSelect={(_shift) => onToggleSelect(rowKey, idx, false)}
+                    indented={isGrouped}
+                  />
+                  {insertAfterIdx === idx && <InsertionLine />}
+                </React.Fragment>
+              );
+            })}
           </React.Fragment>
         );
       })}
-      {hasMore && (
-        <li style={{ listStyle: "none" }} className="pt-1 pb-1">
-          <button
-            onClick={() => setShowAll((v) => !v)}
-            className="text-xs font-bold text-primary hover:underline ml-2"
-          >
-            {showAll ? "▲ Show less" : `▶ Show all ${activities.length} activities`}
-          </button>
-        </li>
-      )}
     </ul>
   );
 }
 
-// ─── Activity Row ──────────────────────────────────────────────────────────────
+// ─── Activity Row ─────────────────────────────────────────────────────────────
 
 function ActivityRow({
-  activity, client, categoryName, allClients, allCategories,
-  onMove, isBeingDragged, isSelected, onDragOver, onToggleSelect,
+  activity, displayTitle, client, categoryName, allClients, allCategories,
+  onMove, isBeingDragged, isSelected, onDragOver, onToggleSelect, indented,
 }: {
-  activity: string;
+  activity: string;        // raw — used for blockId parsing and drag data
+  displayTitle?: string;   // optional override for the visible label
   client: ClientTime;
   categoryName: string;
   allClients: ClientOption[];
@@ -387,10 +632,12 @@ function ActivityRow({
   isBeingDragged: boolean;
   isSelected: boolean;
   onDragOver: (e: React.DragEvent) => void;
-  onToggleSelect: (shift: boolean) => void; // fires with rowKey internally
+  onToggleSelect: (shift: boolean) => void;
+  indented?: boolean;
 }) {
   const [showPopover, setShowPopover] = useState(false);
   const [checkboxActive, setCheckboxActive] = useState(false);
+  const liRef = useRef<HTMLLIElement>(null);
   const parsed = parse(activity);
 
   const handleDragStart = (e: React.DragEvent) => {
@@ -404,12 +651,10 @@ function ActivityRow({
     Object.assign(ghost.style, {
       position: "fixed", top: "-999px", left: "-999px",
       background: "#2B9D90", color: "white",
-      padding: "6px 14px", borderRadius: "99px",
-      fontSize: "13px", fontWeight: "600",
-      whiteSpace: "nowrap", maxWidth: "360px",
-      overflow: "hidden", textOverflow: "ellipsis",
-      boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-      pointerEvents: "none",
+      padding: "5px 12px", borderRadius: "99px",
+      fontSize: "12px", fontWeight: "600", whiteSpace: "nowrap",
+      maxWidth: "320px", overflow: "hidden", textOverflow: "ellipsis",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.2)", pointerEvents: "none",
     });
     ghost.textContent = `↗ ${parsed.title}`;
     document.body.appendChild(ghost);
@@ -419,82 +664,94 @@ function ActivityRow({
 
   const handleApply = async (clientId: number | null, category: string) => {
     setShowPopover(false);
+    console.log("[ActivityRow] handleApply — parsed.blockId:", parsed.blockId, "| raw activity:", activity, "| target:", clientId, category);
     if (parsed.blockId) await onMove(parsed.blockId, clientId, category);
+    else console.warn("[ActivityRow] No blockId found — activity missing [id:N] tag:", activity);
   };
 
   const handleCheckboxClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
+    e.stopPropagation(); e.preventDefault();
     e.nativeEvent.stopImmediatePropagation();
     onToggleSelect(false);
   };
 
   return (
     <li
+      ref={liRef}
       draggable={!!parsed.blockId && !isSelected}
       onDragStart={handleDragStart}
       onDragOver={onDragOver}
       onClick={parsed.blockId ? (e) => {
-        // Single click on row toggles selection
-        // but not if clicking the Move button, popover, or grip handle
         const target = e.target as HTMLElement;
-        if (target.closest("button") || target.closest("[data-popover]")) return;
-        setCheckboxActive(true);
-        handleCheckboxClick(e as any);
-        setTimeout(() => setCheckboxActive(false), 300);
+        // Never toggle from inside a popover or button
+        if (target.closest("[data-popover]") || target.closest("button") || target.closest("select") || target.closest("label")) return;
+        // If already selected, clicking toggles selection
+        if (isSelected) {
+          setCheckboxActive(true);
+          handleCheckboxClick(e as any);
+          setTimeout(() => setCheckboxActive(false), 300);
+          return;
+        }
+        // Open the move popover
+        e.stopPropagation();
+        setShowPopover((v) => !v);
       } : undefined}
       className={cn(
-        "flex items-center gap-2 group/item rounded-lg px-2 py-2 transition-all relative select-none",
-        parsed.blockId && !isSelected && "cursor-grab active:cursor-grabbing hover:bg-slate-50",
+        "flex items-center gap-1.5 group/item rounded-lg px-2 py-1.5 transition-all relative select-none",
+        indented && "pl-5",
+        parsed.blockId && !isSelected && "cursor-pointer hover:bg-slate-50",
         parsed.blockId && isSelected && "cursor-pointer",
-        isBeingDragged && "opacity-30 bg-slate-100",
-        isSelected && !isBeingDragged && "bg-primary/8 ring-1 ring-primary/30",
+        isBeingDragged && "opacity-30",
+        isSelected && !isBeingDragged && "bg-primary/8 ring-1 ring-primary/25",
       )}
       style={{ listStyle: "none" }}
     >
-      {/* Checkbox — larger hit area, always visible on hover */}
+      {/* Checkbox — visible on hover or when selected */}
       {parsed.blockId ? (
         <div
           className={cn(
-            "flex-shrink-0 w-5 h-5 flex items-center justify-center transition-all",
-            isSelected ? "opacity-100" : "opacity-0 group-hover/item:opacity-100"
+            "flex-shrink-0 w-4 h-4 flex items-center justify-center transition-opacity",
+            isSelected ? "opacity-100" : "opacity-0 group-hover/item:opacity-40"
           )}
+          onClick={(e) => {
+            e.stopPropagation();
+            setCheckboxActive(true);
+            handleCheckboxClick(e as any);
+            setTimeout(() => setCheckboxActive(false), 300);
+          }}
         >
           {isSelected
-            ? <CheckSquare className="w-4 h-4 text-primary" />
-            : <Square className="w-4 h-4 text-slate-400" />}
+            ? <CheckSquare className="w-3.5 h-3.5 text-primary" />
+            : <Square className="w-3.5 h-3.5 text-slate-400" />}
         </div>
-      ) : (
-        <span className="w-5 flex-shrink-0" />
-      )}
+      ) : <span className="w-4 flex-shrink-0" />}
 
-      {/* Drag handle — subtle hint that row is draggable */}
+      {/* Drag grip */}
       {parsed.blockId && !isSelected ? (
-        <GripVertical className="w-3.5 h-3.5 text-slate-200 group-hover/item:text-slate-400 flex-shrink-0 transition-colors" />
-      ) : (
-        <span className="w-3.5 flex-shrink-0" />
-      )}
+        <GripVertical className="w-3 h-3 text-slate-200 group-hover/item:text-slate-400 flex-shrink-0 transition-colors" />
+      ) : <span className="w-3 flex-shrink-0" />}
 
-      <ArrowRight className="w-3 h-3 text-slate-300 flex-shrink-0" />
+      <span className="w-2 h-px bg-slate-200 flex-shrink-0" />
 
-      <span className={cn(
-        "text-sm font-medium flex-1 truncate",
-        isSelected ? "text-primary font-semibold" : "text-slate-600"
-      )}>
-        {parsed.title}
+      <span
+        title={displayTitle ?? parsed.title}
+        className={cn(
+          "text-sm flex-1 truncate",
+          isSelected ? "text-primary font-semibold" : "text-slate-600 font-medium"
+        )}
+      >
+        {displayTitle ?? parsed.title}
       </span>
 
-      {/* Hover actions — only when not in selection mode */}
+      {/* Move affordance — always visible, becomes prominent on hover */}
       {parsed.blockId && !isSelected && (
-        <div className="flex items-center gap-1 opacity-0 group-hover/item:opacity-100 transition-opacity flex-shrink-0 relative">
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowPopover((v) => !v); }}
-            className="px-2 py-1 text-xs font-bold border-2 border-slate-200 rounded-lg hover:border-primary hover:text-primary text-slate-500 transition-all"
-          >
-            Move
-          </button>
+        <div className="flex items-center gap-1 flex-shrink-0 relative">
+          <span className="text-[11px] font-medium text-slate-300 group-hover/item:text-primary transition-colors">
+            click to move
+          </span>
           {showPopover && (
             <MovePopover
+              anchorEl={liRef.current}
               clients={allClients}
               categories={allCategories}
               currentClientId={client.client_id}
@@ -510,13 +767,12 @@ function ActivityRow({
   );
 }
 
-// ─── Category Section ──────────────────────────────────────────────────────────
+// ─── Category Section ─────────────────────────────────────────────────────────
 
 function CategorySection({
   cat, client, allClients, allCategories,
   onMoveActivity, onMoveAll,
-  draggingBlockId,
-  onCatDragOver, onCatDragLeave, onCatDrop, isCatDropTarget,
+  draggingBlockId, onCatDragOver, onCatDragLeave, onCatDrop, isCatDropTarget,
   selectedIds, onToggleSelect,
 }: {
   cat: Category; client: ClientTime;
@@ -539,78 +795,111 @@ function CategorySection({
     .map((a) => parse(a).blockId)
     .filter((id): id is number => id !== null);
 
-  // How many in this category are selected
   const selectedInCat = allBlockIds.filter((id) =>
-    Array.from(selectedIds).some(k => k.startsWith(`${id}-`))
+    Array.from(selectedIds).some((k: any) => k.startsWith(`${id}-`))
   ).length;
 
   return (
     <div
       className={cn(
-        "border-t border-slate-100 transition-all",
-        isCatDropTarget && "bg-amber-50 border-t-2 border-t-amber-400"
+        "border-t border-slate-100 transition-colors",
+        isCatDropTarget && "bg-amber-50"
       )}
       onDragOver={onCatDragOver}
       onDragLeave={onCatDragLeave}
       onDrop={onCatDrop}
     >
-      <div className={cn("px-4 py-3 flex items-center gap-3 group/cat relative", nonBillable && "opacity-60")}>
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="p-1 hover:bg-slate-100 rounded-lg transition-colors flex-shrink-0"
-        >
-          {expanded
-            ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-            : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-        </button>
+      <div className={cn(
+        "flex items-center gap-2 group/cat relative",
+        nonBillable && "opacity-55"
+      )}>
+        {/* Left indent accent line */}
+        <div className={cn(
+          "w-0.5 self-stretch flex-shrink-0 ml-4 rounded-full",
+          nonBillable ? "bg-slate-200" : "bg-slate-300"
+        )} />
 
-        <span className={cn("font-bold text-sm flex-1", nonBillable ? "text-slate-500" : "text-slate-800")}>
-          {cat.name}
-        </span>
+        <div className="flex-1 flex items-center gap-2 px-2 py-2.5 min-w-0">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="p-0.5 hover:bg-slate-100 rounded-md transition-colors flex-shrink-0"
+          >
+            {expanded
+              ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+              : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
+          </button>
 
-        {selectedInCat > 0 && (
-          <span className="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full flex-shrink-0">
-            {selectedInCat} selected
+          <span className={cn(
+            "font-bold text-sm flex-1 truncate",
+            nonBillable ? "text-slate-400" : "text-slate-800"
+          )}>
+            {cat.name}
           </span>
-        )}
 
-        {cat.needs_review && (
-          <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-100 border border-amber-300 rounded-full text-xs font-bold text-amber-700 flex-shrink-0">
-            <AlertTriangle className="w-3 h-3" />Review
-          </span>
-        )}
+          {selectedInCat > 0 && (
+            <span className="text-[11px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full flex-shrink-0">
+              {selectedInCat} selected
+            </span>
+          )}
 
-        {isCatDropTarget && (
-          <span className="text-xs font-bold text-amber-700 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full flex-shrink-0 animate-pulse">
-            Drop to move here
-          </span>
-        )}
+          {cat.needs_review && (
+            <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-full text-[11px] font-semibold text-amber-600 flex-shrink-0">
+              <AlertTriangle className="w-2.5 h-2.5" />
+              Review
+            </span>
+          )}
 
-        <span className={cn("font-extrabold text-base flex-shrink-0", nonBillable ? "text-slate-400" : "text-emerald-600")}>
-          {fmt(cat.hours)}
-        </span>
+          {isCatDropTarget && (
+            <span className="text-[11px] font-bold text-amber-700 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full flex-shrink-0 animate-pulse">
+              Drop here
+            </span>
+          )}
 
-        {allBlockIds.length > 0 && (
-          <div className="relative flex-shrink-0">
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowMoveAll((v) => !v); }}
-              className="opacity-0 group-hover/cat:opacity-100 px-2 py-1 text-xs font-bold border-2 border-slate-200 rounded-lg hover:border-primary hover:text-primary text-slate-500 transition-all"
-            >
-              Move all
-            </button>
-            {showMoveAll && (
-              <MovePopover
-                clients={allClients}
-                categories={allCategories}
-                currentClientId={client.client_id}
-                currentCategory={cat.name}
-                label={`Move all ${allBlockIds.length} activities`}
-                onApply={(clientId, category) => { setShowMoveAll(false); onMoveAll(allBlockIds, clientId, category); }}
-                onClose={() => setShowMoveAll(false)}
-              />
+          {/* Hours pill — shows time + block count */}
+          <span className={cn(
+            "flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold tabular-nums",
+            nonBillable
+              ? "bg-slate-100 text-slate-400"
+              : "bg-emerald-50 text-emerald-700"
+          )}>
+            {fmt(cat.hours)}
+            {cat.block_count > 0 && (
+              <span className={cn(
+                "text-[10px] font-semibold",
+                nonBillable ? "text-slate-300" : "text-emerald-400"
+              )}>
+                · {cat.block_count}
+              </span>
             )}
-          </div>
-        )}
+          </span>
+
+          {allBlockIds.length > 0 && (() => {
+            const btnRef = React.createRef<HTMLButtonElement>();
+            return (
+              <div className="relative flex-shrink-0">
+                <button
+                  ref={btnRef}
+                  onClick={(e) => { e.stopPropagation(); setShowMoveAll((v) => !v); }}
+                  className="opacity-0 group-hover/cat:opacity-100 px-2 py-0.5 text-[11px] font-semibold border border-slate-200 rounded-md hover:border-primary hover:text-primary text-slate-400 transition-all"
+                >
+                  Move all
+                </button>
+                {showMoveAll && (
+                  <MovePopover
+                    anchorEl={btnRef.current}
+                    clients={allClients}
+                    categories={allCategories}
+                    currentClientId={client.client_id}
+                    currentCategory={cat.name}
+                    label={`Move all ${allBlockIds.length} activities`}
+                    onApply={(clientId, category) => { setShowMoveAll(false); onMoveAll(allBlockIds, clientId, category); }}
+                    onClose={() => setShowMoveAll(false)}
+                  />
+                )}
+              </div>
+            );
+          })()}
+        </div>
       </div>
 
       {expanded && cat.sample_activities.length > 0 && (
@@ -631,15 +920,15 @@ function CategorySection({
   );
 }
 
-// ─── Flagged Banner ─────────────────────────────────────────────────────────────
+// ─── Flagged Banner ───────────────────────────────────────────────────────────
 
 function FlaggedBanner({ flagged, onDismiss }: { flagged: FlaggedBlock[]; onDismiss: (id: number) => void }) {
   if (!flagged.length) return null;
   return (
-    <div className="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 overflow-hidden">
-      <div className="px-4 py-2 bg-amber-100 border-b border-amber-200 flex items-center gap-2">
-        <Smartphone className="w-4 h-4 text-amber-600" />
-        <span className="text-amber-800 font-bold text-sm">
+    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 overflow-hidden">
+      <div className="px-4 py-2 bg-amber-100/70 border-b border-amber-200 flex items-center gap-2">
+        <Smartphone className="w-3.5 h-3.5 text-amber-600" />
+        <span className="text-amber-800 font-semibold text-sm">
           {flagged.length} mobile {flagged.length === 1 ? "entry needs" : "entries need"} review
         </span>
       </div>
@@ -647,15 +936,15 @@ function FlaggedBanner({ flagged, onDismiss }: { flagged: FlaggedBlock[]; onDism
         {flagged.map((f) => (
           <div key={f.block_id} className="px-4 py-3 flex items-start justify-between gap-4">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
               <div>
                 <p className="text-sm font-semibold text-amber-900">{f.client_name} — {fmt(f.minutes / 60)}</p>
-                <p className="text-xs text-amber-700 mt-0.5">{f.review_reason}</p>
+                <p className="text-xs text-amber-600 mt-0.5">{f.review_reason}</p>
               </div>
             </div>
             <button
               onClick={() => onDismiss(f.block_id)}
-              className="shrink-0 px-3 py-1.5 text-xs font-bold bg-amber-200 hover:bg-amber-300 text-amber-900 rounded-lg transition-all"
+              className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-amber-200 hover:bg-amber-300 text-amber-900 rounded-lg transition-all"
             >
               Looks correct
             </button>
@@ -666,7 +955,52 @@ function FlaggedBanner({ flagged, onDismiss }: { flagged: FlaggedBlock[]; onDism
   );
 }
 
-// ─── Main ───────────────────────────────────────────────────────────────────────
+// ─── Onboarding Hint ─────────────────────────────────────────────────────────
+// Shown once until dismissed. Uses localStorage so it survives page refresh.
+
+const HINT_KEY = "tt_category_hint_dismissed";
+
+function OnboardingHint() {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(HINT_KEY)) setVisible(true);
+    } catch {}
+  }, []);
+
+  const dismiss = () => {
+    try { localStorage.setItem(HINT_KEY, "1"); } catch {}
+    setVisible(false);
+  };
+
+  if (!visible) return null;
+
+  return (
+    <div className="mb-4 flex items-start gap-3 px-4 py-3 bg-primary/5 border border-primary/20 rounded-xl">
+      <div className="p-1.5 bg-primary/10 rounded-lg flex-shrink-0 mt-0.5">
+        <MousePointerClick className="w-3.5 h-3.5 text-primary" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-slate-700 mb-0.5">How to use this view</p>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          <span className="font-semibold text-slate-600">Click any activity</span> to instantly move it to a different client or category.{" "}
+          <span className="font-semibold text-slate-600">Drag rows</span> to reorder.{" "}
+          <span className="font-semibold text-slate-600">Check multiple rows</span> then use the floating bar to bulk-move.
+        </p>
+      </div>
+      <button
+        onClick={dismiss}
+        className="text-slate-300 hover:text-slate-500 transition-colors flex-shrink-0 mt-0.5"
+        title="Got it"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function CategorySummary({
   timeSummary, availableClients, availableCategories,
@@ -685,10 +1019,7 @@ export default function CategorySummary({
   const [catDropTarget, setCatDropTarget] = useState<string | null>(null);
   const [clientDropTarget, setClientDropTarget] = useState<string | null>(null);
   const [draggingBlockId, setDraggingBlockId] = useState<number | null>(null);
-
-  // ── Multi-select state ────────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const lastSelectedIdx = null; // kept for prop compat
 
   const pendingToggleRef = useRef<Set<string>>(new Set());
   const handleToggleSelect = useCallback((rowKey: string, _idx: number, _shift: boolean) => {
@@ -702,13 +1033,14 @@ export default function CategorySummary({
     });
   }, []);
 
-  const clearSelection = useCallback(() => {
-    setSelectedIds(new Set());
-  }, []);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
-  // ── Global drag tracking ──────────────────────────────────────────────────
   useEffect(() => {
-    const onEnd = () => setDraggingBlockId(null);
+    const onEnd = () => {
+      setDraggingBlockId(null);
+      setCatDropTarget(null);
+      setClientDropTarget(null);
+    };
     document.addEventListener("dragend", onEnd);
     return () => document.removeEventListener("dragend", onEnd);
   }, []);
@@ -718,9 +1050,9 @@ export default function CategorySummary({
       const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s;
     });
 
-  // ── API ───────────────────────────────────────────────────────────────────
-
   const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string): Promise<boolean> => {
+    console.log(`🔴 moveActivity called — blockId: ${blockId}, clientId: ${clientId}, category: "${category}"`);
+    console.trace("moveActivity call stack");
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
@@ -729,30 +1061,27 @@ export default function CategorySummary({
       });
       return true;
     } catch (e: any) {
-      // 404 = block was deleted or doesn't exist — skip silently
-      if (e?.status === 404 || e?.message?.includes("404") || e?.message?.includes("Not found")) {
-        return false;
-      }
+      if (e?.status === 404 || e?.message?.includes("404") || e?.message?.includes("Not found")) return false;
       throw e;
     }
   }, []);
 
   const moveMany = useCallback(async (blockIds: number[] | string[], clientId: number | null, category: string) => {
-    // Support both raw blockIds and rowKeys
-    const resolvedIds = (blockIds as any[]).map((id: any) => {
-      if (typeof id === "string") return parseInt(id.split("-")[0]);
-      return id as number;
-    }).filter((n: number) => !isNaN(n) && n > 0);
-    blockIds = [...new Set(resolvedIds)];
-    if (!blockIds.length) return;
+    const resolvedIds = (blockIds as any[])
+      .map((id: any) => {
+        const n = typeof id === "string" ? parseInt(id.split("-")[0]) : id as number;
+        return n;
+      })
+      .filter((n: number) => !isNaN(n) && n > 0); // strict — no-id rows produce NaN or 0, filtered here
+    const uniqueIds = [...new Set(resolvedIds)];
+    if (!uniqueIds.length) {
+      showToast("No moveable entries selected", "error");
+      return;
+    }
     try {
-      const results = await Promise.all(blockIds.map((id) => moveActivity(id, clientId, category)));
+      const results = await Promise.all(uniqueIds.map((id) => moveActivity(id, clientId, category)));
       const moved = results.filter(Boolean).length;
-      if (moved > 0) {
-        showToast(`Moved ${moved} activit${moved !== 1 ? "ies" : "y"}`, "success");
-      } else {
-        showToast("Nothing to move — blocks may have been removed", "error");
-      }
+      showToast(moved > 0 ? `Moved ${moved} activit${moved !== 1 ? "ies" : "y"}` : "Nothing to move", moved > 0 ? "success" : "error");
       clearSelection();
       onRefresh();
     } catch (e: any) {
@@ -770,20 +1099,20 @@ export default function CategorySummary({
     }
   }, [moveActivity, onRefresh, showToast]);
 
-
-
-  // ── Category / client drop ────────────────────────────────────────────────
-
   const makeCatDragOver = (catKey: string) => (e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation(); setCatDropTarget(catKey);
   };
 
   const makeCatDrop = (clientId: number | null, catName: string) => async (e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation(); setCatDropTarget(null);
+    e.preventDefault(); e.stopPropagation();
+    // Always clear drop target state — even if we bail early
+    setCatDropTarget(null);
+    setClientDropTarget(null);
     const raw = e.dataTransfer.getData("application/x-block");
     if (!raw) return;
     const { blockId, fromClient, fromCategory } = JSON.parse(raw);
     const targetClientName = timeSummary.find((c) => c.client_id === clientId)?.client ?? "";
+    // Same client + same category = no-op
     if (fromClient === targetClientName && fromCategory === catName) return;
     setDraggingBlockId(blockId);
     await moveSingle(blockId, clientId, catName);
@@ -791,7 +1120,10 @@ export default function CategorySummary({
   };
 
   const makeClientDrop = (targetClient: ClientTime) => async (e: React.DragEvent) => {
-    e.preventDefault(); setClientDropTarget(null);
+    e.preventDefault();
+    // Always clear drop target state
+    setCatDropTarget(null);
+    setClientDropTarget(null);
     const raw = e.dataTransfer.getData("application/x-block");
     if (!raw) return;
     const { blockId, fromClient, fromCategory } = JSON.parse(raw);
@@ -801,29 +1133,31 @@ export default function CategorySummary({
     setDraggingBlockId(null);
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   const getBillable = (c: ClientTime) =>
     c.categories.filter((cat) => !isNonBillable(cat.name)).reduce((s, cat) => s + cat.hours, 0);
+
+  const getNonBillable = (c: ClientTime) =>
+    c.categories.filter((cat) => isNonBillable(cat.name)).reduce((s, cat) => s + cat.hours, 0);
 
   return (
     <div>
       <FlaggedBanner flagged={flaggedBlocks} onDismiss={onDismissReview} />
 
+      {/* ── Onboarding hint — shown until dismissed, stored in localStorage ── */}
+      <OnboardingHint />
+
       {timeSummary.length > 1 && (
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-xs text-slate-400 font-medium">
-            Click checkboxes to select · use floating bar to move or delete
+          <p className="text-xs text-slate-400">
+            Click any activity to move it · drag to reorder · select multiple with checkboxes
           </p>
           <button
             onClick={() => {
-              if (collapsedClients.size === 0) {
+              if (collapsedClients.size === 0)
                 setCollapsedClients(new Set(timeSummary.map((c) => `${c.client_id}-${c.client}`)));
-              } else {
-                setCollapsedClients(new Set());
-              }
+              else setCollapsedClients(new Set());
             }}
-            className="text-sm text-slate-500 hover:text-slate-900 font-semibold px-3 py-1.5 rounded-lg hover:bg-slate-100 transition-all"
+            className="text-xs text-slate-500 hover:text-slate-800 font-semibold px-2.5 py-1 rounded-lg hover:bg-slate-100 transition-all"
           >
             {collapsedClients.size === 0 ? "Collapse all" : "Expand all"}
           </button>
@@ -837,10 +1171,10 @@ export default function CategorySummary({
       )}
 
       {!busy && timeSummary.length === 0 && (
-        <div className="text-center py-16 bg-white rounded-2xl border-2 border-slate-200">
-          <FileQuestion className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <h3 className="text-lg font-bold text-slate-800 mb-1">No time tracked yet</h3>
-          <p className="text-slate-500 font-medium">Activity appears automatically as you work, or add time manually.</p>
+        <div className="text-center py-16 bg-white rounded-2xl border border-slate-200">
+          <FileQuestion className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+          <h3 className="text-base font-bold text-slate-700 mb-1">No time tracked yet</h3>
+          <p className="text-sm text-slate-400">Activity appears automatically as you work, or add time manually.</p>
         </div>
       )}
 
@@ -851,53 +1185,117 @@ export default function CategorySummary({
           const unassigned = client.client.toLowerCase() === "unassigned";
           const isClientDrop = clientDropTarget === clientKey;
 
-          const colors = unassigned
-            ? { bg: "bg-slate-50", border: "border-slate-200", accent: "bg-slate-100", text: "text-slate-400", hours: "text-slate-400" }
-            : getClientColor(clientIndex);
+          const accent = unassigned
+            ? { border: "border-l-slate-300", header: "bg-slate-50", hours: "text-slate-400" }
+            : CLIENT_ACCENTS[clientIndex % CLIENT_ACCENTS.length];
+
+          // Filter out zero-time categories for display
+          const visibleCategories = client.categories.filter((cat) => cat.hours > 0 || cat.sample_activities.length > 0);
+          const hiddenZeroCount = client.categories.length - visibleCategories.length;
+
+          // Total activity count across all visible categories (for collapsed view)
+          const totalActivityCount = visibleCategories.reduce((sum, cat) => sum + cat.block_count, 0);
 
           return (
             <div
               key={clientKey}
               className={cn(
-                "rounded-2xl border-2 shadow-sm transition-all duration-200",
-                colors.bg, colors.border,
+                "rounded-xl border border-slate-200 border-l-[5px] bg-white shadow-sm overflow-hidden transition-all",
+                accent.border,
                 unassigned && "opacity-70",
-                isClientDrop && "ring-2 ring-primary ring-offset-1"
+                isClientDrop && "ring-2 ring-primary/30 ring-offset-1"
               )}
               onDragOver={(e) => { e.preventDefault(); setClientDropTarget(clientKey); }}
               onDragLeave={() => setClientDropTarget(null)}
               onDrop={makeClientDrop(client)}
             >
+              {/* Client header */}
               <button
                 onClick={() => toggleClient(clientKey)}
-                className={cn("w-full px-4 py-3 flex items-center justify-between rounded-t-2xl", colors.accent)}
+                className={cn(
+                  "w-full px-4 py-3 flex items-center justify-between text-left transition-colors",
+                  accent.header,
+                  "hover:brightness-95"
+                )}
               >
-                <div className="flex items-center gap-3">
-                  <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center", unassigned ? "bg-slate-200" : "bg-white/70")}>
-                    {isCollapsed
-                      ? <ChevronRight className={cn("w-4 h-4", colors.text)} />
-                      : <ChevronDown className={cn("w-4 h-4", colors.text)} />}
-                  </div>
-                  <span className={cn("font-extrabold text-lg tracking-tight", unassigned ? "text-slate-500" : "text-slate-900")}>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {isCollapsed
+                    ? <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                    : <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />}
+                  <span className={cn(
+                    "font-bold text-base truncate",
+                    unassigned ? "text-slate-500" : "text-slate-900"
+                  )}>
                     {client.client}
                   </span>
-                  <span className="text-sm text-slate-500 font-semibold">
-                    {client.categories.length} {client.categories.length === 1 ? "category" : "categories"}
-                  </span>
+
+                  {/* Category + activity count — more informative when collapsed */}
+                  {isCollapsed ? (
+                    <span className="text-xs text-slate-400 font-medium flex-shrink-0">
+                      {visibleCategories.length} {visibleCategories.length === 1 ? "category" : "categories"}
+                      {totalActivityCount > 0 && (
+                        <span className="ml-1 text-slate-300">· {totalActivityCount} {totalActivityCount === 1 ? "entry" : "entries"}</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-400 font-medium flex-shrink-0">
+                      {visibleCategories.length} {visibleCategories.length === 1 ? "category" : "categories"}
+                    </span>
+                  )}
+
                   {isClientDrop && (
-                    <span className="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full animate-pulse">
-                      Drop to reassign client
+                    <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded-full flex-shrink-0 animate-pulse">
+                      Drop to reassign
                     </span>
                   )}
                 </div>
-                <span className={cn("text-2xl font-extrabold", colors.hours)}>
-                  {fmt(unassigned ? client.total_hours : getBillable(client))}
-                </span>
+                <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+                  {!unassigned && (() => {
+                    const billable = getBillable(client);
+                    const nonBillable = getNonBillable(client);
+                    return (
+                      <>
+                        <div className="flex flex-col items-end">
+                          <span className={cn("text-lg font-extrabold tabular-nums leading-none", accent.hours)}>
+                            {fmt(billable)}
+                          </span>
+                          <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
+                            billable
+                          </span>
+                        </div>
+                        {nonBillable > 0 && (
+                          <>
+                            <div className="w-px h-6 bg-black/10 flex-shrink-0" />
+                            <div className="flex flex-col items-end">
+                              <span className="text-lg font-extrabold tabular-nums leading-none text-slate-400">
+                                {fmt(nonBillable)}
+                              </span>
+                              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
+                                non-bill
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
+                  {unassigned && (
+                    <div className="flex flex-col items-end">
+                      <span className="text-lg font-extrabold tabular-nums leading-none text-slate-400">
+                        {fmt(client.total_hours)}
+                      </span>
+                      <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
+                        total
+                      </span>
+                    </div>
+                  )}
+                </div>
               </button>
 
+              {/* Categories — zero-time ones filtered out */}
               {!isCollapsed && (
-                <div className="bg-white rounded-b-2xl">
-                  {client.categories.map((cat) => {
+                <div>
+                  {visibleCategories.map((cat) => {
                     const catKey = `${client.client_id}-${cat.name}`;
                     return (
                       <CategorySection
@@ -918,6 +1316,14 @@ export default function CategorySummary({
                       />
                     );
                   })}
+                  {/* Subtle note if we hid zero-time categories */}
+                  {hiddenZeroCount > 0 && (
+                    <div className="px-5 py-2 border-t border-slate-100">
+                      <span className="text-[11px] text-slate-300 font-medium">
+                        {hiddenZeroCount} empty {hiddenZeroCount === 1 ? "category" : "categories"} hidden
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -925,7 +1331,43 @@ export default function CategorySummary({
         })}
       </div>
 
-      {/* Floating selection action bar */}
+      {/* ── Total summary line ───────────────────────────────────────────── */}
+      {timeSummary.length > 0 && !busy && (() => {
+        const totalBillable = timeSummary.reduce((s, c) => s + getBillable(c), 0);
+        const totalNonBillable = timeSummary.reduce((s, c) => s + getNonBillable(c), 0);
+        const totalAll = totalBillable + totalNonBillable;
+        const clientCount = timeSummary.filter(c => c.client.toLowerCase() !== "unassigned").length;
+        const activityCount = timeSummary.reduce((s, c) =>
+          s + c.categories.reduce((cs, cat) => cs + cat.block_count, 0), 0);
+        return (
+          <div className="mt-4 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+            <span className="text-xs text-slate-400 font-medium">
+              {activityCount} {activityCount === 1 ? "entry" : "entries"} across {clientCount} {clientCount === 1 ? "client" : "clients"}
+            </span>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-extrabold text-primary tabular-nums">{fmt(totalBillable)}</span>
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">billable</span>
+              </div>
+              {totalNonBillable > 0 && (
+                <>
+                  <div className="w-px h-4 bg-slate-200" />
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm font-extrabold text-slate-400 tabular-nums">{fmt(totalNonBillable)}</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">non-bill</span>
+                  </div>
+                </>
+              )}
+              <div className="w-px h-4 bg-slate-200" />
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-extrabold text-slate-700 tabular-nums">{fmt(totalAll)}</span>
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">total</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <SelectionBar
         count={selectedIds.size}
         clients={availableClients}

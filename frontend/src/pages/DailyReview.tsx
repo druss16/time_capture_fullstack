@@ -1,8 +1,8 @@
 /**
- * DailyReview.tsx
+ * DailyReview.tsx — modernized toolbar & layout
  */
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   RefreshCw,
   Edit3,
@@ -10,6 +10,10 @@ import {
   Check,
   X,
   AlertTriangle,
+  Plus,
+  Clock,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { todayIso } from "@/lib/utils/date";
 import { primeCsrf } from "@/lib/csrf";
@@ -64,6 +68,8 @@ type TodayTimeResponse = {
   flagged_blocks: FlaggedBlock[];
 };
 
+// ─── Toast ───────────────────────────────────────────────────────────────────
+
 const Toast = ({
   message,
   type,
@@ -73,23 +79,39 @@ const Toast = ({
 }) => (
   <div
     className={cn(
-      "fixed top-20 right-4 z-50 px-4 py-3 rounded-xl shadow-xl",
-      "flex items-center gap-2 text-white text-sm font-semibold animate-in slide-in-from-top-2",
-      type === "success"
-        ? "bg-success shadow-success/30"
-        : "bg-destructive shadow-destructive/30"
+      "fixed top-[72px] right-4 z-50 px-4 py-2.5 rounded-lg shadow-lg",
+      "flex items-center gap-2 text-white text-sm font-medium",
+      "animate-in slide-in-from-top-1 duration-200",
+      type === "success" ? "bg-emerald-500" : "bg-red-500"
     )}
   >
-    {type === "success" ? (
-      <Check className="w-4 h-4" />
-    ) : (
-      <X className="w-4 h-4" />
-    )}
+    {type === "success" ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
     {message}
   </div>
 );
 
-/** Remove all sample_activities referencing a given blockId from timeSummary */
+// ─── Stat Cell ────────────────────────────────────────────────────────────────
+
+const StatCell = ({
+  value,
+  label,
+  valueClass = "text-slate-800",
+}: {
+  value: string;
+  label: string;
+  valueClass?: string;
+}) => (
+  <div className="flex flex-col items-end">
+    <span className={cn("text-lg font-bold leading-none tabular-nums", valueClass)}>
+      {value}
+    </span>
+    <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
+      {label}
+    </span>
+  </div>
+);
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function DailyReview() {
   const me = useWhoAmI();
@@ -128,9 +150,7 @@ export default function DailyReview() {
 
   useEffect(() => {
     (async () => {
-      try {
-        await primeCsrf(API_BASE);
-      } catch {}
+      try { await primeCsrf(API_BASE); } catch {}
     })();
   }, []);
 
@@ -147,10 +167,7 @@ export default function DailyReview() {
     ]) {
       try {
         const data = await safeFetchJson<ClientOption[]>(url);
-        if (data?.length) {
-          setAvailableClients(data);
-          return;
-        }
+        if (data?.length) { setAvailableClients(data); return; }
       } catch {}
     }
   }, []);
@@ -183,15 +200,9 @@ export default function DailyReview() {
     }
   }, [date]);
 
-  /**
-   * Optimistically remove a deleted block from the local summary immediately,
-   * then do a background refresh to sync with server.
-   */
   const handleDismissReview = async (blockId: number) => {
     try {
-      await safeFetchJson(`${API_BASE}/blocks/${blockId}/dismiss-review/`, {
-        method: "POST",
-      });
+      await safeFetchJson(`${API_BASE}/blocks/${blockId}/dismiss-review/`, { method: "POST" });
       setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
       showToast("Entry confirmed", "success");
     } catch {
@@ -214,10 +225,7 @@ export default function DailyReview() {
       const response = await safeFetchJson<any[]>(`${API_BASE}/blocks/suggestions/`);
       if (Array.isArray(response)) {
         const autoSaved = response.filter((r) => r.ai_suggestion?.auto_saved).length;
-        if (autoSaved > 0) {
-          loadTimeSummary();
-          loadUncategorizedCount();
-        }
+        if (autoSaved > 0) { loadTimeSummary(); loadUncategorizedCount(); }
       }
     } catch {}
   }, [loadTimeSummary, loadUncategorizedCount]);
@@ -250,10 +258,7 @@ export default function DailyReview() {
     const preSelectedClientId = searchParams.get("client_id");
     if (shouldAdd) {
       if (preSelectedClientId)
-        setManualEntry((prev) => ({
-          ...prev,
-          client_id: parseInt(preSelectedClientId),
-        }));
+        setManualEntry((prev) => ({ ...prev, client_id: parseInt(preSelectedClientId) }));
       setShowManualEntry(true);
       searchParams.delete("add");
       searchParams.delete("client_id");
@@ -271,110 +276,145 @@ export default function DailyReview() {
     loadUncategorizedCount();
   }, [loadTimeSummary, loadUncategorizedCount]);
 
+  const totalHours = billableHours + nonBillableHours;
+
+  const stepDate = (days: number) => {
+    const d = new Date(date + "T00:00:00");
+    d.setDate(d.getDate() + days);
+    setDate(d.toISOString().split("T")[0]);
+  };
+
   return (
     <div className="min-h-full bg-background">
       {toast && <Toast message={toast.message} type={toast.type} />}
 
-      {/* ===== TOP TOOLBAR ===== */}
-      <div className="sticky top-0 z-10 bg-card border-b-2 border-border shadow-sm">
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between flex-wrap gap-3">
+      {/* ═══ TOOLBAR ═══════════════════════════════════════════════════════ */}
+      <div className="sticky top-0 z-10 bg-card/95 backdrop-blur-sm border-b border-border/60">
+        <div className="px-5 h-14 flex items-center justify-between gap-4">
 
-            {/* Left: Tabs + Add Time */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center bg-muted p-1 rounded-xl">
-                <button
-                  onClick={() => setActiveTab("summary")}
-                  className={cn(
-                    "px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                    activeTab === "summary"
-                      ? "bg-card text-slate-900 shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  )}
-                >
-                  <BarChart3 className="w-4 h-4" />
-                  Summary
-                </button>
-                <button
-                  onClick={() => setActiveTab("categorize")}
-                  className={cn(
-                    "px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                    activeTab === "categorize"
-                      ? "bg-card text-slate-900 shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  )}
-                >
-                  <Edit3 className="w-4 h-4" />
-                  Categorize
-                  {uncategorizedCount > 0 && (
-                    <span className="bg-warning text-warning-foreground text-xs font-bold rounded-full px-2 py-0.5 min-w-[20px]">
-                      {uncategorizedCount}
-                    </span>
-                  )}
-                </button>
-              </div>
-              <ManualTimeEntry defaultDate={date} onSuccess={handleRefresh} />
+          {/* LEFT — underline tabs + add button */}
+          <div className="flex items-center gap-4 h-full">
+
+            {/* Underline-style tabs — sits flush with toolbar bottom border */}
+            <div className="flex items-stretch h-14 gap-0.5">
+              <button
+                onClick={() => setActiveTab("summary")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 text-sm font-semibold transition-all border-b-2 -mb-px",
+                  activeTab === "summary"
+                    ? "border-primary text-primary"
+                    : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
+                )}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                Summary
+              </button>
+              <button
+                onClick={() => setActiveTab("categorize")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 text-sm font-semibold transition-all border-b-2 -mb-px",
+                  activeTab === "categorize"
+                    ? "border-primary text-primary"
+                    : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
+                )}
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                Categorize
+                {uncategorizedCount > 0 && (
+                  <span className="bg-amber-400 text-white text-[10px] font-bold rounded-full px-1.5 py-px leading-none">
+                    {uncategorizedCount}
+                  </span>
+                )}
+              </button>
             </div>
 
-            {/* Right: Date + Refresh + Stats */}
-            <div className="flex items-center gap-3">
-              {flaggedBlocks.length > 0 && (
-                <div className="flex items-center gap-1.5 px-3 py-2 bg-amber-50 border-2 border-amber-300 rounded-xl">
-                  <AlertTriangle className="w-4 h-4 text-amber-500" />
-                  <span className="text-amber-800 font-bold text-sm">
-                    {flaggedBlocks.length} flagged
-                  </span>
-                </div>
-              )}
+            {/* Divider */}
+            <div className="w-px h-5 bg-border/60" />
+
+            {/* Compact add button */}
+            <ManualTimeEntry defaultDate={date} onSuccess={handleRefresh} />
+          </div>
+
+          {/* RIGHT — flags, date, refresh, stats */}
+          <div className="flex items-center gap-2.5">
+
+            {/* Flagged badge — subtle, not alarming */}
+            {flaggedBlocks.length > 0 && (
+              <div className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-lg">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                <span className="text-amber-700 font-semibold text-xs">
+                  {flaggedBlocks.length} flagged
+                </span>
+              </div>
+            )}
+
+            {/* Date nav: ‹ date › */}
+            <div className="flex items-center gap-0.5 bg-muted/70 border border-border/50 rounded-lg overflow-hidden">
+              <button
+                onClick={() => stepDate(-1)}
+                title="Previous day"
+                className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
               <input
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className="px-3 py-2 rounded-lg bg-muted border-2 border-border text-sm font-semibold text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                className={cn(
+                  "px-1.5 py-1.5 text-sm font-medium text-slate-700 bg-transparent",
+                  "focus:outline-none focus:ring-0 border-0",
+                  "transition-colors"
+                )}
               />
               <button
-                onClick={handleRefresh}
-                disabled={busy}
-                className="p-2.5 text-slate-500 hover:text-slate-900 hover:bg-muted rounded-lg disabled:opacity-50 transition-all"
+                onClick={() => stepDate(1)}
+                title="Next day"
+                disabled={date >= todayIso()}
+                className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all disabled:opacity-30 disabled:cursor-not-allowed"
               >
-                <RefreshCw className={cn("w-4 h-4", busy && "animate-spin")} />
+                <ChevronRight className="w-4 h-4" />
               </button>
-              <div className="flex items-center bg-muted border-2 border-border rounded-xl overflow-hidden divide-x-2 divide-border">
-                <div className="px-4 py-2 flex items-center gap-1.5">
-                  <span className="text-xl font-extrabold text-primary">
-                    {formatHours(billableHours)}
-                  </span>
-                  <span className="text-primary/70 font-semibold text-xs uppercase tracking-wide">
-                    billable
-                  </span>
-                </div>
-                <div className="px-4 py-2 flex items-center gap-1.5">
-                  <span className="text-xl font-extrabold text-slate-400">
-                    {formatHours(nonBillableHours)}
-                  </span>
-                  <span className="text-slate-400 font-semibold text-xs uppercase tracking-wide">
-                    non-bill
-                  </span>
-                </div>
-                <div className="px-4 py-2 flex items-center gap-1.5">
-                  <span className="text-xl font-extrabold text-slate-700">
-                    {formatHours(billableHours + nonBillableHours)}
-                  </span>
-                  <span className="text-slate-500 font-semibold text-xs uppercase tracking-wide">
-                    total
-                  </span>
-                </div>
-              </div>
+            </div>
+
+            {/* Refresh — ghost icon, no background until hover */}
+            <button
+              onClick={handleRefresh}
+              disabled={busy}
+              title="Refresh"
+              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted rounded-lg disabled:opacity-40 transition-all"
+            >
+              <RefreshCw className={cn("w-4 h-4", busy && "animate-spin")} />
+            </button>
+
+            {/* Stats — clean vertical stacks separated by a thin rule */}
+            <div className="flex items-center gap-4 pl-3 border-l border-border/60">
+              <StatCell
+                value={formatHours(billableHours)}
+                label="Billable"
+                valueClass="text-primary"
+              />
+              <StatCell
+                value={formatHours(nonBillableHours)}
+                label="Non-bill"
+                valueClass="text-slate-400"
+              />
+              <StatCell
+                value={formatHours(totalHours)}
+                label="Total"
+                valueClass="text-slate-700"
+              />
             </div>
 
           </div>
         </div>
       </div>
 
-      {/* ===== CONTENT ===== */}
-      <div className="p-6">
+      {/* ═══ CONTENT ════════════════════════════════════════════════════════ */}
+      <div className="p-5">
+
         {err && (
-          <div className="mb-4 px-4 py-3 bg-destructive/10 border-2 border-destructive/30 rounded-xl text-red-700 font-semibold">
+          <div className="mb-4 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm font-medium">
             {err}
           </div>
         )}
@@ -382,19 +422,20 @@ export default function DailyReview() {
         {activeTab === "summary" ? (
           <>
             {uncategorizedCount > 0 && (
-              <div className="mb-4 px-4 py-3 bg-warning/10 border-2 border-warning/30 rounded-xl flex items-center justify-between">
-                <div className="flex items-center gap-2 text-amber-700 font-bold">
-                  <AlertTriangle className="w-5 h-5" />
-                  {uncategorizedCount} blocks need categorization
+              <div className="mb-4 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
+                <div className="flex items-center gap-2 text-amber-700 text-sm font-semibold">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  {uncategorizedCount} block{uncategorizedCount !== 1 ? "s" : ""} need categorization
                 </div>
                 <button
                   onClick={() => setActiveTab("categorize")}
-                  className="px-4 py-2 bg-warning text-warning-foreground font-bold rounded-lg hover:opacity-90 transition-all"
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-md transition-colors"
                 >
-                  Categorize
+                  Categorize now
                 </button>
               </div>
             )}
+
             <CategorySummary
               timeSummary={timeSummary}
               availableClients={availableClients}

@@ -239,24 +239,21 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
 
         if result > 32:
             _log(f"[UPDATE] ✅ Installer launched via ShellExecute — waiting 60s for completion")
-            time.sleep(60)  # Wait for installer to complete
+            time.sleep(60)
             _log(f"[UPDATE] ✅ v{latest_version} install complete — launching new agent")
             try:
                 new_exe = sys.executable
                 subprocess.Popen(
                     [new_exe],
-                    creationflags=0x08000000,  # CREATE_NO_WINDOW
+                    creationflags=0x08000000,
                     close_fds=True,
                 )
-                _log(f"[UPDATE] ✅ New agent launched")
+                _log(f"[UPDATE] ✅ New agent launched — exiting old agent")
             except Exception as e:
                 _log(f"[UPDATE] ⚠️ Failed to launch new agent: {e}")
             _cleanup_file(exe_path)
-            return True
-        else:
-            _log(f"[UPDATE] ⚠️ ShellExecute failed with code: {result}")
-            _cleanup_file(exe_path)
-            return False
+            # Exit old agent so new one can acquire the single instance lock
+            os._exit(0)
 
     except subprocess.TimeoutExpired:
         _log(f"[UPDATE] Installer timed out after 120s")

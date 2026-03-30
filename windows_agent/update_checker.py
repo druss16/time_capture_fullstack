@@ -15,6 +15,8 @@ Drop this file into both mac_agent/ and windows_agent/.
 Usage in main.py:
     from update_checker import check_for_update_blocking, start_background_checker
 
+    testing
+
     # Call BEFORE starting the agent — blocks until user updates if outdated
     check_for_update_blocking(API_BASE, APP_VERSION)
 

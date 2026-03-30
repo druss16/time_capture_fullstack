@@ -848,7 +848,14 @@ def extract_url_from_browser_title(title: str, exe: str) -> Optional[str]:
     
     return None
 
+_com_lock = threading.Lock()
+
 def get_office_file_path(exe: str) -> Optional[str]:
+    # If a previous COM call is still running, skip this one
+    if not _com_lock.acquire(blocking=False):
+        log("[COM] ⚠️ Previous COM call still running — skipping")
+        return None
+    
     result = [None]
     def _get():
         try:
@@ -867,11 +874,15 @@ def get_office_file_path(exe: str) -> Optional[str]:
                     result[0] = ppt.ActivePresentation.FullName
         except Exception:
             pass
+        finally:
+            _com_lock.release()
+    
     t = threading.Thread(target=_get, daemon=True)
     t.start()
     t.join(timeout=3)
     if t.is_alive():
         log("[COM] ⚠️ Office COM call timed out — skipping file path")
+        # Lock will be released when thread eventually finishes
     return result[0]
 
 def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, str, str]:
@@ -1955,17 +1966,6 @@ def run_agent():
                     log(f"[CLIENT-CACHE] Seeded: {current.get('client_name')}")
             except Exception as e:
                 log(f"[CLIENT-CACHE] Seed failed: {e}")
-
-    # Seed client cache from backend (so write_event has it from the first event)
-    api_key = config.get("api_key") or API_KEY
-    if api_key and API_BASE:
-        try:
-            current = get_current_client_from_backend(API_BASE, api_key)
-            if current and current.get("client_id"):
-                _set_cached_client(current["client_id"], current["client_name"])
-                log(f"[CLIENT-CACHE] Seeded: {current['client_name']}")
-        except Exception as e:
-            log(f"[CLIENT-CACHE] Seed failed: {e}")
 
     # Prompt client selection shortly after startup if no client set
     def _prompt_client_after_startup():

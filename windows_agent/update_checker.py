@@ -278,7 +278,7 @@ def _auto_update_mac(download_url: str, latest_version: str) -> bool:
         # Sanity check - pkg should be at least 5MB
         if file_size < 40 * 1024 * 1024:
             _log(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
-            _cleanup_file(exe_path)
+            _cleanup_file(pkg_path)
             return False
 
         # Use AppleScript to run installer with admin privileges
@@ -682,6 +682,17 @@ def start_background_checker(api_base: str, current_version: str):
                     if success:
                         _mark_nagged(latest, download_ok=True)
                         _log(f"[UPDATE] ✅ v{latest} installed — launching new agent and exiting")
+                        # Remove Run key so Windows doesn't restart old agent before installer finishes
+                        try:
+                            import winreg
+                            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                                0, winreg.KEY_SET_VALUE)
+                            winreg.DeleteValue(key, "TimeTracker")
+                            winreg.CloseKey(key)
+                            _log("[UPDATE] Removed Run key — preventing premature restart")
+                        except Exception:
+                            pass
                         try:
                             import subprocess, tempfile
                             new_exe = sys.executable

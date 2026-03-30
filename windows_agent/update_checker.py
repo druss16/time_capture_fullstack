@@ -15,7 +15,7 @@ Drop this file into both mac_agent/ and windows_agent/.
 Usage in main.py:
     from update_checker import check_for_update_blocking, start_background_checker
 
-    testing 20
+    testing 30
 
     # Call BEFORE starting the agent — blocks until user updates if outdated
     check_for_update_blocking(API_BASE, APP_VERSION)
@@ -683,7 +683,6 @@ def start_background_checker(api_base: str, current_version: str):
                         _mark_nagged(latest, download_ok=True)
                         _log(f"[UPDATE] ✅ v{latest} installed — launching new agent and exiting")
                         # Remove Run key so Windows doesn't restart old agent before installer finishes
-                        try:
                         try:
                             import winreg
                             reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,

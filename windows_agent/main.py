@@ -873,7 +873,7 @@ def get_office_file_path(exe: str) -> Optional[str]:
     if t.is_alive():
         log("[COM] ⚠️ Office COM call timed out — skipping file path")
     return result[0]
-    
+
 def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, str, str]:
     """Check if activity is a development tool."""
     exe = (exe_name or "").lower()
@@ -1945,14 +1945,16 @@ def run_agent():
         log(f"[GUI] Set user name: {SERVER_USER_NAME}")
     
     if gui_menu_bar:
+    # Seed client cache from backend (so write_event has it from the first event)
         api_key = config.get("api_key") or API_KEY
         if api_key and API_BASE:
             try:
                 current = get_current_client_from_backend(API_BASE, api_key)
-                if current and current.get("client_id"):
-                    log(f"[CLIENT] Restored from backend: {current['client_name']}")
+                if current is not None:
+                    _set_cached_client(current.get("client_id"), current.get("client_name"))
+                    log(f"[CLIENT-CACHE] Seeded: {current.get('client_name')}")
             except Exception as e:
-                log(f"[CLIENT] Failed to restore client state: {e}")
+                log(f"[CLIENT-CACHE] Seed failed: {e}")
 
     # Seed client cache from backend (so write_event has it from the first event)
     api_key = config.get("api_key") or API_KEY

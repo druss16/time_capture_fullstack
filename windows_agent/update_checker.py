@@ -683,15 +683,19 @@ def start_background_checker(api_base: str, current_version: str):
                         _mark_nagged(latest, download_ok=True)
                         _log(f"[UPDATE] ✅ v{latest} installed — launching new agent and exiting")
                         try:
-                            import subprocess
-                            subprocess.Popen(
-                                [sys.executable],
-                                creationflags=0x08000000,
-                                close_fds=True,
-                            )
+                            import subprocess, tempfile
+                            new_exe = sys.executable
+                            bat = os.path.join(tempfile.gettempdir(), "tt_update.bat")
+                            with open(bat, "w") as f:
+                                f.write(f'@echo off\n')
+                                f.write(f'timeout /t 30 /nobreak >NUL\n')
+                                f.write(f'start "" "{new_exe}"\n')
+                                f.write(f'del "%~f0"\n')
+                            subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)
+                            _log(f"[UPDATE] ✅ Restart bat launched — exiting old agent")
                         except Exception as e:
-                            _log(f"[UPDATE] ⚠️ Failed to launch new agent: {e}")
-                        os._exit(0)  # ← exit AFTER marking success
+                            _log(f"[UPDATE] ⚠️ Failed to launch restart bat: {e}")
+                        os._exit(0)
                     else:
                         _log("[UPDATE] Download/install failed - will retry next cycle")
 

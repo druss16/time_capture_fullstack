@@ -223,7 +223,7 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
 
         # Use ShellExecute instead of subprocess — bypasses RedirectionGuard on Windows 11
         import ctypes
-        params = f'/VERYSILENT /NORESTART /CLOSEAPPLICATIONS /LOG="{log_path}"'
+        params = f'/VERYSILENT /NORESTART /LOG="{log_path}"'
         result = ctypes.windll.shell32.ShellExecuteW(
             None,       # hwnd
             "open",     # operation

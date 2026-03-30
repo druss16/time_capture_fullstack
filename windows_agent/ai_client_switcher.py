@@ -158,6 +158,14 @@ _GENERIC_TITLE_BLOCKLIST = {
     "new tab", "program manager",
 }
 
+# Words too generic to use as partial match signals
+# These appear in many client names AND window titles coincidentally
+_GENERIC_WORD_BLOCKLIST = {
+    "professional", "services", "accounting", "management", 
+    "associates", "solutions", "group", "local", "national",
+    "international", "community", "united", "general", "advanced",
+}
+
 
 # =====================================================================
 # Sensitivity → Threshold Mapping
@@ -410,6 +418,9 @@ def _regex_match(title: str, file_path: str, matchers: list,
 
             if is_partial:
                 # Partial-word confidence — intentionally lower than full match
+                # Skip generic words that appear in many client names
+                if needle.lower() in _GENERIC_WORD_BLOCKLIST:
+                    continue
                 conf = _partial_word_confidence(needle_len, sensitivity)
                 method = "partial_word"
             else:

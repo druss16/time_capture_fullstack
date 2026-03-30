@@ -214,7 +214,7 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
         _log(f"[UPDATE] Downloaded ({file_size:,} bytes) to {exe_path}")
 
         # Sanity check — installer should be at least 10MB
-        if file_size < 10 * 1024 * 1024:
+        if file_size < 40 * 1024 * 1024:
             _log(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
             _cleanup_file(exe_path)
             return False
@@ -276,9 +276,9 @@ def _auto_update_mac(download_url: str, latest_version: str) -> bool:
         _log(f"[UPDATE] Downloaded ({file_size:,} bytes) to {pkg_path}")
 
         # Sanity check - pkg should be at least 5MB
-        if file_size < 5 * 1024 * 1024:
+        if file_size < 40 * 1024 * 1024:
             _log(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
-            _cleanup_file(pkg_path)
+            _cleanup_file(exe_path)
             return False
 
         # Use AppleScript to run installer with admin privileges

@@ -240,20 +240,13 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
         if result > 32:
             _log(f"[UPDATE] ✅ Installer launched via ShellExecute — waiting 60s for completion")
             time.sleep(60)
-            _log(f"[UPDATE] ✅ v{latest_version} install complete — launching new agent")
-            try:
-                new_exe = sys.executable
-                subprocess.Popen(
-                    [new_exe],
-                    creationflags=0x08000000,
-                    close_fds=True,
-                )
-                _log(f"[UPDATE] ✅ New agent launched — exiting old agent")
-            except Exception as e:
-                _log(f"[UPDATE] ⚠️ Failed to launch new agent: {e}")
+            _log(f"[UPDATE] ✅ v{latest_version} install complete")
             _cleanup_file(exe_path)
-            # Exit old agent so new one can acquire the single instance lock
-            os._exit(0)
+            return True  # ← return True, let caller handle exit
+        else:
+            _log(f"[UPDATE] ⚠️ ShellExecute failed with code: {result}")
+            _cleanup_file(exe_path)
+            return False
 
     except subprocess.TimeoutExpired:
         _log(f"[UPDATE] Installer timed out after 120s")
@@ -688,9 +681,18 @@ def start_background_checker(api_base: str, current_version: str):
 
                     if success:
                         _mark_nagged(latest, download_ok=True)
-                        _log(f"[UPDATE] ✅ v{latest} installed — will restart on next mtime check")
+                        _log(f"[UPDATE] ✅ v{latest} installed — launching new agent and exiting")
+                        try:
+                            import subprocess
+                            subprocess.Popen(
+                                [sys.executable],
+                                creationflags=0x08000000,
+                                close_fds=True,
+                            )
+                        except Exception as e:
+                            _log(f"[UPDATE] ⚠️ Failed to launch new agent: {e}")
+                        os._exit(0)  # ← exit AFTER marking success
                     else:
-                        # Don't permanently skip - will retry after 1h
                         _log("[UPDATE] Download/install failed - will retry next cycle")
 
             except Exception as e:

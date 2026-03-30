@@ -198,7 +198,9 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
     import subprocess
     import tempfile
 
-    exe_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerSetup-{latest_version}.exe")
+    update_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker", "Updates")
+    os.makedirs(update_dir, exist_ok=True)
+    exe_path = os.path.join(update_dir, f"TimeTrackerSetup-{latest_version}.exe")
 
     try:
         # Wait for network before downloading

@@ -684,13 +684,18 @@ def start_background_checker(api_base: str, current_version: str):
                         _log(f"[UPDATE] ✅ v{latest} installed — launching new agent and exiting")
                         # Remove Run key so Windows doesn't restart old agent before installer finishes
                         try:
+                        try:
                             import winreg
-                            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                                 r"Software\Microsoft\Windows\CurrentVersion\Run",
                                 0, winreg.KEY_SET_VALUE)
-                            winreg.DeleteValue(key, "TimeTracker")
-                            winreg.CloseKey(key)
-                            _log("[UPDATE] Removed Run key — preventing premature restart")
+                            for name in ["TimeTracker", "TimeTrackerAgent"]:
+                                try:
+                                    winreg.DeleteValue(reg_key, name)
+                                    _log(f"[UPDATE] Removed Run key: {name}")
+                                except Exception:
+                                    pass
+                            winreg.CloseKey(reg_key)
                         except Exception:
                             pass
                         try:

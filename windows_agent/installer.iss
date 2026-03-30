@@ -358,10 +358,8 @@ var
   AppDataDeviceId: String;
 begin
   UserProfile := GetEnv('USERPROFILE');
-  ConfigBackupPath := ExpandConstant('{tmp}\timetracker_config_backup.json');
-  DeviceIdBackupPath := ExpandConstant('{tmp}\timetracker_deviceid_backup.txt');
-  ConfigBackedUp := False;
-  DeviceIdBackedUp := False;
+  ConfigBackupPath := UserProfile + '\.timetracker\.config_backup.json';
+  DeviceIdBackupPath := UserProfile + '\.timetracker\.deviceid_backup.txt';
 
   ConfigPath := UserProfile + '\.timetracker\config.json';
   if FileExists(ConfigPath) then begin
@@ -407,6 +405,9 @@ begin
   ConfigDir := UserProfile + '\.timetracker';
   ConfigPath := ConfigDir + '\config.json';
   DeviceIdPath := ConfigDir + '\.device_id';
+  ConfigBackupPath := UserProfile + '\.timetracker\.config_backup.json';
+  DeviceIdBackupPath := UserProfile + '\.timetracker\.deviceid_backup.txt';
+
 
   if not DirExists(ConfigDir) then
     ForceDirectories(ConfigDir);

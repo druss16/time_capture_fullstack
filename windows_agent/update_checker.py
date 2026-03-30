@@ -230,6 +230,7 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
             ],
             timeout=120,
             capture_output=True,
+            creationflags=0x00000010,  # CREATE_NEW_CONSOLE — gives installer proper user context
         )
 
         _cleanup_file(exe_path)

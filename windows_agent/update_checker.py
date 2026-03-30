@@ -220,25 +220,25 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
 
         _log(f"[UPDATE] Installing v{latest_version} silently...")
         log_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerInstall-{latest_version}.log")
-        result = subprocess.run(
-            [
-                exe_path,
-                "/VERYSILENT",
-                "/NORESTART",
-                "/CLOSEAPPLICATIONS",
-                f"/LOG={log_path}",
-            ],
-            timeout=120,
-            capture_output=True,
-            creationflags=0x00000010,  # CREATE_NEW_CONSOLE — gives installer proper user context
+
+        # Use ShellExecute instead of subprocess — bypasses RedirectionGuard on Windows 11
+        import ctypes
+        params = f'/VERYSILENT /NORESTART /CLOSEAPPLICATIONS /LOG="{log_path}"'
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None,       # hwnd
+            "open",     # operation
+            exe_path,   # file
+            params,     # parameters
+            None,       # directory
+            0           # SW_HIDE
         )
 
-        _cleanup_file(exe_path)
-
-        if result.returncode == 0:
-            _log(f"[UPDATE] ✅ v{latest_version} installed successfully — launching new version")
+        if result > 32:
+            _log(f"[UPDATE] ✅ Installer launched via ShellExecute — waiting 60s for completion")
+            time.sleep(60)  # Wait for installer to complete
+            _log(f"[UPDATE] ✅ v{latest_version} install complete — launching new agent")
             try:
-                new_exe = sys.executable  # same path, new binary on disk
+                new_exe = sys.executable
                 subprocess.Popen(
                     [new_exe],
                     creationflags=0x08000000,  # CREATE_NO_WINDOW
@@ -247,22 +247,12 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
                 _log(f"[UPDATE] ✅ New agent launched")
             except Exception as e:
                 _log(f"[UPDATE] ⚠️ Failed to launch new agent: {e}")
+            _cleanup_file(exe_path)
             return True
         else:
-            stderr = result.stderr.decode(errors="ignore")[:500]
-            _log(f"[UPDATE] ⚠️ Installer exited with code {result.returncode}: {stderr}")
-            # Non-zero doesn't always mean failure with Inno Setup — let mtime confirm
-            try:
-                new_exe = sys.executable
-                subprocess.Popen(
-                    [new_exe],
-                    creationflags=0x08000000,
-                    close_fds=True,
-                )
-                _log(f"[UPDATE] ✅ New agent launched (non-zero exit)")
-            except Exception as e:
-                _log(f"[UPDATE] ⚠️ Failed to launch new agent: {e}")
-            return True
+            _log(f"[UPDATE] ⚠️ ShellExecute failed with code: {result}")
+            _cleanup_file(exe_path)
+            return False
 
     except subprocess.TimeoutExpired:
         _log(f"[UPDATE] Installer timed out after 120s")

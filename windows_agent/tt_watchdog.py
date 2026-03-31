@@ -31,6 +31,8 @@ BUILD (PyInstaller):
 
   This produces tt_watchdog.exe (~8MB) — ship it alongside TimeTrackerAgent.exe
 
+  2
+
 INSTALL:
   Called automatically by TimeTrackerAgent on startup via
   register_watchdog_task(). No manual setup needed.

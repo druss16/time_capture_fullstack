@@ -283,70 +283,43 @@ def _wait_for_updated_exe(timeout: int = 150) -> bool:
 # UPDATE ACTIONS
 # ============================================================
 
-def _auto_update_windows(download_url: str, latest_version: str) -> bool:
-    """
-    Download and silently install the new Windows version.
-    Returns True only if the installed exe was actually replaced.
-    """
-    import ctypes
+def _auto_update_windows(download_url: str, latest_version: str, zip_url: str = None) -> bool:
+    import zipfile
     import tempfile
 
-    update_dir = os.path.join(
-        os.environ.get("LOCALAPPDATA", ""),
-        "TimeTracker",
-        "Updates",
-    )
-    os.makedirs(update_dir, exist_ok=True)
+    if not zip_url:
+        _log("[UPDATE] No zip_url provided — cannot update")
+        return False
 
-    installer_path = os.path.join(
-        update_dir,
-        f"TimeTrackerSetup-{latest_version}.exe",
-    )
+    update_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker", "Updates")
+    os.makedirs(update_dir, exist_ok=True)
+    zip_path = os.path.join(update_dir, f"TimeTrackerAgent-{latest_version}.zip")
+    install_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker")
 
     try:
-        if not _wait_for_network(download_url):
+        if not _wait_for_network(zip_url):
             return False
 
-        _log(f"[UPDATE] Downloading v{latest_version} installer...")
-        file_size = _download_with_timeout(
-            download_url,
-            installer_path,
-            timeout=DOWNLOAD_TIMEOUT,
-        )
-        _log(f"[UPDATE] Downloaded ({file_size:,} bytes) to {installer_path}")
+        _log(f"[UPDATE] Downloading v{latest_version} zip...")
+        file_size = _download_with_timeout(zip_url, zip_path, timeout=DOWNLOAD_TIMEOUT)
+        _log(f"[UPDATE] Downloaded ({file_size:,} bytes) to {zip_path}")
 
-        if file_size < 40 * 1024 * 1024:
+        if file_size < 10 * 1024 * 1024:
             _log(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
-            _cleanup_file(installer_path)
+            _cleanup_file(zip_path)
             return False
 
-        _prepare_for_windows_update()
-
-        # Write flag file for watchdog to pick up and install
-        flag_path = os.path.join(
-            os.environ.get("LOCALAPPDATA", ""),
-            "TimeTracker",
-            "pending_update.json"
-        )
-        with open(flag_path, "w") as f:
-            json.dump({"installer": installer_path, "version": latest_version}, f)
-        _log(f"[UPDATE] ✅ Pending update flag written — watchdog will install v{latest_version}")
-        # Start watchdog if not running — it will pick up the flag
-        try:
-            import subprocess
-            watchdog_exe = os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker", "tt_watchdog.exe")
-            if os.path.exists(watchdog_exe):
-                subprocess.Popen([watchdog_exe], creationflags=0x08000000, close_fds=True)
-                _log("[UPDATE] ✅ Watchdog started to process pending update")
-        except Exception as e:
-            _log(f"[UPDATE] ⚠️ Failed to start watchdog: {e}")
+        _log(f"[UPDATE] Extracting v{latest_version} to {install_dir}...")
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(install_dir)
+        _log(f"[UPDATE] ✅ Extracted successfully")
+        _cleanup_file(zip_path)
         return True
 
     except Exception as e:
-        _log(f"[UPDATE] Silent install failed: {e}")
-        _cleanup_file(installer_path)
+        _log(f"[UPDATE] Zip update failed: {e}")
+        _cleanup_file(zip_path)
         return False
-
 
 def _auto_update_mac(download_url: str, latest_version: str) -> bool:
     """Download and install update on macOS via AppleScript elevated installer."""
@@ -586,7 +559,8 @@ def check_for_update_blocking(api_base: str, current_version: str):
 
             if sys.platform == "win32":
                 def _bg_forced():
-                    success = _auto_update_windows(url, latest)
+                    zip_url = data.get("zip_url", "")
+                    success = _auto_update_windows(url, latest, zip_url=zip_url)
                     if success:
                         _mark_nagged(latest, download_ok=True)
                         _log(f"[UPDATE] ✅ Forced update to v{latest} installed — exiting old agent")
@@ -608,7 +582,8 @@ def check_for_update_blocking(api_base: str, current_version: str):
                 success = False
                 try:
                     if sys.platform == "win32":
-                        success = _auto_update_windows(url, latest)
+                        zip_url = data.get("zip_url", "")
+                        success = _auto_update_windows(url, latest, zip_url=zip_url)
                     elif sys.platform == "darwin":
                         success = _auto_update_mac(url, latest)
                 except Exception as e:
@@ -686,7 +661,8 @@ def start_background_checker(api_base: str, current_version: str):
                     _log(f"[UPDATE] Forced update detected mid-session: {current_version} -> {latest}")
                     _mark_nagged(latest, download_ok=False)
                     if sys.platform == "win32":
-                        success = _auto_update_windows(url, latest)
+                        zip_url = data.get("zip_url", "")
+                        success = _auto_update_windows(url, latest, zip_url=zip_url)
                         if success:
                             _mark_nagged(latest, download_ok=True)
                             _log(f"[UPDATE] ✅ Forced update to v{latest} installed — exiting old agent")
@@ -701,7 +677,8 @@ def start_background_checker(api_base: str, current_version: str):
                     success = False
                     try:
                         if sys.platform == "win32":
-                            success = _auto_update_windows(url, latest)
+                            zip_url = data.get("zip_url", "")
+                            success = _auto_update_windows(url, latest, zip_url=zip_url)
                         elif sys.platform == "darwin":
                             success = _auto_update_mac(url, latest)
                     except Exception as e:

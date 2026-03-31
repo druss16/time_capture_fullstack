@@ -7556,16 +7556,18 @@ def agent_version_check(request):
     base = f"https://github.com/{GITHUB_REPO}/releases/latest/download"
     if 'mac' in plat or 'darwin' in plat:
         download_url = f"{base}/TimeTracker.pkg"
+        zip_url = None
     else:
         download_url = f"{base}/TimeTracker-Windows-Setup.exe"
+        zip_url = f"{base}/TimeTrackerAgent-{latest}.zip"
 
     return JsonResponse({
         "update_available": update_needed,
         "force": False,
         "latest_version": latest,
         "download_url": download_url,
+        "zip_url": zip_url,
     })
-
 
 @api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated])

@@ -333,6 +333,12 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
         _log(f"[UPDATE] ✅ Pending update flag written — watchdog will install v{latest_version}")
         return True
 
+    except Exception as e:
+        _log(f"[UPDATE] Silent install failed: {e}")
+        _cleanup_file(installer_path)
+        return False
+
+
 def _auto_update_mac(download_url: str, latest_version: str) -> bool:
     """Download and install update on macOS via AppleScript elevated installer."""
     import subprocess

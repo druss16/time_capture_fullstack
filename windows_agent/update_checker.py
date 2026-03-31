@@ -10,7 +10,7 @@ Windows behavior in this version:
   - Verifies success by waiting for installed exe mtime to change
   - Exits old agent after verified install; installer should relaunch the new one
 
-  7
+  
 
 macOS behavior:
   - Preserved from existing implementation
@@ -309,11 +309,20 @@ def _auto_update_windows(download_url: str, latest_version: str, zip_url: str = 
             _cleanup_file(zip_path)
             return False
 
-        _log(f"[UPDATE] Extracting v{latest_version} to {install_dir}...")
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            zf.extractall(install_dir)
-        _log(f"[UPDATE] ✅ Extracted successfully")
-        _cleanup_file(zip_path)
+        # Can't extract while agent is running — write a bat script that
+        # waits for agent to exit, extracts zip, then starts new agent
+        import subprocess, tempfile
+        new_exe = _installed_agent_path()
+        bat = os.path.join(tempfile.gettempdir(), "tt_update.bat")
+        with open(bat, "w") as f:
+            f.write("@echo off\n")
+            f.write("timeout /t 3 /nobreak >NUL\n")
+            f.write(f'powershell -Command "Expand-Archive -Path \\"{zip_path}\\" -DestinationPath \\"{install_dir}\\" -Force"\n')
+            f.write(f'del "{zip_path}"\n')
+            f.write(f'start "" "{new_exe}"\n')
+            f.write('del "%~f0"\n')
+        subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)
+        _log(f"[UPDATE] ✅ Update bat launched — exiting old agent")
         return True
 
     except Exception as e:

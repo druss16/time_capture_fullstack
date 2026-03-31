@@ -158,39 +158,6 @@ def start_agent(agent_exe: str) -> bool:
 
 # ── Main watchdog loop ────────────────────────────────────────────────────────
 
-def check_pending_update():
-    flag_path = os.path.join(
-        os.environ.get("LOCALAPPDATA", ""),
-        "TimeTracker",
-        "pending_update.json"
-    )
-    if not os.path.exists(flag_path):
-        return
-    try:
-        with open(flag_path) as f:
-            data = json.load(f)
-        installer = data.get("installer")
-        version = data.get("version")
-        if not installer or not os.path.exists(installer):
-            os.remove(flag_path)
-            return
-        log(f"[WATCHDOG] 🔄 Pending update to v{version} — launching installer")
-        os.remove(flag_path)
-        import subprocess
-        log_path = os.path.join(os.environ.get("TEMP", ""), f"TimeTrackerInstall-{version}.log")
-        env = os.environ.copy()
-        env["__COMPAT_LAYER"] = "RunAsInvoker"
-        proc = subprocess.Popen(
-            [installer, "/VERYSILENT", "/NORESTART", f"/LOG={log_path}"],
-            env=env,
-            creationflags=0x08000000,
-        )
-        log(f"[WATCHDOG] Installer launched (PID={proc.pid}) — waiting for completion")
-        proc.wait(timeout=180)
-        log(f"[WATCHDOG] ✅ Update complete (exit code={proc.returncode})")
-    except Exception as e:
-        log(f"[WATCHDOG] ❌ Pending update failed: {e}")
-
 def run_watchdog():
     log("=" * 60)
     log(f"[WATCHDOG] TimeTracker External Watchdog starting")

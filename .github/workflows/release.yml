@@ -332,6 +332,7 @@ jobs:
         shell: pwsh
         run: |
           $VERSION = $env:GITHUB_REF_NAME -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path "Output"
           Compress-Archive -Path "dist\TimeTrackerAgent\*" -DestinationPath "Output\TimeTrackerAgent-$VERSION.zip"
           Write-Host "Created TimeTrackerAgent-$VERSION.zip"
 

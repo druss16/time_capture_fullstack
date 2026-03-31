@@ -217,7 +217,7 @@ def _prepare_for_windows_update():
         except Exception as e:
             _log(f"[UPDATE] WARN: {' '.join(cmd)} failed: {e}")
 
-    for exe in ["TimeTracker.exe", "tt_watchdog.exe"]:
+    for exe in ["TimeTracker.exe"]:
         _run(["taskkill", "/F", "/IM", exe, "/T"])
 
     _run(["schtasks", "/delete", "/tn", "MavOps TimeTracker", "/f"])
@@ -331,6 +331,15 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
         with open(flag_path, "w") as f:
             json.dump({"installer": installer_path, "version": latest_version}, f)
         _log(f"[UPDATE] ✅ Pending update flag written — watchdog will install v{latest_version}")
+        # Start watchdog if not running — it will pick up the flag
+        try:
+            import subprocess
+            watchdog_exe = os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker", "tt_watchdog.exe")
+            if os.path.exists(watchdog_exe):
+                subprocess.Popen([watchdog_exe], creationflags=0x08000000, close_fds=True)
+                _log("[UPDATE] ✅ Watchdog started to process pending update")
+        except Exception as e:
+            _log(f"[UPDATE] ⚠️ Failed to start watchdog: {e}")
         return True
 
     except Exception as e:

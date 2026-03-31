@@ -47,6 +47,8 @@ import tempfile
 import psutil
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
+import json
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 AGENT_EXE_NAME     = "TimeTrackerAgent.exe"
@@ -154,11 +156,41 @@ def start_agent(agent_exe: str) -> bool:
 
 # ── Main watchdog loop ────────────────────────────────────────────────────────
 
+def check_pending_update():
+    flag_path = os.path.join(
+        os.environ.get("LOCALAPPDATA", ""),
+        "TimeTracker",
+        "pending_update.json"
+    )
+    if not os.path.exists(flag_path):
+        return
+    try:
+        with open(flag_path) as f:
+            data = json.load(f)
+        installer = data.get("installer")
+        version = data.get("version")
+        if not installer or not os.path.exists(installer):
+            os.remove(flag_path)
+            return
+        log(f"[WATCHDOG] 🔄 Pending update to v{version} — launching installer")
+        os.remove(flag_path)
+        import ctypes
+        log_path = os.path.join(os.environ.get("TEMP", ""), f"TimeTrackerInstall-{version}.log")
+        params = f'/VERYSILENT /NORESTART /LOG="{log_path}"'
+        result = ctypes.windll.shell32.ShellExecuteW(None, "open", installer, params, None, 0)
+        log(f"[WATCHDOG] Installer launched (result={result}) — waiting 120s")
+        time.sleep(120)
+        log(f"[WATCHDOG] ✅ Update complete")
+    except Exception as e:
+        log(f"[WATCHDOG] ❌ Pending update failed: {e}")
+
 def run_watchdog():
     log("=" * 60)
     log(f"[WATCHDOG] TimeTracker External Watchdog starting")
     log(f"[WATCHDOG] PID: {os.getpid()}, checking every {CHECK_INTERVAL}s")
     log("=" * 60)
+
+    check_pending_update()  # ← ADD THIS
 
     agent_exe = find_agent_exe()
     if not agent_exe:

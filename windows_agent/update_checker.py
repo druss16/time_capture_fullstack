@@ -322,43 +322,16 @@ def _auto_update_windows(download_url: str, latest_version: str) -> bool:
 
         _prepare_for_windows_update()
 
-        _log(f"[UPDATE] Launching silent installer for v{latest_version}...")
-        log_path = os.path.join(
-            tempfile.gettempdir(),
-            f"TimeTrackerInstall-{latest_version}.log",
+        # Write flag file for watchdog to pick up and install
+        flag_path = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            "TimeTracker",
+            "pending_update.json"
         )
-
-        params = f'/VERYSILENT /NORESTART /LOG="{log_path}"'
-
-        result = ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "open",
-            installer_path,
-            params,
-            None,
-            0
-        )
-
-        if result <= 32:
-            _log(f"[UPDATE] ShellExecute failed with code: {result}")
-            _cleanup_file(installer_path)
-            return False
-
-        _log("[UPDATE] Installer launched — waiting for verified file replacement")
-
-        if _wait_for_updated_exe(timeout=150):
-            _log(f"[UPDATE] ✅ v{latest_version} install verified")
-            _cleanup_file(installer_path)
-            return True
-
-        _log(f"[UPDATE] ⚠️ Installer launched but update could not be verified")
-        return False
-
-    except Exception as e:
-        _log(f"[UPDATE] Silent install failed: {e}")
-        _cleanup_file(installer_path)
-        return False
-
+        with open(flag_path, "w") as f:
+            json.dump({"installer": installer_path, "version": latest_version}, f)
+        _log(f"[UPDATE] ✅ Pending update flag written — watchdog will install v{latest_version}")
+        return True
 
 def _auto_update_mac(download_url: str, latest_version: str) -> bool:
     """Download and install update on macOS via AppleScript elevated installer."""

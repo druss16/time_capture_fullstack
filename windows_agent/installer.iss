@@ -82,7 +82,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 ; Startup is now installer-managed via the main scheduled task only.
 
 [Run]
-Filename: "{app}\TimeTrackerAgent.exe"; Description: "Start TimeTracker Agent"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\tt_watchdog.exe"; Flags: nowait postinstall runhidden
+Filename: "{app}\TimeTrackerAgent.exe"; Description: "Start TimeTracker"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "--unregister-task"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "UnregisterTask"

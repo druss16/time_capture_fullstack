@@ -336,6 +336,12 @@ jobs:
           Compress-Archive -Path "dist\TimeTrackerAgent\*" -DestinationPath "Output\TimeTrackerAgent-$VERSION.zip"
           Write-Host "Created TimeTrackerAgent-$VERSION.zip"
 
+      - name: Upload Windows zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: windows_agent/Output/TimeTrackerAgent-*.zip
+
       - name: List dist contents
         working-directory: windows_agent
         run: |
@@ -463,6 +469,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-installer
+          path: ./windows
+
+      - name: Download Windows zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-zip
           path: ./windows
 
       - name: Download Intune artifact

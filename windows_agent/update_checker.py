@@ -10,7 +10,7 @@ Windows behavior in this version:
   - Verifies success by waiting for installed exe mtime to change
   - Exits old agent after verified install; installer should relaunch the new one
 
-  3
+  4
 
 macOS behavior:
   - Preserved from existing implementation

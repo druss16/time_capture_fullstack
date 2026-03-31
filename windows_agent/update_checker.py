@@ -10,7 +10,7 @@ Windows behavior in this version:
   - Verifies success by waiting for installed exe mtime to change
   - Exits old agent after verified install; installer should relaunch the new one
 
-  2
+  3
 
 macOS behavior:
   - Preserved from existing implementation
@@ -219,7 +219,7 @@ def _prepare_for_windows_update():
 
     for exe in ["TimeTracker.exe", "tt_watchdog.exe"]:
         _run(["taskkill", "/F", "/IM", exe, "/T"])
-        
+
     _run(["schtasks", "/delete", "/tn", "MavOps TimeTracker", "/f"])
     _run(["schtasks", "/delete", "/tn", "TimeTrackerWatchdog", "/f"])
 

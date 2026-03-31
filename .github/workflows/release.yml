@@ -329,12 +329,11 @@ jobs:
 
       - name: Create agent zip for auto-update
         working-directory: windows_agent
-        shell: bash
+        shell: pwsh
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd dist
-          zip -r "../Output/TimeTrackerAgent-${VERSION}.zip" TimeTrackerAgent/
-          echo "Created TimeTrackerAgent-${VERSION}.zip"
+          $VERSION = $env:GITHUB_REF_NAME -replace '^v', ''
+          Compress-Archive -Path "dist\TimeTrackerAgent\*" -DestinationPath "Output\TimeTrackerAgent-$VERSION.zip"
+          Write-Host "Created TimeTrackerAgent-$VERSION.zip"
 
       - name: List dist contents
         working-directory: windows_agent

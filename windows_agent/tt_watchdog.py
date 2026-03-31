@@ -174,13 +174,18 @@ def check_pending_update():
             return
         log(f"[WATCHDOG] 🔄 Pending update to v{version} — launching installer")
         os.remove(flag_path)
-        import ctypes
+        import subprocess
         log_path = os.path.join(os.environ.get("TEMP", ""), f"TimeTrackerInstall-{version}.log")
-        params = f'/VERYSILENT /NORESTART /LOG="{log_path}"'
-        result = ctypes.windll.shell32.ShellExecuteW(None, "open", installer, params, None, 0)
-        log(f"[WATCHDOG] Installer launched (result={result}) — waiting 120s")
-        time.sleep(120)
-        log(f"[WATCHDOG] ✅ Update complete")
+        env = os.environ.copy()
+        env["__COMPAT_LAYER"] = "RunAsInvoker"
+        proc = subprocess.Popen(
+            [installer, "/VERYSILENT", "/NORESTART", f"/LOG={log_path}"],
+            env=env,
+            creationflags=0x08000000,
+        )
+        log(f"[WATCHDOG] Installer launched (PID={proc.pid}) — waiting for completion")
+        proc.wait(timeout=180)
+        log(f"[WATCHDOG] ✅ Update complete (exit code={proc.returncode})")
     except Exception as e:
         log(f"[WATCHDOG] ❌ Pending update failed: {e}")
 

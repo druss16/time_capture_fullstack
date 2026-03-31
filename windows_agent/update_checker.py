@@ -217,9 +217,9 @@ def _prepare_for_windows_update():
         except Exception as e:
             _log(f"[UPDATE] WARN: {' '.join(cmd)} failed: {e}")
 
-    for exe in ["TimeTracker.exe", "TimeTrackerAgent.exe", "tt_watchdog.exe"]:
+    for exe in ["TimeTracker.exe", "tt_watchdog.exe"]:
         _run(["taskkill", "/F", "/IM", exe, "/T"])
-
+        
     _run(["schtasks", "/delete", "/tn", "MavOps TimeTracker", "/f"])
     _run(["schtasks", "/delete", "/tn", "TimeTrackerWatchdog", "/f"])
 

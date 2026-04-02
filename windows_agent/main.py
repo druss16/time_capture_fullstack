@@ -2225,6 +2225,7 @@ def run_agent():
                                         write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
                                     current_sig = None
                                     dwell_start = None
+                                    time.sleep(30)  # Let lock screen settle
                                     continue
                                 else:
                                     log(f"[IDLE] Still genuinely idle after {int(idle_duration)}s (fresh={int(fresh_idle)}s)")
@@ -2353,7 +2354,7 @@ def run_agent():
     watchdog_thread = threading.Thread(
         target=_watchdog,
         args=(_thread_ref, tracking_loop, log, report_error_to_backend),
-        daemon=True,
+        daemon=False,
     )
     watchdog_thread.start()
 

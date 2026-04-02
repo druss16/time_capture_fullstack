@@ -131,6 +131,17 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
                 pass
             os._exit(1)  # Hard kill — clean restart
 
+        # ── Case 3: GUI thread hung — force restart ────────────────────────
+        if _heartbeat_started > 0:
+            try:
+                from main import gui_menu_bar
+                if gui_menu_bar and hasattr(gui_menu_bar, 'icon'):
+                    if gui_menu_bar.icon is None:
+                        log("[WATCHDOG] ⚠️ GUI icon is None — forcing restart")
+                        os._exit(1)
+            except Exception:
+                pass
+
         # ── All good ──────────────────────────────────────────────────────
         # Uncomment for debug:
         # log(f"[WATCHDOG] ✅ Heartbeat OK ({age:.0f}s ago)")

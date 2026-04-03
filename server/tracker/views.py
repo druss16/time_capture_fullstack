@@ -2685,6 +2685,20 @@ def save_block_classification(request, block_id: int):
     # ✅ Save with force_update to bypass protection check
     # (User is intentionally editing, so we allow it)
     b.save(force_update=True)
+
+    # Mark the most recent audit row as user-corrected
+    try:
+        from tracker.models import ClassificationAudit
+        audit = ClassificationAudit.objects.filter(
+            block=b
+        ).order_by('-created_at').first()
+        if audit:
+            audit.corrected_by_user = True
+            audit.client_before = original_client
+            audit.category_before = list(original_categories.keys())[0] if isinstance(original_categories, dict) and original_categories else ''
+            audit.save(update_fields=['corrected_by_user', 'client_before', 'category_before'])
+    except Exception as e:
+        log(f"[AUDIT] Failed to mark correction (non-fatal): {e}")
     
     # ✅ Learn patterns from this manual classification
     user = request.user if request.user.is_authenticated else None

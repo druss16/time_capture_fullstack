@@ -1523,27 +1523,29 @@ from tracker.services.pattern_learning import PatternLearningService
 def ai_suggestions_today(request):
     """
     Generate AI-powered suggestions for today's blocks.
-    
+
     GUARANTEES:
     ✅ Categorized blocks NEVER change (is_categorized=True is permanent)
     ✅ Only uncategorized blocks get AI suggestions
-    ✅ Auto-saves high-confidence results (>= 0.70)
+    ✅ 4-stage pipeline runs BEFORE OpenAI (deterministic → patterns → AI client → AI category)
+    ✅ Auto-saves high-confidence results (>= 0.88, raised from 0.70)
+    ✅ OpenAI batch only called for genuinely unresolved blocks
     ✅ No duplicates (event-centric compaction)
     ✅ No flip-flopping (once saved, never touched again)
     ✅ Clean display formatting (App - Context format)
     """
-    # Import display formatter
     from tracker.utils.display_names import format_block_for_display, format_duration
-    
-    # Toggles
-    username = request.GET.get("user") or None
-    hostname = request.GET.get("hostname") or None
-    limit = int(request.GET.get("limit") or 120)
-    limit = max(1, min(limit, 200))
-    timeout_ms = int(request.GET.get("timeout_ms") or 15000)
-    noai = request.GET.get("noai") in ("1", "true", "yes")
+    from tracker.services.block_classifier import BlockClassifier
+
+    # ── Query params ──────────────────────────────────────────────────────────
+    username     = request.GET.get("user") or None
+    hostname     = request.GET.get("hostname") or None
+    limit        = int(request.GET.get("limit") or 120)
+    limit        = max(1, min(limit, 200))
+    timeout_ms   = int(request.GET.get("timeout_ms") or 15000)
+    noai         = request.GET.get("noai") in ("1", "true", "yes")
     fallback_mode = request.GET.get("fallback") or ""
-    debug = request.GET.get("debug") in ("1", "true", "yes")
+    debug        = request.GET.get("debug") in ("1", "true", "yes")
 
     org = get_org_or_default(request)
 
@@ -1576,64 +1578,55 @@ def ai_suggestions_today(request):
 
     for b in all_blocks:
         if b.is_categorized:
-            # This block is DONE - never touch it again
             already_categorized.append(b)
         else:
             blocks_needing_ai.append(b)
 
-    log(f"[AI] {len(already_categorized)} blocks already categorized (LOCKED), {len(blocks_needing_ai)} need AI")
+    log(f"[AI] {len(already_categorized)} categorized (LOCKED), {len(blocks_needing_ai)} need classification")
+
+    # ── Helper: format an already-categorized block for the response ──────────
+    def _format_locked(b):
+        cat_name    = list((b.category_hours or {}).keys())[0] if b.category_hours else None
+        client_name = getattr(b.client, "name", None)
+        formatted   = format_block_for_display({
+            'app_name':     getattr(b, 'app_name', '') or '',
+            'window_title': getattr(b, 'window_title', '') or '',
+            'url':          getattr(b, 'url', '') or '',
+            'minutes':      b.minutes or 0,
+            'category':     cat_name,
+        }, client_name=client_name)
+        return {
+            "block_id": b.id,
+            "start":    b.start,
+            "end":      b.end,
+            "title":    b.title,
+            "ai_suggestion": {
+                "client":       client_name,
+                "project":      getattr(b.project, "name", None),
+                "categories":   b.category_hours or {},
+                "confidence":   1.0,
+                "needs_review": False,
+                "reasoning":    "Already categorized (locked)",
+                "source":       "existing",
+                "auto_saved":   False,
+            },
+            "display": {
+                "title":         formatted['title'],
+                "app":           formatted['app'],
+                "duration":      formatted['duration'],
+                "category_icon": formatted['category_icon'],
+            },
+            "current_client":  client_name,
+            "current_project": getattr(b.project, "name", None),
+        }
 
     # =========================================================
-    # STEP 3: If everything is categorized, return immediately
-    # No AI call needed - these blocks are permanent
+    # STEP 3: Everything already done — return immediately
     # =========================================================
     if not blocks_needing_ai:
-        out = []
-        for b in already_categorized:
-            # Get category for display
-            cat_name = list((b.category_hours or {}).keys())[0] if b.category_hours else None
-            client_name = getattr(b.client, "name", None)
-            
-            # ✅ Clean display formatting
-            formatted = format_block_for_display({
-                'app_name': getattr(b, 'app_name', '') or '',
-                'window_title': getattr(b, 'window_title', '') or '',
-                'url': getattr(b, 'url', '') or '',
-                'minutes': b.minutes or 0,
-                'category': cat_name,
-            }, client_name=client_name)
-            
-            out.append({
-                "block_id": b.id,
-                "start": b.start,
-                "end": b.end,
-                "title": b.title,
-                "ai_suggestion": {
-                    "client": client_name,
-                    "project": getattr(b.project, "name", None),
-                    "categories": b.category_hours or {},
-                    "confidence": 1.0,
-                    "needs_review": False,
-                    "reasoning": "Already categorized (locked)",
-                    "source": "existing",
-                    "auto_saved": False,
-                },
-                # ✅ Clean display data for UI
-                "display": {
-                    "title": formatted['title'],
-                    "app": formatted['app'],
-                    "duration": formatted['duration'],
-                    "category_icon": formatted['category_icon'],
-                },
-                "current_client": client_name,
-                "current_project": getattr(b.project, "name", None),
-            })
-        return Response(out)
+        return Response([_format_locked(b) for b in already_categorized])
 
-    # Only process uncategorized blocks
-    blocks = blocks_needing_ai
-
-    # Get user object for pattern learning
+    # ── Get user object ───────────────────────────────────────────────────────
     user_obj = None
     if username:
         try:
@@ -1641,119 +1634,207 @@ def ai_suggestions_today(request):
         except User.DoesNotExist:
             pass
 
-    # Trim payload for AI
+    # =========================================================
+    # NOAI MODE — return blocks without calling anything
+    # =========================================================
+    if noai:
+        out = []
+        for b in blocks_needing_ai:
+            client_name = getattr(b.client, "name", None)
+            formatted = format_block_for_display({
+                'app_name':     getattr(b, 'app_name', '') or '',
+                'window_title': getattr(b, 'window_title', '') or '',
+                'url':          getattr(b, 'url', '') or '',
+                'minutes':      b.minutes or 0,
+                'category':     None,
+            }, client_name=client_name)
+            out.append({
+                "block_id": b.id,
+                "start":    b.start,
+                "end":      b.end,
+                "title":    b.title,
+                "ai_suggestion": {
+                    "client": None, "project": None, "categories": {},
+                    "confidence": 0.0, "needs_review": True,
+                    "reasoning": "NOAI mode", "source": "noai",
+                },
+                "display": {
+                    "title": formatted['title'], "app": formatted['app'],
+                    "duration": formatted['duration'], "category_icon": formatted['category_icon'],
+                },
+                "current_client":  client_name,
+                "current_project": getattr(b.project, "name", None),
+            })
+        out += [_format_locked(b) for b in already_categorized]
+        return Response(out)
+
+    # =========================================================
+    # STEP 4: Run the 4-stage BlockClassifier pipeline
+    #
+    # Stage 1 — Deterministic (alias/domain/path)  → stops here if >= 0.88
+    # Stage 2 — Learned patterns (UserWorkPattern) → stops here if >= 0.88
+    # Stage 3 — AI client identification only       → cached, focused prompt
+    # Stage 4 — AI category classification          → separate focused prompt
+    #
+    # Blocks resolved here NEVER reach the OpenAI batch below.
+    # Only genuinely ambiguous blocks fall through to `unresolved`.
+    # =========================================================
+    classifier = BlockClassifier(org=org, user=user_obj)
+
+    pipeline_out = []   # response dicts for blocks resolved by pipeline
+    unresolved   = []   # blocks that still need the legacy OpenAI batch
+
+    for b in blocks_needing_ai[:limit]:
+        result = classifier.classify_block(b)
+
+        if result.should_auto_save or result.should_save_with_review:
+            saved = classifier.apply_result(b, result)
+
+            display_client = result.client_name or getattr(b.client, "name", None)
+            formatted = format_block_for_display({
+                'app_name':     getattr(b, 'app_name', '') or '',
+                'window_title': getattr(b, 'window_title', '') or '',
+                'url':          getattr(b, 'url', '') or '',
+                'minutes':      b.minutes or 0,
+                'category':     result.category,
+            }, client_name=display_client)
+
+            pipeline_out.append({
+                "block_id": b.id,
+                "start":    b.start,
+                "end":      b.end,
+                "title":    b.title,
+                "ai_suggestion": {
+                    "client":       result.client_name,
+                    "project":      None,
+                    "categories":   result.category_hours,
+                    "confidence":   result.overall_confidence,
+                    "needs_review": result.needs_review,
+                    "reasoning":    result.reasoning,
+                    "source":       result.source,
+                    "auto_saved":   saved and result.should_auto_save,
+                },
+                "display": {
+                    "title":         formatted['title'],
+                    "app":           formatted['app'],
+                    "duration":      formatted['duration'],
+                    "category_icon": formatted['category_icon'],
+                },
+                "current_client":  getattr(b.client, "name", None),
+                "current_project": getattr(b.project, "name", None),
+            })
+
+        else:
+            # Not confident enough — hand off to OpenAI batch
+            unresolved.append(b)
+
+    log(f"[AI] Pipeline resolved {len(pipeline_out)} blocks, {len(unresolved)} going to OpenAI batch")
+
+    # =========================================================
+    # STEP 5: If pipeline resolved everything, return early
+    # Zero OpenAI batch calls needed
+    # =========================================================
+    if not unresolved:
+        out = pipeline_out + [_format_locked(b) for b in already_categorized]
+        return Response(out)
+
+    # =========================================================
+    # STEP 6: OpenAI batch — only for genuinely unresolved blocks
+    # =========================================================
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        # No key — return pipeline results + unresolved as empty suggestions
+        out = pipeline_out
+        for b in unresolved:
+            client_name = getattr(b.client, "name", None)
+            out.append({
+                "block_id": b.id, "start": b.start, "end": b.end, "title": b.title,
+                "ai_suggestion": {
+                    "client": None, "project": None, "categories": {},
+                    "confidence": 0.0, "needs_review": True,
+                    "reasoning": "OPENAI_API_KEY not configured", "source": "fallback",
+                },
+                "display": format_block_for_display({
+                    'app_name': getattr(b, 'app_name', '') or '',
+                    'window_title': getattr(b, 'window_title', '') or '',
+                    'url': getattr(b, 'url', '') or '',
+                    'minutes': b.minutes or 0, 'category': None,
+                }, client_name=client_name),
+                "current_client": client_name,
+                "current_project": getattr(b.project, "name", None),
+            })
+        out += [_format_locked(b) for b in already_categorized]
+        return Response(out)
+
+    # ── Build trimmed payload for OpenAI (unresolved blocks only) ────────────
     def _shorten(s: str, n: int = 180) -> str:
         s = (s or "").strip()
         return s[:n] + ("…" if len(s) > n else "")
 
-    MAX_BLOCKS = limit
-    trimmed = []
-    for b in blocks[:MAX_BLOCKS]:
-        minutes = int((b.end - b.start).total_seconds() / 60) if b.end else 0
-        hints = getattr(b, "hints", {}) or {}
-        
-        # Add learned pattern hints to each block
-        pattern_hints = []
-        if user_obj:
-            learned_patterns = PatternLearningService.get_patterns_for_block(b, user_obj)
-            for client_name, category, confidence in learned_patterns:
-                if client_name or category:
-                    pattern_hints.append({
-                        "client": client_name,
-                        "category": category,
-                        "confidence": round(confidence, 2)
-                    })
-        
-        trimmed.append({
-            "id": str(b.id),
-            "title": _shorten(b.title, 160),
-            "window_title": _shorten(getattr(b, 'window_title', ''), 160),
-            "url": _shorten(b.url, 140),
-            "file_path": _shorten(b.file_path, 140),
-            "app_name": _shorten(getattr(b, 'app_name', ''), 80),
-            "bundle_id": _shorten(getattr(b, 'bundle_id', ''), 100),
-            "minutes": minutes,
-            "attendees": getattr(b, 'attendees', []) or [],
-            "description": _shorten(getattr(b, 'description', ''), 220),
-            "hints": hints,
-            "learned_patterns": pattern_hints,
-            "assigned_client": getattr(b.client, "name", None),  # ← what the agent set
-
-        })
-
-    # Build comprehensive context for AI
-    org_context = build_ai_context(org) or ""
-    #seasonal_context = get_seasonal_context()
-    
-    # Add learned user patterns
+    # Build org context + pattern context once
+    org_context     = build_ai_context(org) or ""
     pattern_context = ""
     if user_obj:
         pattern_context = PatternLearningService.build_pattern_context(user_obj, org)
 
-    if debug:
-        return Response({
-            "debug": True,
-            "count": len(trimmed),
-            "sample": trimmed[:3],
-            "org_context": org_context[:1200] if org_context else "",
-            "seasonal_context": get_seasonal_context_for_industry(industry_type)[:500],
-            "pattern_context": pattern_context[:500],
-            "already_categorized": len(already_categorized),
-            "needs_ai": len(blocks_needing_ai),
+    industry_type = getattr(org, 'industry_type', 'general') or 'general'
+
+    trimmed = []
+    for b in unresolved:
+        minutes = int((b.end - b.start).total_seconds() / 60) if b.end else 0
+        hints   = getattr(b, "hints", {}) or {}
+
+        # Still include learned pattern hints for OpenAI context
+        pattern_hints = []
+        if user_obj:
+            learned = PatternLearningService.get_patterns_for_block(b, user_obj)
+            for cn, cat, conf in learned:
+                if cn or cat:
+                    pattern_hints.append({"client": cn, "category": cat, "confidence": round(conf, 2)})
+
+        trimmed.append({
+            "id":              str(b.id),
+            "title":           _shorten(b.title, 160),
+            "window_title":    _shorten(getattr(b, 'window_title', ''), 160),
+            "url":             _shorten(b.url, 140),
+            "file_path":       _shorten(b.file_path, 140),
+            "app_name":        _shorten(getattr(b, 'app_name', ''), 80),
+            "bundle_id":       _shorten(getattr(b, 'bundle_id', ''), 100),
+            "minutes":         minutes,
+            "attendees":       getattr(b, 'attendees', []) or [],
+            "description":     _shorten(getattr(b, 'description', ''), 220),
+            "hints":           hints,
+            "learned_patterns": pattern_hints,
+            "assigned_client": getattr(b.client, "name", None),
         })
 
-    # =========================================================
-    # NOAI MODE: Return blocks without calling AI
-    # =========================================================
-    if noai:
-        out = []
-        for b in blocks[:len(trimmed)]:
-            client_name = getattr(b.client, "name", None)
-            
-            # ✅ Clean display formatting
-            formatted = format_block_for_display({
-                'app_name': getattr(b, 'app_name', '') or '',
-                'window_title': getattr(b, 'window_title', '') or '',
-                'url': getattr(b, 'url', '') or '',
-                'minutes': b.minutes or 0,
-                'category': None,
-            }, client_name=client_name)
-            
-            out.append({
-                "block_id": b.id,
-                "start": b.start,
-                "end": b.end,
-                "title": b.title,
-                "ai_suggestion": {
-                    "client": None,
-                    "project": None,
-                    "categories": {},
-                    "confidence": 0.0,
-                    "needs_review": True,
-                    "reasoning": "NOAI mode",
-                    "source": "noai",
-                },
-                # ✅ Clean display data
-                "display": {
-                    "title": formatted['title'],
-                    "app": formatted['app'],
-                    "duration": formatted['duration'],
-                    "category_icon": formatted['category_icon'],
-                },
-                "current_client": client_name,
-                "current_project": getattr(b.project, "name", None),
-            })
-        return Response(out)
+    if debug:
+        return Response({
+            "debug":              True,
+            "pipeline_resolved":  len(pipeline_out),
+            "unresolved":         len(unresolved),
+            "already_categorized": len(already_categorized),
+            "sample_unresolved":  trimmed[:3],
+            "org_context":        org_context[:1200] if org_context else "",
+            "pattern_context":    pattern_context[:500],
+        })
 
-    # =========================================================
-    # OpenAI API Call
-    # =========================================================
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return Response({"error": "OPENAI_API_KEY not configured"}, status=500)
+    # ── Build system prompt ───────────────────────────────────────────────────
+    from tracker.industry_categories import (
+        build_ai_prompt_for_industry,
+        build_classification_user_prompt,
+        validate_and_fix_ai_response,
+    )
+
+    system_msg = build_ai_prompt_for_industry(industry_type)
+    if org_context:
+        system_msg += "\n\n=== ORGANIZATION CONTEXT ===\n" + org_context
+    if pattern_context:
+        system_msg += "\n\n=== LEARNED PATTERNS ===\n" + pattern_context
 
     prompt = build_classification_prompt(trimmed, org_context)
 
+    # ── JSON helpers ──────────────────────────────────────────────────────────
     def _extract_json(s: str) -> str:
         s = s.strip()
         if s.startswith("```"):
@@ -1767,7 +1848,7 @@ def ai_suggestions_today(request):
             start = m.start()
             depth, i = 0, start
             while i < len(s):
-                if s[i] == '[': depth += 1
+                if s[i] == '[':   depth += 1
                 elif s[i] == ']':
                     depth -= 1
                     if depth == 0:
@@ -1782,142 +1863,92 @@ def ai_suggestions_today(request):
             raw2 = re.sub(r',\s*([}\]])', r'\1', raw)
             return json.loads(raw2)
 
-    client = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
-
-    # =========================================================
-    # Build AI prompts — single source of truth
-    # =========================================================
-    from tracker.industry_categories import (
-        build_ai_prompt_for_industry,
-        build_classification_user_prompt,
-    )
-
-    industry_type = getattr(org, 'industry_type', 'general') or 'general'
-
-    # System prompt: categories + rules + seasonal (all from industry_categories.py)
-    system_msg = build_ai_prompt_for_industry(industry_type)
-
-    # Append org-specific context (clients, aliases, training examples)
-    if org_context:
-        system_msg += "\n\n=== ORGANIZATION CONTEXT ===\n" + org_context
-
-    # Append learned user patterns (from PatternLearningService)
-    if pattern_context:
-        system_msg += "\n\n=== LEARNED PATTERNS ===\n" + pattern_context
-
-    last_text = None
+    oai_client   = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
+    max_tokens   = 1000 if len(trimmed) <= 3 else 4000
     ai_suggestions = []
 
-    # Scale model params to batch size
-    if len(trimmed) <= 3:
-        model = "gpt-4o-mini"
-        max_tokens = 1000
-    else:
-        model = "gpt-4o-mini"
-        max_tokens = 4000
-
     try:
-        resp = client.chat.completions.create(
-            model=model,              # ← was hardcoded "gpt-4o-mini"
+        resp = oai_client.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt},
+                {"role": "user",   "content": prompt},
             ],
             temperature=0.2,
-            max_tokens=max_tokens,    # ← was hardcoded 4000
+            max_tokens=max_tokens,
         )
-        last_text = (resp.choices[0].message.content or "").strip()
-        raw_json = _extract_json(last_text)
+        last_text      = (resp.choices[0].message.content or "").strip()
+        raw_json       = _extract_json(last_text)
         ai_suggestions = _json_loads_loose(raw_json)
         if not isinstance(ai_suggestions, list):
             raise ValueError("Model did not return a JSON array.")
 
-        # ✅ Fix AI category name mistakes before saving
-        from tracker.industry_categories import validate_and_fix_ai_response
         ai_suggestions = validate_and_fix_ai_response(ai_suggestions, industry_type)
+
     except Exception as e:
-        log(f"[AI] OpenAI error: {e}")
+        log(f"[AI] OpenAI batch error: {e}")
         if fallback_mode == "rule":
             return suggestions_today(request)
-        
-        # =========================================================
-        # FALLBACK: Return blocks with error info
-        # =========================================================
-        out = []
-        for b in blocks[:len(trimmed)]:
+
+        # Fallback — return pipeline results + empty suggestions for unresolved
+        out = pipeline_out
+        for b in unresolved:
             client_name = getattr(b.client, "name", None)
-            
-            # ✅ Clean display formatting
             formatted = format_block_for_display({
                 'app_name': getattr(b, 'app_name', '') or '',
                 'window_title': getattr(b, 'window_title', '') or '',
                 'url': getattr(b, 'url', '') or '',
-                'minutes': b.minutes or 0,
-                'category': None,
+                'minutes': b.minutes or 0, 'category': None,
             }, client_name=client_name)
-            
             out.append({
-                "block_id": b.id,
-                "start": b.start,
-                "end": b.end,
-                "title": b.title,
+                "block_id": b.id, "start": b.start, "end": b.end, "title": b.title,
                 "ai_suggestion": {
-                    "client": None,
-                    "project": None,
-                    "categories": {},
-                    "confidence": 0.0,
-                    "needs_review": True,
-                    "reasoning": f"AI fallback: {str(e)[:120]}",
-                    "source": "fallback",
+                    "client": None, "project": None, "categories": {},
+                    "confidence": 0.0, "needs_review": True,
+                    "reasoning": f"AI fallback: {str(e)[:120]}", "source": "fallback",
                 },
-                # ✅ Clean display data
                 "display": {
-                    "title": formatted['title'],
-                    "app": formatted['app'],
-                    "duration": formatted['duration'],
-                    "category_icon": formatted['category_icon'],
+                    "title": formatted['title'], "app": formatted['app'],
+                    "duration": formatted['duration'], "category_icon": formatted['category_icon'],
                 },
                 "current_client": client_name,
                 "current_project": getattr(b.project, "name", None),
             })
+        out += [_format_locked(b) for b in already_categorized]
         return Response(out, status=200)
 
     # =========================================================
-    # STEP 4: Process AI suggestions and auto-save
+    # STEP 7: Process OpenAI batch results and auto-save
+    # RAISED THRESHOLD: >= 0.88 (was 0.70)
     # CRITICAL: Only save if is_categorized=False
     # Once saved, the block is LOCKED forever
     # =========================================================
-    out = []
-    N = min(len(blocks), len(ai_suggestions))
+    batch_out   = []
+    N           = min(len(unresolved), len(ai_suggestions))
     saved_count = 0
 
     with transaction.atomic():
         for i in range(N):
-            b = blocks[i]
+            b   = unresolved[i]
             sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
-            
-            
-            confidence = float(sug.get("confidence", 0.0))
-            needs_review = sug.get("needs_review", True)
-            client_name = (sug.get("client") or "").strip()
-            categories = sug.get("categories", {})
-            
-            # =========================================================
-            # AUTO-SAVE: Only if confidence >= 0.70 AND not categorized
-            # =========================================================
+
+            confidence    = float(sug.get("confidence", 0.0))
+            needs_review  = sug.get("needs_review", True)
+            client_name   = (sug.get("client") or "").strip()
+            categories    = sug.get("categories", {})
+
             auto_saved = False
-            if confidence >= 0.70 and categories:
+
+            # ── RAISED to 0.88 (was 0.70) ────────────────────────────────────
+            if confidence >= 0.88 and categories:
                 try:
-                    # SAFETY CHECK: Re-fetch block to ensure it's still uncategorized
                     fresh_block = Block.objects.select_for_update().get(id=b.id)
-                    
+
                     if not fresh_block.is_categorized:
-                        # Client CORRECTION only — never create new clients
-                        suggested_client = (sug.get("client") or "").strip()
+                        suggested_client   = (sug.get("client") or "").strip()
                         current_client_name = getattr(fresh_block.client, "name", None)
 
                         if suggested_client and suggested_client != current_client_name:
-                            # AI thinks agent's client is wrong — only accept known clients
                             try:
                                 correct_client = Client.objects.get(
                                     org=org,
@@ -1925,18 +1956,15 @@ def ai_suggestions_today(request):
                                     is_active=True,
                                 )
                                 fresh_block.client = correct_client
-                                sug["needs_review"] = True  # Always flag corrections for user review
+                                sug["needs_review"] = True
                                 log(f"[AI] 🔄 Client correction: {current_client_name} → {suggested_client} (block {b.id})")
                             except Client.MultipleObjectsReturned:
-                                # Multiple clients with same name — don't guess
-                                log(f"[AI] ⚠️ Multiple clients match '{suggested_client}' — skipping correction")
+                                log(f"[AI] ⚠️ Multiple clients match '{suggested_client}' — skipping")
                                 sug["client"] = current_client_name
                             except Client.DoesNotExist:
-                                # AI hallucinated a client name — ignore silently
-                                log(f"[AI] ⚠️ Ignoring unknown client suggestion: '{suggested_client}'")
-                                sug["client"] = current_client_name  # Reset to agent's client
-                        
-                        # Save categories
+                                log(f"[AI] ⚠️ Unknown client '{suggested_client}' — ignoring")
+                                sug["client"] = current_client_name
+
                         if categories and isinstance(categories, dict):
                             clean_cats = {}
                             for k, v in categories.items():
@@ -1944,115 +1972,76 @@ def ai_suggestions_today(request):
                                     clean_cats[str(k)] = float(v)
                                 except (ValueError, TypeError):
                                     pass
-                            
+
                             if clean_cats:
-                                fresh_block.category_hours = clean_cats
-                                fresh_block.ai_category = list(clean_cats.keys())[0]
-                                fresh_block.is_categorized = True  # ← LOCK IT
-                                fresh_block.categorized_at = timezone.now()
-                                fresh_block.categorized_by = 'ai'
-                                fresh_block.ai_processed_at = timezone.now()
-                                fresh_block.ai_confidence = confidence
-                                
+                                fresh_block.category_hours   = clean_cats
+                                fresh_block.ai_category      = list(clean_cats.keys())[0]
+                                fresh_block.is_categorized   = True
+                                fresh_block.categorized_at   = timezone.now()
+                                fresh_block.categorized_by   = 'ai'
+                                fresh_block.ai_processed_at  = timezone.now()
+                                fresh_block.ai_confidence    = confidence
                                 fresh_block.save()
-                                auto_saved = True
-                                saved_count += 1
-                                
-                                # Update local reference
-                                b.client = fresh_block.client
+
+                                auto_saved       = True
+                                saved_count      += 1
+                                b.client         = fresh_block.client
                                 b.is_categorized = True
-                                
-                                log(f"[AI] ✅ LOCKED block {b.id} → {client_name or 'none'} | {list(clean_cats.keys())} ({confidence:.2f})")
+
+                                log(f"[AI] ✅ LOCKED block {b.id} → {client_name or 'none'} | "
+                                    f"{list(clean_cats.keys())} ({confidence:.2f})")
                     else:
-                        log(f"[AI] ⚠️ Block {b.id} already categorized - skipping")
-                
+                        log(f"[AI] ⚠️ Block {b.id} already categorized — skipping")
+
                 except Exception as e:
                     log(f"[AI] ❌ Failed to save block {b.id}: {e}")
                     import traceback
                     traceback.print_exc()
-            
-            # ✅ Clean display formatting
+
             display_client = client_name or getattr(b.client, "name", None)
             formatted = format_block_for_display({
-                'app_name': getattr(b, 'app_name', '') or '',
+                'app_name':     getattr(b, 'app_name', '') or '',
                 'window_title': getattr(b, 'window_title', '') or '',
-                'url': getattr(b, 'url', '') or '',
-                'minutes': b.minutes or 0,
-                'category': list(categories.keys())[0] if categories else None,
+                'url':          getattr(b, 'url', '') or '',
+                'minutes':      b.minutes or 0,
+                'category':     list(categories.keys())[0] if categories else None,
             }, client_name=display_client)
-            
-            out.append({
+
+            batch_out.append({
                 "block_id": b.id,
-                "start": b.start,
-                "end": b.end,
-                "title": b.title,
+                "start":    b.start,
+                "end":      b.end,
+                "title":    b.title,
                 "ai_suggestion": {
-                    "client": client_name or None,
-                    "project": sug.get("project"),
-                    "categories": categories,
-                    "confidence": confidence,
+                    "client":       client_name or None,
+                    "project":      sug.get("project"),
+                    "categories":   categories,
+                    "confidence":   confidence,
                     "needs_review": needs_review,
-                    "reasoning": sug.get("reasoning", ""),
-                    "source": "ai_with_context",
-                    "auto_saved": auto_saved,
+                    "reasoning":    sug.get("reasoning", ""),
+                    "source":       "ai_with_context",
+                    "auto_saved":   auto_saved,
                 },
-                # ✅ Clean display data for UI
                 "display": {
-                    "title": formatted['title'],
-                    "app": formatted['app'],
-                    "duration": formatted['duration'],
+                    "title":         formatted['title'],
+                    "app":           formatted['app'],
+                    "duration":      formatted['duration'],
                     "category_icon": formatted['category_icon'],
                 },
-                "current_client": getattr(b.client, "name", None),
+                "current_client":  getattr(b.client, "name", None),
                 "current_project": getattr(b.project, "name", None),
             })
 
-    # =========================================================
-    # STEP 5: Add already-categorized blocks to response
-    # These are READ-ONLY - just returned for display
-    # =========================================================
-    for b in already_categorized:
-        cat_name = list((b.category_hours or {}).keys())[0] if b.category_hours else None
-        client_name = getattr(b.client, "name", None)
-        
-        # ✅ Clean display formatting
-        formatted = format_block_for_display({
-            'app_name': getattr(b, 'app_name', '') or '',
-            'window_title': getattr(b, 'window_title', '') or '',
-            'url': getattr(b, 'url', '') or '',
-            'minutes': b.minutes or 0,
-            'category': cat_name,
-        }, client_name=client_name)
-        
-        out.append({
-            "block_id": b.id,
-            "start": b.start,
-            "end": b.end,
-            "title": b.title,
-            "ai_suggestion": {
-                "client": client_name,
-                "project": getattr(b.project, "name", None),
-                "categories": b.category_hours or {},
-                "confidence": 1.0,
-                "needs_review": False,
-                "reasoning": "Already categorized (locked)",
-                "source": "existing",
-                "auto_saved": False,
-            },
-            # ✅ Clean display data for UI
-            "display": {
-                "title": formatted['title'],
-                "app": formatted['app'],
-                "duration": formatted['duration'],
-                "category_icon": formatted['category_icon'],
-            },
-            "current_client": client_name,
-            "current_project": getattr(b.project, "name", None),
-        })
-
     if saved_count > 0:
-        log(f"[AI] Auto-saved and LOCKED {saved_count}/{N} blocks")
+        log(f"[AI] Batch auto-saved and LOCKED {saved_count}/{N} blocks")
 
+    # =========================================================
+    # STEP 8: Merge everything and return
+    # pipeline_out  — resolved by 4-stage classifier (no OpenAI batch)
+    # batch_out     — resolved by OpenAI batch
+    # already_categorized — locked, read-only
+    # =========================================================
+    out = pipeline_out + batch_out + [_format_locked(b) for b in already_categorized]
     return Response(out)
 
 

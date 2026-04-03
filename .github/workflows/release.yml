@@ -483,6 +483,12 @@ jobs:
           name: intune-package
           path: ./intune
 
+      - name: Download deployment artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment
+          path: ./deployment
+
       - name: Download watchdog script artifact
         uses: actions/download-artifact@v4
         with:

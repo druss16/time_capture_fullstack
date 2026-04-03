@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScheduledTasks clsid="{CC63F200-7309-4ba0-B154-A0CE23105CE8}">
+  <TaskV2 clsid="{135CE400-7309-4ba0-B154-A0CE23105CE8}"
+          name="TimeTrackerWatchdog"
+          image="0"
+          changed="2026-03-31 00:00:00"
+          uid="{A1B2C3D4-E5F6-7890-ABCD-EF1234567891}">
+    <Properties action="C"
+                name="TimeTrackerWatchdog"
+                runAs="%LogonDomain%\%LogonUser%"
+                logonType="InteractiveToken">
+      <Task version="1.3">
+        <RegistrationInfo>
+          <Description>TimeTracker Watchdog — ensures the TimeTracker agent is always running</Description>
+          <Author>MavOps AI</Author>
+        </RegistrationInfo>
+        <Triggers>
+          <LogonTrigger>
+            <Enabled>true</Enabled>
+            <Delay>PT10S</Delay>
+          </LogonTrigger>
+        </Triggers>
+        <Principals>
+          <Principal id="Author">
+            <LogonType>InteractiveToken</LogonType>
+            <RunLevel>LeastPrivilege</RunLevel>
+          </Principal>
+        </Principals>
+        <Settings>
+          <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+          <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+          <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+          <AllowHardTerminate>true</AllowHardTerminate>
+          <StartWhenAvailable>true</StartWhenAvailable>
+          <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+          <AllowStartOnDemand>true</AllowStartOnDemand>
+          <Enabled>true</Enabled>
+          <Hidden>false</Hidden>
+          <RunOnlyIfIdle>false</RunOnlyIfIdle>
+          <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+          <Priority>7</Priority>
+          <RestartOnFailure>
+            <Interval>PT1M</Interval>
+            <Count>10</Count>
+          </RestartOnFailure>
+        </Settings>
+        <Actions>
+          <Exec>
+            <Command>%LOCALAPPDATA%\TimeTracker\tt_watchdog.exe</Command>
+            <WorkingDirectory>%LOCALAPPDATA%\TimeTracker</WorkingDirectory>
+          </Exec>
+        </Actions>
+      </Task>
+    </Properties>
+  </TaskV2>
+</ScheduledTasks>

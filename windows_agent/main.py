@@ -814,19 +814,14 @@ def get_foreground_window_info() -> Optional[Tuple[str, str, int, Optional[str]]
         return None
 
 def try_get_url_or_path(exe_name: str, window_title: str) -> Dict[str, Optional[str]]:
-    """
-    Try to extract URL or file path from window context.
-    """
     exe_lower = exe_name.lower()
     
-    # Browser URL extraction from title
     if exe_lower in ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"):
         url = extract_url_from_browser_title(window_title, exe_lower)
         return {"url": url, "file_path": None}
     
-    # Office files via COM
     if exe_lower in ("excel.exe", "winword.exe", "powerpnt.exe"):
-        file_path = get_office_file_path(exe_lower)
+        file_path = get_office_file_path(exe_lower, window_title)  # ← pass title
         return {"url": None, "file_path": file_path}
     
     return {"url": None, "file_path": None}
@@ -848,42 +843,61 @@ def extract_url_from_browser_title(title: str, exe: str) -> Optional[str]:
     
     return None
 
-_com_lock = threading.Lock()
-
-def get_office_file_path(exe: str) -> Optional[str]:
-    # If a previous COM call is still running, skip this one
-    if not _com_lock.acquire(blocking=False):
-        log("[COM] ⚠️ Previous COM call still running — skipping")
+def get_office_file_path(exe: str, window_title: str = None) -> Optional[str]:
+    """Get active Office file path by matching window title against open files."""
+    if not psutil:
         return None
     
-    result = [None]
-    def _get():
-        try:
-            import win32com.client
-            if exe == "excel.exe":
-                xl = win32com.client.Dispatch("Excel.Application")
-                if xl.Workbooks.Count > 0:
-                    result[0] = xl.ActiveWorkbook.FullName
-            elif exe == "winword.exe":
-                word = win32com.client.Dispatch("Word.Application")
-                if word.Documents.Count > 0:
-                    result[0] = word.ActiveDocument.FullName
-            elif exe == "powerpnt.exe":
-                ppt = win32com.client.Dispatch("PowerPoint.Application")
-                if ppt.Presentations.Count > 0:
-                    result[0] = ppt.ActivePresentation.FullName
-        except Exception:
-            pass
-        finally:
-            _com_lock.release()
+    exe_lower = exe.lower()
+    extensions = {
+        "excel.exe": {".xlsx", ".xls", ".xlsm", ".xlsb", ".csv"},
+        "winword.exe": {".docx", ".doc", ".docm"},
+        "powerpnt.exe": {".pptx", ".ppt", ".pptm"},
+    }
     
-    t = threading.Thread(target=_get, daemon=True)
-    t.start()
-    t.join(timeout=3)
-    if t.is_alive():
-        log("[COM] ⚠️ Office COM call timed out — skipping file path")
-        # Lock will be released when thread eventually finishes
-    return result[0]
+    target_exts = extensions.get(exe_lower, set())
+    if not target_exts:
+        return None
+
+    try:
+        for proc in psutil.process_iter(["name"]):
+            try:
+                if proc.info["name"].lower() != exe_lower:
+                    continue
+                files = proc.open_files()
+                
+                # Filter to only Office files
+                office_files = [
+                    f.path for f in files
+                    if any(f.path.lower().endswith(ext) for ext in target_exts)
+                ]
+                
+                if not office_files:
+                    return None
+                
+                # If only one file open — return it
+                if len(office_files) == 1:
+                    return office_files[0]
+                
+                # Multiple files open — match against window title
+                if window_title:
+                    title_lower = window_title.lower()
+                    for path in office_files:
+                        filename = os.path.basename(path).lower()
+                        # Strip extension for matching
+                        name_no_ext = os.path.splitext(filename)[0].lower()
+                        if name_no_ext in title_lower or filename in title_lower:
+                            return path
+                
+                # Fallback — return most recently modified file
+                return max(office_files, key=lambda p: os.path.getmtime(p))
+                
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception as e:
+        log(f"[FILE] Process file detection failed: {e}")
+    
+    return None
 
 def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, str, str]:
     """Check if activity is a development tool."""
@@ -2225,7 +2239,6 @@ def run_agent():
                                         write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
                                     current_sig = None
                                     dwell_start = None
-                                    time.sleep(30)  # Let lock screen settle
                                     continue
                                 else:
                                     log(f"[IDLE] Still genuinely idle after {int(idle_duration)}s (fresh={int(fresh_idle)}s)")

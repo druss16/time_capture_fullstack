@@ -2574,3 +2574,36 @@ class DeviceProvisioningMap(models.Model):
         self.error_message = error
         self.save()
 
+
+class ClassificationAudit(models.Model):
+    SOURCE_CHOICES = [
+        ('deterministic', 'Deterministic'),
+        ('pattern', 'Pattern'),
+        ('ai', 'AI'),
+        ('manual', 'Manual'),
+        ('error', 'Error'),
+    ]
+
+    block = models.ForeignKey('Block', on_delete=models.CASCADE, related_name='audits')
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES)
+    client_before = models.ForeignKey('Client', null=True, blank=True,
+                                       on_delete=models.SET_NULL, related_name='+')
+    client_after = models.ForeignKey('Client', null=True, blank=True,
+                                      on_delete=models.SET_NULL, related_name='+')
+    category_before = models.CharField(max_length=100, blank=True)
+    category_after = models.CharField(max_length=100, blank=True)
+    confidence_client = models.FloatField(default=0)
+    confidence_category = models.FloatField(default=0)
+    overall_confidence = models.FloatField(default=0)
+    matched_signals = models.JSONField(default=list)
+    corrected_by_user = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['block']),
+            models.Index(fields=['source']),
+            models.Index(fields=['created_at']),
+        ]
+

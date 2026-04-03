@@ -4,9 +4,8 @@ update_checker.py — Cross-platform auto-update for TimeTracker agents.
 Features:
   - Startup blocking check for forced updates
   - Background polling every 5 minutes
-  - Windows: silent install via /VERYSILENT (signed installer, no user interaction)
-  - Mac: AppleScript password prompt, then automatic install
-  - Mtime detection: if exe on disk changes, auto-restart into new version
+  - Windows: zip download + bat script extraction (bypasses RedirectionGuard)
+  - Mac: AppleScript password prompt, then automatic pkg install (unchanged)
   - Network readiness checks before downloads (prevents post-sleep crashes)
   - Timeout-aware downloads (no more hanging on flaky WiFi)
 
@@ -43,7 +42,7 @@ RECHECK_INTERVAL = 300  # 5 mins
 # Network readiness settings
 NETWORK_READY_MAX_WAIT = 30    # Max seconds to wait for network
 NETWORK_READY_POLL = 3         # Seconds between network readiness pings
-DOWNLOAD_TIMEOUT = 120         # Timeout for pkg/exe download (seconds)
+DOWNLOAD_TIMEOUT = 120         # Timeout for pkg/zip download (seconds)
 POST_WAKE_DELAY = 15           # Extra delay after wake before update checks
 
 # Track whether we recently woke from sleep
@@ -135,121 +134,73 @@ def _download_with_timeout(url: str, dest: str, timeout: int = DOWNLOAD_TIMEOUT)
 
 
 # ============================================================
-# EXE MTIME DETECTION + AUTO-RESTART
-# ============================================================
-
-def _get_exe_mtime() -> float:
-    """Get modification time of our own exe (frozen builds only)."""
-    if getattr(sys, 'frozen', False):
-        try:
-            return os.path.getmtime(sys.executable)
-        except Exception:
-            pass
-    return 0.0
-
-_startup_exe_mtime = _get_exe_mtime()
-
-
-def _restart_into_new_exe():
-    """Restart the agent using the updated exe on disk."""
-    if not getattr(sys, 'frozen', False):
-        return  # Only for frozen builds
-
-    exe_path = sys.executable
-    _log(f"[UPDATE] Restarting into updated exe: {exe_path}")
-
-    if sys.platform == "win32":
-        import subprocess, tempfile
-        pid = os.getpid()
-        bat = os.path.join(tempfile.gettempdir(), "tt_restart.bat")
-
-        with open(bat, "w") as f:
-            f.write(f'@echo off\n')
-            f.write(f'echo Waiting for old agent (PID {pid}) to exit...\n')
-            f.write(f':wait\n')
-            f.write(f'tasklist /FI "PID eq {pid}" 2>NUL | find /I "{pid}" >NUL\n')
-            f.write(f'if not errorlevel 1 (\n')
-            f.write(f'    timeout /t 1 /nobreak >NUL\n')
-            f.write(f'    goto wait\n')
-            f.write(f')\n')
-            f.write(f'echo Starting updated agent...\n')
-            f.write(f'start "" "{exe_path}"\n')
-            f.write(f'del "%~f0"\n')
-
-        subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)  # CREATE_NO_WINDOW
-        _log("[UPDATE] Restart script launched - exiting old process")
-        os._exit(0)
-
-    else:
-        # macOS: exec replaces the process in-place
-        os.execv(exe_path, [exe_path])
-
-
-# ============================================================
 # UPDATE ACTIONS (platform-specific)
 # ============================================================
 
-def _auto_update_windows(download_url: str, latest_version: str) -> bool:
+def _auto_update_windows(download_url: str, latest_version: str, zip_url: str = None) -> bool:
     """
     Silently download and install the new version on Windows.
-    Uses Inno Setup /VERYSILENT flag — no user interaction required.
-    Agent auto-restarts via mtime detection after install completes.
+
+    Uses zip extraction via a bat script to bypass Windows 11 RedirectionGuard
+    (which blocks child-process installers). Flow:
+      1. Download TimeTrackerAgent-X.X.X.zip from GitHub releases
+      2. Write a bat script to %TEMP%\tt_update.bat
+      3. Return True — caller does os._exit(0)
+      4. Bat script waits for agent to exit, then PowerShell-extracts the zip
+      5. Bat script launches new TimeTrackerAgent.exe
+
+    zip_url is provided by the backend version-check response.
+    Mac always receives zip_url=None and never calls this function.
     """
     import subprocess
     import tempfile
 
-    exe_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerSetup-{latest_version}.exe")
+    if not zip_url:
+        _log("[UPDATE] Windows update requires zip_url but none provided - skipping")
+        return False
+
+    zip_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerAgent-{latest_version}.zip")
+    install_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker")
 
     try:
         # Wait for network before downloading
-        if not _wait_for_network(download_url):
+        if not _wait_for_network(zip_url):
             return False
 
-        _log(f"[UPDATE] Downloading v{latest_version} installer...")
-        file_size = _download_with_timeout(download_url, exe_path, timeout=DOWNLOAD_TIMEOUT)
-        _log(f"[UPDATE] Downloaded ({file_size:,} bytes) to {exe_path}")
+        _log(f"[UPDATE] Downloading v{latest_version} zip...")
+        file_size = _download_with_timeout(zip_url, zip_path, timeout=DOWNLOAD_TIMEOUT)
+        _log(f"[UPDATE] Downloaded ({file_size:,} bytes) to {zip_path}")
 
-        # Sanity check — installer should be at least 10MB
-        if file_size < 10 * 1024 * 1024:
+        # Sanity check — zip should be at least 1MB
+        if file_size < 1 * 1024 * 1024:
             _log(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
-            _cleanup_file(exe_path)
+            _cleanup_file(zip_path)
             return False
 
-        # Disable scheduled restart task so old version doesn't relaunch
-        _disable_restart_task()
+        # Write bat script — runs after we exit
+        bat_path = os.path.join(tempfile.gettempdir(), "tt_update.bat")
+        exe_path = os.path.join(install_dir, "TimeTrackerAgent.exe")
 
-        _log(f"[UPDATE] Installing v{latest_version} silently...")
-        log_path = os.path.join(tempfile.gettempdir(), f"TimeTrackerInstall-{latest_version}.log")
-        result = subprocess.run(
-            [
-                exe_path,
-                "/VERYSILENT",
-                "/NORESTART",
-                "/CLOSEAPPLICATIONS",
-                f"/LOG={log_path}",
-            ],
-            timeout=120,
-            capture_output=True,
+        with open(bat_path, "w") as f:
+            f.write("@echo off\n")
+            f.write("echo Waiting for TimeTracker agent to exit...\n")
+            f.write("timeout /t 3 /nobreak >NUL\n")
+            f.write(f'powershell -Command "Expand-Archive -Path \'"{zip_path}"\' '
+                    f'-DestinationPath \'"{install_dir}"\' -Force"\n')
+            f.write(f'start "" "{exe_path}"\n')
+            f.write("del \"%~f0\"\n")
+
+        subprocess.Popen(
+            ["cmd", "/c", bat_path],
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
 
-        _cleanup_file(exe_path)
+        _log(f"[UPDATE] ✅ Bat script launched — exiting for update")
+        return True
 
-        if result.returncode == 0:
-            _log(f"[UPDATE] ✅ v{latest_version} installed successfully")
-            return True
-        else:
-            stderr = result.stderr.decode(errors="ignore")[:500]
-            _log(f"[UPDATE] ⚠️ Installer exited with code {result.returncode}: {stderr}")
-            # Non-zero doesn't always mean failure with Inno Setup — let mtime confirm
-            return True
-
-    except subprocess.TimeoutExpired:
-        _log(f"[UPDATE] Installer timed out after 120s")
-        _cleanup_file(exe_path)
-        return False
     except Exception as e:
-        _log(f"[UPDATE] Silent install failed: {e}")
-        _cleanup_file(exe_path)
+        _log(f"[UPDATE] Windows zip update failed: {e}")
+        _cleanup_file(zip_path)
         return False
 
 
@@ -527,6 +478,7 @@ def check_for_update_blocking(api_base: str, current_version: str):
 
         latest = data.get("latest_version", "unknown")
         url = data.get("download_url", "https://github.com/druss16/timetracker-releases/releases/latest")
+        zip_url = data.get("zip_url", "")  # Windows only; Mac always receives None/""
 
         _log(f"[UPDATE] Update available: v{current_version} → v{latest} (force={data.get('force', False)})")
 
@@ -541,9 +493,10 @@ def check_for_update_blocking(api_base: str, current_version: str):
 
             if sys.platform == "win32":
                 def _bg_forced():
-                    success = _auto_update_windows(url, latest)
+                    success = _auto_update_windows(url, latest, zip_url=zip_url)
                     if success:
                         _mark_nagged(latest, download_ok=True)
+                        os._exit(0)
                 threading.Thread(target=_bg_forced, daemon=True).start()
             else:
                 _show_blocking_dialog(latest, url)
@@ -562,7 +515,7 @@ def check_for_update_blocking(api_base: str, current_version: str):
                 success = False
                 try:
                     if sys.platform == "win32":
-                        success = _auto_update_windows(url, latest)
+                        success = _auto_update_windows(url, latest, zip_url=zip_url)
                     elif sys.platform == "darwin":
                         success = _auto_update_mac(url, latest)
                 except Exception as e:
@@ -571,7 +524,11 @@ def check_for_update_blocking(api_base: str, current_version: str):
 
                 if success:
                     _mark_nagged(latest, download_ok=True)
-                    _log(f"[UPDATE] ✅ v{latest} install complete — will restart on next mtime check")
+                    if sys.platform == "win32":
+                        _log(f"[UPDATE] ✅ v{latest} bat script launched — exiting")
+                        os._exit(0)
+                    else:
+                        _log(f"[UPDATE] ✅ v{latest} installer launched")
                 else:
                     # Don't permanently mark as handled - will retry after 1h
                     _log("[UPDATE] Download/install failed - will retry later")
@@ -592,14 +549,17 @@ def start_background_checker(api_base: str, current_version: str):
     """
     Periodically re-check for updates while the agent is running.
 
-    Three update paths:
-      1. Mtime detection — exe on disk changed (installer already ran) -> restart
-      2. Forced update — block with dialog, exit
-      3. Silent background install
+    Two update paths:
+      1. Forced update — silent zip install on Windows, dialog on Mac
+      2. Silent background install
 
     Post-wake delay prevents crashes when WiFi is not reconnected yet.
     All download paths check network readiness first.
     mark_nagged only set to download_ok=True AFTER successful handling.
+
+    Note: mtime detection removed — the zip-based Windows update flow
+    handles restarts via os._exit(0) + bat script, not mtime polling.
+    Mac restarts are handled by LaunchAgent after pkg install.
     """
     if current_version in ("dev", "0.0.0", ""):
         return
@@ -617,17 +577,6 @@ def start_background_checker(api_base: str, current_version: str):
                      f"waiting {wait:.0f}s for network")
                 time.sleep(wait)
 
-            # -- Path 1: Mtime detection (installer already ran while we were running) --
-            if _startup_exe_mtime > 0:
-                try:
-                    current_mtime = _get_exe_mtime()
-                    if current_mtime > _startup_exe_mtime:
-                        _log(f"[UPDATE] Exe on disk changed "
-                             f"({_startup_exe_mtime} -> {current_mtime}) - restarting")
-                        _restart_into_new_exe()
-                except Exception as e:
-                    _log(f"[UPDATE] Mtime check error: {e}")
-
             try:
                 data = check_version(api_base, current_version)
 
@@ -636,6 +585,7 @@ def start_background_checker(api_base: str, current_version: str):
 
                 latest = data.get("latest_version", "unknown")
                 url = data.get("download_url", "")
+                zip_url = data.get("zip_url", "")  # Windows only; Mac always receives None/""
 
                 if not url:
                     continue
@@ -647,19 +597,20 @@ def start_background_checker(api_base: str, current_version: str):
                 _log(f"[UPDATE] Background check: update available v{current_version} → v{latest} "
                      f"(force={data.get('force', False)})")
 
-                # -- Path 2: Forced update — silent on Windows, dialog on Mac --
+                # -- Forced update — silent on Windows, dialog on Mac --
                 if data.get("force"):
                     _log(f"[UPDATE] Forced update detected mid-session: "
                          f"{current_version} -> {latest}")
                     _mark_nagged(latest, download_ok=False)
                     if sys.platform == "win32":
-                        success = _auto_update_windows(url, latest)
+                        success = _auto_update_windows(url, latest, zip_url=zip_url)
                         if success:
                             _mark_nagged(latest, download_ok=True)
+                            os._exit(0)
                     else:
                         _show_blocking_dialog(latest, url)
 
-                # -- Path 3: Silent background install --
+                # -- Silent background install --
                 else:
                     _log(f"[UPDATE] Starting background install of v{latest}...")
                     _mark_nagged(latest, download_ok=False)
@@ -667,7 +618,7 @@ def start_background_checker(api_base: str, current_version: str):
                     success = False
                     try:
                         if sys.platform == "win32":
-                            success = _auto_update_windows(url, latest)
+                            success = _auto_update_windows(url, latest, zip_url=zip_url)
                         elif sys.platform == "darwin":
                             success = _auto_update_mac(url, latest)
                     except Exception as e:
@@ -676,9 +627,13 @@ def start_background_checker(api_base: str, current_version: str):
 
                     if success:
                         _mark_nagged(latest, download_ok=True)
-                        _log(f"[UPDATE] ✅ v{latest} installed — will restart on next mtime check")
+                        if sys.platform == "win32":
+                            _log(f"[UPDATE] ✅ v{latest} bat script launched — exiting")
+                            os._exit(0)
+                        else:
+                            _log(f"[UPDATE] ✅ v{latest} installer launched")
                     else:
-                        # Don't permanently skip - will retry after 1h
+                        # Don't permanently skip - will retry next cycle
                         _log("[UPDATE] Download/install failed - will retry next cycle")
 
             except Exception as e:

@@ -34,6 +34,7 @@ WATCHDOG_FROZEN_THRESHOLD = 90    # Seconds of no heartbeat = frozen
 WATCHDOG_CHECK_INTERVAL   = 30    # How often watchdog checks
 WATCHDOG_GRACE_PERIOD     = 120   # Don't kill during first 2min of startup
 
+_watchdog_stop = threading.Event()
 
 def heartbeat_touch():
     """

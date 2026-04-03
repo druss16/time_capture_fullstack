@@ -2208,6 +2208,7 @@ def run_agent():
                                 if dwell >= MIN_DWELL_SECONDS:
                                     write_event(conn, cur, os_user, hostname, current_sig)
                             current_sig = IDLE_SIG
+                            _idle_entered_at = time.time()  # ← ADD THIS
                             if force_idle:
                                 dwell_start = time.time()
                             else:
@@ -2227,6 +2228,7 @@ def run_agent():
                                 write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
                                 current_sig = None
                                 dwell_start = None
+                                _idle_entered_at = 0.0
                                 continue
 
                             # Stuck idle check — re-read idle timer fresh
@@ -2239,9 +2241,18 @@ def run_agent():
                                         write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
                                     current_sig = None
                                     dwell_start = None
+                                    _idle_entered_at = 0.0  # ← ADD THIS
                                     continue
                                 else:
                                     log(f"[IDLE] Still genuinely idle after {int(idle_duration)}s (fresh={int(fresh_idle)}s)")
+                                    if idle_duration > (_IDLE_WATCHDOG_MAX_MINUTES * 60):
+                                        log(f"[IDLE-WD] ⚠️ Wall clock cap hit — force-flushing idle dwell")
+                                        write_event(conn, cur, os_user, hostname, IDLE_SIG, ts_override=dwell_start)
+                                        current_sig = None
+                                        dwell_start = None
+                                        _idle_entered_at = 0.0
+                                        _idle_reading_unchanged_since = 0.0
+                                        continue
 
                         if force_idle:
                             time.sleep(POLL_SECONDS * 3)
@@ -2266,6 +2277,8 @@ def run_agent():
                                 log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
                             current_sig = None
                             dwell_start = None
+                            _idle_entered_at = 0.0  # ← ADD THIS
+
 
                             # ── FIX 4: After waking from idle, re-peek foreground ──
                             # Use the front_peek we already grabbed above
@@ -2367,7 +2380,7 @@ def run_agent():
     watchdog_thread = threading.Thread(
         target=_watchdog,
         args=(_thread_ref, tracking_loop, log, report_error_to_backend),
-        daemon=False,
+        daemon=True,
     )
     watchdog_thread.start()
 

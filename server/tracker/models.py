@@ -1075,6 +1075,17 @@ class Block(models.Model):
     all_objects = models.Manager()  # Use this to include deleted blocks
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
 
+    taxpayer_bucket = models.ForeignKey(
+    'TaxpayerBucket',
+    null=True, blank=True,
+    on_delete=models.SET_NULL,
+    related_name='blocks',
+    )
+    
+    taxpayer_name = models.CharField(max_length=120, blank=True, null=True)
+    taxpayer_id_hash = models.CharField(max_length=16, blank=True, null=True, db_index=True)
+    tax_return_type = models.CharField(max_length=16, blank=True, null=True)
+
     # ===============================
     # Immutability Tracking
     # ===============================
@@ -2607,3 +2618,57 @@ class ClassificationAudit(models.Model):
             models.Index(fields=['created_at']),
         ]
 
+
+class TaxpayerBucket(models.Model):
+    """
+    Virtual grouping for individual tax return time blocks.
+
+    One row per unique taxpayer per org. Allows the dashboard to show
+    "Wood, Michael — 1h 42m Tax Preparation" as a named bucket without
+    requiring a Client record for every individual taxpayer.
+
+    SECURITY:
+      taxpayer_id_hash is a truncated SHA-256 of the SSN or EIN extracted
+      from the tax software window title. The raw SSN/EIN is never stored
+      anywhere in TimeTracker — it is hashed in tracker/utils/tax_software.py
+      and discarded immediately.
+
+    DEDUP:
+      Two people named "Wood, Michael" are distinguished by their hash
+      (different SSNs → different hashes → different buckets).
+      When a collision occurs on display_name, the frontend appends (1), (2)
+      and admins can rename to "Wood, Michael Sr." / "Wood, Michael Jr."
+    """
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='taxpayer_buckets',
+    )
+
+    # Dedup key — sha256(ssn_or_ein)[:12]
+    taxpayer_id_hash = models.CharField(max_length=16, db_index=True)
+
+    # Editable display name — admin can correct after initial extraction
+    display_name = models.CharField(max_length=120)
+
+    # Which return types this taxpayer has had open (informational only)
+    return_types_seen = models.JSONField(default=list, blank=True)
+
+    # Which software generated this bucket
+    software = models.CharField(max_length=32, blank=True, default='')
+
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'tracker_taxpayer_bucket'
+        ordering = ['display_name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['org', 'taxpayer_id_hash'],
+                name='unique_taxpayer_per_org',
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.display_name} ({self.org})"

@@ -3,6 +3,7 @@
 AI Client Auto-Switcher for TimeTracker Windows Agent
 
 Two-tier client detection from window titles:
+  Tier 0: Org-admin ClientPattern rules (highest priority)
   Tier 1: Local pattern matching (instant, free) — covers ~80% of cases
     - Pre-compiled regex matchers for client names + aliases
     - Persistent pattern cache (remembers prior AI decisions)
@@ -10,31 +11,17 @@ Two-tier client detection from window titles:
     - CPA file-naming convention detection
     - Partial-word matching (scales with sensitivity)
   Tier 2: Backend AI classification (smart, server-side) — ambiguous cases only
-    - Routed through TimeTracker backend (backend holds OpenAI key)
-    - Results cached server-side per-org (shared across all users in firm)
-    - Results also cached locally for instant future lookups
 
-Integration points (called from main.py):
-  on_window_change()   — every focus change in the tracking loop
-  on_dwell_tick()      — every POLL_SECONDS to fire pending switches
-  on_manual_switch()   — when user manually picks a client
-  update_clients()     — when sync refreshes the client list
-  undo_last_switch()   — revert most recent auto-switch
+CHANGES FROM PREVIOUS VERSION:
+  - GENERIC_TAX_DIALOGS and GENERIC_TAX_EXES imported from tax_software_constants.py
+    (agent-local file, no Django dependency — mirrors tracker/utils/tax_software.py)
+  - _should_skip() uses the shared set so both agent + backend stay in sync
+  - Tax software bare exe names (utw25.exe etc.) added to skip list
+  - No logic changes to switching pipeline itself
 
-AI Sensitivity (org-level admin setting, 0–100):
-  Controls how aggressively the switcher matches window titles to clients.
-    0  = Conservative — only very high-confidence, full-name matches trigger
-    50 = Balanced     — default behaviour (was hardcoded before v2.x)
-    100= Aggressive   — partial words + low-confidence hints auto-switch
-
-  Threshold mapping (see _sensitivity_to_thresholds):
-    local_confidence_threshold  0.90 → 0.50
-    openai_confidence_threshold 0.85 → 0.45
-    suggest_threshold           0.70 → 0.35
-  Partial-word matching activates at sensitivity >= 40:
-    e.g. "Dauphin" in "Eric Dauphin update" → "Dauphin & Fantacone"
-    
-Addressed False Positives
+SYNC NOTE:
+  tax_software_constants.py (this folder) mirrors tracker/utils/tax_software.py
+  on the backend. Update BOTH when adding new suppress entries.
 """
 
 import json, os, re, time, threading, hashlib, logging, urllib.request, urllib.error
@@ -44,6 +31,17 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("timetracker")
 
+# ---------------------------------------------------------------------------
+# Import suppress lists from agent-local constants file.
+# No Django dependency — safe to import in standalone PyInstaller build.
+# ---------------------------------------------------------------------------
+from tax_software_constants import (
+    GENERIC_TAX_DIALOGS,
+    GENERIC_TAX_EXES,
+    TAX_SOFTWARE_RETURN_PATTERN,
+    TAX_SOFTWARE_TAXWISE_PATTERN,
+    INTERNAL_TAX_CLIENT_NAME,
+)
 
 # =====================================================================
 # Data Structures
@@ -51,20 +49,16 @@ logger = logging.getLogger("timetracker")
 
 @dataclass
 class ClientMatch:
-    """Result of a client detection attempt."""
     client_id: int
     client_name: str
-    confidence: float          # 0.0 - 1.0
-    match_method: str          # "exact", "alias", "pattern_cache", "learned_rule",
-                               # "learned_partial", "file_convention", "backend_ai",
-                               # "partial_word"
+    confidence: float
+    match_method: str
     matched_token: str = ""
     reasoning: str = ""
 
 
 @dataclass
 class SwitchEvent:
-    """Record of an auto-switch for undo support."""
     timestamp: float
     from_client_id: Optional[int]
     from_client_name: Optional[str]
@@ -80,45 +74,39 @@ class SwitchEvent:
 
 DEFAULT_CONFIG = {
     "enabled": True,
-
-    # --- AI Sensitivity (0–100, org-level admin setting) ---
-    # Thresholds below are computed dynamically from this value via
-    # _sensitivity_to_thresholds(). Do NOT set threshold keys directly
-    # in org config — set ai_sensitivity instead.
     "ai_sensitivity": 50,
 
-    # These are computed at init/update and cached here for runtime use.
-    # They are overwritten by _apply_sensitivity() — do not hand-edit.
+    # Computed by _apply_sensitivity() — do not hand-edit
     "local_confidence_threshold": 0.80,
     "openai_confidence_threshold": 0.75,
     "suggest_threshold": 0.55,
-    "partial_name_matching": False,         # auto-enabled when sensitivity >= 40
-    "partial_name_min_word_len": 5,         # min chars for a word to be a partial needle
+    "partial_name_matching": False,
+    "partial_name_min_word_len": 5,
 
-    # --- Timing ---
+    # Timing
     "dwell_seconds_before_switch": 8,
     "cooldown_seconds": 120,
     "manual_override_snooze_minutes": 0,
 
-    # --- Backend AI ---
+    # Backend AI
     "ai_timeout": 10,
     "max_ai_calls_per_hour": 60,
     "ai_debounce_seconds": 5.0,
     "ai_max_batch": 5,
 
-    # --- Behavior ---
+    # Behavior
     "learn_from_confirms": True,
     "notify_on_switch": True,
     "undo_window_seconds": 120,
     "max_switch_history": 50,
     "debug": False,
 
-    # --- Pattern Cache ---
+    # Pattern Cache
     "pattern_cache_file": os.path.expanduser("~/.timetracker/ai_pattern_cache.json"),
     "max_cache_entries": 2000,
     "cache_ttl_days": 30,
 
-    # --- Skip Rules ---
+    # Skip Rules
     "skip_exes": {
         "explorer.exe", "searchapp.exe", "searchui.exe",
         "shellexperiencehost.exe", "startmenuexperiencehost.exe",
@@ -132,79 +120,36 @@ DEFAULT_CONFIG = {
 
 LEARNED_RULES_PATH = os.path.expanduser("~/.timetracker/ai_switcher_rules.json")
 
-# Words too generic to use as partial-word needles even at high sensitivity
 _STOP_WORDS = {
     "and", "the", "for", "inc", "llc", "ltd", "corp", "co", "group",
     "tax", "firm", "cpas", "cpa", "associates", "partners", "services",
 }
 
-# Generic UltraTax/TaxWise/Office window titles that should NEVER trigger
-# a client switch — too ambiguous to be meaningful signal
-_GENERIC_TITLE_BLOCKLIST = {
-    # UltraTax generic dialogs
-    "printing status", "print returns", "print status", "ultratax cs",
-    "2025 ultratax cs", "2024 ultratax cs", "2023 ultratax cs",
-    "cflvoutframe", "cflyoutframe", "electronic filing status",
-    "online status", "call summary", "open client", "return list",
-    "confirm", "data sharing - pending updates", "edit note",
-    "field note/tick", "statements from a", "statements from w2",
-    "statements from broker", "dividend income", "dependents",
-    "printing status", "select package",
-    # TaxWise generic
-    "taxwise 2024 on z drive", "taxwise 2023 on z drive",
-    "taxwise 2024", "taxwise 2023",
-    # Generic office/windows
-    "book1 - excel", "book1", "document1 - word",
-    "new tab", "program manager",
-}
-
-# Words too generic to use as partial match signals
-# These appear in many client names AND window titles coincidentally
 _GENERIC_WORD_BLOCKLIST = {
-    "professional", "services", "accounting", "management", 
+    "professional", "services", "accounting", "management",
     "associates", "solutions", "group", "local", "national",
     "international", "community", "united", "general", "advanced",
 }
 
 
 # =====================================================================
-# Sensitivity → Threshold Mapping
+# Sensitivity → Threshold Mapping (unchanged)
 # =====================================================================
 
 def _sensitivity_to_thresholds(sensitivity: int) -> dict:
-    """
-    Map org-level sensitivity (0–100) to runtime confidence thresholds.
-
-    Sensitivity scale:
-      0   = Conservative  — only solid full-name matches, no false positives
-      25  = Cautious      — mostly full names, minimal partial matching
-      50  = Balanced      — default (previous hardcoded behaviour)
-      75  = Aggressive    — partial words, looser AI threshold
-      100 = Very Aggressive — very short tokens, low-confidence AI triggers
-
-    Returns dict of threshold keys that override DEFAULT_CONFIG.
-    """
     s = max(0, min(100, int(sensitivity))) / 100.0
-
-    # Linear interpolation across the range
-    local_thresh  = round(0.90 - (s * 0.40), 3)   # 0.90 → 0.50
-    openai_thresh = round(0.85 - (s * 0.40), 3)   # 0.85 → 0.45
-    suggest_thresh = round(0.70 - (s * 0.35), 3)  # 0.70 → 0.35
-
-    # Partial-word matching activates once sensitivity crosses 40
+    local_thresh   = round(0.90 - (s * 0.40), 3)
+    openai_thresh  = round(0.85 - (s * 0.40), 3)
+    suggest_thresh = round(0.70 - (s * 0.35), 3)
     partial_matching = s >= 0.40
-
-    # Minimum word length for partial needles (shrinks as sensitivity rises)
-    # 40% → 6 chars,  70% → 4 chars,  100% → 3 chars
     if s < 0.40:
-        min_word_len = 99   # effectively disabled
+        min_word_len = 99
     elif s < 0.70:
         min_word_len = 6
     elif s < 0.90:
         min_word_len = 4
     else:
         min_word_len = 3
-
     return {
         "local_confidence_threshold":  local_thresh,
         "openai_confidence_threshold": openai_thresh,
@@ -215,35 +160,19 @@ def _sensitivity_to_thresholds(sensitivity: int) -> dict:
 
 
 def _partial_word_confidence(word_len: int, sensitivity: int) -> float:
-    """
-    Confidence assigned to a partial-word match.
-    Scales with both word length (longer = more specific) and sensitivity.
-    Always stays below the full-name regex confidence so full matches win.
-    """
     s = max(0, min(100, sensitivity)) / 100.0
-    if word_len >= 10:
-        base = 0.72
-    elif word_len >= 7:
-        base = 0.65
-    elif word_len >= 5:
-        base = 0.58
-    else:
-        base = 0.50
-    # At max sensitivity, add up to +0.10 bonus
+    if word_len >= 10:   base = 0.72
+    elif word_len >= 7:  base = 0.65
+    elif word_len >= 5:  base = 0.58
+    else:                base = 0.50
     return round(min(0.80, base + s * 0.10), 3)
 
 
 # =====================================================================
-# Pattern Cache — remembers AI decisions to skip repeat calls
+# Pattern Cache (unchanged)
 # =====================================================================
 
 class PatternCache:
-    """
-    Persists title->client mappings learned from AI.
-    Normalizes titles so "Smith_Co_1040_2024.pdf" and
-    "Smith_Co_1120S_2024.pdf" map to the same cache key.
-    """
-
     def __init__(self, path, max_entries=2000, ttl_days=30):
         self.path = path
         self.max_entries = max_entries
@@ -314,7 +243,7 @@ class PatternCache:
 
 
 # =====================================================================
-# Pre-compiled Regex Matchers (fast local matching)
+# Pre-compiled Regex Matchers (unchanged)
 # =====================================================================
 
 _BOUNDARY = r'[\s_\-./\\|:,()\'"<>*\u2013\u2014]'
@@ -326,19 +255,9 @@ def _normalize(s: str) -> str:
 
 
 def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
-    """
-    Pre-compile regex patterns for each client name + aliases.
-
-    When sensitivity >= 40, also compiles individual significant words
-    from multi-word client names as lower-confidence partial matchers.
-    E.g. "Dauphin & Fantacone" → also matches "Dauphin" alone.
-
-    Each matcher entry now carries a 'partial' flag and per-pattern
-    confidence so _regex_match can score correctly.
-    """
     thresholds = _sensitivity_to_thresholds(sensitivity)
     partial_enabled = thresholds["partial_name_matching"]
-    min_word_len = thresholds["partial_name_min_word_len"]
+    min_word_len    = thresholds["partial_name_min_word_len"]
 
     matchers = []
     for c in clients:
@@ -347,9 +266,8 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
             continue
 
         needles_raw = [name] + [a.strip() for a in (c.get("aliases") or []) if a and a.strip()]
-        patterns = []      # list of (compiled_pat, needle_str, is_partial)
+        patterns = []
 
-        # --- Full-name / alias patterns (always compiled) ---
         for needle in needles_raw:
             if len(needle) < 3:
                 continue
@@ -359,11 +277,9 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
                 r'(?:^|' + _BOUNDARY + r')' + flex + r'(?:$|' + _BOUNDARY + r')',
                 re.IGNORECASE,
             )
-            patterns.append((pat, needle, False))   # is_partial=False
+            patterns.append((pat, needle, False))
 
-        # --- Partial-word patterns (sensitivity-gated) ---
         if partial_enabled:
-            # Extract significant words from the primary client name
             words = re.split(r'[\s&,./\\]+', name)
             for word in words:
                 word = word.strip(" .,&")
@@ -371,10 +287,7 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
                     continue
                 if word.lower() in _STOP_WORDS:
                     continue
-                # Skip if word is already fully covered by a full-name needle
-                already_covered = any(
-                    word.lower() == n.lower() for n in needles_raw
-                )
+                already_covered = any(word.lower() == n.lower() for n in needles_raw)
                 if already_covered:
                     continue
                 escaped = re.escape(word.lower())
@@ -382,13 +295,13 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
                     r'(?:^|' + _BOUNDARY + r')' + escaped + r'(?:$|' + _BOUNDARY + r')',
                     re.IGNORECASE,
                 )
-                patterns.append((pat, word, True))  # is_partial=True
+                patterns.append((pat, word, True))
 
         if patterns:
             matchers.append({
                 "client_id": c["id"],
                 "client_name": name,
-                "patterns": patterns,      # list of (pat, needle, is_partial)
+                "patterns": patterns,
                 "needles_raw": needles_raw,
             })
     return matchers
@@ -396,13 +309,6 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
 
 def _regex_match(title: str, file_path: str, matchers: list,
                  sensitivity: int = 50) -> Optional[ClientMatch]:
-    """
-    Fast pre-compiled regex match of client names/aliases + partial words.
-
-    Partial-word hits receive lower confidence scores (see
-    _partial_word_confidence) so they only auto-switch when the org's
-    sensitivity is dialled high enough to lower the threshold to meet them.
-    """
     search_text = _normalize(f"{title or ''} {file_path or ''}")
     if not search_text.strip():
         return None
@@ -417,29 +323,20 @@ def _regex_match(title: str, file_path: str, matchers: list,
             needle_len = len(needle)
 
             if is_partial:
-                # Partial-word confidence — intentionally lower than full match
-                # Skip generic words that appear in many client names
                 if needle.lower() in _GENERIC_WORD_BLOCKLIST:
                     continue
-                conf = _partial_word_confidence(needle_len, sensitivity)
+                conf   = _partial_word_confidence(needle_len, sensitivity)
                 method = "partial_word"
             else:
-                # Full name / alias confidence (original logic)
-                if needle_len >= 8:
-                    conf = 0.95
-                elif needle_len >= 5:
-                    conf = 0.88
-                elif needle_len >= 3:
-                    conf = 0.70
-                else:
-                    conf = 0.50
-                # Primary name gets a small boost over aliases
+                if needle_len >= 8:   conf = 0.95
+                elif needle_len >= 5: conf = 0.88
+                elif needle_len >= 3: conf = 0.70
+                else:                 conf = 0.50
                 is_primary = (needle == m["needles_raw"][0])
                 if is_primary:
                     conf = min(1.0, conf + 0.03)
                 method = "exact" if is_primary else "alias"
 
-            # Boost if found in file path (more intentional than browser tab)
             if file_path and needle.lower() in (file_path or "").lower():
                 conf = min(1.0, conf + 0.05)
 
@@ -460,13 +357,13 @@ def _regex_match(title: str, file_path: str, matchers: list,
 
 
 # =====================================================================
-# Learned Rules — strengthen over time with repeated confirms
+# Learned Rules (unchanged)
 # =====================================================================
 
 class LearnedRules:
 
     def __init__(self, path=LEARNED_RULES_PATH):
-        self.path = path
+        self.path  = path
         self.rules: Dict[str, dict] = {}
         self._load()
 
@@ -550,7 +447,7 @@ class LearnedRules:
             r'Microsoft Edge|Microsoft Excel|Microsoft Word|Microsoft PowerPoint|'
             r'Adobe Acrobat|Notepad\+?\+?|Visual Studio Code|Code|'
             r'Windows PowerShell|Command Prompt|Terminal|File Explorer).*$',
-            '', title, flags=re.IGNORECASE
+            '', title, flags=re.IGNORECASE,
         ).strip()
         if cleaned:
             patterns.append(cleaned.lower())
@@ -564,7 +461,7 @@ class LearnedRules:
 
 
 # =====================================================================
-# CPA File Convention Matcher
+# CPA File Convention Matcher (unchanged)
 # =====================================================================
 
 def _cpa_file_match(title: str, clients: list, current_client_id: int = None) -> Optional[ClientMatch]:
@@ -572,7 +469,7 @@ def _cpa_file_match(title: str, clients: list, current_client_id: int = None) ->
         r'^([A-Za-z][A-Za-z0-9\s&.,]+?)[\s_-]+'
         r'(?:1040|1120|1065|990|W-?2|1099|K-?1|tax|return|financials?|'
         r'audit|review|engagement|invoice|proposal|letter)',
-        title, re.IGNORECASE
+        title, re.IGNORECASE,
     )
     if not m:
         return None
@@ -581,7 +478,7 @@ def _cpa_file_match(title: str, clients: list, current_client_id: int = None) ->
         return None
     for client in clients:
         client_name = (client.get("name") or "").strip()
-        client_id = client.get("id")
+        client_id   = client.get("id")
         if client_id == current_client_id:
             continue
         if client_name.lower() in candidate.lower() or candidate.lower() in client_name.lower():
@@ -597,7 +494,7 @@ def _cpa_file_match(title: str, clients: list, current_client_id: int = None) ->
 
 
 # =====================================================================
-# Backend AI Classifier (Tier 2)
+# Backend AI Classifier (unchanged)
 # =====================================================================
 
 def _call_backend_classify(titles: list, api_base: str, api_key: str,
@@ -609,8 +506,8 @@ def _call_backend_classify(titles: list, api_base: str, api_key: str,
     payload = {
         "titles": [
             {
-                "title": t.get("title", ""),
-                "app_name": t.get("app", ""),
+                "title":     t.get("title", ""),
+                "app_name":  t.get("app", ""),
                 "file_path": t.get("file_path", ""),
             }
             for t in titles
@@ -671,73 +568,63 @@ def _call_backend_classify(titles: list, api_base: str, api_key: str,
 # =====================================================================
 
 class AIClientSwitcher:
-    """
-    Orchestrates local + backend AI client detection and auto-switching.
-
-    The ai_sensitivity value (0–100) from org settings is the single knob
-    that controls how aggressively titles are matched to clients.  Admins
-    set it in Settings → AI & Automation → Client Detection Sensitivity.
-    It is delivered to the agent via the /api/sync/ payload under
-    org_settings.ai_sensitivity and applied at __init__ / update_clients.
-    """
 
     def __init__(self, config=None, api_base="", api_key="", openai_api_key="",
                  set_current_client_fn=None, gui_menu_bar=None,
                  notif_manager=None, sync=None):
         self.config = {**DEFAULT_CONFIG, **(config or {})}
-        self.api_base = api_base
-        self.api_key = api_key
-        self.openai_api_key = openai_api_key
+        self.api_base          = api_base
+        self.api_key           = api_key
+        self.openai_api_key    = openai_api_key
         self.set_current_client_fn = set_current_client_fn
-        self.gui_menu_bar = gui_menu_bar
-        self.notif_manager = notif_manager
-        self.sync = sync
+        self.gui_menu_bar      = gui_menu_bar
+        self.notif_manager     = notif_manager
+        self.sync              = sync
 
-        # Apply sensitivity → threshold mapping before building matchers
         self._apply_sensitivity()
 
-        # Client data
-        clients = (sync.clients if sync else None) or []
-        self._clients = clients
-        self._client_map = {c["id"]: c for c in clients}
+        clients           = (sync.clients if sync else None) or []
+        self._clients     = clients
+        self._client_map  = {c["id"]: c for c in clients}
 
-        sensitivity = self.config["ai_sensitivity"]
-        self._matchers = _build_client_matchers(clients, sensitivity)
-        self._client_patterns: List[Dict] = []  # Tier 0 org-admin rules
-        self._learned = LearnedRules()
-        self._cache = PatternCache(
+        sensitivity       = self.config["ai_sensitivity"]
+        self._matchers    = _build_client_matchers(clients, sensitivity)
+        self._client_patterns: List[Dict] = []
+        self._learned     = LearnedRules()
+        self._cache       = PatternCache(
             self.config["pattern_cache_file"],
             self.config["max_cache_entries"],
             self.config["cache_ttl_days"],
         )
 
-        # Tier 2: Backend AI rate limiter
-        self._ai_call_count = 0
+        self._ai_call_count   = 0
         self._ai_window_start = time.time()
-
-        # AI batch queue (debounced)
         self._ai_queue: List[dict] = []
-        self._ai_lock = threading.Lock()
+        self._ai_lock   = threading.Lock()
         self._ai_timer: Optional[threading.Timer] = None
 
-        # Switch state
-        self._current_client_id: Optional[int] = None
+        self._current_client_id:   Optional[int] = None
         self._current_client_name: Optional[str] = None
-        self._pending_switch: Optional[dict] = None
-        self._cooldowns: Dict[int, float] = {}
+        self._pending_switch:      Optional[dict] = None
+        self._cooldowns:           Dict[int, float] = {}
         self._manual_override_until: float = 0.0
         self._switch_history: List[SwitchEvent] = []
-        self._lock = threading.Lock()
-        self._last_title: str = ""
+        self._lock      = threading.Lock()
+        self._last_title = ""
 
         self._skip_exes = set(self.config.get("skip_exes", set()))
+        # Merge in tax software exe names from shared constant
+        self._skip_exes.update(GENERIC_TAX_EXES)
+
         self._skip_patterns = [
             re.compile(p, re.IGNORECASE)
             for p in self.config.get("skip_title_patterns", [])
         ]
 
-        self.stats = {"regex": 0, "cache": 0, "learned": 0, "file_conv": 0,
-                      "backend_ai": 0, "partial_word": 0, "switches": 0, "suppressed": 0}
+        self.stats = {
+            "regex": 0, "cache": 0, "learned": 0, "file_conv": 0,
+            "backend_ai": 0, "partial_word": 0, "switches": 0, "suppressed": 0,
+        }
 
         self._backend_ai_available = bool(api_base and api_key)
 
@@ -751,17 +638,12 @@ class AIClientSwitcher:
         )
 
     # =================================================================
-    # Sensitivity Management
+    # Sensitivity Management (unchanged)
     # =================================================================
 
     def _apply_sensitivity(self):
-        """
-        Compute threshold config keys from ai_sensitivity and write them
-        into self.config so all downstream code reads them transparently.
-        Called at init and whenever sensitivity changes.
-        """
         sensitivity = int(self.config.get("ai_sensitivity", 50))
-        thresholds = _sensitivity_to_thresholds(sensitivity)
+        thresholds  = _sensitivity_to_thresholds(sensitivity)
         self.config.update(thresholds)
         logger.info(
             f"[AI-SWITCH] Sensitivity={sensitivity} → "
@@ -772,52 +654,40 @@ class AIClientSwitcher:
         )
 
     def update_sensitivity(self, sensitivity: int):
-        """
-        Called when the backend delivers an updated org sensitivity value
-        (e.g. an admin changed it in Settings while agents are running).
-        Rebuilds matchers immediately — no agent restart required.
-        """
         self.config["ai_sensitivity"] = max(0, min(100, int(sensitivity)))
         self._apply_sensitivity()
-        # Rebuild matchers so partial-word patterns reflect new setting
         self._matchers = _build_client_matchers(
             self._clients, self.config["ai_sensitivity"]
         )
         logger.info(f"[AI-SWITCH] Sensitivity updated live → {self.config['ai_sensitivity']}")
 
     # =================================================================
-    # Public API (called from main.py)
+    # Public API (unchanged)
     # =================================================================
 
     def update_clients(self, clients: list):
-        """Called when sync refreshes the client list."""
-        self._clients = clients or []
+        self._clients    = clients or []
         self._client_map = {c["id"]: c for c in self._clients}
-        self._matchers = _build_client_matchers(
+        self._matchers   = _build_client_matchers(
             self._clients, self.config["ai_sensitivity"]
         )
         logger.info(f"[AI-SWITCH] Updated: {len(self._clients)} clients")
 
     def update_client_patterns(self, patterns: list):
-        """
-        Called when sync delivers org-level ClientPattern rules.
-        These are Tier 0 — checked before regex matching.
-        Sorted by weight descending so highest-priority rules win.
-        """
         self._client_patterns = sorted(
             patterns or [],
             key=lambda p: p.get('weight', 0),
-            reverse=True
+            reverse=True,
         )
         logger.info(f"[AI-SWITCH] Updated {len(self._client_patterns)} client patterns (Tier 0)")
 
     def set_current_client(self, client_id: int, client_name: str):
-        self._current_client_id = client_id
+        self._current_client_id   = client_id
         self._current_client_name = client_name
 
     def on_manual_switch(self, client_id: int, client_name: str):
         with self._lock:
-            self._current_client_id = client_id
+            self._current_client_id   = client_id
             self._current_client_name = client_name
             snooze_min = self.config["manual_override_snooze_minutes"]
             self._manual_override_until = time.time() + snooze_min * 60
@@ -861,7 +731,7 @@ class AIClientSwitcher:
             return False
         if time.time() - last.timestamp > self.config["undo_window_seconds"]:
             return False
-        logger.info(f"[AI-SWITCH] UNDO: {last.to_client_name} \u2192 {last.from_client_name}")
+        logger.info(f"[AI-SWITCH] UNDO: {last.to_client_name} → {last.from_client_name}")
         self._do_backend_switch(last.from_client_id, last.from_client_name)
         self._notify_switch(last.from_client_name, last.to_client_name, is_undo=True)
         return True
@@ -869,40 +739,34 @@ class AIClientSwitcher:
     def get_last_switch(self) -> Optional[SwitchEvent]:
         return self._switch_history[-1] if self._switch_history else None
 
+    # =================================================================
+    # Tier 0 — Org admin patterns (unchanged)
+    # =================================================================
 
-    def _tier0_pattern_match(self, app_name: str, title: str) -> Optional['ClientMatch']:
-        """
-        Check org-admin ClientPattern rules (Tier 0).
-        match_type='app'   → match against app_name
-        match_type='title' → match against window title
-        Returns highest-weight match or None.
-        """
+    def _tier0_pattern_match(self, app_name: str, title: str) -> Optional[ClientMatch]:
         search_app   = (app_name or '').lower()
         search_title = (title or '').lower()
-     
-        for rule in self._client_patterns:  # already sorted by weight desc
-            pattern = (rule.get('pattern') or '').lower()
+
+        for rule in self._client_patterns:
+            pattern    = (rule.get('pattern') or '').lower()
             if not pattern:
                 continue
             match_type  = rule.get('match_type', 'title')
             client_name = rule.get('client_name', '')
-     
-            # Find the client_id by name from our client list
+
             client = next(
-                (c for c in self._clients if c.get('name') == client_name),
-                None
+                (c for c in self._clients if c.get('name') == client_name), None
             )
             if not client:
                 continue
-     
+
             hit = False
             if match_type == 'app' and pattern in search_app:
                 hit = True
             elif match_type == 'title' and pattern in search_title:
                 hit = True
-     
+
             if hit:
-                # Weight 100 → confidence 1.0, weight 50 → confidence 0.5
                 confidence = min(1.0, rule.get('weight', 100) / 100.0)
                 return ClientMatch(
                     client_id=client['id'],
@@ -916,16 +780,17 @@ class AIClientSwitcher:
 
     # =================================================================
     # Detection Pipeline
+    # KEY CHANGE: _should_skip now uses shared GENERIC_TAX_DIALOGS
     # =================================================================
 
     def _detect(self, app_name: str, exe_name: str, title: str,
                 url: str, file_path: str):
         try:
-            search = f"{title} {file_path}" if file_path else title
-            cur_id = self._current_client_id
+            search      = f"{title} {file_path}" if file_path else title
+            cur_id      = self._current_client_id
             sensitivity = self.config["ai_sensitivity"]
 
-            # --- Tier 1a: Pattern cache ---
+            # Tier 1a: Pattern cache
             cached = self._cache.get(title)
             if cached and cached.get("client_id"):
                 if cached["client_id"] != cur_id:
@@ -942,7 +807,7 @@ class AIClientSwitcher:
                         self._queue_switch(match)
                         return
 
-            # --- Tier 1b: Pre-compiled regex + partial-word ---
+            # Tier 1b: Pre-compiled regex + partial-word
             regex_hit = _regex_match(title, file_path, self._matchers, sensitivity)
             if regex_hit and regex_hit.client_id != cur_id:
                 if regex_hit.confidence >= self.config["local_confidence_threshold"]:
@@ -951,7 +816,7 @@ class AIClientSwitcher:
                     self._queue_switch(regex_hit)
                     return
 
-            # --- Tier 1c: Learned rules ---
+            # Tier 1c: Learned rules
             learned_hit = self._learned.match(search, cur_id)
             if learned_hit and learned_hit.confidence >= 0.65:
                 if learned_hit.client_id != cur_id:
@@ -959,17 +824,39 @@ class AIClientSwitcher:
                     self._queue_switch(learned_hit)
                     return
 
-            # --- Tier 1d: CPA file naming conventions ---
+            # Tier 1d: CPA file naming conventions
             file_hit = _cpa_file_match(title, self._clients, cur_id)
             if file_hit:
                 self.stats["file_conv"] += 1
                 self._queue_switch(file_hit)
                 return
 
-            # --- Tier 0 FALLBACK: Org-admin ClientPattern rules ---
-            # Runs AFTER local matching so known clients are caught by regex first.
-            # Unknown clients (not in client list) fall through here e.g.
-            # "UltraTax → Internal – Tax" for returns not in the client list.
+            # --- Tier 1e: Tax software open return → Internal - Tax ──────────────
+            # When UltraTax/TaxWise has an individual return open and no client
+            # matched, switch to the Internal - Tax client so time isn't orphaned.
+            if not regex_hit and not learned_hit and not file_hit:
+                if (TAX_SOFTWARE_RETURN_PATTERN.search(title or '')
+                        or TAX_SOFTWARE_TAXWISE_PATTERN.search(title or '')):
+                    # Find the Internal - Tax client in our client list
+                    internal_client = next(
+                        (c for c in self._clients
+                         if c.get('name', '').lower() == INTERNAL_TAX_CLIENT_NAME.lower()),
+                        None
+                    )
+                    if internal_client and internal_client['id'] != cur_id:
+                        match = ClientMatch(
+                            client_id=internal_client['id'],
+                            client_name=internal_client['name'],
+                            confidence=0.92,
+                            match_method="tax_software_return",
+                            matched_token=title[:80],
+                            reasoning="Tax software open return — routing to Internal - Tax",
+                        )
+                        self.stats["regex"] += 1
+                        self._queue_switch(match)
+                        return
+
+            # Tier 0 fallback: Org-admin rules
             if self._client_patterns:
                 tier0_hit = self._tier0_pattern_match(app_name, title)
                 if tier0_hit and tier0_hit.client_id != cur_id:
@@ -977,7 +864,7 @@ class AIClientSwitcher:
                     self._queue_switch(tier0_hit)
                     return
 
-            # --- Suggestion: confident enough to suggest, not enough to auto-switch ---
+            # Suggestion only
             best_local = regex_hit or learned_hit or file_hit
             if best_local and best_local.client_id != cur_id:
                 if best_local.confidence >= self.config["suggest_threshold"]:
@@ -988,11 +875,13 @@ class AIClientSwitcher:
                             confidence=best_local.confidence,
                             reason=best_local.reasoning,
                         )
-                        logger.info(f"[AI-SWITCH] Suggested: {best_local.client_name} "
-                                    f"(conf={best_local.confidence:.2f})")
+                        logger.info(
+                            f"[AI-SWITCH] Suggested: {best_local.client_name} "
+                            f"(conf={best_local.confidence:.2f})"
+                        )
                         return
 
-            # --- Tier 2: Backend AI ---
+            # Tier 2: Backend AI
             if self._backend_ai_available and self.config["enabled"]:
                 if (regex_hit and regex_hit.confidence >= self.config["suggest_threshold"]) or not regex_hit:
                     self._enqueue_for_ai(title, file_path, app_name)
@@ -1014,20 +903,22 @@ class AIClientSwitcher:
             if self._pending_switch and self._pending_switch["client_id"] == match.client_id:
                 return
             self._pending_switch = {
-                "client_id": match.client_id,
+                "client_id":   match.client_id,
                 "client_name": match.client_name,
-                "confidence": match.confidence,
-                "method": match.match_method,
-                "reasoning": match.reasoning,
-                "first_seen": time.time(),
-                "match": match,
+                "confidence":  match.confidence,
+                "method":      match.match_method,
+                "reasoning":   match.reasoning,
+                "first_seen":  time.time(),
+                "match":       match,
             }
             if self.config.get("debug"):
-                logger.info(f"[AI-SWITCH] Pending: {match.client_name} "
-                            f"(conf={match.confidence:.2f}, via={match.match_method})")
+                logger.info(
+                    f"[AI-SWITCH] Pending: {match.client_name} "
+                    f"(conf={match.confidence:.2f}, via={match.match_method})"
+                )
 
     # =================================================================
-    # Backend AI Batch Queue
+    # Backend AI Batch Queue (unchanged)
     # =================================================================
 
     def _enqueue_for_ai(self, title: str, file_path: str, app_name: str):
@@ -1035,15 +926,15 @@ class AIClientSwitcher:
             return
         now = time.time()
         if now - self._ai_window_start > 3600:
-            self._ai_call_count = 0
+            self._ai_call_count  = 0
             self._ai_window_start = now
         if self._ai_call_count >= self.config["max_ai_calls_per_hour"]:
             return
         item = {
-            "id": hashlib.md5(f"{title}:{now}".encode()).hexdigest()[:12],
-            "title": title,
+            "id":        hashlib.md5(f"{title}:{now}".encode()).hexdigest()[:12],
+            "title":     title,
             "file_path": file_path,
-            "app": app_name,
+            "app":       app_name,
         }
         with self._ai_lock:
             self._ai_queue.append(item)
@@ -1062,8 +953,8 @@ class AIClientSwitcher:
         with self._ai_lock:
             if not self._ai_queue:
                 return
-            batch = self._ai_queue[:self.config["ai_max_batch"]]
-            self._ai_queue = self._ai_queue[self.config["ai_max_batch"]:]
+            batch           = self._ai_queue[:self.config["ai_max_batch"]]
+            self._ai_queue  = self._ai_queue[self.config["ai_max_batch"]:]
             if self._ai_timer:
                 self._ai_timer.cancel()
                 self._ai_timer = None
@@ -1073,7 +964,9 @@ class AIClientSwitcher:
                 logger.info(f"[AI-SWITCH] Backend AI batch: {len(batch)} titles")
                 self._ai_call_count += 1
                 results = _call_backend_classify(
-                    batch, api_base=self.api_base, api_key=self.api_key,
+                    batch,
+                    api_base=self.api_base,
+                    api_key=self.api_key,
                     timeout=self.config.get("ai_timeout", 10),
                 )
                 cur_id = self._current_client_id
@@ -1082,7 +975,9 @@ class AIClientSwitcher:
                         continue
                     self._cache.put(item["title"], match.client_id, match.client_name, match.confidence)
                     if self.config["learn_from_confirms"]:
-                        self._learned.learn(item["title"], match.client_id, match.client_name, "backend_ai")
+                        self._learned.learn(
+                            item["title"], match.client_id, match.client_name, "backend_ai"
+                        )
                     if match.confidence >= self.config["openai_confidence_threshold"]:
                         if match.client_id != cur_id:
                             self.stats["backend_ai"] += 1
@@ -1094,27 +989,27 @@ class AIClientSwitcher:
         threading.Thread(target=_run, daemon=True).start()
 
     # =================================================================
-    # Switch Execution
+    # Switch Execution (unchanged)
     # =================================================================
 
     def _execute_switch(self, data: dict):
-        cid = data["client_id"]
-        cname = data["client_name"]
-        conf = data["confidence"]
+        cid    = data["client_id"]
+        cname  = data["client_name"]
+        conf   = data["confidence"]
         method = data.get("method", "?")
-        match = data.get("match")
+        match  = data.get("match")
 
         if cid == self._current_client_id:
             return
 
         try:
-            old_id = self._current_client_id
+            old_id   = self._current_client_id
             old_name = self._current_client_name or "None"
 
             if self.set_current_client_fn:
                 self.set_current_client_fn(cid, cname, "ai_switcher")
 
-            self._current_client_id = cid
+            self._current_client_id   = cid
             self._current_client_name = cname
             self._last_title = ""
             self._cooldowns[cid] = time.time() + self.config["cooldown_seconds"]
@@ -1127,7 +1022,8 @@ class AIClientSwitcher:
                 to_client_name=cname,
                 trigger_title=data.get("reasoning", "")[:200],
                 match=match or ClientMatch(
-                    client_id=cid, client_name=cname, confidence=conf, match_method=method,
+                    client_id=cid, client_name=cname,
+                    confidence=conf, match_method=method,
                 ),
             ))
             max_hist = self.config.get("max_switch_history", 50)
@@ -1136,8 +1032,10 @@ class AIClientSwitcher:
 
             self._notify_switch(cname, old_name, conf=conf, method=method)
             self.stats["switches"] += 1
-            logger.info(f"[AI-SWITCH] \u2705 {old_name} \u2192 {cname} "
-                        f"(conf={conf:.0%}, {method})")
+            logger.info(
+                f"[AI-SWITCH] ✅ {old_name} → {cname} "
+                f"(conf={conf:.0%}, {method})"
+            )
 
         except Exception as e:
             logger.error(f"[AI-SWITCH] switch error: {e}")
@@ -1145,17 +1043,19 @@ class AIClientSwitcher:
     def _do_backend_switch(self, client_id: int, client_name: str):
         if self.set_current_client_fn:
             self.set_current_client_fn(client_id, client_name, "ai_switcher")
-        self._current_client_id = client_id
+        self._current_client_id   = client_id
         self._current_client_name = client_name
         if self.gui_menu_bar and hasattr(self.gui_menu_bar, "state"):
             self.gui_menu_bar.state.set_client(client_id, client_name)
             if hasattr(self.gui_menu_bar, "app") and self.gui_menu_bar.app:
-                self.gui_menu_bar.app.title = f"\u23f1 {client_name}" if client_name else "\u23f1 None"
+                self.gui_menu_bar.app.title = (
+                    f"⏱ {client_name}" if client_name else "⏱ None"
+                )
         if self.notif_manager and hasattr(self.notif_manager, "set_current_client"):
             self.notif_manager.set_current_client(client_id, client_name)
 
     # =================================================================
-    # Notifications
+    # Notifications (unchanged)
     # =================================================================
 
     def _notify_switch(self, new_name: str, old_name: str,
@@ -1163,12 +1063,12 @@ class AIClientSwitcher:
         if not self.config["notify_on_switch"]:
             return
         if is_undo:
-            title = "\u23f1 Client Reverted"
-            body = f"Back to {new_name}"
+            title    = "⏱ Client Reverted"
+            body     = f"Back to {new_name}"
             subtitle = "Undo successful"
         else:
-            title = "\u23f1 Client Switched"
-            body = f"{old_name} \u2192 {new_name}"
+            title    = "⏱ Client Switched"
+            body     = f"{old_name} → {new_name}"
             subtitle = f"Auto-detected ({int(conf * 100)}% confidence)" if conf else "Auto-detected"
 
         full_body = f"{subtitle}\n{body}" if subtitle else body
@@ -1192,7 +1092,10 @@ class AIClientSwitcher:
                 '$toast = [Windows.UI.Notifications.ToastNotification]::new($template); '
                 '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("TimeTracker").Show($toast)'
             )
-            subprocess.run(["powershell", "-Command", ps_script], timeout=5, capture_output=True)
+            subprocess.run(
+                ["powershell", "-Command", ps_script],
+                timeout=5, capture_output=True,
+            )
             return
         except Exception:
             pass
@@ -1205,7 +1108,8 @@ class AIClientSwitcher:
                 root.attributes("-topmost", True)
                 root.geometry("350x80+{}+{}".format(
                     root.winfo_screenwidth() - 370,
-                    root.winfo_screenheight() - 120))
+                    root.winfo_screenheight() - 120,
+                ))
                 root.overrideredirect(True)
                 root.configure(bg="#2d2d2d")
                 Label(root, text=title, fg="white", bg="#2d2d2d",
@@ -1220,24 +1124,30 @@ class AIClientSwitcher:
 
     # =================================================================
     # Helpers
+    # KEY CHANGE: _should_skip uses shared GENERIC_TAX_DIALOGS set
     # =================================================================
 
     def _should_skip(self, title: str, exe_name: str) -> bool:
-        # Block generic dialog titles that cause false positives
-        if title.lower().strip() in _GENERIC_TITLE_BLOCKLIST:
+        # Use shared suppression list (same set as block_classifier Stage 0)
+        if title.lower().strip() in GENERIC_TAX_DIALOGS:
             return True
 
         if exe_name and exe_name.lower() in self._skip_exes:
             return True
+
         t = title.lower().strip()
         for pat in self._skip_patterns:
             if pat.search(t):
                 return True
-        if t in {"google chrome", "microsoft edge", "brave browser", "firefox",
-         "microsoft outlook", "mail", "slack", "file explorer",
-         "microsoft teams", "zoom", "windows powershell",
-         "command prompt", "terminal", "task manager"}:
+
+        if t in {
+            "google chrome", "microsoft edge", "brave browser", "firefox",
+            "microsoft outlook", "mail", "slack", "file explorer",
+            "microsoft teams", "zoom", "windows powershell",
+            "command prompt", "terminal", "task manager",
+        }:
             return True
+
         return False
 
     def _clear_pending(self):

@@ -134,9 +134,22 @@ def create_internal_client(sender, instance, created, **kwargs):
                 'visibility': 'all',
             }
         )
-        logger.info(f"[ORG] Created 'Internal' client for org: {instance.name}")
+        # After the existing 'Internal' client creation
+        Client.objects.get_or_create(
+            org=instance,
+            code='INTERNAL_TAX',
+            defaults={
+                'name': 'Internal - Tax',
+                'is_active': True,
+                'is_billable': False,
+                'visibility': 'all',
+            }
+        )
+
+        logger.info(f"[ORG] Created 'Internal' + 'Internal - Tax' clients for org: {instance.name}")
     except Exception as e:
         logger.warning(f"[ORG] Failed to create Internal client for {instance.name}: {e}")
+
 
 
 def backfill_internal_clients():

@@ -1527,25 +1527,34 @@ def ai_suggestions_today(request):
     GUARANTEES:
     ✅ Categorized blocks NEVER change (is_categorized=True is permanent)
     ✅ Only uncategorized blocks get AI suggestions
-    ✅ 4-stage pipeline runs BEFORE OpenAI (deterministic → patterns → AI client → AI category)
-    ✅ Auto-saves high-confidence results (>= 0.88, raised from 0.70)
+    ✅ 5-stage pipeline runs BEFORE OpenAI:
+         Stage 0a — Suppress generic dialogs / internal timesheets (no save, no response)
+         Stage 0b — Internal firm work shortcut (Billing/Admin, no client)
+         Stage 1  — Tax software extraction (UltraTax/TaxWise SSN hashed, taxpayer bucket)
+         Stage 2  — Deterministic alias/domain/path rules
+         Stage 3  — Learned patterns (UserWorkPattern)
+         Stage 4  — AI client identification
+         Stage 5  — AI category classification
+    ✅ Auto-saves high-confidence results (>= 0.88)
     ✅ OpenAI batch only called for genuinely unresolved blocks
     ✅ No duplicates (event-centric compaction)
     ✅ No flip-flopping (once saved, never touched again)
     ✅ Clean display formatting (App - Context format)
+    ✅ Individual tax returns returned with taxpayer_name for frontend bucketing
+    ✅ Suppressed blocks silently dropped (no frontend entry)
     """
     from tracker.utils.display_names import format_block_for_display, format_duration
     from tracker.services.block_classifier import BlockClassifier
 
     # ── Query params ──────────────────────────────────────────────────────────
-    username     = request.GET.get("user") or None
-    hostname     = request.GET.get("hostname") or None
-    limit        = int(request.GET.get("limit") or 120)
-    limit        = max(1, min(limit, 200))
-    timeout_ms   = int(request.GET.get("timeout_ms") or 15000)
-    noai         = request.GET.get("noai") in ("1", "true", "yes")
+    username      = request.GET.get("user") or None
+    hostname      = request.GET.get("hostname") or None
+    limit         = int(request.GET.get("limit") or 120)
+    limit         = max(1, min(limit, 200))
+    timeout_ms    = int(request.GET.get("timeout_ms") or 15000)
+    noai          = request.GET.get("noai") in ("1", "true", "yes")
     fallback_mode = request.GET.get("fallback") or ""
-    debug        = request.GET.get("debug") in ("1", "true", "yes")
+    debug         = request.GET.get("debug") in ("1", "true", "yes")
 
     org = get_org_or_default(request)
 
@@ -1573,7 +1582,7 @@ def ai_suggestions_today(request):
     # STEP 2: Split blocks into categorized vs uncategorized
     # Categorized blocks are NEVER sent to AI
     # =========================================================
-    blocks_needing_ai = []
+    blocks_needing_ai   = []
     already_categorized = []
 
     for b in all_blocks:
@@ -1601,14 +1610,16 @@ def ai_suggestions_today(request):
             "end":      b.end,
             "title":    b.title,
             "ai_suggestion": {
-                "client":       client_name,
-                "project":      getattr(b.project, "name", None),
-                "categories":   b.category_hours or {},
-                "confidence":   1.0,
-                "needs_review": False,
-                "reasoning":    "Already categorized (locked)",
-                "source":       "existing",
-                "auto_saved":   False,
+                "client":          client_name,
+                "project":         getattr(b.project, "name", None),
+                "categories":      b.category_hours or {},
+                "confidence":      1.0,
+                "needs_review":    False,
+                "reasoning":       "Already categorized (locked)",
+                "source":          "existing",
+                "auto_saved":      False,
+                "taxpayer_name":   getattr(b, 'taxpayer_name', None),
+                "tax_return_type": getattr(b, 'tax_return_type', None),
             },
             "display": {
                 "title":         formatted['title'],
@@ -1654,13 +1665,21 @@ def ai_suggestions_today(request):
                 "end":      b.end,
                 "title":    b.title,
                 "ai_suggestion": {
-                    "client": None, "project": None, "categories": {},
-                    "confidence": 0.0, "needs_review": True,
-                    "reasoning": "NOAI mode", "source": "noai",
+                    "client":          None,
+                    "project":         None,
+                    "categories":      {},
+                    "confidence":      0.0,
+                    "needs_review":    True,
+                    "reasoning":       "NOAI mode",
+                    "source":          "noai",
+                    "taxpayer_name":   None,
+                    "tax_return_type": None,
                 },
                 "display": {
-                    "title": formatted['title'], "app": formatted['app'],
-                    "duration": formatted['duration'], "category_icon": formatted['category_icon'],
+                    "title":         formatted['title'],
+                    "app":           formatted['app'],
+                    "duration":      formatted['duration'],
+                    "category_icon": formatted['category_icon'],
                 },
                 "current_client":  client_name,
                 "current_project": getattr(b.project, "name", None),
@@ -1669,28 +1688,51 @@ def ai_suggestions_today(request):
         return Response(out)
 
     # =========================================================
-    # STEP 4: Run the 4-stage BlockClassifier pipeline
+    # STEP 4: Run the 5-stage BlockClassifier pipeline
     #
-    # Stage 1 — Deterministic (alias/domain/path)  → stops here if >= 0.88
-    # Stage 2 — Learned patterns (UserWorkPattern) → stops here if >= 0.88
-    # Stage 3 — AI client identification only       → cached, focused prompt
-    # Stage 4 — AI category classification          → separate focused prompt
+    # Stage 0a — Suppress: generic dialogs, bare tax software windows
+    #             → source="suppressed" → dropped entirely, not in response
+    # Stage 0b — Internal firm work (timesheets, Book1, Save As)
+    #             → category="Billing/Admin", client=None
+    # Stage 1  — Tax software extraction (UltraTax/TaxWise open return)
+    #             → taxpayer_name + taxpayer_id_hash set, client=None for 1040s
+    #             → client matched for 1065/1120S if name found in client list
+    # Stage 2  — Deterministic alias/domain/path rules
+    # Stage 3  — Learned patterns (UserWorkPattern)
+    # Stage 4  — AI client identification (OpenAI, cached per-org)
+    # Stage 5  — AI category classification (separate focused prompt)
     #
     # Blocks resolved here NEVER reach the OpenAI batch below.
-    # Only genuinely ambiguous blocks fall through to `unresolved`.
+    # Suppressed blocks are silently dropped — not returned to frontend.
     # =========================================================
     classifier = BlockClassifier(org=org, user=user_obj)
 
     pipeline_out = []   # response dicts for blocks resolved by pipeline
     unresolved   = []   # blocks that still need the legacy OpenAI batch
+    suppressed_count = 0
 
     for b in blocks_needing_ai[:limit]:
         result = classifier.classify_block(b)
 
+        # ── Suppressed: generic dialogs, internal timesheets ─────────────────
+        # Stage 0 returns source="suppressed" for titles like CFlyOutFrame,
+        # "Input Screen Ctrl+I", "Save As", bare "UltraTax CS", etc.
+        # Don't save them, don't return them — they're noise.
+        if result.is_suppressed:
+            suppressed_count += 1
+            log(f"[AI] ⏭ Block {b.id} suppressed: '{getattr(b, 'window_title', '')[:60]}'")
+            continue
+
         if result.should_auto_save or result.should_save_with_review:
             saved = classifier.apply_result(b, result)
 
-            display_client = result.client_name or getattr(b.client, "name", None)
+            # For individual returns, display_client is the taxpayer name
+            # For regular client blocks, it's the client name
+            display_client = (
+                result.client_name
+                or result.taxpayer_name
+                or getattr(b.client, "name", None)
+            )
             formatted = format_block_for_display({
                 'app_name':     getattr(b, 'app_name', '') or '',
                 'window_title': getattr(b, 'window_title', '') or '',
@@ -1705,14 +1747,17 @@ def ai_suggestions_today(request):
                 "end":      b.end,
                 "title":    b.title,
                 "ai_suggestion": {
-                    "client":       result.client_name,
-                    "project":      None,
-                    "categories":   result.category_hours,
-                    "confidence":   result.overall_confidence,
-                    "needs_review": result.needs_review,
-                    "reasoning":    result.reasoning,
-                    "source":       result.source,
-                    "auto_saved":   saved and result.should_auto_save,
+                    "client":          result.client_name,
+                    "project":         None,
+                    "categories":      result.category_hours,
+                    "confidence":      result.overall_confidence,
+                    "needs_review":    result.needs_review,
+                    "reasoning":       result.reasoning,
+                    "source":          result.source,
+                    "auto_saved":      saved and result.should_auto_save,
+                    # Individual return fields — None for regular client blocks
+                    "taxpayer_name":   result.taxpayer_name,
+                    "tax_return_type": result.tax_return_type,
                 },
                 "display": {
                     "title":         formatted['title'],
@@ -1728,7 +1773,11 @@ def ai_suggestions_today(request):
             # Not confident enough — hand off to OpenAI batch
             unresolved.append(b)
 
-    log(f"[AI] Pipeline resolved {len(pipeline_out)} blocks, {len(unresolved)} going to OpenAI batch")
+    log(
+        f"[AI] Pipeline resolved {len(pipeline_out)} blocks, "
+        f"{suppressed_count} suppressed, "
+        f"{len(unresolved)} going to OpenAI batch"
+    )
 
     # =========================================================
     # STEP 5: If pipeline resolved everything, return early
@@ -1743,24 +1792,30 @@ def ai_suggestions_today(request):
     # =========================================================
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        # No key — return pipeline results + unresolved as empty suggestions
         out = pipeline_out
         for b in unresolved:
             client_name = getattr(b.client, "name", None)
             out.append({
                 "block_id": b.id, "start": b.start, "end": b.end, "title": b.title,
                 "ai_suggestion": {
-                    "client": None, "project": None, "categories": {},
-                    "confidence": 0.0, "needs_review": True,
-                    "reasoning": "OPENAI_API_KEY not configured", "source": "fallback",
+                    "client":          None,
+                    "project":         None,
+                    "categories":      {},
+                    "confidence":      0.0,
+                    "needs_review":    True,
+                    "reasoning":       "OPENAI_API_KEY not configured",
+                    "source":          "fallback",
+                    "taxpayer_name":   None,
+                    "tax_return_type": None,
                 },
                 "display": format_block_for_display({
-                    'app_name': getattr(b, 'app_name', '') or '',
+                    'app_name':     getattr(b, 'app_name', '') or '',
                     'window_title': getattr(b, 'window_title', '') or '',
-                    'url': getattr(b, 'url', '') or '',
-                    'minutes': b.minutes or 0, 'category': None,
+                    'url':          getattr(b, 'url', '') or '',
+                    'minutes':      b.minutes or 0,
+                    'category':     None,
                 }, client_name=client_name),
-                "current_client": client_name,
+                "current_client":  client_name,
                 "current_project": getattr(b.project, "name", None),
             })
         out += [_format_locked(b) for b in already_categorized]
@@ -1771,7 +1826,6 @@ def ai_suggestions_today(request):
         s = (s or "").strip()
         return s[:n] + ("…" if len(s) > n else "")
 
-    # Build org context + pattern context once
     org_context     = build_ai_context(org) or ""
     pattern_context = ""
     if user_obj:
@@ -1784,7 +1838,6 @@ def ai_suggestions_today(request):
         minutes = int((b.end - b.start).total_seconds() / 60) if b.end else 0
         hints   = getattr(b, "hints", {}) or {}
 
-        # Still include learned pattern hints for OpenAI context
         pattern_hints = []
         if user_obj:
             learned = PatternLearningService.get_patterns_for_block(b, user_obj)
@@ -1793,30 +1846,31 @@ def ai_suggestions_today(request):
                     pattern_hints.append({"client": cn, "category": cat, "confidence": round(conf, 2)})
 
         trimmed.append({
-            "id":              str(b.id),
-            "title":           _shorten(b.title, 160),
-            "window_title":    _shorten(getattr(b, 'window_title', ''), 160),
-            "url":             _shorten(b.url, 140),
-            "file_path":       _shorten(b.file_path, 140),
-            "app_name":        _shorten(getattr(b, 'app_name', ''), 80),
-            "bundle_id":       _shorten(getattr(b, 'bundle_id', ''), 100),
-            "minutes":         minutes,
-            "attendees":       getattr(b, 'attendees', []) or [],
-            "description":     _shorten(getattr(b, 'description', ''), 220),
-            "hints":           hints,
+            "id":               str(b.id),
+            "title":            _shorten(b.title, 160),
+            "window_title":     _shorten(getattr(b, 'window_title', ''), 160),
+            "url":              _shorten(b.url, 140),
+            "file_path":        _shorten(b.file_path, 140),
+            "app_name":         _shorten(getattr(b, 'app_name', ''), 80),
+            "bundle_id":        _shorten(getattr(b, 'bundle_id', ''), 100),
+            "minutes":          minutes,
+            "attendees":        getattr(b, 'attendees', []) or [],
+            "description":      _shorten(getattr(b, 'description', ''), 220),
+            "hints":            hints,
             "learned_patterns": pattern_hints,
-            "assigned_client": getattr(b.client, "name", None),
+            "assigned_client":  getattr(b.client, "name", None),
         })
 
     if debug:
         return Response({
-            "debug":              True,
-            "pipeline_resolved":  len(pipeline_out),
-            "unresolved":         len(unresolved),
+            "debug":               True,
+            "pipeline_resolved":   len(pipeline_out),
+            "suppressed":          suppressed_count,
+            "unresolved":          len(unresolved),
             "already_categorized": len(already_categorized),
-            "sample_unresolved":  trimmed[:3],
-            "org_context":        org_context[:1200] if org_context else "",
-            "pattern_context":    pattern_context[:500],
+            "sample_unresolved":   trimmed[:3],
+            "org_context":         org_context[:1200] if org_context else "",
+            "pattern_context":     pattern_context[:500],
         })
 
     # ── Build system prompt ───────────────────────────────────────────────────
@@ -1863,8 +1917,8 @@ def ai_suggestions_today(request):
             raw2 = re.sub(r',\s*([}\]])', r'\1', raw)
             return json.loads(raw2)
 
-    oai_client   = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
-    max_tokens   = 1000 if len(trimmed) <= 3 else 4000
+    oai_client     = OpenAI(api_key=api_key, timeout=timeout_ms / 1000.0)
+    max_tokens     = 1000 if len(trimmed) <= 3 else 4000
     ai_suggestions = []
 
     try:
@@ -1890,28 +1944,36 @@ def ai_suggestions_today(request):
         if fallback_mode == "rule":
             return suggestions_today(request)
 
-        # Fallback — return pipeline results + empty suggestions for unresolved
         out = pipeline_out
         for b in unresolved:
             client_name = getattr(b.client, "name", None)
             formatted = format_block_for_display({
-                'app_name': getattr(b, 'app_name', '') or '',
+                'app_name':     getattr(b, 'app_name', '') or '',
                 'window_title': getattr(b, 'window_title', '') or '',
-                'url': getattr(b, 'url', '') or '',
-                'minutes': b.minutes or 0, 'category': None,
+                'url':          getattr(b, 'url', '') or '',
+                'minutes':      b.minutes or 0,
+                'category':     None,
             }, client_name=client_name)
             out.append({
                 "block_id": b.id, "start": b.start, "end": b.end, "title": b.title,
                 "ai_suggestion": {
-                    "client": None, "project": None, "categories": {},
-                    "confidence": 0.0, "needs_review": True,
-                    "reasoning": f"AI fallback: {str(e)[:120]}", "source": "fallback",
+                    "client":          None,
+                    "project":         None,
+                    "categories":      {},
+                    "confidence":      0.0,
+                    "needs_review":    True,
+                    "reasoning":       f"AI fallback: {str(e)[:120]}",
+                    "source":          "fallback",
+                    "taxpayer_name":   None,
+                    "tax_return_type": None,
                 },
                 "display": {
-                    "title": formatted['title'], "app": formatted['app'],
-                    "duration": formatted['duration'], "category_icon": formatted['category_icon'],
+                    "title":         formatted['title'],
+                    "app":           formatted['app'],
+                    "duration":      formatted['duration'],
+                    "category_icon": formatted['category_icon'],
                 },
-                "current_client": client_name,
+                "current_client":  client_name,
                 "current_project": getattr(b.project, "name", None),
             })
         out += [_format_locked(b) for b in already_categorized]
@@ -1932,20 +1994,18 @@ def ai_suggestions_today(request):
             b   = unresolved[i]
             sug = ai_suggestions[i] if isinstance(ai_suggestions[i], dict) else {}
 
-            confidence    = float(sug.get("confidence", 0.0))
-            needs_review  = sug.get("needs_review", True)
-            client_name   = (sug.get("client") or "").strip()
-            categories    = sug.get("categories", {})
+            confidence   = float(sug.get("confidence", 0.0))
+            needs_review = sug.get("needs_review", True)
+            client_name  = (sug.get("client") or "").strip()
+            categories   = sug.get("categories", {})
+            auto_saved   = False
 
-            auto_saved = False
-
-            # ── RAISED to 0.88 (was 0.70) ────────────────────────────────────
             if confidence >= 0.88 and categories:
                 try:
                     fresh_block = Block.objects.select_for_update().get(id=b.id)
 
                     if not fresh_block.is_categorized:
-                        suggested_client   = (sug.get("client") or "").strip()
+                        suggested_client    = (sug.get("client") or "").strip()
                         current_client_name = getattr(fresh_block.client, "name", None)
 
                         if suggested_client and suggested_client != current_client_name:
@@ -1955,8 +2015,8 @@ def ai_suggestions_today(request):
                                     name__iexact=suggested_client,
                                     is_active=True,
                                 )
-                                fresh_block.client = correct_client
-                                sug["needs_review"] = True
+                                fresh_block.client   = correct_client
+                                sug["needs_review"]  = True
                                 log(f"[AI] 🔄 Client correction: {current_client_name} → {suggested_client} (block {b.id})")
                             except Client.MultipleObjectsReturned:
                                 log(f"[AI] ⚠️ Multiple clients match '{suggested_client}' — skipping")
@@ -1974,13 +2034,13 @@ def ai_suggestions_today(request):
                                     pass
 
                             if clean_cats:
-                                fresh_block.category_hours   = clean_cats
-                                fresh_block.ai_category      = list(clean_cats.keys())[0]
-                                fresh_block.is_categorized   = True
-                                fresh_block.categorized_at   = timezone.now()
-                                fresh_block.categorized_by   = 'ai'
-                                fresh_block.ai_processed_at  = timezone.now()
-                                fresh_block.ai_confidence    = confidence
+                                fresh_block.category_hours  = clean_cats
+                                fresh_block.ai_category     = list(clean_cats.keys())[0]
+                                fresh_block.is_categorized  = True
+                                fresh_block.categorized_at  = timezone.now()
+                                fresh_block.categorized_by  = 'ai'
+                                fresh_block.ai_processed_at = timezone.now()
+                                fresh_block.ai_confidence   = confidence
                                 fresh_block.save()
 
                                 auto_saved       = True
@@ -2013,14 +2073,18 @@ def ai_suggestions_today(request):
                 "end":      b.end,
                 "title":    b.title,
                 "ai_suggestion": {
-                    "client":       client_name or None,
-                    "project":      sug.get("project"),
-                    "categories":   categories,
-                    "confidence":   confidence,
-                    "needs_review": needs_review,
-                    "reasoning":    sug.get("reasoning", ""),
-                    "source":       "ai_with_context",
-                    "auto_saved":   auto_saved,
+                    "client":          client_name or None,
+                    "project":         sug.get("project"),
+                    "categories":      categories,
+                    "confidence":      confidence,
+                    "needs_review":    needs_review,
+                    "reasoning":       sug.get("reasoning", ""),
+                    "source":          "ai_with_context",
+                    "auto_saved":      auto_saved,
+                    # OpenAI batch blocks are never individual returns
+                    # (those are caught by Stage 1 of the pipeline)
+                    "taxpayer_name":   None,
+                    "tax_return_type": None,
                 },
                 "display": {
                     "title":         formatted['title'],
@@ -2037,9 +2101,10 @@ def ai_suggestions_today(request):
 
     # =========================================================
     # STEP 8: Merge everything and return
-    # pipeline_out  — resolved by 4-stage classifier (no OpenAI batch)
-    # batch_out     — resolved by OpenAI batch
+    # pipeline_out        — resolved by 5-stage classifier (no OpenAI batch)
+    # batch_out           — resolved by OpenAI batch
     # already_categorized — locked, read-only
+    # suppressed blocks   — silently dropped, not in response
     # =========================================================
     out = pipeline_out + batch_out + [_format_locked(b) for b in already_categorized]
     return Response(out)
@@ -2053,7 +2118,6 @@ def _host_from_url(u: str) -> str:
         return urllib.parse.urlparse(u or "").hostname or ""
     except Exception:
         return ""
-
 
 def resolve_client_from_known(org, b) -> str | None:
     """

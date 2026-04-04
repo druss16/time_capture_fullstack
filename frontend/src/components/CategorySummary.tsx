@@ -1,14 +1,12 @@
 /**
  * CategorySummary.tsx
  *
- * Features:
- *  - Click checkbox (or shift+click) to multi-select activity rows
- *  - Floating action bar appears when items are selected: Move | Delete | Clear
- *  - "Move selected" opens a popover → calls recategorize_block for all IDs
- *  - Single "Move" button per row for quick one-off moves
- *  - "Move all" on category header for bulk category reassign
- *  - Drag rows with yellow insertion line showing drop position
- *  - Teal ghost pill follows cursor while dragging
+ * Changes from previous version:
+ *  - Added IndividualReturnsSection component + TaxpayerCard + ReturnTypeBadge
+ *  - Accepts new `aiSuggestions` prop (raw pipeline_out from /blocks/suggestions/)
+ *  - Individual tax return blocks (taxpayer_name set, no client) routed to
+ *    IndividualReturnsSection instead of appearing under a client card
+ *  - Everything else (drag/drop, multi-select, move popover, etc.) unchanged
  */
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
@@ -24,8 +22,8 @@ import {
   Square,
   X,
   ArrowRightLeft,
-  Lightbulb,
   MousePointerClick,
+  FileText,
 } from "lucide-react";
 import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -35,7 +33,7 @@ const API_BASE = RAW_BASE.endsWith("/api")
   ? RAW_BASE
   : `${RAW_BASE.replace(/\/+$/, "")}/api`;
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Category = {
   name: string;
@@ -58,9 +56,29 @@ export type FlaggedBlock = {
   minutes: number;
   start: string;
 };
+
+type IndividualReturnBlock = {
+  block_id: number;
+  taxpayer_name: string;
+  taxpayer_id_hash: string;
+  tax_return_type: string;
+  duration_minutes: number;
+  category: string;
+  display_title: string;
+};
+
+type TaxpayerGroup = {
+  display_name: string;
+  hash: string;
+  return_types: string[];
+  blocks: IndividualReturnBlock[];
+  total_minutes: number;
+  billable_minutes: number;
+};
+
 type ParsedActivity = { blockId: number | null; title: string };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const fmt = (hours: number): string => {
   const h = Math.floor(hours);
@@ -68,6 +86,13 @@ const fmt = (hours: number): string => {
   if (h === 0) return `${m}m`;
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
+};
+
+const fmtMinutes = (minutes: number): string => {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
 };
 
 const parse = (activity: string): ParsedActivity => {
@@ -88,9 +113,6 @@ const isNonBillable = (name: string) => {
   );
 };
 
-// ─── Client accent colors ─────────────────────────────────────────────────────
-// Each client card gets a left-border accent + subtle header tint.
-// We override the heavy bg-fill approach with a left-border + very light tint.
 const CLIENT_ACCENTS = [
   { border: "border-l-teal-500",    header: "bg-teal-50",    hours: "text-teal-600"    },
   { border: "border-l-amber-400",   header: "bg-amber-50",   hours: "text-amber-500"   },
@@ -100,9 +122,182 @@ const CLIENT_ACCENTS = [
   { border: "border-l-emerald-500", header: "bg-emerald-50", hours: "text-emerald-600" },
 ];
 
+// ─── Return type badge ────────────────────────────────────────────────────────
+
+const RETURN_TYPE_COLORS: Record<string, string> = {
+  "1040":  "bg-blue-100 text-blue-700",
+  "1065":  "bg-purple-100 text-purple-700",
+  "1120":  "bg-orange-100 text-orange-700",
+  "1120S": "bg-orange-100 text-orange-700",
+  "990":   "bg-green-100 text-green-700",
+  "1041":  "bg-pink-100 text-pink-700",
+};
+
+function ReturnTypeBadge({ type }: { type: string }) {
+  const colors = RETURN_TYPE_COLORS[type] ?? "bg-gray-100 text-gray-600";
+  return (
+    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${colors}`}>
+      {type}
+    </span>
+  );
+}
+
+// ─── IndividualReturnsSection ─────────────────────────────────────────────────
+
+function TaxpayerCard({ group }: { group: TaxpayerGroup }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="border border-gray-100 rounded-lg mb-2 overflow-hidden">
+      <div
+        className="flex items-center gap-2 px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100 select-none"
+        onClick={() => setExpanded((e) => !e)}
+      >
+        <span className="text-gray-400 w-4 flex-shrink-0">
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
+        <FileText size={14} className="text-gray-400 flex-shrink-0" />
+        <span className="font-medium text-gray-800 flex-1 text-sm">
+          {group.display_name}
+        </span>
+        <div className="flex gap-1 flex-shrink-0">
+          {group.return_types.map((rt) => (
+            <ReturnTypeBadge key={rt} type={rt} />
+          ))}
+        </div>
+        <div className="flex items-center gap-3 flex-shrink-0 ml-2">
+          {group.billable_minutes > 0 && (
+            <div className="text-right">
+              <span className="text-sm font-semibold text-emerald-600">
+                {fmtMinutes(group.billable_minutes)}
+              </span>
+              <span className="text-xs text-gray-400 ml-1">BILLABLE</span>
+            </div>
+          )}
+          {group.total_minutes - group.billable_minutes > 0 && (
+            <div className="text-right">
+              <span className="text-sm font-semibold text-gray-400">
+                {fmtMinutes(group.total_minutes - group.billable_minutes)}
+              </span>
+              <span className="text-xs text-gray-400 ml-1">NON-BILL</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="divide-y divide-gray-50">
+          {group.blocks.map((block) => (
+            <div
+              key={block.block_id}
+              className="flex items-center gap-3 px-8 py-2 hover:bg-gray-50"
+            >
+              <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded flex-shrink-0">
+                {block.category || "Tax Preparation"}
+              </span>
+              <span className="text-sm text-gray-700 flex-1 truncate">
+                {block.display_title}
+              </span>
+              <span className="text-sm text-gray-500 flex-shrink-0">
+                ({fmtMinutes(block.duration_minutes)})
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IndividualReturnsSection({ blocks }: { blocks: IndividualReturnBlock[] }) {
+  const [expanded, setExpanded] = useState(true);
+
+  const groups = React.useMemo<TaxpayerGroup[]>(() => {
+    const map = new Map<string, TaxpayerGroup>();
+    for (const block of blocks) {
+      const key = block.taxpayer_id_hash || block.taxpayer_name;
+      if (!map.has(key)) {
+        map.set(key, {
+          display_name:    block.taxpayer_name,
+          hash:            key,
+          return_types:    [],
+          blocks:          [],
+          total_minutes:   0,
+          billable_minutes: 0,
+        });
+      }
+      const g = map.get(key)!;
+      g.blocks.push(block);
+      g.total_minutes += block.duration_minutes || 0;
+      if (["Tax Preparation", "Tax Review", "Tax Research"].includes(block.category)) {
+        g.billable_minutes += block.duration_minutes || 0;
+      }
+      if (block.tax_return_type && !g.return_types.includes(block.tax_return_type)) {
+        g.return_types.push(block.tax_return_type);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.total_minutes - a.total_minutes);
+  }, [blocks]);
+
+  if (groups.length === 0) return null;
+
+  const totalBillable = groups.reduce((s, g) => s + g.billable_minutes, 0);
+  const totalMinutes  = groups.reduce((s, g) => s + g.total_minutes, 0);
+
+  return (
+    <div
+      className="rounded-xl border border-slate-200 border-l-[5px] bg-white shadow-sm overflow-hidden"
+      style={{ borderLeftColor: "#f59e0b" }}
+    >
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full px-4 py-3 flex items-center justify-between text-left bg-amber-50 hover:brightness-95 transition-colors"
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          {expanded
+            ? <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
+            : <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />}
+          <span className="font-bold text-base text-slate-900">Individual Returns</span>
+          <span className="text-xs text-slate-400 font-medium flex-shrink-0">
+            {groups.length} taxpayer{groups.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+          {totalBillable > 0 && (
+            <div className="flex flex-col items-end">
+              <span className="text-lg font-extrabold tabular-nums leading-none text-amber-600">
+                {fmtMinutes(totalBillable)}
+              </span>
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
+                billable
+              </span>
+            </div>
+          )}
+          {totalMinutes - totalBillable > 0 && (
+            <div className="flex flex-col items-end">
+              <span className="text-lg font-extrabold tabular-nums leading-none text-slate-400">
+                {fmtMinutes(totalMinutes - totalBillable)}
+              </span>
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
+                non-bill
+              </span>
+            </div>
+          )}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="p-3">
+          {groups.map((group) => (
+            <TaxpayerCard key={group.hash} group={group} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Move Popover ─────────────────────────────────────────────────────────────
-// Uses createPortal so it renders at document.body — completely outside any
-// parent click handler, stacking context, or event bubble chain.
 
 function MovePopover({
   anchorEl, clients, categories, currentClientId, currentCategory, label, onApply, onClose,
@@ -120,7 +315,6 @@ function MovePopover({
   const popRef = useRef<HTMLDivElement>(null);
   const catRef = useRef<HTMLSelectElement>(null);
 
-  // Position below the anchor element
   useEffect(() => {
     const el = anchorEl ?? document.body;
     const rect = el.getBoundingClientRect();
@@ -129,7 +323,6 @@ function MovePopover({
     setTimeout(() => catRef.current?.focus(), 60);
   }, []);
 
-  // Close on outside mousedown
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (popRef.current && !popRef.current.contains(e.target as Node)) onClose();
@@ -138,7 +331,6 @@ function MovePopover({
     return () => document.removeEventListener("mousedown", handler);
   }, [onClose]);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); onClose(); }
@@ -322,31 +514,16 @@ function SelectionBar({
 }
 
 // ─── App grouping ─────────────────────────────────────────────────────────────
-// Extract the leading app name from activity titles like "Chrome - Foo (2m)"
-// Known multi-window apps that produce many entries worth grouping.
 
 const APP_PREFIXES = [
-  "Chrome",
-  "Safari",
-  "Firefox",
-  "Edge",
-  "Sublime Text",
-  "VS Code",
-  "Xcode",
-  "Terminal",
-  "iTerm",
-  "Finder",
-  "Excel",
-  "Word",
-  "Outlook",
-  "Slack",
-  "Zoom",
-  "Timetrackeragent",
+  "Chrome", "Safari", "Firefox", "Edge", "Sublime Text", "VS Code",
+  "Xcode", "Terminal", "iTerm", "Finder", "Excel", "Word",
+  "Outlook", "Slack", "Zoom", "Timetrackeragent",
 ];
 
 type AppGroup = {
-  app: string;           // e.g. "Chrome"
-  activities: string[];  // raw activity strings in this group
+  app: string;
+  activities: string[];
   totalMinutes: number;
 };
 
@@ -362,13 +539,6 @@ const extractApp = (title: string): string | null => {
 const extractMinutes = (title: string): number => {
   const m = title.match(/\((\d+)m\)$/);
   return m ? parseInt(m[1]) : 0;
-};
-
-const stripApp = (title: string, app: string): string => {
-  // Remove "AppName - " or "AppName · " prefix and trailing "(Nm)"
-  return title
-    .replace(new RegExp(`^${app}\\s*[-·]\\s*`), "")
-    .trim();
 };
 
 const groupActivities = (activities: string[]): AppGroup[] => {
@@ -388,23 +558,17 @@ const groupActivities = (activities: string[]): AppGroup[] => {
     }
   }
 
-  // Only group apps that have 2+ entries — single entries stay ungrouped
   const result: AppGroup[] = [];
   for (const [app, group] of groups) {
-    if (group.activities.length >= 2) {
-      result.push(group);
-    } else {
-      ungrouped.push(...group.activities);
-    }
+    if (group.activities.length >= 2) result.push(group);
+    else ungrouped.push(...group.activities);
   }
 
-  // Ungrouped items each become their own "group" of 1 (rendered flat)
   for (const raw of ungrouped) {
     const { title } = parse(raw);
     result.push({ app: "", activities: [raw], totalMinutes: extractMinutes(title) });
   }
 
-  // Sort: multi-activity groups first, then by time desc
   return result.sort((a, b) => {
     if (a.activities.length > 1 && b.activities.length === 1) return -1;
     if (a.activities.length === 1 && b.activities.length > 1) return 1;
@@ -412,7 +576,7 @@ const groupActivities = (activities: string[]): AppGroup[] => {
   });
 };
 
-// ─── App Group Row ────────────────────────────────────────────────────────────
+// ─── App Group Header ─────────────────────────────────────────────────────────
 
 function AppGroupHeader({
   app, count, totalMinutes, expanded, onToggle,
@@ -443,7 +607,6 @@ function AppGroupHeader({
             {count} {count === 1 ? "entry" : "entries"} · {totalMinutes}m
           </span>
         </button>
-        {/* Move all in group */}
         {blockIds.length > 0 && (() => {
           const btnRef = React.createRef<HTMLButtonElement>();
           return (
@@ -493,11 +656,9 @@ function ActivityList({
   onToggleSelect: (rowKey: string, idx: number, shift: boolean) => void;
 }) {
   const [insertAfterIdx, setInsertAfterIdx] = useState<number | null>(null);
-  // Track which app groups are collapsed — default all expanded
   const [collapsedApps, setCollapsedApps] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLUListElement>(null);
 
-  // Filter zero-minute, then group by app
   const nonZero = activities.filter((a) => !/ \(0m\)$/.test(parse(a).title));
   const groups = groupActivities(nonZero);
 
@@ -530,7 +691,6 @@ function ActivityList({
     </li>
   );
 
-  // Flatten all activities for global idx tracking
   let globalIdx = 0;
 
   return (
@@ -550,7 +710,6 @@ function ActivityList({
 
         return (
           <React.Fragment key={group.app || `ungrouped-${groupIdx}`}>
-            {/* App group header — only for multi-entry app groups */}
             {isGrouped && (
               <AppGroupHeader
                 app={group.app}
@@ -573,15 +732,12 @@ function ActivityList({
               />
             )}
 
-            {/* Activity rows — hidden when group is collapsed */}
             {!isCollapsed && group.activities.map((activity) => {
               const parsed = parse(activity);
               const isBeingDragged = parsed.blockId === draggingBlockId;
               const idx = globalIdx++;
               const rowKey = `${parsed.blockId ?? "no-id"}-${idx}`;
               const isSelected = selectedIds.has(rowKey as any);
-
-              // Strip app prefix for display only — raw activity still used for blockId
               const displayTitle = isGrouped
                 ? parse(activity).title.replace(
                     new RegExp(`^${group.app}\\s*[-·]\\s*`), ""
@@ -622,8 +778,8 @@ function ActivityRow({
   activity, displayTitle, client, categoryName, allClients, allCategories,
   onMove, isBeingDragged, isSelected, onDragOver, onToggleSelect, indented,
 }: {
-  activity: string;        // raw — used for blockId parsing and drag data
-  displayTitle?: string;   // optional override for the visible label
+  activity: string;
+  displayTitle?: string;
   client: ClientTime;
   categoryName: string;
   allClients: ClientOption[];
@@ -664,9 +820,7 @@ function ActivityRow({
 
   const handleApply = async (clientId: number | null, category: string) => {
     setShowPopover(false);
-    console.log("[ActivityRow] handleApply — parsed.blockId:", parsed.blockId, "| raw activity:", activity, "| target:", clientId, category);
     if (parsed.blockId) await onMove(parsed.blockId, clientId, category);
-    else console.warn("[ActivityRow] No blockId found — activity missing [id:N] tag:", activity);
   };
 
   const handleCheckboxClick = (e: React.MouseEvent) => {
@@ -683,16 +837,13 @@ function ActivityRow({
       onDragOver={onDragOver}
       onClick={parsed.blockId ? (e) => {
         const target = e.target as HTMLElement;
-        // Never toggle from inside a popover or button
         if (target.closest("[data-popover]") || target.closest("button") || target.closest("select") || target.closest("label")) return;
-        // If already selected, clicking toggles selection
         if (isSelected) {
           setCheckboxActive(true);
           handleCheckboxClick(e as any);
           setTimeout(() => setCheckboxActive(false), 300);
           return;
         }
-        // Open the move popover
         e.stopPropagation();
         setShowPopover((v) => !v);
       } : undefined}
@@ -706,7 +857,6 @@ function ActivityRow({
       )}
       style={{ listStyle: "none" }}
     >
-      {/* Checkbox — visible on hover or when selected */}
       {parsed.blockId ? (
         <div
           className={cn(
@@ -726,7 +876,6 @@ function ActivityRow({
         </div>
       ) : <span className="w-4 flex-shrink-0" />}
 
-      {/* Drag grip */}
       {parsed.blockId && !isSelected ? (
         <GripVertical className="w-3 h-3 text-slate-200 group-hover/item:text-slate-400 flex-shrink-0 transition-colors" />
       ) : <span className="w-3 flex-shrink-0" />}
@@ -743,7 +892,6 @@ function ActivityRow({
         {displayTitle ?? parsed.title}
       </span>
 
-      {/* Move affordance — always visible, becomes prominent on hover */}
       {parsed.blockId && !isSelected && (
         <div className="flex items-center gap-1 flex-shrink-0 relative">
           <span className="text-[11px] font-medium text-slate-300 group-hover/item:text-primary transition-colors">
@@ -813,7 +961,6 @@ function CategorySection({
         "flex items-center gap-2 group/cat relative",
         nonBillable && "opacity-55"
       )}>
-        {/* Left indent accent line */}
         <div className={cn(
           "w-0.5 self-stretch flex-shrink-0 ml-4 rounded-full",
           nonBillable ? "bg-slate-200" : "bg-slate-300"
@@ -855,7 +1002,6 @@ function CategorySection({
             </span>
           )}
 
-          {/* Hours pill — shows time + block count */}
           <span className={cn(
             "flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold tabular-nums",
             nonBillable
@@ -955,8 +1101,7 @@ function FlaggedBanner({ flagged, onDismiss }: { flagged: FlaggedBlock[]; onDism
   );
 }
 
-// ─── Onboarding Hint ─────────────────────────────────────────────────────────
-// Shown once until dismissed. Uses localStorage so it survives page refresh.
+// ─── Onboarding Hint ──────────────────────────────────────────────────────────
 
 const HINT_KEY = "tt_category_hint_dismissed";
 
@@ -1003,8 +1148,15 @@ function OnboardingHint() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function CategorySummary({
-  timeSummary, availableClients, availableCategories,
-  flaggedBlocks, busy, onDismissReview, onRefresh, showToast,
+  timeSummary,
+  availableClients,
+  availableCategories,
+  flaggedBlocks,
+  busy,
+  onDismissReview,
+  onRefresh,
+  showToast,
+  aiSuggestions = [],
 }: {
   timeSummary: ClientTime[];
   availableClients: ClientOption[];
@@ -1014,7 +1166,34 @@ export default function CategorySummary({
   onDismissReview: (id: number) => void;
   onRefresh: () => void;
   showToast: (msg: string, type: "success" | "error") => void;
+  aiSuggestions?: any[];
 }) {
+
+  // ── Extract individual-return blocks from AI suggestions ─────────────────
+  const individualReturnBlocks = React.useMemo<IndividualReturnBlock[]>(() => {
+    return aiSuggestions
+      .filter((s) => s?.ai_suggestion?.taxpayer_name && !s?.ai_suggestion?.client)
+      .map((s) => {
+        const minutes =
+          s.end && s.start
+            ? Math.round(
+                (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000
+              )
+            : 0;
+        return {
+          block_id:         s.block_id,
+          taxpayer_name:    s.ai_suggestion.taxpayer_name,
+          taxpayer_id_hash: s.ai_suggestion.taxpayer_id_hash || s.ai_suggestion.taxpayer_name,
+          tax_return_type:  s.ai_suggestion.tax_return_type || "1040",
+          duration_minutes: minutes,
+          category:         s.ai_suggestion.categories
+            ? Object.keys(s.ai_suggestion.categories)[0] || "Tax Preparation"
+            : "Tax Preparation",
+          display_title: s.display?.title || s.title || "",
+        };
+      });
+  }, [aiSuggestions]);
+
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
   const [catDropTarget, setCatDropTarget] = useState<string | null>(null);
   const [clientDropTarget, setClientDropTarget] = useState<string | null>(null);
@@ -1052,7 +1231,6 @@ export default function CategorySummary({
 
   const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string): Promise<boolean> => {
     console.log(`🔴 moveActivity called — blockId: ${blockId}, clientId: ${clientId}, category: "${category}"`);
-    console.trace("moveActivity call stack");
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
@@ -1072,7 +1250,7 @@ export default function CategorySummary({
         const n = typeof id === "string" ? parseInt(id.split("-")[0]) : id as number;
         return n;
       })
-      .filter((n: number) => !isNaN(n) && n > 0); // strict — no-id rows produce NaN or 0, filtered here
+      .filter((n: number) => !isNaN(n) && n > 0);
     const uniqueIds = [...new Set(resolvedIds)];
     if (!uniqueIds.length) {
       showToast("No moveable entries selected", "error");
@@ -1081,7 +1259,10 @@ export default function CategorySummary({
     try {
       const results = await Promise.all(uniqueIds.map((id) => moveActivity(id, clientId, category)));
       const moved = results.filter(Boolean).length;
-      showToast(moved > 0 ? `Moved ${moved} activit${moved !== 1 ? "ies" : "y"}` : "Nothing to move", moved > 0 ? "success" : "error");
+      showToast(
+        moved > 0 ? `Moved ${moved} activit${moved !== 1 ? "ies" : "y"}` : "Nothing to move",
+        moved > 0 ? "success" : "error"
+      );
       clearSelection();
       onRefresh();
     } catch (e: any) {
@@ -1105,14 +1286,11 @@ export default function CategorySummary({
 
   const makeCatDrop = (clientId: number | null, catName: string) => async (e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
-    // Always clear drop target state — even if we bail early
-    setCatDropTarget(null);
-    setClientDropTarget(null);
+    setCatDropTarget(null); setClientDropTarget(null);
     const raw = e.dataTransfer.getData("application/x-block");
     if (!raw) return;
     const { blockId, fromClient, fromCategory } = JSON.parse(raw);
     const targetClientName = timeSummary.find((c) => c.client_id === clientId)?.client ?? "";
-    // Same client + same category = no-op
     if (fromClient === targetClientName && fromCategory === catName) return;
     setDraggingBlockId(blockId);
     await moveSingle(blockId, clientId, catName);
@@ -1121,9 +1299,7 @@ export default function CategorySummary({
 
   const makeClientDrop = (targetClient: ClientTime) => async (e: React.DragEvent) => {
     e.preventDefault();
-    // Always clear drop target state
-    setCatDropTarget(null);
-    setClientDropTarget(null);
+    setCatDropTarget(null); setClientDropTarget(null);
     const raw = e.dataTransfer.getData("application/x-block");
     if (!raw) return;
     const { blockId, fromClient, fromCategory } = JSON.parse(raw);
@@ -1142,8 +1318,6 @@ export default function CategorySummary({
   return (
     <div>
       <FlaggedBanner flagged={flaggedBlocks} onDismiss={onDismissReview} />
-
-      {/* ── Onboarding hint — shown until dismissed, stored in localStorage ── */}
       <OnboardingHint />
 
       {timeSummary.length > 1 && (
@@ -1170,7 +1344,7 @@ export default function CategorySummary({
         </div>
       )}
 
-      {!busy && timeSummary.length === 0 && (
+      {!busy && timeSummary.length === 0 && individualReturnBlocks.length === 0 && (
         <div className="text-center py-16 bg-white rounded-2xl border border-slate-200">
           <FileQuestion className="w-10 h-10 text-slate-300 mx-auto mb-3" />
           <h3 className="text-base font-bold text-slate-700 mb-1">No time tracked yet</h3>
@@ -1189,11 +1363,10 @@ export default function CategorySummary({
             ? { border: "border-l-slate-300", header: "bg-slate-50", hours: "text-slate-400" }
             : CLIENT_ACCENTS[clientIndex % CLIENT_ACCENTS.length];
 
-          // Filter out zero-time categories for display
-          const visibleCategories = client.categories.filter((cat) => cat.hours > 0 || cat.sample_activities.length > 0);
+          const visibleCategories = client.categories.filter(
+            (cat) => cat.hours > 0 || cat.sample_activities.length > 0
+          );
           const hiddenZeroCount = client.categories.length - visibleCategories.length;
-
-          // Total activity count across all visible categories (for collapsed view)
           const totalActivityCount = visibleCategories.reduce((sum, cat) => sum + cat.block_count, 0);
 
           return (
@@ -1228,13 +1401,13 @@ export default function CategorySummary({
                   )}>
                     {client.client}
                   </span>
-
-                  {/* Category + activity count — more informative when collapsed */}
                   {isCollapsed ? (
                     <span className="text-xs text-slate-400 font-medium flex-shrink-0">
                       {visibleCategories.length} {visibleCategories.length === 1 ? "category" : "categories"}
                       {totalActivityCount > 0 && (
-                        <span className="ml-1 text-slate-300">· {totalActivityCount} {totalActivityCount === 1 ? "entry" : "entries"}</span>
+                        <span className="ml-1 text-slate-300">
+                          · {totalActivityCount} {totalActivityCount === 1 ? "entry" : "entries"}
+                        </span>
                       )}
                     </span>
                   ) : (
@@ -1242,7 +1415,6 @@ export default function CategorySummary({
                       {visibleCategories.length} {visibleCategories.length === 1 ? "category" : "categories"}
                     </span>
                   )}
-
                   {isClientDrop && (
                     <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded-full flex-shrink-0 animate-pulse">
                       Drop to reassign
@@ -1292,7 +1464,6 @@ export default function CategorySummary({
                 </div>
               </button>
 
-              {/* Categories — zero-time ones filtered out */}
               {!isCollapsed && (
                 <div>
                   {visibleCategories.map((cat) => {
@@ -1316,7 +1487,6 @@ export default function CategorySummary({
                       />
                     );
                   })}
-                  {/* Subtle note if we hid zero-time categories */}
                   {hiddenZeroCount > 0 && (
                     <div className="px-5 py-2 border-t border-slate-100">
                       <span className="text-[11px] text-slate-300 font-medium">
@@ -1329,20 +1499,29 @@ export default function CategorySummary({
             </div>
           );
         })}
+
+        {/* ── Individual Returns — renders after all client cards ── */}
+        <IndividualReturnsSection blocks={individualReturnBlocks} />
       </div>
 
-      {/* ── Total summary line ───────────────────────────────────────────── */}
-      {timeSummary.length > 0 && !busy && (() => {
+      {/* Total summary line */}
+      {(timeSummary.length > 0 || individualReturnBlocks.length > 0) && !busy && (() => {
         const totalBillable = timeSummary.reduce((s, c) => s + getBillable(c), 0);
         const totalNonBillable = timeSummary.reduce((s, c) => s + getNonBillable(c), 0);
         const totalAll = totalBillable + totalNonBillable;
-        const clientCount = timeSummary.filter(c => c.client.toLowerCase() !== "unassigned").length;
-        const activityCount = timeSummary.reduce((s, c) =>
-          s + c.categories.reduce((cs, cat) => cs + cat.block_count, 0), 0);
+        const clientCount = timeSummary.filter((c) => c.client.toLowerCase() !== "unassigned").length;
+        const activityCount = timeSummary.reduce(
+          (s, c) => s + c.categories.reduce((cs, cat) => cs + cat.block_count, 0), 0
+        );
         return (
           <div className="mt-4 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
             <span className="text-xs text-slate-400 font-medium">
               {activityCount} {activityCount === 1 ? "entry" : "entries"} across {clientCount} {clientCount === 1 ? "client" : "clients"}
+              {individualReturnBlocks.length > 0 && (
+                <span className="ml-1">
+                  · {individualReturnBlocks.length} individual {individualReturnBlocks.length === 1 ? "return" : "returns"}
+                </span>
+              )}
             </span>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-1.5">

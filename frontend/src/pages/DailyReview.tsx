@@ -143,6 +143,8 @@ export default function DailyReview() {
     hours: 0,
     date: todayIso(),
   });
+  const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
+
 
   useEffect(() => {
     if (!user && whoami) setUser(whoami);
@@ -224,6 +226,7 @@ export default function DailyReview() {
     try {
       const response = await safeFetchJson<any[]>(`${API_BASE}/blocks/suggestions/`);
       if (Array.isArray(response)) {
+        setAiSuggestions(response);  // ← ADD THIS
         const autoSaved = response.filter((r) => r.ai_suggestion?.auto_saved).length;
         if (autoSaved > 0) { loadTimeSummary(); loadUncategorizedCount(); }
       }
@@ -445,6 +448,7 @@ export default function DailyReview() {
               onDismissReview={handleDismissReview}
               onRefresh={handleRefresh}
               showToast={showToast}
+              aiSuggestions={aiSuggestions}  // ← ADD THIS
             />
           </>
         ) : (

@@ -4218,6 +4218,7 @@ def today_time(request):
     # =========================================================================
     IDLE_CAP_SECONDS = 180  # 3 minutes - matches agent's MOUSE_IDLE_PAUSE_S
     NON_BILLABLE_CATEGORIES = {'personal/non-billable', 'idle', 'uncategorized'}
+    EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}  # ← NEW
 
     event_durations = []
     for i, event in enumerate(events):
@@ -4321,11 +4322,13 @@ def today_time(request):
             }
         
         # Track totals
-        total_minutes += minutes
-        if ev['is_billable']:
-            billable_minutes += minutes
-        else:
-            non_billable_minutes += minutes
+        # Exclude Idle/Uncategorized from all time totals
+        if category.lower() not in EXCLUDE_FROM_TOTALS:
+            total_minutes += minutes
+            if ev['is_billable']:
+                billable_minutes += minutes
+            else:
+                non_billable_minutes += minutes
     
     # =========================================================================
     # STEP 4: Build response with clean formatting
@@ -4334,11 +4337,13 @@ def today_time(request):
     for client_name, client_data in sorted(data.items()):
         categories = []
         client_total_minutes = 0.0
-        
+
         for cat_name, cat_data in sorted(client_data['categories'].items()):
+            if cat_name.lower() in EXCLUDE_FROM_TOTALS:
+                continue
             minutes = cat_data['minutes']
-            client_total_minutes += minutes
-            
+            client_total_minutes += minutes  # ← match the variable name
+                    
             # Build sample activities (top 10 by time) with CLEAN titles
             aggregated_samples = []
             sorted_activities = sorted(
@@ -4483,6 +4488,8 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
     """
     from collections import defaultdict
     from tracker.utils.display_names import format_block_for_display, format_duration
+
+    EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}
     
     blocks = Block.objects.filter(
         user=user,
@@ -4540,9 +4547,10 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
                 'minutes': minutes,
             }
         
-        total_minutes += minutes
-        if client_id and not is_idle:
-            billable_minutes += minutes
+        if category.lower() not in EXCLUDE_FROM_TOTALS:
+            total_minutes += minutes
+            if client_id:
+                billable_minutes += minutes
     
     result = []
     for client_name, client_data in sorted(data.items()):
@@ -4550,6 +4558,8 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
         client_total = 0.0
         
         for cat_name, cat_data in sorted(client_data['categories'].items()):
+            if cat_name.lower() in EXCLUDE_FROM_TOTALS:
+                continue
             minutes = cat_data['minutes']
             client_total += minutes
             

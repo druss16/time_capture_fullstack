@@ -4449,6 +4449,46 @@ def today_time(request):
         billable_minutes += b_minutes
         total_minutes    += b_minutes
  
+
+     # =========================================================================
+    # STEP 6: Build individual returns from Internal - Tax blocks
+    # =========================================================================
+    from tracker.utils.tax_software import extract_tax_context
+    
+    individual_returns = []
+    internal_tax_blocks = Block.objects.filter(
+        user=user,
+        org=get_user_org(user),
+        client__name='Internal - Tax',
+        start__gte=start_utc,
+        start__lt=end_utc,
+        deleted_at__isnull=True,
+    ).select_related('client')
+    
+    for block in internal_tax_blocks:
+        taxpayer_name = getattr(block, 'taxpayer_name', None)
+        taxpayer_id_hash = getattr(block, 'taxpayer_id_hash', None)
+        tax_return_type = getattr(block, 'tax_return_type', None)
+        
+        # Fall back to extracting from window title if not stored
+        if not taxpayer_name and block.window_title:
+            ctx = extract_tax_context(block.window_title)
+            if ctx:
+                taxpayer_name = ctx.taxpayer_name
+                taxpayer_id_hash = ctx.taxpayer_id_hash
+                tax_return_type = ctx.return_type
+        
+        if taxpayer_name:
+            individual_returns.append({
+                'block_id':         block.id,
+                'taxpayer_name':    taxpayer_name,
+                'taxpayer_id_hash': taxpayer_id_hash or taxpayer_name,
+                'tax_return_type':  tax_return_type or '1040',
+                'minutes':          block.minutes or 0,
+                'category':         list(block.category_hours.keys())[0] if block.category_hours else 'Tax Preparation',
+                'display_title':    block.window_title or '',
+            })
+
     return Response({
         'clients':            result,
         'global_hours':       round(total_minutes / 60, 2),
@@ -4456,6 +4496,7 @@ def today_time(request):
         'non_billable_hours': round(non_billable_minutes / 60, 2),
         'date':               target_date.isoformat(),
         'flagged_blocks':     flagged_blocks,
+        'individual_returns': individual_returns,   # ← NEW
     })
 
 # ── Add this new view to views.py ─────────────────────────────────────────────

@@ -1157,6 +1157,8 @@ export default function CategorySummary({
   onRefresh,
   showToast,
   aiSuggestions = [],
+  individualReturns = [],
+
 }: {
   timeSummary: ClientTime[];
   availableClients: ClientOption[];
@@ -1167,36 +1169,23 @@ export default function CategorySummary({
   onRefresh: () => void;
   showToast: (msg: string, type: "success" | "error") => void;
   aiSuggestions?: any[];
+  individualReturns?: any[];
 }) {
 
   // ── Extract individual-return blocks from AI suggestions ─────────────────
+  // ── Extract individual-return blocks from today_time response ─────────────
   const individualReturnBlocks = React.useMemo<IndividualReturnBlock[]>(() => {
-    return aiSuggestions
-      .filter((s) => 
-          s?.ai_suggestion?.taxpayer_name && 
-          (!s?.ai_suggestion?.client || 
-           s?.ai_suggestion?.client?.toLowerCase() === "internal - tax")
-        )
-      .map((s) => {
-        const minutes =
-          s.end && s.start
-            ? Math.round(
-                (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000
-              )
-            : 0;
-        return {
-          block_id:         s.block_id,
-          taxpayer_name:    s.ai_suggestion.taxpayer_name,
-          taxpayer_id_hash: s.ai_suggestion.taxpayer_id_hash || s.ai_suggestion.taxpayer_name,
-          tax_return_type:  s.ai_suggestion.tax_return_type || "1040",
-          duration_minutes: minutes,
-          category:         s.ai_suggestion.categories
-            ? Object.keys(s.ai_suggestion.categories)[0] || "Tax Preparation"
-            : "Tax Preparation",
-          display_title: s.display?.title || s.title || "",
-        };
-      });
-  }, [aiSuggestions]);
+    return (individualReturns || []).map((r) => ({
+      block_id:         r.block_id,
+      taxpayer_name:    r.taxpayer_name,
+      taxpayer_id_hash: r.taxpayer_id_hash || r.taxpayer_name,
+      tax_return_type:  r.tax_return_type || '1040',
+      duration_minutes: r.minutes || 0,
+      category:         r.category || 'Tax Preparation',
+      display_title:    r.display_title || '',
+    }));
+  }, [individualReturns]);
+
 
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
   const [catDropTarget, setCatDropTarget] = useState<string | null>(null);

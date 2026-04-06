@@ -87,7 +87,7 @@ GENERIC_TAX_EXES: set = {
 # Covers UltraTax and TaxWise open-return patterns
 TAX_SOFTWARE_RETURN_PATTERN = re.compile(
     r'(?:1040|1120-?S?|1065|990(?:EZ|PF)?|1041|706|709)'
-    r'\s*\[[\d]+\s+[A-Z]',  # UltraTax: return type + [SSN LASTNAME
+    r'\s*\[[\w]+\s+[A-Z]',  # \w handles both SSNs and alphanumeric codes
     re.IGNORECASE,
 )
 

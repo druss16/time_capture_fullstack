@@ -9,14 +9,19 @@ THE PROBLEM WITH THE OLD WATCHDOG:
 - The _suspended gap check inside the loop never fires if the loop is blocked
   BEFORE reaching that check
 
-THE FIX:
-- Tracking loop writes a heartbeat timestamp every iteration
-- Watchdog checks if heartbeat is stale (>90s = frozen)
-- If frozen: os._exit(0) — hard kill, Task Scheduler restarts the whole process
-- This is the same fix as the Mac agent's os._exit(1) on wake
+THE FIX (two complementary signals):
+- heartbeat_touch() / heartbeat_age(): catches win32 API freezes — the thread
+  is blocked BEFORE progress_tick() even fires, so this is the first line of
+  defense against hard freezes (GetForegroundWindow blocking after sleep, etc.)
+- watchdog_check() from tracking_health: catches subtler logic stalls where
+  the thread is running but not making forward progress through the loop body
+  (e.g. stuck in a tight retry loop, blocked on DB, etc.)
 
-INTEGRATION: 
-Replace the existing watchdog() function and add _heartbeat_touch() calls
+Either signal alone triggers an os._exit(1) hard kill — Task Scheduler
+restarts the whole process cleanly.
+
+INTEGRATION:
+Replace the existing watchdog() function and add heartbeat_touch() calls
 in the tracking loop. See comments marked "ADD" and "REPLACE" below.
 """
 
@@ -30,7 +35,7 @@ _heartbeat_lock = threading.Lock()
 _last_heartbeat: float = 0.0
 _heartbeat_started: float = 0.0
 
-WATCHDOG_FROZEN_THRESHOLD = 90    # Seconds of no heartbeat = frozen
+WATCHDOG_FROZEN_THRESHOLD = 90    # Seconds of no heartbeat = frozen (hard freeze)
 WATCHDOG_CHECK_INTERVAL   = 30    # How often watchdog checks
 WATCHDOG_GRACE_PERIOD     = 120   # Don't kill during first 2min of startup
 
@@ -58,6 +63,16 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
     """
     Bulletproof watchdog. Detects BOTH dead threads AND frozen threads.
 
+    Two frozen-detection signals:
+      1. heartbeat_age() > WATCHDOG_FROZEN_THRESHOLD
+         — catches hard win32 API freezes (GetForegroundWindow blocking after
+           sleep/wake). The thread is stuck BEFORE progress_tick() fires.
+
+      2. watchdog_check() from tracking_health
+         — catches subtler logic stalls where the thread is technically running
+           but not making forward progress (stuck retry loop, DB block, etc.)
+           Uses a tighter 60s timeout vs the 90s heartbeat threshold.
+
     Args:
         tracking_thread_ref: A list with one element [thread] so we can
                              swap it out when we restart (nonlocal workaround)
@@ -76,13 +91,14 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
         )
         watchdog_thread.start()
         log("[WATCHDOG] Started watchdog thread")
-
-        # Then wherever you use tracking_thread, use _thread_ref[0] instead.
     """
     global _heartbeat_started
     _heartbeat_started = time.time()
 
-    log("[WATCHDOG] Started watchdog thread")
+    log_fn("[WATCHDOG] Started watchdog thread")
+
+    # Import here to avoid circular import at module load time
+    from tracking_health import watchdog_check, get_loop_stats
 
     while True:
         time.sleep(WATCHDOG_CHECK_INTERVAL)
@@ -97,13 +113,12 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
 
         # ── Case 1: Thread is dead ─────────────────────────────────────────
         if not thread.is_alive():
-            log("[WATCHDOG] ⚠️ Tracking thread DIED — restarting process")
+            log_fn("[WATCHDOG] ⚠️ Tracking thread DIED — restarting process")
             if report_error_fn:
                 try:
                     report_error_fn("watchdog_dead", "Tracking thread died", "")
                 except Exception:
                     pass
-            # Ship logs before dying so we have a record
             try:
                 from main import ship_logs_to_backend
                 ship_logs_to_backend(tail_lines=200, trigger="watchdog_dead")
@@ -112,37 +127,55 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
                 pass
             os._exit(1)  # Task Scheduler / startup task restarts us
 
-        # ── Case 2: Thread is alive but frozen (no heartbeat) ─────────────
-        if age > WATCHDOG_FROZEN_THRESHOLD:
-            log(f"[WATCHDOG] 🥶 Tracking thread FROZEN for {int(age)}s — restarting process")
+        # ── Case 2: Thread alive but frozen (heartbeat OR progress timeout) ──
+        # Signal 1: heartbeat_age — hard freeze (win32 API blocking)
+        # Signal 2: watchdog_check — soft freeze (logic stall, no forward progress)
+        progress_ok = watchdog_check(timeout_s=60, log_fn=log_fn, report_fn=report_error_fn)
+
+        if age > WATCHDOG_FROZEN_THRESHOLD or not progress_ok:
+            stats = get_loop_stats()
+
+            if age > WATCHDOG_FROZEN_THRESHOLD:
+                freeze_reason = f"heartbeat stale ({int(age)}s > {WATCHDOG_FROZEN_THRESHOLD}s threshold)"
+            else:
+                freeze_reason = f"no loop progress for {stats['last_tick_age_s']}s (logic stall)"
+
+            log_fn(
+                f"[WATCHDOG] 🥶 Tracking thread FROZEN — {freeze_reason} | "
+                f"heartbeat_age={int(age)}s, last_tick={stats['last_tick_age_s']}s, "
+                f"longest_gap={stats['longest_gap_s']}s, freeze_count={stats['freeze_count']}"
+            )
+
             if report_error_fn:
                 try:
                     report_error_fn(
                         "watchdog_frozen",
-                        f"Tracking thread frozen for {int(age)}s",
-                        f"Last heartbeat: {age:.1f}s ago\nUptime: {uptime:.0f}s",
+                        f"Tracking thread frozen: {freeze_reason}",
+                        f"heartbeat_age={age:.1f}s\nuptime={uptime:.0f}s",
+                        context=stats,
                     )
                 except Exception:
                     pass
+
             try:
                 from main import ship_logs_to_backend
                 ship_logs_to_backend(tail_lines=200, trigger="watchdog_frozen")
                 time.sleep(2)
             except Exception:
                 pass
+
             os._exit(1)  # Hard kill — clean restart
 
         # ── Case 3: GUI thread hung — force restart ────────────────────────
-        if _heartbeat_started > 0:
-            try:
-                from main import gui_menu_bar
-                if gui_menu_bar and hasattr(gui_menu_bar, 'icon'):
-                    if gui_menu_bar.icon is None:
-                        log("[WATCHDOG] ⚠️ GUI icon is None — forcing restart")
-                        os._exit(1)
-            except Exception:
-                pass
+        try:
+            from main import gui_menu_bar
+            if gui_menu_bar and hasattr(gui_menu_bar, 'icon'):
+                if gui_menu_bar.icon is None:
+                    log_fn("[WATCHDOG] ⚠️ GUI icon is None — forcing restart")
+                    os._exit(1)
+        except Exception:
+            pass
 
         # ── All good ──────────────────────────────────────────────────────
         # Uncomment for debug:
-        # log(f"[WATCHDOG] ✅ Heartbeat OK ({age:.0f}s ago)")
+        # log_fn(f"[WATCHDOG] ✅ Heartbeat OK ({age:.0f}s ago), tick_age={get_loop_stats()['last_tick_age_s']}s")

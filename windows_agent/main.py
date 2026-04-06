@@ -37,6 +37,17 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Tuple, List
 from urllib.parse import urlparse
 
+from tracking_health import (
+    progress_tick,
+    record_window_change,
+    record_idle_enter,
+    record_idle_exit,
+    record_wake_event,
+    classify_idle,
+    watchdog_check,
+    get_loop_stats,
+    IdleKind,
+)
 
 # Windows-specific imports
 try:
@@ -1162,6 +1173,7 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
             _wake_handled = True
             
             log("[WAKE] System resumed from sleep — resetting connections")
+            record_wake_event()
             _last_control_check = 0.0
             _wake_timestamp = now
             set_network_ok(False)
@@ -2040,6 +2052,7 @@ def run_agent():
             while True:
                 try:
                     heartbeat_touch()   # ← add this
+                    progress_tick()
 
                     # ── IDLE WATCHDOG: force-exit idle if stuck > 30 min ──────────
                     # GetLastInputInfo returns stale values on some machines after
@@ -2077,6 +2090,7 @@ def run_agent():
                                 dwell_start = None
                                 _idle_entered_at = 0.0
                                 _idle_reading_unchanged_since = 0.0
+                                record_idle_exit()
                                 continue
                         else:
                             # Reading is changing — legitimate idle, reset staleness timer
@@ -2102,6 +2116,7 @@ def run_agent():
                             dwell_start = None
                             _idle_entered_at = 0.0
                             _idle_reading_unchanged_since = 0.0
+                            record_idle_exit()
                             continue
 
                      # === SUBSCRIPTION CHECK ===
@@ -2209,6 +2224,20 @@ def run_agent():
                                     write_event(conn, cur, os_user, hostname, current_sig)
                             current_sig = IDLE_SIG
                             _idle_entered_at = time.time()  # ← ADD THIS
+                            record_idle_enter()
+                            verdict = classify_idle(idle, MOUSE_IDLE_PAUSE_S)
+                            if verdict.kind == IdleKind.UNINTENTIONAL:
+                                log(f"[IDLE] ⚠️ Unintentional idle detected — {verdict.reason} "
+                                    f"(confidence={verdict.confidence:.0%})")
+                                # Don't record this idle block; just reset state and continue
+                                current_sig = None
+                                dwell_start = None
+                                _idle_entered_at = 0.0
+                                record_idle_exit()
+                                continue
+                            else:
+                                log(f"[IDLE] Intentional idle — {verdict.reason}")
+                                # Fall through to normal idle handling
                             if force_idle:
                                 dwell_start = time.time()
                             else:
@@ -2229,6 +2258,7 @@ def run_agent():
                                 current_sig = None
                                 dwell_start = None
                                 _idle_entered_at = 0.0
+                                record_idle_exit()
                                 continue
 
                             # Stuck idle check — re-read idle timer fresh
@@ -2242,6 +2272,7 @@ def run_agent():
                                     current_sig = None
                                     dwell_start = None
                                     _idle_entered_at = 0.0  # ← ADD THIS
+                                    record_idle_exit()
                                     continue
                                 else:
                                     log(f"[IDLE] Still genuinely idle after {int(idle_duration)}s (fresh={int(fresh_idle)}s)")
@@ -2252,6 +2283,7 @@ def run_agent():
                                         dwell_start = None
                                         _idle_entered_at = 0.0
                                         _idle_reading_unchanged_since = 0.0
+                                        record_idle_exit()
                                         continue
 
                         if force_idle:
@@ -2278,6 +2310,7 @@ def run_agent():
                             current_sig = None
                             dwell_start = None
                             _idle_entered_at = 0.0  # ← ADD THIS
+                            record_idle_exit()
 
 
                             # ── FIX 4: After waking from idle, re-peek foreground ──
@@ -2313,6 +2346,7 @@ def run_agent():
                             current_sig = sig
                             dwell_start = time.time()
                             log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
+                            record_window_change()
                             
                             # >>> ADD THIS: Feed focus change to AI switcher
                             if ai_switcher:

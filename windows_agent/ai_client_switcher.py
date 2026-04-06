@@ -864,6 +864,8 @@ class AIClientSwitcher:
             # --- Tier 1e: Tax software open return → Internal - Tax ──────────────
             # When UltraTax/TaxWise has an individual return open and no client
             # matched, switch to the Internal - Tax client so time isn't orphaned.
+            logger.info(f"[AI-SWITCH] Tier1e check: regex={regex_hit}, learned={learned_hit}, file={file_hit}, title={title[:60]}")
+
             if not regex_hit and not learned_hit and not file_hit:
                 if (TAX_SOFTWARE_RETURN_PATTERN.search(title or '')
                         or TAX_SOFTWARE_TAXWISE_PATTERN.search(title or '')):

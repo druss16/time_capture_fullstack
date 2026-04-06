@@ -408,10 +408,16 @@ def setup_logging():
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
         
+        logger = logging.getLogger('timetracker')
+        
+        # Prevent duplicate handlers on reload/restart
+        if logger.handlers:
+            return logger
+        
         # Main log - rotates at 5MB, keeps 3 backups
         main_handler = RotatingFileHandler(
             LOG_FILE, 
-            maxBytes=5*1024*1024,  # 5MB
+            maxBytes=5*1024*1024,
             backupCount=3,
             encoding='utf-8'
         )
@@ -424,7 +430,7 @@ def setup_logging():
         # Error log - separate file for crashes only
         error_handler = RotatingFileHandler(
             ERROR_LOG_FILE,
-            maxBytes=2*1024*1024,  # 2MB
+            maxBytes=2*1024*1024,
             backupCount=5,
             encoding='utf-8'
         )
@@ -434,8 +440,7 @@ def setup_logging():
             datefmt='%Y-%m-%d %H:%M:%S'
         ))
         
-        # Configure root logger
-        logger = logging.getLogger('timetracker')
+        # ── removed second getLogger call here ──
         logger.setLevel(logging.DEBUG)
         logger.addHandler(main_handler)
         logger.addHandler(error_handler)
@@ -2031,7 +2036,14 @@ def run_agent():
         log("[TRACKING] Initializing...")
         _last_idle_reading = 0.0
         _last_idle_reading_time = 0.0
-        
+
+        # At the very top of tracking_loop(), before the while True:
+        if not hasattr(tracking_loop, '_running'):
+            tracking_loop._running = True
+        else:
+            log("[TRACKING] ⚠️ Duplicate tracking loop detected — aborting this instance")
+            return
+                
         try:
             conn = ensure_db()
             cur = conn.cursor()
@@ -2275,7 +2287,10 @@ def run_agent():
                                     record_idle_exit()
                                     continue
                                 else:
-                                    log(f"[IDLE] Still genuinely idle after {int(idle_duration)}s (fresh={int(fresh_idle)}s)")
+                                    _now = time.time()
+                                    if not hasattr(tracking_loop, '_last_idle_log') or _now - tracking_loop._last_idle_log > 60:
+                                        log(f"[IDLE] Still genuinely idle after {int(idle_duration)}s (fresh={int(fresh_idle)}s)")
+                                        tracking_loop._last_idle_log = _now
                                     if idle_duration > (_IDLE_WATCHDOG_MAX_MINUTES * 60):
                                         log(f"[IDLE-WD] ⚠️ Wall clock cap hit — force-flushing idle dwell")
                                         write_event(conn, cur, os_user, hostname, IDLE_SIG, ts_override=dwell_start)

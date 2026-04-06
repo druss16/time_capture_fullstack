@@ -4450,12 +4450,16 @@ def today_time(request):
         total_minutes    += b_minutes
  
 
-     # =========================================================================
-    # STEP 6: Build individual returns from Internal - Tax blocks
+    # =========================================================================
+    # STEP 6: Build individual returns from Internal - Tax events + blocks
     # =========================================================================
     from tracker.utils.tax_software import extract_tax_context
     
     individual_returns = []
+    seen_hashes = set()
+    seen_titles = set()
+
+    # First from blocks (already stored taxpayer_name)
     internal_tax_blocks = Block.objects.filter(
         user=user,
         org=get_user_org(user),
@@ -4470,7 +4474,6 @@ def today_time(request):
         taxpayer_id_hash = getattr(block, 'taxpayer_id_hash', None)
         tax_return_type = getattr(block, 'tax_return_type', None)
         
-        # Fall back to extracting from window title if not stored
         if not taxpayer_name and block.window_title:
             ctx = extract_tax_context(block.window_title)
             if ctx:
@@ -4479,6 +4482,9 @@ def today_time(request):
                 tax_return_type = ctx.return_type
         
         if taxpayer_name:
+            key = taxpayer_id_hash or taxpayer_name
+            if key not in seen_hashes:
+                seen_hashes.add(key)
             individual_returns.append({
                 'block_id':         block.id,
                 'taxpayer_name':    taxpayer_name,
@@ -4488,6 +4494,36 @@ def today_time(request):
                 'category':         list(block.category_hours.keys())[0] if block.category_hours else 'Tax Preparation',
                 'display_title':    block.window_title or '',
             })
+
+
+    for ev in event_durations:
+        if ev['client_name'] != 'Internal - Tax':
+            continue
+        title = ev['window_title']
+        if not title or title in seen_titles:
+            continue
+        ctx = extract_tax_context(title)
+        if not ctx:
+            continue
+        seen_titles.add(title)
+        key = ctx.taxpayer_id_hash or ctx.taxpayer_name
+        if key in seen_hashes:
+            # Already have this taxpayer from blocks — just add minutes
+            for r in individual_returns:
+                if r['taxpayer_id_hash'] == key:
+                    r['minutes'] += ev['duration_minutes']
+                    break
+            continue
+        seen_hashes.add(key)
+        individual_returns.append({
+            'block_id':         ev['block_id'],
+            'taxpayer_name':    ctx.taxpayer_name,
+            'taxpayer_id_hash': ctx.taxpayer_id_hash or ctx.taxpayer_name,
+            'tax_return_type':  ctx.return_type or '1040',
+            'minutes':          ev['duration_minutes'],
+            'category':         'Tax Preparation',
+            'display_title':    title,
+        })
 
     return Response({
         'clients':            result,

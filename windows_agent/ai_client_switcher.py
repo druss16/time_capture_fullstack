@@ -597,6 +597,28 @@ class AIClientSwitcher:
             self.config["cache_ttl_days"],
         )
 
+        # ── Auto-clear stale pattern cache on version upgrade ──────────────
+        try:
+            from version import APP_VERSION
+            cache_version_file = os.path.expanduser("~/.timetracker/ai_cache_version.txt")
+            cached_version = ""
+            if os.path.exists(cache_version_file):
+                with open(cache_version_file) as f:
+                    cached_version = f.read().strip()
+            if cached_version != APP_VERSION:
+                cache_path = self.config["pattern_cache_file"]
+                if os.path.exists(cache_path):
+                    os.remove(cache_path)
+                    self._cache._data = {}
+                    logger.info(
+                        f"[AI-SWITCH] Pattern cache cleared on upgrade "
+                        f"{cached_version or 'unknown'} → {APP_VERSION}"
+                    )
+                with open(cache_version_file, "w") as f:
+                    f.write(APP_VERSION)
+        except Exception as e:
+            logger.warning(f"[AI-SWITCH] Cache version check failed (non-fatal): {e}")
+
         self._ai_call_count   = 0
         self._ai_window_start = time.time()
         self._ai_queue: List[dict] = []

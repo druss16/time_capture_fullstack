@@ -4500,18 +4500,17 @@ def today_time(request):
         if ev['client_name'] != 'Internal - Tax':
             continue
         title = ev['window_title']
-        if not title or title in seen_titles:
+        if not title:
             continue
         ctx = extract_tax_context(title)
         if not ctx:
             continue
-        seen_titles.add(title)
         key = ctx.taxpayer_id_hash or ctx.taxpayer_name
         if key in seen_hashes:
-            # Already have this taxpayer from blocks — just add minutes
+            # Accumulate minutes for existing taxpayer
             for r in individual_returns:
                 if r['taxpayer_id_hash'] == key:
-                    r['minutes'] += ev['duration_minutes']
+                    r['minutes'] = round(r['minutes'] + ev['duration_minutes'])
                     break
             continue
         seen_hashes.add(key)
@@ -4520,7 +4519,7 @@ def today_time(request):
             'taxpayer_name':    ctx.taxpayer_name,
             'taxpayer_id_hash': ctx.taxpayer_id_hash or ctx.taxpayer_name,
             'tax_return_type':  ctx.return_type or '1040',
-            'minutes':          ev['duration_minutes'],
+            'minutes':          round(ev['duration_minutes']),
             'category':         'Tax Preparation',
             'display_title':    title,
         })

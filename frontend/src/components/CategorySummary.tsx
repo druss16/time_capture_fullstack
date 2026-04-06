@@ -89,10 +89,11 @@ const fmt = (hours: number): string => {
 };
 
 const fmtMinutes = (minutes: number): string => {
-  if (minutes < 60) return `${minutes}m`;
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  const m = Math.round(minutes);  // ← round first
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
 };
 
 const parse = (activity: string): ParsedActivity => {
@@ -1367,9 +1368,7 @@ export default function CategorySummary({
                 ...cat,
                 sample_activities: cat.sample_activities.filter(a => {
                   const parsed = parse(a);
-                  return !aiSuggestions.some(
-                    s => s.block_id === parsed.blockId && s?.ai_suggestion?.taxpayer_name
-                  );
+                  return !individualReturns.some(r => r.block_id === parsed.blockId);
                 })
               };
             }

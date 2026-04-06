@@ -600,6 +600,9 @@ class AIClientSwitcher:
         # ── Auto-clear stale pattern cache on version upgrade ──────────────
         try:
             from version import APP_VERSION
+        except ImportError:
+            APP_VERSION = "unknown"
+        try:
             cache_version_file = os.path.expanduser("~/.timetracker/ai_cache_version.txt")
             cached_version = ""
             if os.path.exists(cache_version_file):

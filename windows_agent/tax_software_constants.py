@@ -92,7 +92,7 @@ TAX_SOFTWARE_RETURN_PATTERN = re.compile(
 )
 
 TAX_SOFTWARE_TAXWISE_PATTERN = re.compile(
-    r'TaxWise.*?:\s*(?:1040|1120-?S?|1065|990)\s+In\s+[A-Z]',
+    r'TaxWise.*?:\s*(?:1040|1120-?S?|1065|990)\s+(?:In\s+|Individual\s*:?\s*)[A-Z\d]',
     re.IGNORECASE,
 )
 

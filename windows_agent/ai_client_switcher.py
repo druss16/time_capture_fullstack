@@ -727,14 +727,22 @@ class AIClientSwitcher:
 
     def on_window_change(self, app_name: str, exe_name: str, title: str,
                          url: str = None, file_path: str = None, in_meeting: bool = False):
-        if not self.config["enabled"] or not title or title == self._last_title:
+        if not self.config["enabled"] or not title:
+            logger.info(f"[AI-SWITCH] on_window_change: skipped (disabled/no title)")
+            return
+        if title == self._last_title:
+            logger.info(f"[AI-SWITCH] on_window_change: skipped (same title) {title[:60]!r}")
             return
         self._last_title = title
         if in_meeting or time.time() < self._manual_override_until:
+            logger.info(f"[AI-SWITCH] on_window_change: skipped (meeting/override)")
             return
-        if self._should_skip(title, exe_name):
+        skip = self._should_skip(title, exe_name)
+        logger.info(f"[AI-SWITCH] on_window_change: should_skip={skip} title={title[:60]!r}")
+        if skip:
             self._clear_pending()
             return
+        logger.info(f"[AI-SWITCH] on_window_change: launching _detect")
         threading.Thread(
             target=self._detect,
             args=(app_name, exe_name, title, url, file_path),
@@ -816,6 +824,7 @@ class AIClientSwitcher:
     def _detect(self, app_name: str, exe_name: str, title: str,
                 url: str, file_path: str):
         try:
+            logger.info(f"[AI-SWITCH] _detect entered: {title[:60]!r}")
             search      = f"{title} {file_path}" if file_path else title
             cur_id      = self._current_client_id
             sensitivity = self.config["ai_sensitivity"]

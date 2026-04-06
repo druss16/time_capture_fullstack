@@ -100,6 +100,7 @@ if sys.platform == 'win32':
 
 register_hotkey = None
 ai_switcher = None  # Will be initialized after GUI setup
+_lock_fh = None
 
 
 # ---------------- Check Active Subscriptions ----------------
@@ -2513,9 +2514,10 @@ def cmd_stop():
         print(f"Error stopping agent: {e}")
 
 def main():
-        # ── Single instance lock — prevent duplicate agents ──
+    # ── Single instance lock — prevent duplicate agents ──
     if sys.platform == 'win32':
         import msvcrt
+        global _lock_fh
         _lock_path = os.path.join(APPDATA, "TimeTracker", "agent.lock")
         try:
             os.makedirs(os.path.dirname(_lock_path), exist_ok=True)

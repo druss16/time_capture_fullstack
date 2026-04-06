@@ -73,7 +73,7 @@ class TaxSoftwareContext:
 #              "Utw25 - 2025 UltraTax CS / 1065 [123456789 EVERSON CORP, LLC"
 _UT_PATTERN = re.compile(
     r'(?:1040|1120-?S?|1065|990(?:EZ|PF)?|1041|706|709)'
-    r'\s*\[(\w{5,12})\s+([A-Z][A-Z0-9\s,\.&\-]+?)\]?',
+    r'\s*\[(\w{5,12})\s+([A-Z][A-Z0-9\s,\.&\-]+?)(?:\]|(?=\s*-\s*\[)|\Z)',
     re.IGNORECASE,
 )
 

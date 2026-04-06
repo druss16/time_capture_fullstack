@@ -4457,7 +4457,6 @@ def today_time(request):
     
     individual_returns = []
     seen_hashes = set()
-    seen_titles = set()
 
     # First from blocks (already stored taxpayer_name)
     internal_tax_blocks = Block.objects.filter(

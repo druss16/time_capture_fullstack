@@ -1172,7 +1172,11 @@ export default function CategorySummary({
   // ── Extract individual-return blocks from AI suggestions ─────────────────
   const individualReturnBlocks = React.useMemo<IndividualReturnBlock[]>(() => {
     return aiSuggestions
-      .filter((s) => s?.ai_suggestion?.taxpayer_name && !s?.ai_suggestion?.client)
+      .filter((s) => 
+          s?.ai_suggestion?.taxpayer_name && 
+          (!s?.ai_suggestion?.client || 
+           s?.ai_suggestion?.client?.toLowerCase() === "internal - tax")
+        )
       .map((s) => {
         const minutes =
           s.end && s.start
@@ -1363,9 +1367,33 @@ export default function CategorySummary({
             ? { border: "border-l-slate-300", header: "bg-slate-50", hours: "text-slate-400" }
             : CLIENT_ACCENTS[clientIndex % CLIENT_ACCENTS.length];
 
+          // In the timeSummary.map, filter out individual return activities 
+          // from Internal - Tax so they don't double-render
           const visibleCategories = client.categories.filter(
             (cat) => cat.hours > 0 || cat.sample_activities.length > 0
-          );
+          ).map(cat => {
+            // For Internal - Tax, filter out activities that belong to Individual Returns
+            if (client.client.toLowerCase() === "internal - tax") {
+              return {
+                ...cat,
+                sample_activities: cat.sample_activities.filter(a => {
+                  const parsed = parse(a);
+                  return !aiSuggestions.some(
+                    s => s.block_id === parsed.blockId && s?.ai_suggestion?.taxpayer_name
+                  );
+                })
+              };
+            }
+            return cat;
+          });
+
+          // Hide Internal - Tax card entirely if all activities moved to Individual Returns
+          if (client.client.toLowerCase() === "internal - tax") {
+            const hasRemainingActivities = visibleCategories.some(
+              cat => cat.sample_activities.length > 0
+            );
+            if (!hasRemainingActivities) return null;
+          }
           const hiddenZeroCount = client.categories.length - visibleCategories.length;
           const totalActivityCount = visibleCategories.reduce((sum, cat) => sum + cat.block_count, 0);
 

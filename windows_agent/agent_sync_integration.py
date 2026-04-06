@@ -173,7 +173,7 @@ class AgentSync:
         """Make API request"""
         url = f"{self.api_base}{endpoint}"
         req = urllib.request.Request(url)
-        req.add_header('Authorization', f'Bearer {self.device_token}')
+        req.add_header('Authorization', f'DeviceKey {self.device_token}')
         req.add_header('Content-Type', 'application/json')
         
         try:

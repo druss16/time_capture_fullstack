@@ -644,7 +644,6 @@ class AIClientSwitcher:
 
         self._skip_exes = set(self.config.get("skip_exes", set()))
         # Merge in tax software exe names from shared constant
-        self._skip_exes.update(GENERIC_TAX_EXES)
 
         self._skip_patterns = [
             re.compile(p, re.IGNORECASE)

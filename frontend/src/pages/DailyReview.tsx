@@ -238,9 +238,10 @@ export default function DailyReview() {
       loadTimeSummary();
       loadUncategorizedCount();
       loadClients();
+      runAIClassification(); // ← ADD THIS
     }, 200);
     return () => clearTimeout(t);
-  }, [loadTimeSummary, loadUncategorizedCount, loadClients]);
+  }, [loadTimeSummary, loadUncategorizedCount, loadClients, runAIClassification]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -272,7 +273,8 @@ export default function DailyReview() {
   const handleRefresh = useCallback(() => {
     loadTimeSummary();
     loadUncategorizedCount();
-  }, [loadTimeSummary, loadUncategorizedCount]);
+    runAIClassification(); // ← ADD THIS
+  }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
   const handleCategorizationComplete = useCallback(() => {
     loadTimeSummary();

@@ -4496,17 +4496,15 @@ def today_time(request):
 
 
     for ev in event_durations:
-        if ev['client_name'] != 'Internal - Tax':
-            continue
         title = ev['window_title']
         if not title:
             continue
         ctx = extract_tax_context(title)
         if not ctx:
             continue
+        # ← Remove the client_name check entirely
         key = ctx.taxpayer_id_hash or ctx.taxpayer_name
         if key in seen_hashes:
-            # Accumulate minutes for existing taxpayer
             for r in individual_returns:
                 if r['taxpayer_id_hash'] == key:
                     r['minutes'] = round(r['minutes'] + ev['duration_minutes'])

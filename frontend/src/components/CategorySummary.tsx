@@ -23,7 +23,6 @@ import {
   X,
   ArrowRightLeft,
   MousePointerClick,
-  FileText,
 } from "lucide-react";
 import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -57,24 +56,7 @@ export type FlaggedBlock = {
   start: string;
 };
 
-type IndividualReturnBlock = {
-  block_id: number;
-  taxpayer_name: string;
-  taxpayer_id_hash: string;
-  tax_return_type: string;
-  duration_minutes: number;
-  category: string;
-  display_title: string;
-};
 
-type TaxpayerGroup = {
-  display_name: string;
-  hash: string;
-  return_types: string[];
-  blocks: IndividualReturnBlock[];
-  total_minutes: number;
-  billable_minutes: number;
-};
 
 type ParsedActivity = { blockId: number | null; title: string };
 
@@ -88,13 +70,6 @@ const fmt = (hours: number): string => {
   return `${h}h ${m}m`;
 };
 
-const fmtMinutes = (minutes: number): string => {
-  const m = Math.round(minutes);  // ← round first
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  const rem = m % 60;
-  return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
-};
 
 const parse = (activity: string): ParsedActivity => {
   const match = activity.match(/\[id:(\d+)\]\s*/);
@@ -123,127 +98,6 @@ const CLIENT_ACCENTS = [
   { border: "border-l-emerald-500", header: "bg-emerald-50", hours: "text-emerald-600" },
 ];
 
-// ─── Return type badge ────────────────────────────────────────────────────────
-
-const RETURN_TYPE_COLORS: Record<string, string> = {
-  "1040":  "bg-blue-100 text-blue-700",
-  "1065":  "bg-purple-100 text-purple-700",
-  "1120":  "bg-orange-100 text-orange-700",
-  "1120S": "bg-orange-100 text-orange-700",
-  "990":   "bg-green-100 text-green-700",
-  "1041":  "bg-pink-100 text-pink-700",
-};
-
-function ReturnTypeBadge({ type }: { type: string }) {
-  const colors = RETURN_TYPE_COLORS[type] ?? "bg-gray-100 text-gray-600";
-  return (
-    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${colors}`}>
-      {type}
-    </span>
-  );
-}
-
-// ─── IndividualReturnsSection ─────────────────────────────────────────────────
-
-function TaxpayerCard({ group }: { group: TaxpayerGroup }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="border border-gray-100 rounded-lg mb-2 overflow-hidden">
-      <div
-        className="flex items-center gap-2 px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100 select-none"
-        onClick={() => setExpanded((e) => !e)}
-      >
-        <span className="text-gray-400 w-4 flex-shrink-0">
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        </span>
-        <FileText size={14} className="text-gray-400 flex-shrink-0" />
-        <span className="font-medium text-gray-800 flex-1 text-sm">
-          {group.display_name}
-        </span>
-        <div className="flex gap-1 flex-shrink-0">
-          {group.return_types.map((rt) => (
-            <ReturnTypeBadge key={rt} type={rt} />
-          ))}
-        </div>
-        <div className="flex items-center gap-3 flex-shrink-0 ml-2">
-          {group.billable_minutes > 0 && (
-            <div className="text-right">
-              <span className="text-sm font-semibold text-emerald-600">
-                {fmtMinutes(group.billable_minutes)}
-              </span>
-              <span className="text-xs text-gray-400 ml-1">BILLABLE</span>
-            </div>
-          )}
-          {group.total_minutes - group.billable_minutes > 0 && (
-            <div className="text-right">
-              <span className="text-sm font-semibold text-gray-400">
-                {fmtMinutes(group.total_minutes - group.billable_minutes)}
-              </span>
-              <span className="text-xs text-gray-400 ml-1">NON-BILL</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="divide-y divide-gray-50">
-          {group.blocks.map((block) => (
-            <div
-              key={block.block_id}
-              className="flex items-center gap-3 px-8 py-2 hover:bg-gray-50"
-            >
-              <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded flex-shrink-0">
-                {block.category || "Tax Preparation"}
-              </span>
-              <span className="text-sm text-gray-700 flex-1 truncate">
-                {block.display_title}
-              </span>
-              <span className="text-sm text-gray-500 flex-shrink-0">
-                ({fmtMinutes(block.duration_minutes)})
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function IndividualReturnsSection({ blocks }: { blocks: IndividualReturnBlock[] }) {
-  const [expanded, setExpanded] = useState(true);
-
-  const groups = React.useMemo<TaxpayerGroup[]>(() => {
-    const map = new Map<string, TaxpayerGroup>();
-    for (const block of blocks) {
-      const key = block.taxpayer_id_hash || block.taxpayer_name;
-      if (!map.has(key)) {
-        map.set(key, {
-          display_name:    block.taxpayer_name,
-          hash:            key,
-          return_types:    [],
-          blocks:          [],
-          total_minutes:   0,
-          billable_minutes: 0,
-        });
-      }
-      const g = map.get(key)!;
-      g.blocks.push(block);
-      g.total_minutes += block.duration_minutes || 0;
-      if (["Tax Preparation", "Tax Review", "Tax Research"].includes(block.category)) {
-        g.billable_minutes += block.duration_minutes || 0;
-      }
-      if (block.tax_return_type && !g.return_types.includes(block.tax_return_type)) {
-        g.return_types.push(block.tax_return_type);
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => b.total_minutes - a.total_minutes);
-  }, [blocks]);
-
-  if (groups.length === 0) return null;
-
-  const totalBillable = groups.reduce((s, g) => s + g.billable_minutes, 0);
-  const totalMinutes  = groups.reduce((s, g) => s + g.total_minutes, 0);
 
   return (
     <div
@@ -1157,9 +1011,6 @@ export default function CategorySummary({
   onDismissReview,
   onRefresh,
   showToast,
-  aiSuggestions = [],
-  individualReturns = [],
-
 }: {
   timeSummary: ClientTime[];
   availableClients: ClientOption[];
@@ -1169,23 +1020,8 @@ export default function CategorySummary({
   onDismissReview: (id: number) => void;
   onRefresh: () => void;
   showToast: (msg: string, type: "success" | "error") => void;
-  aiSuggestions?: any[];
-  individualReturns?: any[];
 }) {
 
-  // ── Extract individual-return blocks from AI suggestions ─────────────────
-  // ── Extract individual-return blocks from today_time response ─────────────
-  const individualReturnBlocks = React.useMemo<IndividualReturnBlock[]>(() => {
-    return (individualReturns || []).map((r) => ({
-      block_id:         r.block_id,
-      taxpayer_name:    r.taxpayer_name,
-      taxpayer_id_hash: r.taxpayer_id_hash || r.taxpayer_name,
-      tax_return_type:  r.tax_return_type || '1040',
-      duration_minutes: r.minutes || 0,
-      category:         r.category || 'Tax Preparation',
-      display_title:    r.display_title || '',
-    }));
-  }, [individualReturns]);
 
 
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
@@ -1358,30 +1194,11 @@ export default function CategorySummary({
             : CLIENT_ACCENTS[clientIndex % CLIENT_ACCENTS.length];
 
           // In the timeSummary.map, filter out individual return activities 
-          // from Internal - Tax so they don't double-render
           const visibleCategories = client.categories.filter(
             (cat) => cat.hours > 0 || cat.sample_activities.length > 0
-          ).map(cat => {
-            // For Internal - Tax, filter out activities that belong to Individual Returns
-            if (client.client.toLowerCase() === "internal - tax") {
-              return {
-                ...cat,
-                sample_activities: cat.sample_activities.filter(a => {
-                  const parsed = parse(a);
-                  return !individualReturns.some(r => r.block_id === parsed.blockId);
-                })
-              };
-            }
-            return cat;
-          });
+          );
 
           // Hide Internal - Tax card entirely if all activities moved to Individual Returns
-          if (client.client.toLowerCase() === "internal - tax") {
-            const hasRemainingActivities = visibleCategories.some(
-              cat => cat.sample_activities.length > 0
-            );
-            if (!hasRemainingActivities) return null;
-          }
           const hiddenZeroCount = client.categories.length - visibleCategories.length;
           const totalActivityCount = visibleCategories.reduce((sum, cat) => sum + cat.block_count, 0);
 
@@ -1516,16 +1333,11 @@ export default function CategorySummary({
           );
         })}
 
-        {/* ── Individual Returns — renders after all client cards ── */}
-        <IndividualReturnsSection blocks={individualReturnBlocks} />
       </div>
 
       {/* Total summary line */}
       {(timeSummary.length > 0 || individualReturnBlocks.length > 0) && !busy && (() => {
-        const irBillableHours = individualReturnBlocks.reduce(
-          (s, b) => s + (b.duration_minutes || 0), 0
-        ) / 60;
-        const totalBillable = timeSummary.reduce((s, c) => s + getBillable(c), 0) + irBillableHours;
+        const totalBillable = timeSummary.reduce((s, c) => s + getBillable(c), 0);
         const totalNonBillable = timeSummary.reduce((s, c) => s + getNonBillable(c), 0);
         const totalAll = totalBillable + totalNonBillable;
         const clientCount = timeSummary.filter((c) => c.client.toLowerCase() !== "unassigned").length;

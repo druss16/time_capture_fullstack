@@ -4146,7 +4146,6 @@ ALSO: Copy display_names.py to tracker/utils/display_names.py
 # UPDATED today_time() - With Clean Display Formatting
 # ============================================================================x
 
-from tracker.utils.tax_software import extract_tax_context as _extract_tax
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -4286,10 +4285,6 @@ def today_time(request):
     non_billable_minutes = 0.0
     
     for ev in event_durations:
-        # Skip tax return events — counted in individual_returns (Step 6) not here
-        if _extract_tax(ev['window_title']):
-            continue
-
         client_name = ev['client_name']
         category = ev['category']
         minutes = ev['duration_minutes']
@@ -4442,82 +4437,6 @@ def today_time(request):
         billable_minutes += b_minutes
         total_minutes    += b_minutes
 
-    # =========================================================================
-    # STEP 6: Build individual returns from all events + Internal-Tax blocks
-    # =========================================================================
-    from tracker.utils.tax_software import extract_tax_context
-    
-    individual_returns = []
-    seen_hashes = set()
-
-    # First pass — blocks with stored taxpayer_name (or extractable window title)
-    internal_tax_blocks = Block.objects.filter(
-        user=user,
-        org=get_user_org(user),
-        client__name='Internal - Tax',
-        start__gte=start_utc,
-        start__lt=end_utc,
-        deleted_at__isnull=True,
-    ).select_related('client')
-    
-    for block in internal_tax_blocks:
-        taxpayer_name    = getattr(block, 'taxpayer_name', None)
-        taxpayer_id_hash = getattr(block, 'taxpayer_id_hash', None)
-        tax_return_type  = getattr(block, 'tax_return_type', None)
-        
-        if not taxpayer_name and block.window_title:
-            ctx = extract_tax_context(block.window_title)
-            if ctx:
-                taxpayer_name    = ctx.taxpayer_name
-                taxpayer_id_hash = ctx.taxpayer_id_hash
-                tax_return_type  = ctx.return_type
-        
-        if taxpayer_name:
-            key = taxpayer_id_hash or taxpayer_name
-            if key not in seen_hashes:
-                seen_hashes.add(key)
-            individual_returns.append({
-                'block_id':         block.id,
-                'taxpayer_name':    taxpayer_name,
-                'taxpayer_id_hash': taxpayer_id_hash or taxpayer_name,
-                'tax_return_type':  tax_return_type or '1040',
-                'minutes':          block.minutes or 0,
-                'category':         list(block.category_hours.keys())[0] if block.category_hours else 'Tax Preparation',
-                'display_title':    block.window_title or '',
-            })
-
-    # Second pass — all events with extractable tax software titles
-    # Covers blocks not yet compacted + returns under wrong client (pre-v1.2.89)
-    for ev in event_durations:
-        title = ev['window_title']
-        if not title:
-            continue
-        ctx = extract_tax_context(title)
-        if not ctx:
-            continue
-        key = ctx.taxpayer_id_hash or ctx.taxpayer_name
-        if key in seen_hashes:
-            # Accumulate minutes for existing taxpayer
-            for r in individual_returns:
-                if r['taxpayer_id_hash'] == key:
-                    r['minutes'] = round(r['minutes'] + ev['duration_minutes'])
-                    break
-            continue
-        seen_hashes.add(key)
-        individual_returns.append({
-            'block_id':         ev['block_id'],
-            'taxpayer_name':    ctx.taxpayer_name,
-            'taxpayer_id_hash': ctx.taxpayer_id_hash or ctx.taxpayer_name,
-            'tax_return_type':  ctx.return_type or '1040',
-            'minutes':          round(ev['duration_minutes']),
-            'category':         'Tax Preparation',
-            'display_title':    title,
-        })
-
-    # Add IR billable minutes to totals so header reflects full day accurately
-    ir_billable_minutes = sum(r['minutes'] for r in individual_returns)
-    billable_minutes += ir_billable_minutes
-    total_minutes    += ir_billable_minutes
 
     return Response({
         'clients':            result,
@@ -4526,7 +4445,6 @@ def today_time(request):
         'non_billable_hours': round(non_billable_minutes / 60, 2),
         'date':               target_date.isoformat(),
         'flagged_blocks':     flagged_blocks,
-        'individual_returns': individual_returns,
     })
 
 # ── Add this new view to views.py ─────────────────────────────────────────────

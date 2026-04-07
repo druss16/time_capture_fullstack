@@ -100,7 +100,8 @@ if sys.platform == 'win32':
 
 register_hotkey = None
 ai_switcher = None  # Will be initialized after GUI setup
-_lock_fh = None
+# Single instance lock — named mutex held for entire process lifetime
+_lock_mutex = None
 
 
 # ---------------- Check Active Subscriptions ----------------
@@ -2544,17 +2545,33 @@ def cmd_stop():
         print(f"Error stopping agent: {e}")
 
 def main():
+    # ── Single instance lock — named mutex (Windows-standard) ──
     if sys.platform == 'win32':
-        import msvcrt
-        global _lock_fh
-        _lock_path = os.path.join(APPDATA, "TimeTracker", "agent.lock")
-        try:
-            os.makedirs(os.path.dirname(_lock_path), exist_ok=True)
-            _lock_fh = open(_lock_path, 'w')
-            msvcrt.locking(_lock_fh.fileno(), msvcrt.LK_NBLCK, 1)
-        except (IOError, OSError):
+        import ctypes
+        global _lock_mutex
+
+        # Try Global mutex first (works across all sessions on machine)
+        _lock_mutex = ctypes.windll.kernel32.CreateMutexW(
+            None, True, "Global\\TimeTrackerAgent_MavOps"
+        )
+        last_error = ctypes.windll.kernel32.GetLastError()
+
+        # Fallback to session-local mutex if Global fails
+        # (some domain machines restrict SeCreateGlobalPrivilege)
+        if not _lock_mutex:
+            _lock_mutex = ctypes.windll.kernel32.CreateMutexW(
+                None, True, "TimeTrackerAgent_MavOps"
+            )
+            last_error = ctypes.windll.kernel32.GetLastError()
+
+        if last_error == 183:  # ERROR_ALREADY_EXISTS
             print("[AGENT] Another instance is already running — exiting.")
+            ctypes.windll.kernel32.CloseHandle(_lock_mutex)
+            _lock_mutex = None
             sys.exit(0)
+
+        if not _lock_mutex:
+            print("[AGENT] ⚠️ Failed to create mutex — proceeding without lock")
     # Handle uninstaller flag FIRST before anything else
     if "--unregister-task" in sys.argv:
         from startup_task import unregister_startup_task

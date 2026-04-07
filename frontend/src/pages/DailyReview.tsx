@@ -66,7 +66,6 @@ type TodayTimeResponse = {
   global_hours: number;
   date: string;
   flagged_blocks: FlaggedBlock[];
-  individual_returns?: any[];  // ← ADD
 };
 
 // ─── Toast ───────────────────────────────────────────────────────────────────
@@ -145,7 +144,6 @@ export default function DailyReview() {
     date: todayIso(),
   });
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
-  const [individualReturns, setIndividualReturns] = useState<any[]>([]);
 
 
 
@@ -194,7 +192,6 @@ export default function DailyReview() {
         `${API_BASE}/today-time/?date=${date}`
       );
       setTimeSummary(json.clients || []);
-      setIndividualReturns(json.individual_returns || []);
       setBillableHours(json.billable_hours || 0);
       setNonBillableHours(json.non_billable_hours || 0);
       setFlaggedBlocks(json.flagged_blocks || []);
@@ -454,8 +451,7 @@ export default function DailyReview() {
               onDismissReview={handleDismissReview}
               onRefresh={handleRefresh}
               showToast={showToast}
-              aiSuggestions={aiSuggestions}  // ← ADD THIS
-              individualReturns={individualReturns}  // ← ADD
+              aiSuggestions={aiSuggestions}
 
             />
           </>

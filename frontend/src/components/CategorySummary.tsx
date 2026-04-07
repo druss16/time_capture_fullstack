@@ -1,12 +1,5 @@
 /**
  * CategorySummary.tsx
- *
- * Changes from previous version:
- *  - Added IndividualReturnsSection component + TaxpayerCard + ReturnTypeBadge
- *  - Accepts new `aiSuggestions` prop (raw pipeline_out from /blocks/suggestions/)
- *  - Individual tax return blocks (taxpayer_name set, no client) routed to
- *    IndividualReturnsSection instead of appearing under a client card
- *  - Everything else (drag/drop, multi-select, move popover, etc.) unchanged
  */
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
@@ -56,8 +49,6 @@ export type FlaggedBlock = {
   start: string;
 };
 
-
-
 type ParsedActivity = { blockId: number | null; title: string };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -69,7 +60,6 @@ const fmt = (hours: number): string => {
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
 };
-
 
 const parse = (activity: string): ParsedActivity => {
   const match = activity.match(/\[id:(\d+)\]\s*/);
@@ -97,60 +87,6 @@ const CLIENT_ACCENTS = [
   { border: "border-l-rose-500",    header: "bg-rose-50",    hours: "text-rose-600"    },
   { border: "border-l-emerald-500", header: "bg-emerald-50", hours: "text-emerald-600" },
 ];
-
-
-  return (
-    <div
-      className="rounded-xl border border-slate-200 border-l-[5px] bg-white shadow-sm overflow-hidden"
-      style={{ borderLeftColor: "#f59e0b" }}
-    >
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="w-full px-4 py-3 flex items-center justify-between text-left bg-amber-50 hover:brightness-95 transition-colors"
-      >
-        <div className="flex items-center gap-2.5 min-w-0">
-          {expanded
-            ? <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
-            : <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />}
-          <span className="font-bold text-base text-slate-900">Individual Returns</span>
-          <span className="text-xs text-slate-400 font-medium flex-shrink-0">
-            {groups.length} taxpayer{groups.length !== 1 ? "s" : ""}
-          </span>
-        </div>
-        <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-          {totalBillable > 0 && (
-            <div className="flex flex-col items-end">
-              <span className="text-lg font-extrabold tabular-nums leading-none text-amber-600">
-                {fmtMinutes(totalBillable)}
-              </span>
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
-                billable
-              </span>
-            </div>
-          )}
-          {totalMinutes - totalBillable > 0 && (
-            <div className="flex flex-col items-end">
-              <span className="text-lg font-extrabold tabular-nums leading-none text-slate-400">
-                {fmtMinutes(totalMinutes - totalBillable)}
-              </span>
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
-                non-bill
-              </span>
-            </div>
-          )}
-        </div>
-      </button>
-
-      {expanded && (
-        <div className="p-3">
-          {groups.map((group) => (
-            <TaxpayerCard key={group.hash} group={group} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── Move Popover ─────────────────────────────────────────────────────────────
 
@@ -1021,9 +957,6 @@ export default function CategorySummary({
   onRefresh: () => void;
   showToast: (msg: string, type: "success" | "error") => void;
 }) {
-
-
-
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
   const [catDropTarget, setCatDropTarget] = useState<string | null>(null);
   const [clientDropTarget, setClientDropTarget] = useState<string | null>(null);
@@ -1060,7 +993,6 @@ export default function CategorySummary({
     });
 
   const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string): Promise<boolean> => {
-    console.log(`🔴 moveActivity called — blockId: ${blockId}, clientId: ${clientId}, category: "${category}"`);
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
@@ -1174,7 +1106,7 @@ export default function CategorySummary({
         </div>
       )}
 
-      {!busy && timeSummary.length === 0 && individualReturnBlocks.length === 0 && (
+      {!busy && timeSummary.length === 0 && (
         <div className="text-center py-16 bg-white rounded-2xl border border-slate-200">
           <FileQuestion className="w-10 h-10 text-slate-300 mx-auto mb-3" />
           <h3 className="text-base font-bold text-slate-700 mb-1">No time tracked yet</h3>
@@ -1193,12 +1125,10 @@ export default function CategorySummary({
             ? { border: "border-l-slate-300", header: "bg-slate-50", hours: "text-slate-400" }
             : CLIENT_ACCENTS[clientIndex % CLIENT_ACCENTS.length];
 
-          // In the timeSummary.map, filter out individual return activities 
           const visibleCategories = client.categories.filter(
             (cat) => cat.hours > 0 || cat.sample_activities.length > 0
           );
 
-          // Hide Internal - Tax card entirely if all activities moved to Individual Returns
           const hiddenZeroCount = client.categories.length - visibleCategories.length;
           const totalActivityCount = visibleCategories.reduce((sum, cat) => sum + cat.block_count, 0);
 
@@ -1215,7 +1145,6 @@ export default function CategorySummary({
               onDragLeave={() => setClientDropTarget(null)}
               onDrop={makeClientDrop(client)}
             >
-              {/* Client header */}
               <button
                 onClick={() => toggleClient(clientKey)}
                 className={cn(
@@ -1332,11 +1261,9 @@ export default function CategorySummary({
             </div>
           );
         })}
-
       </div>
 
-      {/* Total summary line */}
-      {(timeSummary.length > 0 || individualReturnBlocks.length > 0) && !busy && (() => {
+      {timeSummary.length > 0 && !busy && (() => {
         const totalBillable = timeSummary.reduce((s, c) => s + getBillable(c), 0);
         const totalNonBillable = timeSummary.reduce((s, c) => s + getNonBillable(c), 0);
         const totalAll = totalBillable + totalNonBillable;
@@ -1348,11 +1275,6 @@ export default function CategorySummary({
           <div className="mt-4 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
             <span className="text-xs text-slate-400 font-medium">
               {activityCount} {activityCount === 1 ? "entry" : "entries"} across {clientCount} {clientCount === 1 ? "client" : "clients"}
-              {individualReturnBlocks.length > 0 && (
-                <span className="ml-1">
-                  · {individualReturnBlocks.length} individual {individualReturnBlocks.length === 1 ? "return" : "returns"}
-                </span>
-              )}
             </span>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-1.5">

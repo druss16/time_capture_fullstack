@@ -1040,14 +1040,30 @@ def agents_hello(request):
 
     return resp
 
-@api_view(["GET"])
-@permission_classes([AllowAny])
 def agent_control(request):
     username = (request.GET.get("user") or "").strip()
     host = (request.GET.get("host") or "").strip()
     stop, reason, stop_until = False, "", None
     ship_logs = False
-    restart = False  # ← ADD
+    restart = False
+
+    if host:
+        # Check device flags by hostname (no user required)
+        from django.db.models import Q
+        device = AgentDevice.objects.filter(
+            Q(hostname=host) | Q(device_id=host)
+        ).first()
+        
+        if device and device.log_requested:
+            ship_logs = True
+            device.log_requested = False
+            device.save(update_fields=['log_requested'])
+        
+        if device and device.restart_requested:
+            restart = True
+            device.restart_requested = False
+            device.save(update_fields=['restart_requested'])
+
     if username and host:
         try:
             u = User.objects.get(username=username)
@@ -1059,26 +1075,15 @@ def agent_control(request):
                     stop = ac.stop
                 reason = ac.reason
                 stop_until = ac.stop_until
-            device = AgentDevice.objects.filter(
-                user=u, hostname=host, is_active=True
-            ).first()
-            if device and device.log_requested:
-                ship_logs = True
-                device.log_requested = False
-                device.save(update_fields=['log_requested'])
-            # ← ADD
-            if device and device.restart_requested:
-                restart = True
-                device.restart_requested = False
-                device.save(update_fields=['restart_requested'])
         except User.DoesNotExist:
             pass
+
     return Response({
         "stop": stop,
         "reason": reason,
         "stop_until": stop_until.isoformat() if stop_until else None,
         "ship_logs": ship_logs,
-        "restart": restart,  # ← ADD
+        "restart": restart,
     })
 
 

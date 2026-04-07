@@ -271,26 +271,19 @@ def mavops_errors(request):
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])
 def mavops_request_logs(request):
-    """
-    Request on-demand log ship from any device.
-    POST /api/mavops/request-logs/
-    Body: { "device_id": "uuid" }
-    """
+    from django.db.models import Q
     device_id = request.data.get('device_id')
     if not device_id:
         return Response({'error': 'device_id required'}, status=400)
 
-    updated = AgentDevice.objects.filter(device_id=device_id).update(
-        log_requested=True
-    )
+    updated = AgentDevice.objects.filter(
+        Q(device_id=device_id) | Q(hostname=device_id)
+    ).update(log_requested=True)
 
     if not updated:
         return Response({'error': 'Device not found'}, status=404)
 
-    return Response({
-        'ok': True,
-        'message': f'Log request sent to {device_id} — agent will ship within 10s'
-    })
+    return Response({'ok': True, 'message': f'Log request sent — agent will ship within 10s'})
 
 
 # ── Resolve error ─────────────────────────────────────────────────────────────
@@ -323,24 +316,20 @@ def mavops_resolve_error(request, error_id):
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])
 def mavops_restart_device(request):
-    from tracker.models import AgentControl
     from django.db.models import Q
-
     device_id = request.data.get('device_id')
     if not device_id:
         return Response({'error': 'device_id required'}, status=400)
 
     updated = AgentDevice.objects.filter(
-        Q(hostname=device_id) | Q(device_id=device_id)
+        Q(device_id=device_id) | Q(hostname=device_id)
     ).update(restart_requested=True)
 
     if not updated:
-        return Response({'error': f'Device {device_id} not found'}, status=404)
+        return Response({'error': f'Device not found'}, status=404)
 
-    return Response({
-        'ok': True,
-        'message': f'Restart queued for {device_id} — agent will restart within 10s'
-    })
+    return Response({'ok': True, 'message': f'Restart queued — agent will restart within 10s'})
+
 
 @api_view(['POST'])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])

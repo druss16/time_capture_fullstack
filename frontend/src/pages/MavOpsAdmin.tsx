@@ -302,10 +302,16 @@ export default function MavOpsAdmin() {
     finally { setRequestingDevice(null); }
   };
 
-  const restartDevice = async (hostname: string) => {
-    setRestartingDevice(hostname);
-    try { await apiFetch("/mavops/restart-device/", { method: "POST", body: JSON.stringify({ device_id: hostname }) }); flash("✓ Restart queued — agent will restart within 10s."); }
-    catch { flash("Restart failed or not yet implemented.", "err"); }
+  const restartDevice = async (deviceId: string) => {
+    setRestartingDevice(deviceId);
+    try { 
+      await apiFetch("/mavops/restart-device/", { 
+        method: "POST", 
+        body: JSON.stringify({ device_id: deviceId }) 
+      }); 
+      flash("✓ Restart queued — agent will restart within 10s."); 
+    }
+    catch { flash("Restart failed.", "err"); }
     finally { setRestartingDevice(null); }
   };
 
@@ -497,7 +503,7 @@ export default function MavOpsAdmin() {
             {filteredDevices.map(d => {
               const inactiveDays = Math.floor((Date.now() - new Date(d.last_seen).getTime()) / 86400000);
               const isInactive = inactiveDays >= 7;
-              const vs = versionStatus(d.agent_version);
+              const vs = versionStatus(d.agent_version, latestVersion);
               return (
                 <div key={d.id} style={{ ...card, opacity: isInactive ? 0.65 : 1, borderColor: vs === "outdated" ? T.red + "55" : T.border }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -520,7 +526,13 @@ export default function MavOpsAdmin() {
                     <div style={{ display: "flex", gap: 8 }}>
                       <Btn label="view logs" onClick={() => { setFilterHostname(d.machine_name); setTab("logs"); }} outline />
                       <Btn label={requestingDevice === d.device_id ? "requesting…" : "request logs"} onClick={() => d.device_id ? requestLogs(d.device_id) : flash("No device_id", "err")} disabled={requestingDevice === d.device_id} />
-                      <Btn label={restartingDevice === d.machine_name ? "restarting…" : "restart"} onClick={() => restartDevice(d.machine_name)} outline color={T.yellow} disabled={restartingDevice === d.machine_name} />
+                      <Btn 
+                        label={restartingDevice === d.device_id ? "restarting…" : "restart"} 
+                        onClick={() => restartDevice(d.device_id)} 
+                        outline 
+                        color={T.yellow} 
+                        disabled={restartingDevice === d.device_id} 
+                      />
                     </div>
                   </div>
                 </div>

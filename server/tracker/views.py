@@ -1045,14 +1045,11 @@ def agents_hello(request):
 def agent_control(request):
     username = (request.GET.get("user") or "").strip()
     host = (request.GET.get("host") or "").strip()
-    username = (request.GET.get("user") or "").strip()
-    host = (request.GET.get("host") or "").strip()
     stop, reason, stop_until = False, "", None
     ship_logs = False
     restart = False
 
     if host:
-        # Check device flags by hostname (no user required)
         from django.db.models import Q
         device = AgentDevice.objects.filter(
             Q(hostname=host) | Q(device_id=host)

@@ -1053,7 +1053,7 @@ def agent_control(request):
         from django.db.models import Q
         device = AgentDevice.objects.filter(
             Q(hostname=host) | Q(device_id=host)
-        ).first()
+        ).order_by('-last_seen_at').first()  # ← ADD order_by
         
         if device and device.log_requested:
             ship_logs = True

@@ -2031,6 +2031,36 @@ def run_agent():
     except Exception as e:
         log(f"[WATCHDOG-TASK] Failed to register: {e}")
 
+    # === DIRECT LAUNCH — no GPO/task registration needed ===
+    def _start_external_watchdog():
+        try:
+            if not getattr(sys, 'frozen', False):
+                return
+            watchdog_exe = os.path.join(
+                os.path.dirname(sys.executable),
+                "tt_watchdog.exe"
+            )
+            if not os.path.exists(watchdog_exe):
+                log(f"[WATCHDOG-EXT] ⚠️ Not found: {watchdog_exe}")
+                return
+            for proc in psutil.process_iter(["name"]):
+                try:
+                    if "tt_watchdog" in (proc.info["name"] or "").lower():
+                        log("[WATCHDOG-EXT] ✅ Already running")
+                        return
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            subprocess.Popen(
+                [watchdog_exe],
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                close_fds=True,
+            )
+            log("[WATCHDOG-EXT] ✅ Launched tt_watchdog.exe")
+        except Exception as e:
+            log(f"[WATCHDOG-EXT] Failed: {e}")
+
+    _start_external_watchdog()
+
     # === TRACKING LOOP WITH ERROR HANDLING ===
     def tracking_loop():
         global _last_subscription_check, _subscription_active, _idle_entered_at, _idle_reading_unchanged_since
@@ -2514,7 +2544,6 @@ def cmd_stop():
         print(f"Error stopping agent: {e}")
 
 def main():
-    # ── Single instance lock — prevent duplicate agents ──
     if sys.platform == 'win32':
         import msvcrt
         global _lock_fh

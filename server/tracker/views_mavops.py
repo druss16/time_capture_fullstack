@@ -341,3 +341,49 @@ def mavops_restart_device(request):
         'ok': True,
         'message': f'Restart queued for {device_id} — agent will restart within 10s'
     })
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_kill_agent(request):
+    """Force-kill agent via watchdog — works even when loop is frozen."""
+    from django.db.models import Q
+    device_id = request.data.get('device_id')
+    if not device_id:
+        return Response({'error': 'device_id required'}, status=400)
+
+    updated = AgentDevice.objects.filter(
+        Q(hostname=device_id) | Q(device_id=device_id)
+    ).update(kill_requested=True)
+
+    if not updated:
+        return Response({'error': 'Device not found'}, status=404)
+
+    return Response({
+        'ok': True,
+        'message': f'Kill queued — watchdog will fire within 60s'
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def watchdog_command(request):
+    """Polled by tt_watchdog.exe every 60s."""
+    from django.db.models import Q
+    device_id = request.GET.get('device_id')
+    if not device_id:
+        return Response({'kill': False})
+
+    device = AgentDevice.objects.filter(
+        Q(device_id=device_id)
+    ).first()
+
+    if not device:
+        return Response({'kill': False})
+
+    kill = getattr(device, 'kill_requested', False)
+    if kill:
+        device.kill_requested = False
+        device.save(update_fields=['kill_requested'])
+
+    return Response({'kill': kill})

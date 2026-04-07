@@ -1,188 +1,143 @@
-"""
-tt_watchdog_gpo.py — GPO-deployable watchdog registration
-
-TWO DEPLOYMENT PATHS:
-─────────────────────
-Path A (Current / self-registering):
-  Agent calls register_watchdog_task() on startup.
-  Works fine for manual installs. Fails if agent never runs as admin.
-
-Path B (GPO / Intune / MSI — RECOMMENDED for enterprise):
-  IT drops a .xml task file into the package.
-  GPO imports it via: schtasks /Create /XML watchdog_task.xml /TN TimeTrackerWatchdog
-  No dependency on agent running first. Survives agent crashes before first run.
-
-This file generates the XML for Path B and also hardens Path A.
-"""
-
 import os
 import sys
+import time
+import json
 import subprocess
-import getpass
-import tempfile
 import logging
+import urllib.request
+import psutil
+from logging.handlers import RotatingFileHandler
 
-APPDATA       = os.environ.get("APPDATA", os.path.expanduser("~"))
-LOCALAPPDATA  = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-_NO_WINDOW    = 0x08000000 if sys.platform == 'win32' else 0
+AGENT_EXE_NAME     = "TimeTrackerAgent.exe"
+WATCHDOG_EXE_NAME  = "tt_watchdog.exe"
+CHECK_INTERVAL     = 60
+STARTUP_GRACE      = 30
+MAX_START_ATTEMPTS = 5
+BACKOFF_SLEEP      = 300
+API_BASE           = "https://timetracker-api-k375.onrender.com/api"
+
+APPDATA   = os.environ.get("APPDATA", os.path.expanduser("~"))
+LOG_DIR   = os.path.join(APPDATA, "TimeTracker", "Logs")
+LOG_FILE  = os.path.join(LOG_DIR, "watchdog.log")
+
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0
 
 WATCHDOG_TASK_NAME = "TimeTrackerWatchdog"
 AGENT_TASK_NAME    = "TimeTrackerAgent"
 
 
-def _find_exe(exe_name: str) -> str:
-    """Find an exe relative to current executable or common install paths."""
+def setup_logging():
+    os.makedirs(LOG_DIR, exist_ok=True)
+    handler = RotatingFileHandler(
+        LOG_FILE, maxBytes=2*1024*1024, backupCount=2, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    logger = logging.getLogger("tt_watchdog")
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        logger.addHandler(handler)
+    return logger
+
+logger = setup_logging()
+
+def log(msg: str):
+    logger.info(msg)
+    print(msg, flush=True)
+
+
+def _get_device_id() -> str:
+    config_path = os.path.join(
+        os.path.expanduser("~"), ".timetracker", "config.json"
+    )
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+            return cfg.get("server_device_id") or cfg.get("device_id") or ""
+    except Exception:
+        return ""
+
+
+def check_kill_command() -> bool:
+    """
+    Poll backend for remote kill command.
+    This is the out-of-band kill — works even when agent loop is frozen.
+    """
+    device_id = _get_device_id()
+    if not device_id:
+        return False
+    try:
+        url = f"{API_BASE}/watchdog/command/?device_id={device_id}"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            return bool(data.get("kill"))
+    except Exception:
+        return False
+
+
+def kill_all_agent_processes():
+    """Force-kill ALL TimeTrackerAgent.exe processes via psutil."""
+    killed = 0
+    try:
+        for proc in psutil.process_iter(["name", "pid"]):
+            try:
+                if AGENT_EXE_NAME.lower() in (proc.info["name"] or "").lower():
+                    proc.kill()
+                    killed += 1
+                    log(f"[WATCHDOG] Killed PID {proc.info['pid']}")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception as e:
+        log(f"[WATCHDOG] Error killing processes: {e}")
+    return killed
+
+
+def find_agent_exe() -> str:
     candidates = []
-
     if getattr(sys, 'frozen', False):
-        candidates.append(os.path.join(os.path.dirname(sys.executable), exe_name))
-
+        candidates.append(
+            os.path.join(os.path.dirname(sys.executable), AGENT_EXE_NAME)
+        )
+    localappdata = os.environ.get("LOCALAPPDATA", "")
     candidates += [
-        os.path.join(LOCALAPPDATA, "TimeTracker", exe_name),
-        os.path.join("C:\\Program Files", "TimeTracker", exe_name),
-        os.path.join("C:\\Program Files (x86)", "TimeTracker", exe_name),
-        os.path.join("C:\\TimeTracker", exe_name),
+        os.path.join(localappdata, "TimeTracker", AGENT_EXE_NAME),
+        os.path.join("C:\\Program Files", "TimeTracker", AGENT_EXE_NAME),
+        os.path.join("C:\\Program Files (x86)", "TimeTracker", AGENT_EXE_NAME),
     ]
-
-    for p in candidates:
-        if os.path.exists(p):
-            return p
+    for path in candidates:
+        if os.path.exists(path):
+            return path
     return None
 
 
-def build_watchdog_task_xml(watchdog_exe: str, username: str) -> str:
-    """
-    Build the Task Scheduler XML for the watchdog.
-
-    Key settings vs the old version:
-    - RegistrationTrigger fires every 2 min (catches post-crash restarts)
-    - LogonTrigger for the specific user
-    - ExecutionTimeLimit PT0S = no timeout (runs forever)
-    - RestartOnFailure every 1 min, up to 10 times
-    - MultipleInstancesPolicy = IgnoreNew (only one instance)
-    """
-    return f"""<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>TimeTracker Watchdog — ensures TimeTrackerAgent is always running</Description>
-    <Author>MavOps AI</Author>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>{username}</UserId>
-      <Delay>PT15S</Delay>
-    </LogonTrigger>
-    <RegistrationTrigger>
-      <Enabled>true</Enabled>
-      <Delay>PT10S</Delay>
-    </RegistrationTrigger>
-    <TimeTrigger>
-      <Repetition>
-        <Interval>PT2M</Interval>
-        <Duration>P9999D</Duration>
-        <StopAtDurationEnd>false</StopAtDurationEnd>
-      </Repetition>
-      <StartBoundary>2024-01-01T00:00:00</StartBoundary>
-      <Enabled>true</Enabled>
-    </TimeTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>{username}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>HighestAvailable</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <IdleSettings>
-      <StopOnIdleEnd>false</StopOnIdleEnd>
-      <RestartOnIdle>false</RestartOnIdle>
-    </IdleSettings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
-    <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>6</Priority>
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>10</Count>
-    </RestartOnFailure>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>{watchdog_exe}</Command>
-      <WorkingDirectory>{os.path.dirname(watchdog_exe)}</WorkingDirectory>
-    </Exec>
-  </Actions>
-</Task>"""
+def is_agent_running() -> bool:
+    try:
+        for proc in psutil.process_iter(["name"]):
+            try:
+                if AGENT_EXE_NAME.lower() in (proc.info["name"] or "").lower():
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception as e:
+        log(f"[WATCHDOG] Error checking processes: {e}")
+    return False
 
 
-def build_agent_task_xml(agent_exe: str, username: str) -> str:
-    """
-    Task XML for the agent itself — also GPO-deployable.
-    Same structure as watchdog but points at TimeTrackerAgent.exe.
-    """
-    return f"""<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>TimeTracker Agent — activity tracking for CPA time billing</Description>
-    <Author>MavOps AI</Author>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>{username}</UserId>
-      <Delay>PT5S</Delay>
-    </LogonTrigger>
-    <RegistrationTrigger>
-      <Enabled>true</Enabled>
-      <Delay>PT5S</Delay>
-    </RegistrationTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>{username}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>HighestAvailable</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <IdleSettings>
-      <StopOnIdleEnd>false</StopOnIdleEnd>
-      <RestartOnIdle>false</RestartOnIdle>
-    </IdleSettings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
-    <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>6</Priority>
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>999</Count>
-    </RestartOnFailure>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>{agent_exe}</Command>
-      <WorkingDirectory>{os.path.dirname(agent_exe)}</WorkingDirectory>
-    </Exec>
-  </Actions>
-</Task>"""
+def start_agent(agent_exe: str) -> bool:
+    try:
+        log(f"[WATCHDOG] 🚀 Starting agent: {agent_exe}")
+        subprocess.Popen(
+            [agent_exe],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
+        return True
+    except Exception as e:
+        log(f"[WATCHDOG] ❌ Failed to start agent: {e}")
+        return False
 
 
 def _task_exists(task_name: str) -> bool:
@@ -197,126 +152,57 @@ def _task_exists(task_name: str) -> bool:
         return False
 
 
-def _register_task_from_xml(task_name: str, xml: str, log_fn=print) -> bool:
-    """Write XML to temp file and register with schtasks."""
-    tmp = None
-    try:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".xml", delete=False,
-            encoding="utf-16", prefix=f"tt_task_{task_name}_"
-        )
-        tmp.write(xml)
-        tmp.close()
-
-        r = subprocess.run(
-            ["schtasks", "/Create", "/TN", task_name, "/XML", tmp.name, "/F"],
-            capture_output=True, text=True, timeout=30,
-            creationflags=_NO_WINDOW,
-        )
-        if r.returncode == 0:
-            log_fn(f"[TASK] ✅ Registered: {task_name}")
-            return True
-        else:
-            log_fn(f"[TASK] ⚠️ Failed to register {task_name}: {r.stderr.strip()}")
-            return False
-    except Exception as e:
-        log_fn(f"[TASK] ❌ Exception registering {task_name}: {e}")
-        return False
-    finally:
-        if tmp and os.path.exists(tmp.name):
-            try:
-                os.unlink(tmp.name)
-            except Exception:
-                pass
-
-
-def export_task_xmls(output_dir: str, log_fn=print):
-    """
-    Export both task XMLs to output_dir for GPO/Intune packaging.
-
-    Call this from your build script:
-        python tt_watchdog_gpo.py --export C:\\build\\tasks
-
-    IT then imports these via GPO:
-        Computer Config → Preferences → Control Panel → Scheduled Tasks
-        or: schtasks /Create /XML agent_task.xml /TN TimeTrackerAgent
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Use placeholder paths — IT will adjust or MSI sets real paths
-    localappdata = "%LOCALAPPDATA%"
-    agent_exe    = f"{localappdata}\\TimeTracker\\TimeTrackerAgent.exe"
-    watchdog_exe = f"{localappdata}\\TimeTracker\\tt_watchdog.exe"
-    username     = "%USERNAME%"  # GPO expands this per-user
-
-    agent_xml    = build_agent_task_xml(agent_exe, username)
-    watchdog_xml = build_watchdog_task_xml(watchdog_exe, username)
-
-    agent_out    = os.path.join(output_dir, "TimeTrackerAgent_task.xml")
-    watchdog_out = os.path.join(output_dir, "TimeTrackerWatchdog_task.xml")
-
-    with open(agent_out, "w", encoding="utf-16") as f:
-        f.write(agent_xml)
-    with open(watchdog_out, "w", encoding="utf-16") as f:
-        f.write(watchdog_xml)
-
-    log_fn(f"[EXPORT] ✅ Agent task XML:    {agent_out}")
-    log_fn(f"[EXPORT] ✅ Watchdog task XML: {watchdog_out}")
-    log_fn("")
-    log_fn("GPO deployment steps:")
-    log_fn("  1. Add both XMLs to your GPO package")
-    log_fn("  2. Computer Config → Preferences → Control Panel → Scheduled Tasks")
-    log_fn("  3. New → Scheduled Task (At least Windows 7)")
-    log_fn("  4. Action: Create, import XML, set 'Run only when user is logged on'")
-    log_fn("  OR via PowerShell startup script:")
-    log_fn("     schtasks /Create /XML TimeTrackerAgent_task.xml /TN TimeTrackerAgent /F")
-    log_fn("     schtasks /Create /XML TimeTrackerWatchdog_task.xml /TN TimeTrackerWatchdog /F")
-
-    return agent_out, watchdog_out
-
-
 def register_watchdog_task(log_fn=print):
     """
-    Hardened version of register_watchdog_task().
-    Replaces the version in tt_watchdog.py.
-
-    Registers BOTH the watchdog task AND the agent task — so even if
-    GPO hasn't pre-deployed them, the agent bootstraps both on first run.
+    Called by agent on startup — tries to register tasks.
+    Fails silently on domain machines (GPO handles it).
+    Only tries once per session.
     """
     if sys.platform != "win32":
         return
+    if getattr(register_watchdog_task, '_done', False):
+        return
+    register_watchdog_task._done = True
 
-    domain   = os.environ.get("USERDOMAIN", "")
-    username = getpass.getuser()
-    full_user = f"{domain}\\{username}" if domain and domain.lower() != username.lower() else username
+    install_dir = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, 'frozen', False)
+        else os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker")
+    )
 
-    # ── Register watchdog task ──────────────────────────────────────────────
-    watchdog_exe = _find_exe("tt_watchdog.exe")
-    if not watchdog_exe:
-        log_fn("[TASK] ⚠️ tt_watchdog.exe not found — skipping watchdog task registration")
-    else:
-        if _task_exists(WATCHDOG_TASK_NAME):
-            log_fn(f"[TASK] ✅ {WATCHDOG_TASK_NAME} already registered")
-        else:
-            xml = build_watchdog_task_xml(watchdog_exe, full_user)
-            _register_task_from_xml(WATCHDOG_TASK_NAME, xml, log_fn)
+    for task_name, exe_name in [
+        (WATCHDOG_TASK_NAME, WATCHDOG_EXE_NAME),
+        (AGENT_TASK_NAME,    AGENT_EXE_NAME),
+    ]:
+        exe_path = os.path.join(install_dir, exe_name)
+        if not os.path.exists(exe_path):
+            log_fn(f"[WATCHDOG-TASK] ⚠️ {exe_name} not found — skipping")
+            continue
+        if _task_exists(task_name):
+            log_fn(f"[WATCHDOG-TASK] ✅ {task_name} already registered")
+            continue
+        try:
+            r = subprocess.run(
+                [
+                    "schtasks", "/Create",
+                    "/TN", task_name,
+                    "/TR", f'"{exe_path}"',
+                    "/SC", "ONLOGON",
+                    "/RL", "LIMITED",
+                    "/F",
+                ],
+                capture_output=True, text=True, timeout=30,
+                creationflags=_NO_WINDOW,
+            )
+            if r.returncode == 0:
+                log_fn(f"[WATCHDOG-TASK] ✅ Registered: {task_name}")
+            else:
+                log_fn(f"[WATCHDOG-TASK] ⚠️ Failed: {r.stderr.strip()}")
+        except Exception as e:
+            log_fn(f"[WATCHDOG-TASK] ❌ Exception: {e}")
 
-    # ── Register agent task (self-healing) ─────────────────────────────────
-    # This ensures the agent itself has a Task Scheduler entry even if
-    # startup_task.py failed or GPO hasn't been applied yet.
-    agent_exe = _find_exe("TimeTrackerAgent.exe")
-    if not agent_exe:
-        log_fn("[TASK] ⚠️ TimeTrackerAgent.exe not found — skipping agent task registration")
-    else:
-        if _task_exists(AGENT_TASK_NAME):
-            log_fn(f"[TASK] ✅ {AGENT_TASK_NAME} already registered")
-        else:
-            xml = build_agent_task_xml(agent_exe, full_user)
-            _register_task_from_xml(AGENT_TASK_NAME, xml, log_fn)
 
-
-def unregister_all_tasks(log_fn=print):
-    """Called by uninstaller."""
+def unregister_watchdog_task(log_fn=print):
     for task in [WATCHDOG_TASK_NAME, AGENT_TASK_NAME]:
         try:
             subprocess.run(
@@ -324,28 +210,71 @@ def unregister_all_tasks(log_fn=print):
                 capture_output=True, timeout=10,
                 creationflags=_NO_WINDOW,
             )
-            log_fn(f"[TASK] 🗑️ Removed: {task}")
+            log_fn(f"[WATCHDOG-TASK] 🗑️ Removed: {task}")
         except Exception as e:
-            log_fn(f"[TASK] Failed to remove {task}: {e}")
+            log_fn(f"[WATCHDOG-TASK] Failed to remove {task}: {e}")
 
 
-# ── CLI for build pipeline ────────────────────────────────────────────────────
+def run_watchdog():
+    log("=" * 60)
+    log(f"[WATCHDOG] TimeTracker External Watchdog starting")
+    log(f"[WATCHDOG] PID: {os.getpid()}, checking every {CHECK_INTERVAL}s")
+    log("=" * 60)
+
+    # Try task registration once — fails silently on domain machines
+    register_watchdog_task(log_fn=log)
+
+    agent_exe = find_agent_exe()
+    if not agent_exe:
+        log(f"[WATCHDOG] ⚠️ Could not find {AGENT_EXE_NAME} — will keep retrying")
+
+    consecutive_failures = 0
+
+    while True:
+        try:
+            # ── Check for remote kill command ─────────────────────────
+            if check_kill_command():
+                log("[WATCHDOG] 🔴 Kill command received — killing all agent processes")
+                killed = kill_all_agent_processes()
+                log(f"[WATCHDOG] Killed {killed} process(es) — waiting for restart")
+                time.sleep(STARTUP_GRACE)
+
+            # ── Re-find exe each loop (handles updates) ───────────────
+            if not agent_exe or not os.path.exists(agent_exe):
+                agent_exe = find_agent_exe()
+                if not agent_exe:
+                    log(f"[WATCHDOG] ⚠️ {AGENT_EXE_NAME} not found — waiting")
+                    time.sleep(CHECK_INTERVAL)
+                    continue
+
+            # ── Check if agent is running ─────────────────────────────
+            if is_agent_running():
+                if consecutive_failures > 0:
+                    log(f"[WATCHDOG] ✅ Agent is running again")
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+                log(f"[WATCHDOG] ⚠️ Agent NOT running (attempt {consecutive_failures})")
+
+                if consecutive_failures >= MAX_START_ATTEMPTS:
+                    log(f"[WATCHDOG] 🛑 {consecutive_failures} failed starts — backing off {BACKOFF_SLEEP}s")
+                    consecutive_failures = 0
+                    time.sleep(BACKOFF_SLEEP)
+                    continue
+
+                if start_agent(agent_exe):
+                    log(f"[WATCHDOG] ✅ Agent started — waiting {STARTUP_GRACE}s")
+                    time.sleep(STARTUP_GRACE)
+                    continue
+
+        except Exception as e:
+            log(f"[WATCHDOG] ❌ Loop error: {e}")
+
+        time.sleep(CHECK_INTERVAL)
+
+
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--export", metavar="DIR",
-                        help="Export task XMLs for GPO packaging")
-    parser.add_argument("--register", action="store_true",
-                        help="Register tasks on this machine now")
-    parser.add_argument("--unregister", action="store_true",
-                        help="Remove all TimeTracker tasks")
-    args = parser.parse_args()
-
-    if args.export:
-        export_task_xmls(args.export)
-    elif args.register:
-        register_watchdog_task()
-    elif args.unregister:
-        unregister_all_tasks()
-    else:
-        parser.print_help()
+    if "--unregister-task" in sys.argv:
+        unregister_watchdog_task()
+        sys.exit(0)
+    run_watchdog()

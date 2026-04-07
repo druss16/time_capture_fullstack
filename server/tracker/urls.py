@@ -351,5 +351,8 @@ urlpatterns = [
     path('mavops/restart-device/', views_mavops.mavops_restart_device, name='mavops-restart-device'),
 
 
+    path('mavops/kill-agent/', views_mavops.mavops_kill_agent),
+    path('watchdog/command/', views_mavops.watchdog_command),
+
 
 ]

@@ -357,6 +357,8 @@ class AgentDevice(models.Model):
 
     restart_requested = models.BooleanField(default=False)
 
+    kill_requested = models.BooleanField(default=False)
+
     def rotate_key(self):
         import secrets
         self.api_key = secrets.token_hex(16)

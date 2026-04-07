@@ -159,9 +159,15 @@ def _auto_update_windows(download_url: str, latest_version: str, zip_url: str = 
         with open(bat, "w") as f:
             f.write("@echo off\n")
             f.write("timeout /t 3 /nobreak >NUL\n")
+            # Kill watchdog before replacing files
+            f.write("taskkill /F /IM tt_watchdog.exe 2>nul\n")
+            f.write("taskkill /F /IM TimeTrackerAgent.exe 2>nul\n")
+            f.write("timeout /t 2 /nobreak >NUL\n")
+            # Extract new files
             f.write(f'powershell -Command "Expand-Archive -Path \\"{zip_path}\\" -DestinationPath \\"{install_dir}\\" -Force"\n')
             f.write(f'del "{zip_path}"\n')
-            f.write(f'start "" "{new_exe}"\n')
+            # Start watchdog — it will start the agent
+            f.write(f'start "" "{os.path.join(install_dir, "tt_watchdog.exe")}"\n')
             f.write('del "%~f0"\n')
 
         subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)

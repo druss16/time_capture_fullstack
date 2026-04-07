@@ -23,13 +23,9 @@ jobs:
         working-directory: mac_agent
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          
-          # Create version.py for any imports
           echo "# Auto-generated during build - DO NOT EDIT" > version.py
           echo "APP_VERSION = \"$VERSION\"" >> version.py
           cat version.py
-          
-          # Update version directly in timetracker_gui.py
           sed -i '' "s/APP_VERSION = \"dev\"/APP_VERSION = \"$VERSION\"/" timetracker_gui.py
           grep "APP_VERSION" timetracker_gui.py | head -1
       
@@ -72,33 +68,19 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           INFO_PLIST="dist/TimeTracker.app/Contents/Info.plist"
-          
-          echo "Setting version to: $VERSION"
-          
-          # Add if missing, Set if exists
           /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$INFO_PLIST"
-          
           /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$INFO_PLIST"
-          
           /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string © 2024-2025 MavOps" "$INFO_PLIST" 2>/dev/null || true
-          
-          # CRITICAL: LSUIElement makes it a menu bar app (no Dock icon, always visible)
           /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$INFO_PLIST"
-          
-          # CRITICAL: Prevent macOS App Nap from killing the agent overnight
           /usr/libexec/PlistBuddy -c "Add :NSAppSleepDisabled bool true" "$INFO_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :NSAppSleepDisabled true" "$INFO_PLIST"
-          
           echo "=== Info.plist version info ==="
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Print :LSUIElement" "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Print :NSAppSleepDisabled" "$INFO_PLIST"
 
-      # ── Bundle LaunchAgent plist BEFORE signing (modifying .app after signing invalidates it) ──
       - name: Add LaunchAgent plist to app bundle
         working-directory: mac_agent
         run: |
@@ -132,8 +114,6 @@ jobs:
           </dict>
           </plist>
           EOF
-          echo "=== LaunchAgent plist bundled ==="
-          cat dist/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist
       
       - name: Import signing certificates
         env:
@@ -145,17 +125,13 @@ jobs:
         run: |
           echo $MACOS_CERTIFICATE | base64 --decode > certificate.p12
           echo $MACOS_INSTALLER_CERTIFICATE | base64 --decode > installer.p12
-          
           security create-keychain -p "$KEYCHAIN_PWD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
           security set-keychain-settings -t 3600 -u build.keychain
-          
           security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -T /usr/bin/productsign
           security import installer.p12 -k build.keychain -P "$MACOS_INSTALLER_CERTIFICATE_PWD" -T /usr/bin/codesign -T /usr/bin/productsign
-          
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
-          
           echo "=== Available signing identities ==="
           security find-identity -v -p codesigning build.keychain
       
@@ -164,14 +140,9 @@ jobs:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         working-directory: mac_agent
         run: |
-          echo "Signing all internal binaries first..."
           find dist/TimeTracker.app -type f \( -name "*.so" -o -name "*.dylib" \) -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
-          
           find dist/TimeTracker.app -type f -name "Python*" -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
-          
           codesign --force --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app/Contents/MacOS/TimeTracker
-          
-          echo "Signing app bundle..."
           codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
           codesign --verify --verbose dist/TimeTracker.app
       
@@ -181,69 +152,48 @@ jobs:
         working-directory: mac_agent
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          
-          # ── Preinstall: kill running app so macOS can overwrite the binary ──
           mkdir -p scripts
           cat > scripts/preinstall << 'SCRIPT'
           #!/bin/bash
           LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
           LOGGED_IN_UID=$(id -u "$LOGGED_IN_USER" 2>/dev/null || echo "")
-
-          # Unload LaunchAgent first (prevents auto-restart during install)
           if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ] && [ -n "$LOGGED_IN_UID" ]; then
               PLIST="/Users/$LOGGED_IN_USER/Library/LaunchAgents/com.mavops.timetracker.plist"
               sudo -u "$LOGGED_IN_USER" launchctl bootout "gui/$LOGGED_IN_UID" "$PLIST" 2>/dev/null || true
           fi
-
-          # Force kill all TimeTracker processes
           pkill -9 -f "TimeTracker.app" 2>/dev/null || true
           sleep 2
           exit 0
           SCRIPT
           chmod +x scripts/preinstall
 
-          # ── Postinstall: install LaunchAgent, bootstrap (auto-starts app) ──
           cat > scripts/postinstall << 'SCRIPT'
           #!/bin/bash
           LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
           LOGGED_IN_UID=$(id -u "$LOGGED_IN_USER" 2>/dev/null || echo "")
-
           if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ] && [ -n "$LOGGED_IN_UID" ]; then
-              # Install LaunchAgent (auto-start + auto-restart on crash)
               PLIST_SRC="/Applications/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist"
               PLIST_DST="/Users/$LOGGED_IN_USER/Library/LaunchAgents/com.mavops.timetracker.plist"
-
-              # Unload old version if present
               sudo -u "$LOGGED_IN_USER" launchctl bootout "gui/$LOGGED_IN_UID" "$PLIST_DST" 2>/dev/null || true
               sleep 0.5
-
-              # Copy plist and set ownership
               mkdir -p "/Users/$LOGGED_IN_USER/Library/LaunchAgents"
               cp "$PLIST_SRC" "$PLIST_DST"
               chown "$LOGGED_IN_USER" "$PLIST_DST"
               chmod 644 "$PLIST_DST"
-
-              # Load new version — this starts the app immediately via KeepAlive
               sudo -u "$LOGGED_IN_USER" launchctl bootstrap "gui/$LOGGED_IN_UID" "$PLIST_DST"
           fi
           exit 0
           SCRIPT
           chmod +x scripts/postinstall
-          echo "=== postinstall script ==="
-          cat scripts/postinstall
-          
-          echo "Packaging .app bundle..."
+
           pkgbuild --component dist/TimeTracker.app \
             --identifier com.mavops.timetracker \
             --version "$VERSION" \
             --install-location /Applications \
             --scripts scripts \
             unsigned.pkg
-          
           productsign --sign "$IDENTITY" unsigned.pkg TimeTracker.pkg
           rm unsigned.pkg
-          
-          echo "=== Package created ==="
           ls -la TimeTracker.pkg
       
       - name: Notarize pkg
@@ -258,10 +208,8 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --output-format json > submit_result.json
-
           SUBMISSION_ID=$(cat submit_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
           echo "Submission ID: $SUBMISSION_ID"
-
           for i in $(seq 1 20); do
             sleep 30
             RESULT=$(xcrun notarytool info "$SUBMISSION_ID" \
@@ -273,7 +221,6 @@ jobs:
             echo "Poll $i: $STATUS"
             if [ "$STATUS" = "Accepted" ]; then break; fi
             if [ "$STATUS" = "Invalid" ]; then
-              echo "=== NOTARIZATION LOG ==="
               xcrun notarytool log "$SUBMISSION_ID" \
                 --apple-id "$APPLE_ID" \
                 --team-id "$APPLE_TEAM_ID" \
@@ -281,12 +228,10 @@ jobs:
               exit 1
             fi
           done
-
           if [ "$STATUS" != "Accepted" ]; then
-            echo "Notarization timed out after 10 minutes"
+            echo "Notarization timed out"
             exit 1
           fi
-
           xcrun stapler staple TimeTracker.pkg
       
       - name: Upload Mac artifact
@@ -323,38 +268,37 @@ jobs:
       - name: Build executables
         working-directory: windows_agent
         run: |
-          python -m PyInstaller --onedir --windowed --name "TimeTracker" --collect-all customtkinter --collect-all CTkMessagebox --hidden-import=customtkinter --hidden-import=CTkMessagebox gui.py
-          python -m PyInstaller --onedir --noconsole --name "TimeTrackerAgent" --hidden-import=timetracker_gui --hidden-import=mdm_deploy --hidden-import=version --hidden-import=update_checker --hidden-import=tax_software_constants --add-data "timetracker_gui.py;." --add-data "mdm_deploy.py;." --add-data "version.py;." --add-data "update_checker.py;." --add-data "tax_software_constants.py;." main.py
-          python -m PyInstaller --onefile --noconsole --name "tt_watchdog" tt_watchdog.py
+          # Build GUI
+          python -m PyInstaller --onedir --windowed --name "TimeTracker" `
+            --collect-all customtkinter `
+            --collect-all CTkMessagebox `
+            --hidden-import=customtkinter `
+            --hidden-import=CTkMessagebox `
+            gui.py
 
-      - name: Create agent zip for auto-update
-        working-directory: windows_agent
-        shell: pwsh
-        run: |
-          $VERSION = $env:GITHUB_REF_NAME -replace '^v', ''
-          New-Item -ItemType Directory -Force -Path "Output"
-          Compress-Archive -Path "dist\TimeTrackerAgent\*" -DestinationPath "Output\TimeTrackerAgent-$VERSION.zip"
-          Write-Host "Created TimeTrackerAgent-$VERSION.zip"
+          # Build Agent
+          python -m PyInstaller --onedir --noconsole --name "TimeTrackerAgent" `
+            --hidden-import=timetracker_gui `
+            --hidden-import=mdm_deploy `
+            --hidden-import=version `
+            --hidden-import=update_checker `
+            --hidden-import=tax_software_constants `
+            --add-data "timetracker_gui.py;." `
+            --add-data "mdm_deploy.py;." `
+            --add-data "version.py;." `
+            --add-data "update_checker.py;." `
+            --add-data "tax_software_constants.py;." `
+            main.py
 
-      - name: Upload Windows zip artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-zip
-          path: windows_agent/Output/TimeTrackerAgent-*.zip
+          # Build Watchdog — onefile, runs standalone
+          python -m PyInstaller --onefile --noconsole --name "tt_watchdog" `
+            tt_watchdog.py
 
-      - name: List dist contents
-        working-directory: windows_agent
-        run: |
-          echo "=== dist folder contents ==="
-          dir dist
-          echo "=== dist/TimeTracker contents ==="
-          dir dist\TimeTracker
-          echo "=== dist/TimeTrackerAgent contents ==="
-          dir dist\TimeTrackerAgent
-          echo "=== tt_watchdog.exe ==="
-          dir dist\tt_watchdog.exe
-      
-      - name: Sign Windows executables
+      # ── SIGN FIRST, ZIP SECOND ──────────────────────────────────
+      # Critical: sign all exes before packaging into zip
+      # Agents receive the zip via auto-update — must contain signed binaries
+
+      - name: Sign all executables (pre-zip)
         if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
         uses: azure/trusted-signing-action@v0.5.0
         with:
@@ -369,7 +313,73 @@ jobs:
           files-folder-recurse: true
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-      
+
+      # ── CREATE AUTO-UPDATE ZIP (contains signed binaries + tt_watchdog) ──
+      - name: Create agent zip for auto-update
+        working-directory: windows_agent
+        shell: pwsh
+        run: |
+          $VERSION = $env:GITHUB_REF_NAME -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path "Output"
+
+          # Copy tt_watchdog.exe (onefile) into the agent folder so it zips together
+          Copy-Item "dist\tt_watchdog.exe" "dist\TimeTrackerAgent\tt_watchdog.exe"
+
+          # Verify both exist and are signed before zipping
+          if (-not (Test-Path "dist\TimeTrackerAgent\TimeTrackerAgent.exe")) {
+            Write-Error "TimeTrackerAgent.exe not found"
+            exit 1
+          }
+          if (-not (Test-Path "dist\TimeTrackerAgent\tt_watchdog.exe")) {
+            Write-Error "tt_watchdog.exe not found"
+            exit 1
+          }
+
+          # Create zip with all agent files including watchdog
+          Compress-Archive -Path "dist\TimeTrackerAgent\*" -DestinationPath "Output\TimeTrackerAgent-$VERSION.zip" -Force
+          
+          # Verify zip size (should be >10MB)
+          $zipSize = (Get-Item "Output\TimeTrackerAgent-$VERSION.zip").Length
+          Write-Host "Created TimeTrackerAgent-$VERSION.zip ($zipSize bytes)"
+          if ($zipSize -lt 10MB) {
+            Write-Error "Zip too small ($zipSize bytes) - something went wrong"
+            exit 1
+          }
+
+      - name: Verify zip contents
+        working-directory: windows_agent
+        shell: pwsh
+        run: |
+          $VERSION = $env:GITHUB_REF_NAME -replace '^v', ''
+          $zip = "Output\TimeTrackerAgent-$VERSION.zip"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $entries = [System.IO.Compression.ZipFile]::OpenRead($zip).Entries.Name
+          Write-Host "=== Zip contents ==="
+          $entries | ForEach-Object { Write-Host "  $_" }
+          if ($entries -notcontains "TimeTrackerAgent.exe") {
+            Write-Error "TimeTrackerAgent.exe missing from zip"
+            exit 1
+          }
+          if ($entries -notcontains "tt_watchdog.exe") {
+            Write-Error "tt_watchdog.exe missing from zip"
+            exit 1
+          }
+          Write-Host "=== Zip verified OK ==="
+
+      - name: Upload Windows zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: windows_agent/Output/TimeTrackerAgent-*.zip
+
+      - name: List dist contents
+        working-directory: windows_agent
+        run: |
+          echo "=== dist/TimeTrackerAgent contents ==="
+          dir dist\TimeTrackerAgent
+          echo "=== Output contents ==="
+          dir Output
+
       - name: Get version without v prefix
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
@@ -379,7 +389,7 @@ jobs:
         with:
           path: windows_agent/installer.iss
           options: /DMyAppVersion=${{ env.VERSION }}
-      
+
       - name: Sign Windows installer
         if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
         uses: azure/trusted-signing-action@v0.5.0
@@ -400,25 +410,23 @@ jobs:
         working-directory: windows_agent
         shell: pwsh
         run: |
+          $VERSION = $env:GITHUB_REF_NAME -replace '^v', ''
           Write-Host "=== SHA512 HASHES ==="
           Write-Host "TimeTracker-Windows-Setup.exe:"
           (Get-FileHash "Output\TimeTracker-Windows-Setup.exe" -Algorithm SHA512).Hash
-          Write-Host "TimeTracker.exe:"
-          (Get-FileHash "dist\TimeTracker\TimeTracker.exe" -Algorithm SHA512).Hash
           Write-Host "TimeTrackerAgent.exe:"
           (Get-FileHash "dist\TimeTrackerAgent\TimeTrackerAgent.exe" -Algorithm SHA512).Hash
-      
+          Write-Host "tt_watchdog.exe:"
+          (Get-FileHash "dist\tt_watchdog.exe" -Algorithm SHA512).Hash
+          Write-Host "TimeTrackerAgent-$VERSION.zip:"
+          (Get-FileHash "Output\TimeTrackerAgent-$VERSION.zip" -Algorithm SHA512).Hash
+
       - name: Package for Intune
         working-directory: windows_agent
         run: |
-          # Download IntuneWinAppUtil
           Invoke-WebRequest -Uri "https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/master/IntuneWinAppUtil.exe" -OutFile IntuneWinAppUtil.exe
-
-          # Create packaging folder
           New-Item -ItemType Directory -Force -Path intune-package
           Copy-Item "Output\TimeTracker-Windows-Setup.exe" "intune-package\"
-
-          # Write the install wrapper script
           @'
           param([string]$OrgToken = "")
           if ($OrgToken) {
@@ -433,8 +441,6 @@ jobs:
           }
           Start-Process -FilePath (Join-Path $PSScriptRoot "TimeTracker-Windows-Setup.exe") -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -NoNewWindow
           '@ | Set-Content "intune-package\install_timetracker.ps1"
-
-          # Wrap for Intune
           .\IntuneWinAppUtil.exe -c intune-package -s install_timetracker.ps1 -o Output -q
 
       - name: Upload Windows artifact
@@ -448,12 +454,6 @@ jobs:
         with:
           name: intune-package
           path: windows_agent/Output/*.intunewin
-
-      - name: Upload watchdog script artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: watchdog-script
-          path: windows_agent/register_watchdog_task.ps1
 
   release:
     needs: [build-mac, build-windows]
@@ -483,12 +483,6 @@ jobs:
           name: intune-package
           path: ./intune
 
-      - name: Download watchdog script artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: watchdog-script
-          path: ./watchdog-script
-      
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -496,9 +490,8 @@ jobs:
           files: |
             ./mac/TimeTracker.pkg
             ./windows/TimeTracker-Windows-Setup.exe
-            ./intune/install_timetracker.intunewin
-            ./watchdog-script/register_watchdog_task.ps1
             ./windows/TimeTrackerAgent-*.zip
+            ./intune/install_timetracker.intunewin
           tag_name: ${{ github.ref_name }}
           token: ${{ secrets.RELEASES_PAT }}
           make_latest: true

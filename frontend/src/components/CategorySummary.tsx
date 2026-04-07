@@ -1522,7 +1522,10 @@ export default function CategorySummary({
 
       {/* Total summary line */}
       {(timeSummary.length > 0 || individualReturnBlocks.length > 0) && !busy && (() => {
-        const totalBillable = timeSummary.reduce((s, c) => s + getBillable(c), 0);
+        const irBillableHours = individualReturnBlocks.reduce(
+          (s, b) => s + (b.duration_minutes || 0), 0
+        ) / 60;
+        const totalBillable = timeSummary.reduce((s, c) => s + getBillable(c), 0) + irBillableHours;
         const totalNonBillable = timeSummary.reduce((s, c) => s + getNonBillable(c), 0);
         const totalAll = totalBillable + totalNonBillable;
         const clientCount = timeSummary.filter((c) => c.client.toLowerCase() !== "unassigned").length;

@@ -4144,7 +4144,9 @@ ALSO: Copy display_names.py to tracker/utils/display_names.py
 
 # ============================================================================
 # UPDATED today_time() - With Clean Display Formatting
-# ============================================================================
+# ============================================================================x
+
+from tracker.utils.tax_software import extract_tax_context as _extract_tax
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -4158,13 +4160,17 @@ def today_time(request):
     NOW WITH CLEAN DISPLAY FORMATTING:
     - "Chrome - Aurelia Dashboard (15m)" instead of "Google Chrome (15m)"
     - "VS Code - views.py (timetracker) (45m)" instead of messy raw titles
+
+    INDIVIDUAL RETURNS:
+    - Tax software open return events are excluded from client aggregation (Step 3)
+    - Instead they are bucketed by taxpayer in Step 6 (individual_returns)
+    - IR billable minutes are added to totals so header reflects full day
     """
     from datetime import datetime, timedelta
     from datetime import timezone as dt_timezone
     from collections import defaultdict
     from django.utils.dateparse import parse_date
     
-    # Import the display formatter
     from tracker.utils.display_names import format_block_for_display, format_duration
     
     user = request.user
@@ -4199,7 +4205,6 @@ def today_time(request):
         ts_utc__lt=end_utc,
     ).select_related('block', 'block__client').order_by('ts_utc'))
     
-    # Build set of deleted block IDs upfront so we can check efficiently
     from django.db.models import Q
     deleted_block_ids = set(
         Block.objects.filter(
@@ -4209,16 +4214,15 @@ def today_time(request):
     )
     
     if not events:
-        # Fallback to blocks if no events (e.g., manual entries)
         return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
     
     # =========================================================================
     # STEP 2: Calculate duration for each event
     # Duration = time until next event (capped at 3 min)
     # =========================================================================
-    IDLE_CAP_SECONDS = 180  # 3 minutes - matches agent's MOUSE_IDLE_PAUSE_S
+    IDLE_CAP_SECONDS = 180
     NON_BILLABLE_CATEGORIES = {'personal/non-billable', 'idle', 'uncategorized'}
-    EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}  # ← NEW
+    EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}
 
     event_durations = []
     for i, event in enumerate(events):
@@ -4227,27 +4231,21 @@ def today_time(request):
             duration_sec = (next_ts - event.ts_utc).total_seconds()
             duration_sec = min(duration_sec, IDLE_CAP_SECONDS)
         else:
-            duration_sec = 180  # 3 min for last event
+            duration_sec = 180
         
-        # Get client and category from linked block
         block = event.block
 
-        # ✅ FIX: treat soft-deleted blocks as unassigned
         if block and block.id in deleted_block_ids:
             block = None
 
         if block:
             client_id = block.client_id
             client_name = block.client.name if block.client else 'Unassigned'
-            
-            # Get category from block
             if block.category_hours and isinstance(block.category_hours, dict):
                 categories = list(block.category_hours.keys())
                 category = categories[0] if categories else 'Uncategorized'
             else:
                 category = 'Uncategorized'
-            
-            # Check if idle
             is_idle = category.lower() == 'idle'
         else:
             client_id = None
@@ -4256,22 +4254,22 @@ def today_time(request):
             is_idle = False
         
         event_durations.append({
-            'ts': event.ts_utc,
+            'ts':               event.ts_utc,
             'duration_minutes': duration_sec / 60.0,
-            'client_id': client_id,
-            'client_name': client_name,
-            'category': category,
-            'is_idle': is_idle,
-            'is_billable': bool(client_id) and category.lower() not in NON_BILLABLE_CATEGORIES,
-            'app_name': event.app_name or 'Unknown',
-            'window_title': event.window_title or '',
-            'url': event.url or '',
-            'block_id': block.id if block else None,
+            'client_id':        client_id,
+            'client_name':      client_name,
+            'category':         category,
+            'is_idle':          is_idle,
+            'is_billable':      bool(client_id) and category.lower() not in NON_BILLABLE_CATEGORIES,
+            'app_name':         event.app_name or 'Unknown',
+            'window_title':     event.window_title or '',
+            'url':              event.url or '',
+            'block_id':         block.id if block else None,
         })
     
     # =========================================================================
     # STEP 3: Aggregate by client → category
-    # Each event's duration goes to exactly ONE client
+    # Tax return events are SKIPPED here — they go to individual_returns in Step 6
     # =========================================================================
     data = defaultdict(lambda: {
         'client_id': None,
@@ -4288,6 +4286,10 @@ def today_time(request):
     non_billable_minutes = 0.0
     
     for ev in event_durations:
+        # Skip tax return events — counted in individual_returns (Step 6) not here
+        if _extract_tax(ev['window_title']):
+            continue
+
         client_name = ev['client_name']
         category = ev['category']
         minutes = ev['duration_minutes']
@@ -4296,33 +4298,28 @@ def today_time(request):
         cat_data = data[client_name]['categories'][category]
         cat_data['minutes'] += minutes
         
-        # Track unique blocks for count
         if ev['block_id'] and ev['block_id'] not in cat_data['blocks_seen']:
             cat_data['blocks_seen'].add(ev['block_id'])
             cat_data['block_count'] += 1
         
-        # Use display formatter for clean title
         formatted = format_block_for_display({
-            'app_name': ev['app_name'],
+            'app_name':     ev['app_name'],
             'window_title': ev['window_title'],
-            'url': ev['url'],
-            'minutes': minutes,
+            'url':          ev['url'],
+            'minutes':      minutes,
         }, client_name=client_name)
         
         clean_title = formatted['title']
         
-        # Aggregate by CLEAN title (merges similar activities)
         if clean_title in cat_data['by_activity']:
             cat_data['by_activity'][clean_title]['minutes'] += minutes
         else:
             cat_data['by_activity'][clean_title] = {
-                'id': ev['block_id'],
+                'id':    ev['block_id'],
                 'title': clean_title,
                 'minutes': minutes,
             }
         
-        # Track totals
-        # Exclude Idle/Uncategorized from all time totals
         if category.lower() not in EXCLUDE_FROM_TOTALS:
             total_minutes += minutes
             if ev['is_billable']:
@@ -4342,9 +4339,8 @@ def today_time(request):
             if cat_name.lower() in EXCLUDE_FROM_TOTALS:
                 continue
             minutes = cat_data['minutes']
-            client_total_minutes += minutes  # ← match the variable name
+            client_total_minutes += minutes
                     
-            # Build sample activities (top 10 by time) with CLEAN titles
             aggregated_samples = []
             sorted_activities = sorted(
                 cat_data['by_activity'].items(), 
@@ -4354,26 +4350,24 @@ def today_time(request):
             for clean_title, info in sorted_activities:
                 mins = info['minutes']
                 time_str = format_duration(mins)
-                
-                # Clean format with block ID for editing
                 if info['id']:
                     aggregated_samples.append(f"[id:{info['id']}] {clean_title} ({time_str})")
                 else:
                     aggregated_samples.append(f"{clean_title} ({time_str})")
             
             categories.append({
-                'name': cat_name,
-                'hours': round(minutes / 60, 2),
-                'block_count': cat_data['block_count'],
+                'name':              cat_name,
+                'hours':             round(minutes / 60, 2),
+                'block_count':       cat_data['block_count'],
                 'unique_activities': len(cat_data['by_activity']),
                 'sample_activities': aggregated_samples,
             })
         
         result.append({
-            'client_id': client_data['client_id'],
-            'client': client_name,
+            'client_id':   client_data['client_id'],
+            'client':      client_name,
             'total_hours': round(client_total_minutes / 60, 2),
-            'categories': categories,
+            'categories':  categories,
         })
 
     # =========================================================================
@@ -4389,7 +4383,7 @@ def today_time(request):
         start__lt=end_utc,
         is_categorized=True,
         client__isnull=False,
-        deleted_at__isnull=True,  # ✅ FIX: exclude soft-deleted blocks
+        deleted_at__isnull=True,
     ).select_related('client')
  
     for block in mobile_blocks:
@@ -4403,7 +4397,6 @@ def today_time(request):
         )
         b_title = f"Mobile - {block.notes or b_cat} ({b_minutes}m)"
  
-        # Collect flagged entries for the UI
         if getattr(block, 'needs_review', False):
             flagged_blocks.append({
                 'block_id':      block.id,
@@ -4448,17 +4441,16 @@ def today_time(request):
  
         billable_minutes += b_minutes
         total_minutes    += b_minutes
- 
 
     # =========================================================================
-    # STEP 6: Build individual returns from Internal - Tax events + blocks
+    # STEP 6: Build individual returns from all events + Internal-Tax blocks
     # =========================================================================
     from tracker.utils.tax_software import extract_tax_context
     
     individual_returns = []
     seen_hashes = set()
 
-    # First from blocks (already stored taxpayer_name)
+    # First pass — blocks with stored taxpayer_name (or extractable window title)
     internal_tax_blocks = Block.objects.filter(
         user=user,
         org=get_user_org(user),
@@ -4469,16 +4461,16 @@ def today_time(request):
     ).select_related('client')
     
     for block in internal_tax_blocks:
-        taxpayer_name = getattr(block, 'taxpayer_name', None)
+        taxpayer_name    = getattr(block, 'taxpayer_name', None)
         taxpayer_id_hash = getattr(block, 'taxpayer_id_hash', None)
-        tax_return_type = getattr(block, 'tax_return_type', None)
+        tax_return_type  = getattr(block, 'tax_return_type', None)
         
         if not taxpayer_name and block.window_title:
             ctx = extract_tax_context(block.window_title)
             if ctx:
-                taxpayer_name = ctx.taxpayer_name
+                taxpayer_name    = ctx.taxpayer_name
                 taxpayer_id_hash = ctx.taxpayer_id_hash
-                tax_return_type = ctx.return_type
+                tax_return_type  = ctx.return_type
         
         if taxpayer_name:
             key = taxpayer_id_hash or taxpayer_name
@@ -4494,7 +4486,8 @@ def today_time(request):
                 'display_title':    block.window_title or '',
             })
 
-
+    # Second pass — all events with extractable tax software titles
+    # Covers blocks not yet compacted + returns under wrong client (pre-v1.2.89)
     for ev in event_durations:
         title = ev['window_title']
         if not title:
@@ -4502,9 +4495,9 @@ def today_time(request):
         ctx = extract_tax_context(title)
         if not ctx:
             continue
-        # ← Remove the client_name check entirely
         key = ctx.taxpayer_id_hash or ctx.taxpayer_name
         if key in seen_hashes:
+            # Accumulate minutes for existing taxpayer
             for r in individual_returns:
                 if r['taxpayer_id_hash'] == key:
                     r['minutes'] = round(r['minutes'] + ev['duration_minutes'])
@@ -4521,6 +4514,11 @@ def today_time(request):
             'display_title':    title,
         })
 
+    # Add IR billable minutes to totals so header reflects full day accurately
+    ir_billable_minutes = sum(r['minutes'] for r in individual_returns)
+    billable_minutes += ir_billable_minutes
+    total_minutes    += ir_billable_minutes
+
     return Response({
         'clients':            result,
         'global_hours':       round(total_minutes / 60, 2),
@@ -4528,7 +4526,7 @@ def today_time(request):
         'non_billable_hours': round(non_billable_minutes / 60, 2),
         'date':               target_date.isoformat(),
         'flagged_blocks':     flagged_blocks,
-        'individual_returns': individual_returns,   # ← NEW
+        'individual_returns': individual_returns,
     })
 
 # ── Add this new view to views.py ─────────────────────────────────────────────

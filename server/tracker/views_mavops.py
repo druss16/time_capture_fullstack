@@ -5,7 +5,7 @@
 # ============================================================================
 
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
-from rest_framework.permissions import IsAuthenticated, BasePermission
+from rest_framework.permissions import IsAuthenticated, BasePermission, AllowAny
 from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Count, Max

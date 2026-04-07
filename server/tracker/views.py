@@ -1040,7 +1040,11 @@ def agents_hello(request):
 
     return resp
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
 def agent_control(request):
+    username = (request.GET.get("user") or "").strip()
+    host = (request.GET.get("host") or "").strip()
     username = (request.GET.get("user") or "").strip()
     host = (request.GET.get("host") or "").strip()
     stop, reason, stop_until = False, "", None

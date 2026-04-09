@@ -5385,8 +5385,8 @@ def firm_signup(request):
         org = Organization.objects.create(
             name=firm_name,
             slug=slug,
-            plan='trial',
-            trial_ends_at=timezone.now() + timedelta(days=14),
+            plan='professional',
+            trial_ends_at=timezone.now() + timedelta(days=30),
         )
         
 

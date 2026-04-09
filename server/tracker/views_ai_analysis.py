@@ -202,7 +202,7 @@ def ai_analysis(request):
 
         # Plan gate: executive only
         plan = getattr(org, "plan", "")
-        if not any(plan.startswith(p) for p in ("executive", "trial")):
+        if not any(plan.startswith(p) for p in ("executive",)):
             return JsonResponse({"error": "AI analysis requires the Executive plan."}, status=403)
 
         body = json.loads(request.body or "{}")

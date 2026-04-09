@@ -18,6 +18,10 @@ from tracker.industry_categories import INDUSTRY_CHOICES
 
 from decimal import Decimal
 
+class ActiveOrgManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
 class Organization(models.Model):
     """
     Represents a CPA firm - the tenant in multi-tenant setup.
@@ -40,7 +44,7 @@ class Organization(models.Model):
         ('professional', 'Professional'),
         ('executive', 'Executive'),
     ], default='none')
-    trial_ends_at = models.DateTimeField(null=True, blank=True)
+
     stripe_customer_id = models.CharField(max_length=100, blank=True)
 
     # ADD these fields
@@ -86,16 +90,22 @@ class Organization(models.Model):
     
     mouse_idle_pause_seconds = models.IntegerField(default=90)
 
-
-    # Metadata
+    trial_ends_at = models.DateTimeField(null=True, blank=True)
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    is_demo = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     
-    class Meta:
-        verbose_name = "Organization"
-        verbose_name_plural = "Organizations"
+    objects = ActiveOrgManager()
+    all_objects = models.Manager()
+
+    def soft_delete(self):
+        from django.utils import timezone
+        self.deleted_at = timezone.now()
+        self.save(update_fields=['deleted_at'])
     
     def __str__(self):
         return self.name
@@ -117,26 +127,27 @@ class Organization(models.Model):
             margin = self.billing_rate_default - (self.cost_rate_default or Decimal('0'))
             return round((margin / self.billing_rate_default) * 100, 1)
         return 0
-    
+
     @property
     def is_trial_active(self):
-        """Check if trial is still active"""
         from django.utils import timezone
-        if self.plan != 'trial':
-            return False
         if not self.trial_ends_at:
             return False
         return self.trial_ends_at > timezone.now()
-    
+
     @property
     def trial_days_remaining(self):
-        """Days left in trial"""
         from django.utils import timezone
         if not self.trial_ends_at:
             return 0
         if self.trial_ends_at < timezone.now():
             return 0
         return (self.trial_ends_at - timezone.now()).days
+
+    class Meta:
+        verbose_name = "Organization"
+        verbose_name_plural = "Organizations"
+    
 
 class OrganizationMembership(models.Model):
     """

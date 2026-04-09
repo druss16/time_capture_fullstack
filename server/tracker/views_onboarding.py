@@ -92,8 +92,8 @@ def onboarding_signup(request):
             name=firm_name,
             slug=slug,
             industry_type=industry_type,  # ✅ SET INDUSTRY TYPE
-            plan='trial',
-            trial_ends_at=timezone.now() + timedelta(days=14),
+            plan='professional',
+            trial_ends_at=timezone.now() + timedelta(days=30),
             timezone=tz,
             billing_rate_default=Decimal('150.00'),
         )

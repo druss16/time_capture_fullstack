@@ -1602,6 +1602,10 @@ def repair_device():
 def run_agent():
     """Main agent function with GUI integration"""
     global API_KEY, notif_manager, notif_worker, sync, gui_menu_bar, SERVER_USER_NAME, ai_switcher
+
+    # ── Global socket timeout — prevents any network call hanging indefinitely ──
+    socket.setdefaulttimeout(8)
+
     from watchdog import heartbeat_touch, watchdog as _watchdog
 
 
@@ -2572,6 +2576,8 @@ def main():
 
         if not _lock_mutex:
             print("[AGENT] ⚠️ Failed to create mutex — proceeding without lock")
+
+
     # Handle uninstaller flag FIRST before anything else
     if "--unregister-task" in sys.argv:
         from startup_task import unregister_startup_task

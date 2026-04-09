@@ -99,6 +99,9 @@ class _ProgressState:
     freeze_count:    int   = 0          # How many freeze gaps detected this session
     longest_gap:     float = 0.0
 
+    last_unintentional_log: float = 0.0  # dedup guard
+
+
 _state = _ProgressState()
 
 
@@ -249,12 +252,22 @@ def classify_idle(
     # ── Rule 3: RETROACTIVE idle — discovered gap much longer than threshold ─
     # If the idle_seconds reading is >> MOUSE_IDLE_PAUSE_S, the user was away
     # for a long time before the loop even detected it (e.g. Modern Standby).
+    # ── Rule 3: RETROACTIVE idle ──
     retroactive_threshold = mouse_idle_pause_s * RETROACTIVE_IDLE_MULTIPLIER
     if idle_seconds > retroactive_threshold:
+        now_t = time.time()
+        with _state.lock:
+            last_log = _state.last_unintentional_log
+            if now_t - last_log > 5:
+                _state.last_unintentional_log = now_t
+                should_log = True
+            else:
+                should_log = False
+
         return IdleVerdict(
             IdleKind.UNINTENTIONAL,
             f"retroactive idle: mouse_idle={idle_seconds:.0f}s >> "
-            f"{retroactive_threshold:.0f}s threshold",
+            f"{retroactive_threshold:.0f}s threshold" if should_log else "retroactive idle (suppressed)",
             confidence=0.85,
         )
 

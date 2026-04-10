@@ -4218,11 +4218,9 @@ def today_time(request):
         ).values_list('id', flat=True)
     )
 
-    return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
-
     
-    # if not events:
-    #     return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
+    if not events:
+        return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
     
     # =========================================================================
     # STEP 2: Calculate duration for each event

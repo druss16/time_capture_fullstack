@@ -4218,7 +4218,8 @@ def today_time(request):
         ).values_list('id', flat=True)
     )
     
-    return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
+    if not events:
+        return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
     
     # =========================================================================
     # STEP 2: Calculate duration for each event
@@ -4233,7 +4234,7 @@ def today_time(request):
         if i + 1 < len(events):
             next_ts = events[i + 1].ts_utc
             duration_sec = (next_ts - event.ts_utc).total_seconds()
-            duration_sec = min(duration_sec, IDLE_CAP_SECONDS)
+            duration_sec = min(duration_sec, 3600)  # 1 hour max, not 3 minutes
         else:
             duration_sec = 180
         

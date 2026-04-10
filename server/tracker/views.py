@@ -4234,7 +4234,7 @@ def today_time(request):
         if i + 1 < len(events):
             next_ts = events[i + 1].ts_utc
             duration_sec = (next_ts - event.ts_utc).total_seconds()
-            duration_sec = min(duration_sec, 3600)  # 1 hour max, not 3 minutes
+            duration_sec = min(duration_sec, IDLE_CAP_SECONDS)
         else:
             duration_sec = 180
         

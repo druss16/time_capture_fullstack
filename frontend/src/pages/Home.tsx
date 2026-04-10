@@ -39,14 +39,14 @@ const FEATURES = [
 ];
 
 const INTEGRATIONS = [
-  { name: "QuickBooks", abbr: "QB", color: "#2CA01C", bg: "#E8F5E2", category: "Billing" },
-  { name: "Xero", abbr: "X", color: "#1AB4D7", bg: "#E2F6FB", category: "Billing" },
-  { name: "Wolters Kluwer", abbr: "WK", color: "#004C97", bg: "#E0EAF5", category: "Tax" },
-  { name: "Thomson Reuters", abbr: "TR", color: "#FF8200", bg: "#FFF0E0", category: "Tax" },
-  { name: "Drake Software", abbr: "DS", color: "#C8102E", bg: "#FAE2E5", category: "Tax" },
-  { name: "Sage", abbr: "S", color: "#00DC82", bg: "#E0FAF0", category: "Accounting" },
-  { name: "Karbon", abbr: "K", color: "#6C47FF", bg: "#EEEAFF", category: "Practice Mgmt" },
-  { name: "Canopy", abbr: "C", color: "#0EA5E9", bg: "#E0F3FD", category: "Practice Mgmt" },
+  { name: "QuickBooks",      category: "Billing",        abbr: "QB", color: "#fff", bg: "#2CA01C" },
+  { name: "Xero",            category: "Billing",        abbr: "X",  color: "#fff", bg: "#1AB4D7" },
+  { name: "Wolters Kluwer",  category: "Tax",            abbr: "WK", color: "#fff", bg: "#004C97" },
+  { name: "Thomson Reuters", category: "Tax",            abbr: "TR", color: "#fff", bg: "#FF8200" },
+  { name: "Drake Software",  category: "Tax",            abbr: "DS", color: "#fff", bg: "#C8102E" },
+  { name: "Sage",            category: "Accounting",     abbr: "S",  color: "#fff", bg: "#00B050" },
+  { name: "Karbon",          category: "Practice Mgmt",  abbr: "K",  color: "#fff", bg: "#6C47FF" },
+  { name: "Canopy",          category: "Practice Mgmt",  abbr: "C",  color: "#fff", bg: "#0EA5E9" },
 ];
 
 const PRICING = [
@@ -384,7 +384,12 @@ export default function Home() {
           flex-shrink: 0; transition: border-color 0.15s;
         }
         .int-chip:hover { border-color: var(--teal-border); }
-        .int-abbr { width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 800; }
+        .int-abbr { 
+          width: 32px; height: 32px; border-radius: 8px; 
+          display: flex; align-items: center; justify-content: center;
+          font-size: 11px; font-weight: 800; letter-spacing: -0.02em;
+          flex-shrink: 0;
+        }
         .int-name { font-size: 12.5px; font-weight: 600; color: var(--text); line-height: 1.2; }
         .int-cat  { font-size: 10.5px; color: var(--text-3); }
 
@@ -393,26 +398,53 @@ export default function Home() {
         .section-h2 { font-size: clamp(28px, 3.5vw, 40px); font-weight: 800; letter-spacing: -0.025em; line-height: 1.1; color: var(--text); margin-bottom: 40px; }
         .section-sub { font-size: 16px; color: var(--text-2); line-height: 1.65; max-width: 500px; margin-bottom: 40px; margin-top: -24px; }
         .hr { border: none; border-top: 1px solid var(--line); }
-
-        .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        
+        .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
         @media (max-width: 768px) { .steps { grid-template-columns: 1fr; } }
-        .step-card { background: var(--white); border: 1px solid var(--line); border-radius: 14px; padding: 32px 28px; transition: border-color 0.2s; }
-        .step-card:hover { border-color: var(--teal-border); }
-        .step-num { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-3); margin-bottom: 24px; }
-        .step-icon { width: 38px; height: 38px; border-radius: 9px; background: var(--teal-light); border: 1px solid var(--teal-border); display: flex; align-items: center; justify-content: center; margin-bottom: 18px; }
-        .step-icon svg { width: 17px; height: 17px; color: var(--teal); }
-        .step-card h3 { font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 10px; }
-        .step-card p { font-size: 13.5px; color: var(--text-2); line-height: 1.65; }
+        .step-card {
+          background: var(--white); border: 1px solid var(--line);
+          border-radius: 20px; padding: 36px 32px;
+          transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+          position: relative; overflow: hidden;
+        }
+        .step-card::before {
+          content: attr(data-step);
+          position: absolute; top: -10px; right: 20px;
+          font-size: 80px; font-weight: 900; letter-spacing: -0.05em;
+          color: var(--teal-light); line-height: 1;
+          pointer-events: none; user-select: none;
+        }
+        .step-card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(43,157,144,0.12); border-color: var(--teal-border); }
+        .step-num { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--teal-mid); margin-bottom: 20px; }
+        .step-icon { width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, var(--teal-light), #d0f0ec); border: 1px solid var(--teal-border); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
+        .step-icon svg { width: 20px; height: 20px; color: var(--teal); }
+        .step-card h3 { font-size: 16px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 10px; color: var(--text); }
+        .step-card p { font-size: 13.5px; color: var(--text-2); line-height: 1.7; }
 
-        .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
         @media (max-width: 900px) { .feat-grid { grid-template-columns: repeat(2, 1fr); } }
         @media (max-width: 560px) { .feat-grid { grid-template-columns: 1fr; } }
-        .feat-card { background: var(--white); border: 1px solid var(--line); border-radius: 14px; padding: 28px 24px; transition: border-color 0.2s; }
-        .feat-card:hover { border-color: var(--teal-border); }
-        .feat-icon { width: 34px; height: 34px; border-radius: 8px; background: var(--teal-light); border: 1px solid var(--teal-border); display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
-        .feat-icon svg { width: 15px; height: 15px; color: var(--teal); }
-        .feat-card h3 { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 7px; }
-        .feat-card p { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+        .feat-card {
+          background: var(--white); border: 1px solid var(--line);
+          border-radius: 20px; padding: 32px 28px;
+          transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+          display: flex; flex-direction: column; gap: 0;
+        }
+        .feat-card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(43,157,144,0.12); border-color: var(--teal-border); }
+        .feat-card:nth-child(1) .feat-icon { background: linear-gradient(135deg, #E6F5F4, #d0f0ec); }
+        .feat-card:nth-child(2) .feat-icon { background: linear-gradient(135deg, #E0F3FD, #c7eaf9); }
+        .feat-card:nth-child(3) .feat-icon { background: linear-gradient(135deg, #EEF2FF, #dde4ff); }
+        .feat-card:nth-child(4) .feat-icon { background: linear-gradient(135deg, #FFF7ED, #fde8cc); }
+        .feat-card:nth-child(5) .feat-icon { background: linear-gradient(135deg, #F0FDF4, #d1fae5); }
+        .feat-card:nth-child(6) .feat-icon { background: linear-gradient(135deg, #FDF4FF, #f3e8ff); }
+        .feat-icon { width: 44px; height: 44px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.06); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
+        .feat-icon svg { width: 18px; height: 18px; color: var(--teal); }
+        .feat-card:nth-child(3) .feat-icon svg { color: #6366F1; }
+        .feat-card:nth-child(4) .feat-icon svg { color: #F97316; }
+        .feat-card:nth-child(5) .feat-icon svg { color: #22C55E; }
+        .feat-card:nth-child(6) .feat-icon svg { color: #A855F7; }
+        .feat-card h3 { font-size: 14.5px; font-weight: 800; letter-spacing: -0.015em; margin-bottom: 8px; color: var(--text); }
+        .feat-card p { font-size: 13px; color: var(--text-2); line-height: 1.65; }
 
         .compare-grid { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
         @media (max-width: 640px) { .compare-grid { grid-template-columns: 1fr; } }
@@ -579,7 +611,9 @@ export default function Home() {
           <div className="marquee-track">
             {[...INTEGRATIONS, ...INTEGRATIONS].map((int, i) => (
               <div key={i} className="int-chip">
-                <div className="int-abbr" style={{ background: int.bg, color: int.color }}>{int.abbr}</div>
+                <div className="int-abbr" style={{ background: int.bg, color: int.color }}>
+                  {int.abbr}
+                </div>
                 <div>
                   <div className="int-name">{int.name}</div>
                   <div className="int-cat">{int.category}</div>
@@ -597,8 +631,8 @@ export default function Home() {
         <p className="section-sub">No setup hassle. No daily input. Just reliable billable time.</p>
         <div className="steps">
           {HOW_IT_WORKS.map(({ icon: Icon, step, title, desc }, i) => (
-            <div key={i} className="step-card">
-              <div className="step-num">{step}</div>
+            <div key={i} className="step-card" data-step={step}>
+              <div className="step-num">Step {step}</div>
               <div className="step-icon"><Icon /></div>
               <h3>{title}</h3>
               <p>{desc}</p>

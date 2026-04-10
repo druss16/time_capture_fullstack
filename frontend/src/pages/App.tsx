@@ -40,7 +40,6 @@ const WhiteGloveOnboarding = lazy(() => import("./settings/WhiteGloveOnboarding"
 const ExecutiveDashboard = lazy(() => import("./ExecutiveDashboard"));
 const Home = lazy(() => import("./Home"));
 const RequestAccess = lazy(() => import("./RequestAccess"));
-const Clients = lazy(() => import("./Clients"));
 const MavOpsAdmin = lazy(() => import("./MavOpsAdmin")); // ← NEW
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -175,7 +174,6 @@ export default function App() {
                 <Route path="/summary" element={<MaybeProtected><AppLayout><TimecardSummary /></AppLayout></MaybeProtected>} />
                 <Route path="/billing" element={<MaybeProtected><AppLayout><BillingPage /></AppLayout></MaybeProtected>} />
                 <Route path="/devices" element={<MaybeProtected><AppLayout><Devices /></AppLayout></MaybeProtected>} />
-                <Route path="/clients" element={<MaybeProtected><AppLayout><Clients /></AppLayout></MaybeProtected>} />
 
                 {/* Protected — admin/manager */}
                 <Route path="/settings" element={<MaybeProtected><AdminRoute><AppLayout><OrgAdminSettings /></AppLayout></AdminRoute></MaybeProtected>} />

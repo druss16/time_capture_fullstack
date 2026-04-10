@@ -91,7 +91,6 @@ export default function Navigation() {
     { path: '/daily', label: 'Daily Review', icon: Calendar },
     { path: '/billing', label: 'Billing', icon: Receipt },
     { path: '/devices', label: 'Devices', icon: Monitor },
-    { path: '/clients', label: 'Clients', icon: Users },
   ].filter(item => {
     if (item.path === '/devices' && mdmManaged) return false;
     return true;

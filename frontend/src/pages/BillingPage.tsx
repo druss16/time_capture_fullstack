@@ -11,7 +11,6 @@ import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
 import ClientProfitability from '@/components/ClientProfitability';
 import TimesheetHistory from '@/components/TimesheetHistory';
-import IntegrationPushPanel from '@/components/IntegrationPushPanel';
 import IntegrationInvoicePanel from '@/components/IntegrationInvoicePanel';
 import InvoiceManager from '@/components/InvoiceManager';
 import {
@@ -21,7 +20,6 @@ import {
   TrendingUp,
   FileText,
   Receipt,
-  ChevronRight,
   Lock,
   Sparkles,
   AlertTriangle,
@@ -112,16 +110,14 @@ const ALL_TABS: Tab[] = [
   },
 ];
 
-// Loading skeleton for sidebar
 const SidebarSkeleton = () => (
-  <div className="space-y-2">
+  <div className="space-y-1">
     {[1, 2, 3, 4].map((i) => (
-      <div key={i} className={cn(SKELETON.base, 'h-14 w-full rounded-xl')} />
+      <div key={i} className={cn(SKELETON.base, 'h-10 w-full rounded-lg')} />
     ))}
   </div>
 );
 
-// Loading skeleton for content
 const ContentSkeleton = () => (
   <div className="space-y-4">
     <div className={cn(SKELETON.heading, 'w-48')} />
@@ -133,84 +129,46 @@ const ContentSkeleton = () => (
   </div>
 );
 
-// Subscribe prompt for users with no plan
 const SubscribePrompt: React.FC = () => (
-  <div className="relative flex items-center justify-center min-h-[400px]">
-    <div className="absolute inset-0 overflow-hidden rounded-2xl">
-      <div className="w-full h-full bg-gradient-to-br from-slate-100 to-slate-200 opacity-60 blur-sm" />
-      <div className="absolute inset-0 p-6 opacity-30 blur-[2px]">
-        <div className="h-8 w-48 bg-slate-300 rounded mb-4" />
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          <div className="h-24 bg-slate-200 rounded-xl" />
-          <div className="h-24 bg-slate-200 rounded-xl" />
-          <div className="h-24 bg-slate-200 rounded-xl" />
-        </div>
-        <div className="space-y-3">
-          <div className="h-12 bg-slate-200 rounded-lg" />
-          <div className="h-12 bg-slate-200 rounded-lg" />
-          <div className="h-12 bg-slate-200 rounded-lg" />
-        </div>
+  <div className="flex items-center justify-center min-h-[400px]">
+    <div className="text-center p-10 bg-white rounded-2xl border border-border/60 shadow-sm max-w-md">
+      <div className="w-14 h-14 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-5">
+        <AlertTriangle className="w-7 h-7 text-red-500" />
       </div>
-    </div>
-    <div className="relative z-10 text-center p-8 bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border-2 border-red-200 max-w-md">
-      <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-        <AlertTriangle className="w-8 h-8 text-red-500" />
-      </div>
-      <h3 className="text-xl font-extrabold text-slate-900 mb-2">No Active Subscription</h3>
-      <p className="text-slate-600 font-medium mb-6">
+      <h3 className="text-lg font-bold text-slate-900 mb-2">No Active Subscription</h3>
+      <p className="text-slate-500 text-sm leading-relaxed mb-6">
         You need an active subscription to access TimeTracker features.
-        Subscribe to a plan to start tracking time and billing clients.
       </p>
       <a
         href="/account/billing"
-        className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25"
+        className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-white text-sm font-semibold rounded-lg hover:opacity-90 transition-all"
       >
-        <CreditCard className="w-5 h-5" />
+        <CreditCard className="w-4 h-4" />
         Subscribe Now
       </a>
-      <p className="text-sm text-slate-500 font-medium mt-4">
-        Plans start at $29.99/user/month
-      </p>
+      <p className="text-xs text-slate-400 mt-4">Plans start at $29.99/user/month</p>
     </div>
   </div>
 );
 
-// Upgrade prompt for locked Executive features
 const UpgradePrompt: React.FC<{ featureName: string }> = ({ featureName }) => (
-  <div className="relative flex items-center justify-center min-h-[400px]">
-    <div className="absolute inset-0 overflow-hidden rounded-2xl">
-      <div className="w-full h-full bg-gradient-to-br from-slate-100 to-slate-200 opacity-60 blur-sm" />
-      <div className="absolute inset-0 p-6 opacity-30 blur-[2px]">
-        <div className="h-8 w-48 bg-slate-300 rounded mb-4" />
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          <div className="h-24 bg-slate-200 rounded-xl" />
-          <div className="h-24 bg-slate-200 rounded-xl" />
-          <div className="h-24 bg-slate-200 rounded-xl" />
-        </div>
-        <div className="space-y-3">
-          <div className="h-12 bg-slate-200 rounded-lg" />
-          <div className="h-12 bg-slate-200 rounded-lg" />
-          <div className="h-12 bg-slate-200 rounded-lg" />
-        </div>
+  <div className="flex items-center justify-center min-h-[400px]">
+    <div className="text-center p-10 bg-white rounded-2xl border border-border/60 shadow-sm max-w-md">
+      <div className="w-14 h-14 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-5">
+        <Lock className="w-7 h-7 text-slate-300" />
       </div>
-    </div>
-    <div className="relative z-10 text-center p-8 bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border-2 border-slate-200 max-w-md">
-      <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
-        <Lock className="w-8 h-8 text-slate-400" />
-      </div>
-      <h3 className="text-xl font-extrabold text-slate-900 mb-2">{featureName}</h3>
-      <p className="text-slate-600 font-medium mb-6">
-        This feature is available on the <span className="font-bold text-primary">Executive</span> plan.
-        Upgrade to unlock advanced billing and profitability tools.
+      <h3 className="text-lg font-bold text-slate-900 mb-2">{featureName}</h3>
+      <p className="text-slate-500 text-sm leading-relaxed mb-6">
+        This feature is available on the{' '}
+        <span className="font-semibold text-primary">Executive</span> plan.
       </p>
       <a
         href="/account/billing"
-        className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25"
+        className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-white text-sm font-semibold rounded-lg hover:opacity-90 transition-all"
       >
-        <Sparkles className="w-5 h-5" />
+        <Sparkles className="w-4 h-4" />
         Upgrade to Executive
       </a>
-      <p className="text-sm text-slate-500 font-medium mt-4">See pricing in Billing</p>
     </div>
   </div>
 );
@@ -279,15 +237,12 @@ const BillingPage: React.FC = () => {
     return !tab.requiredPlan.includes(orgPlan);
   };
 
-  // Prevent landing on a locked tab
   useEffect(() => {
     if (loading) return;
     const tab = ALL_TABS.find((t) => t.id === activeTab);
     if (tab && isTabLocked(tab)) setActiveTab('timesheet');
   }, [orgPlan, loading]);
 
-  // Sync tab + filter from URL when search params change externally
-  // (e.g. IntegrationsTab banner link: ?tab=invoices&filter=conflicts)
   useEffect(() => {
     const tabParam = searchParams.get('tab');
     const filterParam = searchParams.get('filter') || '';
@@ -297,17 +252,17 @@ const BillingPage: React.FC = () => {
 
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId);
-    setInvoiceFilter(''); // clear filter when navigating away from invoices
+    setInvoiceFilter('');
     setSearchParams({ tab: tabId });
   };
 
   const getLockedFeatureName = (tabId: string): string => {
     switch (tabId) {
-      case 'billing':    return 'Client Billing';
-      case 'invoices':   return 'Invoice Management';
+      case 'billing':       return 'Client Billing';
+      case 'invoices':      return 'Invoice Management';
       case 'profitability': return 'Profitability Analysis';
-      case 'history':    return 'Timesheet History';
-      default:           return 'This Feature';
+      case 'history':       return 'Timesheet History';
+      default:              return 'This Feature';
     }
   };
 
@@ -321,23 +276,15 @@ const BillingPage: React.FC = () => {
 
   return (
     <div className="flex min-h-[calc(100vh-56px)]">
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r-2 border-slate-200 flex-shrink-0 flex flex-col">
-        {/* Header */}
-        <div className="p-4 border-b-2 border-slate-200">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
-              <DollarSign className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-lg font-extrabold text-slate-900 tracking-tight">Billing</h1>
-              <p className="text-sm text-slate-600 font-medium">Time & Invoicing</p>
-            </div>
-          </div>
+
+      {/* ── Sidebar ── */}
+      <aside className="w-56 bg-white border-r border-border/50 flex-shrink-0 flex flex-col">
+        <div className="px-5 py-4 border-b border-border/40">
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400 mb-0.5">Billing</p>
+          <p className="text-base font-extrabold text-slate-900 tracking-tight">Time & Invoicing</p>
         </div>
 
-        {/* Navigation */}
-        <nav className="p-3 space-y-1 flex-1">
+        <nav className="flex-1 py-3 px-2 space-y-0.5">
           {loading ? (
             <SidebarSkeleton />
           ) : (
@@ -351,116 +298,68 @@ const BillingPage: React.FC = () => {
                   key={tab.id}
                   onClick={() => { if (!locked) handleTabChange(tab.id); }}
                   className={cn(
-                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl',
-                    'text-sm font-bold transition-all duration-200',
-                    'group border-2',
+                    'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150 group relative',
                     locked
-                      ? 'text-slate-400 border-transparent hover:bg-slate-50 cursor-not-allowed'
+                      ? 'text-slate-400 cursor-not-allowed'
                       : isActive
-                        ? 'bg-primary/10 text-primary border-primary/30'
-                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border-transparent'
+                        ? 'bg-primary/8 text-primary font-semibold'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 font-medium'
                   )}
                 >
-                  <div
-                    className={cn(
-                      'w-8 h-8 rounded-lg flex items-center justify-center transition-colors relative',
-                      locked
-                        ? 'bg-slate-100 text-slate-400'
-                        : isActive
-                          ? 'bg-primary text-white'
-                          : 'bg-slate-200 text-slate-600 group-hover:bg-slate-300'
-                    )}
-                  >
+                  {isActive && !locked && (
+                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-primary rounded-r-full" />
+                  )}
+                  <span className={cn(
+                    'shrink-0 transition-colors',
+                    locked ? 'text-slate-400' : isActive ? 'text-primary' : 'text-slate-400 group-hover:text-slate-600'
+                  )}>
                     <Icon className="w-4 h-4" />
-                    {locked && (
-                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-slate-300 rounded-full flex items-center justify-center">
-                        <Lock className="w-2.5 h-2.5 text-slate-500" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 text-left">
-                    <span className={cn('block', locked && 'text-slate-400')}>{tab.label}</span>
-                    <span
-                      className={cn(
-                        'text-xs font-semibold',
-                        locked ? 'text-slate-400' : isActive ? 'text-primary/70' : 'text-slate-500'
-                      )}
-                    >
+                  </span>
+                  <div className="flex-1 text-left min-w-0">
+                    <p className="truncate">{tab.label}</p>
+                    <p className={cn(
+                      'text-[10px] font-medium truncate',
+                      locked ? 'text-slate-400' : isActive ? 'text-primary/60' : 'text-slate-400'
+                    )}>
                       {locked
                         ? (hasNoPlan ? 'Requires subscription' : 'Executive plan')
                         : tab.description}
-                    </span>
+                    </p>
                   </div>
-                  {isActive && !locked && <ChevronRight className="w-4 h-4 text-primary" />}
-                  {locked && <Lock className="w-4 h-4 text-slate-400" />}
+                  {locked && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
                 </button>
               );
             })
           )}
         </nav>
 
-        {/* Plan Badge */}
+        {/* Plan badge */}
         {!loading && (
-          <div className="px-3 pb-2">
-            <div
-              className={cn(
-                'px-3 py-2 rounded-xl text-center border-2',
-                orgPlan === 'executive'
-                  ? 'bg-primary/10 border-primary/20'
-                  : orgPlan === 'professional'
-                    ? 'bg-amber-50 border-amber-200'
-                    : 'bg-red-50 border-red-200'
-              )}
-            >
-              <p className={cn(
-                'text-xs font-bold',
-                orgPlan === 'executive'
-                  ? 'text-primary'
-                  : orgPlan === 'professional'
-                    ? 'text-amber-700'
-                    : 'text-red-700'
-              )}>
-                {getPlanLabel()}
-              </p>
-              {orgPlan === 'professional' && (
-                <a href="/account/billing" className="text-xs text-amber-600 font-semibold hover:underline">
-                  Upgrade for more features
-                </a>
-              )}
-              {hasNoPlan && (
-                <a href="/account/billing" className="text-xs text-red-600 font-semibold hover:underline">
-                  Subscribe now
-                </a>
-              )}
+          <div className="px-4 py-3 border-t border-border/40">
+            <div className={cn(
+              'text-xs font-semibold px-2.5 py-1.5 rounded-lg text-center',
+              orgPlan === 'executive'    ? 'bg-primary/8 text-primary'
+              : orgPlan === 'professional' ? 'bg-amber-50 text-amber-600'
+              : 'bg-red-50 text-red-600'
+            )}>
+              {getPlanLabel()}
             </div>
-          </div>
-        )}
-
-        {/* User Info */}
-        {userInfo && (
-          <div className="p-4 border-t-2 border-slate-200 bg-slate-50">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-slate-300 flex items-center justify-center text-sm font-bold text-slate-700">
-                {userInfo.username.charAt(0).toUpperCase()}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-bold text-slate-900 truncate">{userInfo.username}</p>
-                {userInfo.org_name && (
-                  <p className="text-xs text-slate-600 font-medium truncate">{userInfo.org_name}</p>
-                )}
-              </div>
-              {userRole && userRole !== 'member' && (
-                <span className={cn('text-xs px-2 py-0.5 rounded font-bold', getRoleColor(userRole))}>
-                  {userRole.charAt(0).toUpperCase() + userRole.slice(1)}
-                </span>
-              )}
-            </div>
+            {orgPlan === 'professional' && (
+              <a href="/account/billing" className="block text-center text-[11px] text-slate-400 hover:text-primary mt-1.5 transition-colors">
+                Upgrade for more features →
+              </a>
+            )}
+            {hasNoPlan && (
+              <a href="/account/billing" className="block text-center text-[11px] text-red-400 hover:text-red-600 mt-1.5 transition-colors">
+                Subscribe now →
+              </a>
+            )}
           </div>
         )}
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 p-6 bg-slate-50">
+      {/* ── Main Content ── */}
+      <main className="flex-1 pt-2 px-6 pb-6 bg-slate-50 overflow-auto min-w-0">
         {loading ? (
           <ContentSkeleton />
         ) : hasNoPlan ? (
@@ -470,17 +369,13 @@ const BillingPage: React.FC = () => {
             {(() => {
               const tab = ALL_TABS.find((t) => t.id === activeTab);
               const locked = tab ? isTabLocked(tab) : false;
-
-              if (locked) {
-                return <UpgradePrompt featureName={getLockedFeatureName(activeTab)} />;
-              }
-
+              if (locked) return <UpgradePrompt featureName={getLockedFeatureName(activeTab)} />;
               return (
                 <>
                   {activeTab === 'timesheet' && <WeeklyTimesheet />}
                   {activeTab === 'approvals' && <ApprovalQueue />}
-                  {activeTab === 'billing' && <ClientSummary />}
-                  {activeTab === 'invoices' && (
+                  {activeTab === 'billing'   && <ClientSummary />}
+                  {activeTab === 'invoices'  && (
                     <InvoiceManager
                       filter={invoiceFilter}
                       onFilterClear={() => {

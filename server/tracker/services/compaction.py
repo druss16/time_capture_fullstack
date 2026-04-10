@@ -591,6 +591,7 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     billing_amount = round((minutes / 60) * float(billing_rate), 2)
     
     if is_idle:
+        client = None  # ← ADD THIS
         hours = round(minutes / 60.0, 2)
         new_block = Block.objects.create(
             org=org,

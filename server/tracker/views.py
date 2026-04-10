@@ -4252,12 +4252,19 @@ def today_time(request):
                 category = categories[0] if categories else 'Uncategorized'
             else:
                 category = 'Uncategorized'
-            is_idle = category.lower() == 'idle'
+            is_idle = (
+                category.lower() == 'idle' or
+                (event.bundle_id or '').lower() == '__idle__' or
+                (event.window_title or '').lower() == 'idle/uncategorized'
+            )
         else:
             client_id = None
             client_name = 'Unassigned'
             category = 'Uncategorized'
-            is_idle = False
+            is_idle = (
+                (event.bundle_id or '').lower() == '__idle__' or
+                (event.window_title or '').lower() == 'idle/uncategorized'
+            )
         
         event_durations.append({
             'ts':               event.ts_utc,

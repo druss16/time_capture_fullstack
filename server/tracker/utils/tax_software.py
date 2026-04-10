@@ -105,6 +105,7 @@ GENERIC_TAX_DIALOGS: set[str] = {
     # UltraTax generic windows
     "cflvoutframe",
     "cflyoutframe",
+    "client properties",
     "input screen ctrl+i",
     "statements from a",
     "statements from b&d",

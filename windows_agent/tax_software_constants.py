@@ -47,6 +47,14 @@ GENERIC_TAX_DIALOGS: set = {
     "field note/tick",
     "dependents",
     "select package",
+    "client properties",
+    "open client",
+    "return list",
+    "print returns",
+    "printing status",
+    "data sharing",
+    "cflyoutframe",
+
 
     # Bare UltraTax app titles (app open, no return loaded)
     "2025 ultratax cs",

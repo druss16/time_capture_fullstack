@@ -26,6 +26,7 @@ import BillingSettingsPage from '@/pages/account/BillingSettingsPage';
 import DownloadPage from '@/pages/account/DownloadPage';
 import TimesheetReminderBanner from '@/components/TimesheetReminderBanner';
 import NotificationsPage from '@/pages/account/NotificationsPage';
+import TaxReturnsTab from "./TaxReturnsTab";
 
 // --------- Lazy pages (code-splitting) ---------
 const DailyReview = lazy(() => import("./DailyReview"));

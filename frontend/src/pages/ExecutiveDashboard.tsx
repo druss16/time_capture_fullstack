@@ -18,6 +18,7 @@ import {
 } from "recharts";
 
 import AIAnalysisTab from "./AIAnalysisTab";
+import TaxReturnsTab from "./TaxReturnsTab";
 
 // ─── Design tokens ─────────────────────────────────────────────────────────
 const C = {
@@ -871,7 +872,7 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
         <>
           {/* ── Tab bar ── */}
           <div style={s.tabs}>
-            {(["overview", "clients", "billing", "staff", "analysis"] as const).map((id) => (
+            {(["overview", "clients", "billing", "staff", "tax-returns", "analysis"] as const).map((id) => (
               <button key={id} style={s.tabStyle(tab === id)} onClick={() => setTab(id)}>
                 {id.toUpperCase()}
               </button>
@@ -883,6 +884,7 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
           {tab === "clients"   && <ClientsTab />}
           {tab === "billing"   && <BillingTab />}
           {tab === "staff"     && <StaffTab />}
+          {tab === "tax-returns" && <TaxReturnsTab apiBase={apiBase} period={period} />}
           {tab === "analysis"  && <AIAnalysisTab data={data} apiBase={apiBase} period={period} />}
         </>
       )}

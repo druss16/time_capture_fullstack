@@ -349,10 +349,14 @@ urlpatterns = [
     path('mavops/errors/<int:error_id>/resolve/', views_mavops.mavops_resolve_error, name='mavops-resolve-error'),
 
     path('mavops/restart-device/', views_mavops.mavops_restart_device, name='mavops-restart-device'),
+    path('mavops/impersonate/',        views_mavops.impersonate_org,         name='mavops-impersonate'),
+    path('mavops/impersonate/clear/',  views_mavops.clear_impersonation,     name='mavops-impersonate-clear'),
+    path('mavops/impersonate/status/', views_mavops.impersonation_status,    name='mavops-impersonate-status'),
 
 
     path('mavops/kill-agent/', views_mavops.mavops_kill_agent),
     path('watchdog/command/', views_mavops.watchdog_command),
+
 
     path("analytics/tax-returns/", views_analytics_tax_returns.tax_returns_dashboard)
 

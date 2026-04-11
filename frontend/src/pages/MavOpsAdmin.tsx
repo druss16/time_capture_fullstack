@@ -31,13 +31,13 @@ interface ErrorSummary {
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const T = {
-  bg:        "#111827",   // page background — dark navy, not pure black
-  surface:   "#1e2533",   // card background — noticeably lighter than bg
-  border:    "#2d3748",   // card borders — visible
-  borderHi:  "#4a5568",   // highlighted borders
-  text:      "#f0f4f8",   // primary text — near white
-  textSub:   "#94a3b8",   // secondary text — light slate
-  textMuted: "#64748b",   // muted text
+  bg:        "#111827",
+  surface:   "#1e2533",
+  border:    "#2d3748",
+  borderHi:  "#4a5568",
+  text:      "#f0f4f8",
+  textSub:   "#94a3b8",
+  textMuted: "#64748b",
   teal:      "#2b9d90",
   tealHi:    "#34b5a7",
   yellow:    "#f59e0b",
@@ -200,6 +200,8 @@ function Btn({ label, onClick, color = T.teal, outline = false, disabled = false
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 export default function MavOpsAdmin() {
+  const ADMIN_SECRET = import.meta.env.VITE_MAVOPS_ADMIN_SECRET ?? "";
+
   const [latestVersion, setLatestVersion] = useState<string>("0.0.0");
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
@@ -225,20 +227,23 @@ export default function MavOpsAdmin() {
   const [msg, setMsg] = useState("");
   const [msgType, setMsgType] = useState<"ok" | "err">("ok");
 
+  // ── Impersonation state ──
+  const [impersonatingOrg, setImpersonatingOrg] = useState<{ id: number; name: string } | null>(null);
+
   const handleUnlock = () => { sessionStorage.setItem("mavops_admin", "1"); setUnlocked(true); };
   const flash = (m: string, type: "ok" | "err" = "ok") => { setMsg(m); setMsgType(type); setTimeout(() => setMsg(""), 5000); };
 
   useEffect(() => { if (token && tab === "orgs") loadOrgs(); }, []); // eslint-disable-line
 
   useEffect(() => {
-  fetch("https://api.github.com/repos/druss16/timetracker-releases/releases/latest")
-    .then(r => r.json())
-    .then(d => {
-      const v = (d.tag_name || "").replace(/^v/, "");
-      if (v) setLatestVersion(v);
-    })
-    .catch(() => {}); // fail silently
-}, []);
+    fetch("https://api.github.com/repos/druss16/timetracker-releases/releases/latest")
+      .then(r => r.json())
+      .then(d => {
+        const v = (d.tag_name || "").replace(/^v/, "");
+        if (v) setLatestVersion(v);
+      })
+      .catch(() => {});
+  }, []);
 
   const apiFetch = useCallback(async (path: string, opts: RequestInit = {}) => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts.headers as any || {}) };
@@ -304,12 +309,9 @@ export default function MavOpsAdmin() {
 
   const restartDevice = async (deviceId: string) => {
     setRestartingDevice(deviceId);
-    try { 
-      await apiFetch("/mavops/restart-device/", { 
-        method: "POST", 
-        body: JSON.stringify({ device_id: deviceId }) 
-      }); 
-      flash("✓ Restart queued — agent will restart within 10s."); 
+    try {
+      await apiFetch("/mavops/restart-device/", { method: "POST", body: JSON.stringify({ device_id: deviceId }) });
+      flash("✓ Restart queued — agent will restart within 10s.");
     }
     catch { flash("Restart failed.", "err"); }
     finally { setRestartingDevice(null); }
@@ -322,6 +324,32 @@ export default function MavOpsAdmin() {
       if (errorSummary) setErrorSummary(p => p ? { ...p, unresolved: p.unresolved - 1 } : p);
       flash("✓ Error resolved.");
     } catch { flash("Failed to resolve.", "err"); }
+  };
+
+  // ── Impersonation ──────────────────────────────────────────────────────────
+  const impersonateOrg = async (org: Org) => {
+    try {
+      await fetch(`${API}/mavops/impersonate/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Secret": ADMIN_SECRET },
+        body: JSON.stringify({ org_id: org.id }),
+        credentials: "include",
+      });
+      setImpersonatingOrg({ id: org.id, name: org.name });
+      flash(`✓ Now viewing as ${org.name} — open the app to browse as this org`);
+    } catch { flash("Failed to impersonate org.", "err"); }
+  };
+
+  const clearImpersonation = async () => {
+    try {
+      await fetch(`${API}/mavops/impersonate/clear/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Secret": ADMIN_SECRET },
+        credentials: "include",
+      });
+      setImpersonatingOrg(null);
+      flash("✓ Impersonation cleared");
+    } catch { flash("Failed to clear impersonation.", "err"); }
   };
 
   if (!unlocked) return <PasswordGate onUnlock={handleUnlock} />;
@@ -384,6 +412,20 @@ export default function MavOpsAdmin() {
           <button onClick={() => setToken(tokenInput)} style={{ background: T.teal, border: "none", color: "#fff", padding: "7px 16px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono, fontWeight: 600 }}>connect</button>
         </div>
       </div>
+
+      {/* ── Impersonation banner ── */}
+      {impersonatingOrg && (
+        <div style={{ background: "#92400e", borderBottom: `1px solid ${T.yellow}`, padding: "10px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: "#fef3c7", ...mono, position: "sticky", top: 57, zIndex: 9 }}>
+          <span>
+            👁 Viewing app as <strong>{impersonatingOrg.name}</strong> (org #{impersonatingOrg.id}) —{" "}
+            <a href="/dashboard" target="_blank" rel="noreferrer" style={{ color: T.yellow, textDecoration: "underline" }}>open dashboard</a>
+            {" "}to browse as this org
+          </span>
+          <button onClick={clearImpersonation} style={{ background: "none", border: `1px solid ${T.yellow}`, color: "#fef3c7", padding: "4px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>
+            exit ×
+          </button>
+        </div>
+      )}
 
       {/* ── Flash message ── */}
       {msg && (
@@ -457,8 +499,9 @@ export default function MavOpsAdmin() {
               const trialDays = daysUntil(org.trial_ends_at);
               const trialAlert = trialDays !== null && trialDays <= 7 && trialDays >= 0;
               const mrr_org = (SEAT_PRICES[org.plan] || 0) * org.seat_count;
+              const isViewing = impersonatingOrg?.id === org.id;
               return (
-                <div key={org.id} style={{ ...card, borderColor: trialAlert ? T.yellow + "66" : T.border }}>
+                <div key={org.id} style={{ ...card, borderColor: isViewing ? T.purple + "99" : trialAlert ? T.yellow + "66" : T.border }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
@@ -466,6 +509,7 @@ export default function MavOpsAdmin() {
                         <Badge label={org.plan} color={org.plan === "trial" ? T.yellow : org.plan === "executive" ? T.purple : T.teal} />
                         {mrr_org > 0 && <span style={{ ...mono, fontSize: 12, color: T.green, fontWeight: 600 }}>${mrr_org.toFixed(0)}/mo</span>}
                         {trialAlert && <span style={{ ...mono, fontSize: 12, color: T.yellow, fontWeight: 600 }}>⚠ {trialDays}d left</span>}
+                        {isViewing && <Badge label="viewing as" color={T.purple} />}
                       </div>
                       <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
                         <SeatBar used={org.member_count} total={org.seat_count} />
@@ -474,6 +518,13 @@ export default function MavOpsAdmin() {
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
+                      <Btn
+                        label={isViewing ? "✓ viewing" : "view as"}
+                        onClick={() => isViewing ? clearImpersonation() : impersonateOrg(org)}
+                        color={isViewing ? T.green : T.purple}
+                        outline={isViewing}
+                        small
+                      />
                       {(["devices", "logs", "errors"] as const).map(t => (
                         <Btn key={t} label={t} onClick={() => { setFilterOrg(org.id); setTab(t); }} outline color={T.textSub} small />
                       ))}
@@ -526,12 +577,12 @@ export default function MavOpsAdmin() {
                     <div style={{ display: "flex", gap: 8 }}>
                       <Btn label="view logs" onClick={() => { setFilterHostname(d.machine_name); setTab("logs"); }} outline />
                       <Btn label={requestingDevice === d.device_id ? "requesting…" : "request logs"} onClick={() => d.device_id ? requestLogs(d.device_id) : flash("No device_id", "err")} disabled={requestingDevice === d.device_id} />
-                      <Btn 
-                        label={restartingDevice === d.device_id ? "restarting…" : "restart"} 
-                        onClick={() => restartDevice(d.device_id)} 
-                        outline 
-                        color={T.yellow} 
-                        disabled={restartingDevice === d.device_id} 
+                      <Btn
+                        label={restartingDevice === d.device_id ? "restarting…" : "restart"}
+                        onClick={() => restartDevice(d.device_id)}
+                        outline
+                        color={T.yellow}
+                        disabled={restartingDevice === d.device_id}
                       />
                     </div>
                   </div>

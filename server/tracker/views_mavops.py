@@ -376,3 +376,60 @@ def watchdog_command(request):
         device.save(update_fields=['kill_requested'])
 
     return Response({'kill': kill})
+
+
+
+# ── Org Impersonation ─────────────────────────────────────────────────────────
+
+import os
+import json
+
+MAVOPS_ADMIN_SECRET = os.environ.get("MAVOPS_ADMIN_SECRET", "")
+
+def _is_mavops_admin(request):
+    auth = request.headers.get("X-Admin-Secret", "")
+    return bool(MAVOPS_ADMIN_SECRET) and auth == MAVOPS_ADMIN_SECRET
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def impersonate_org(request):
+    if not _is_mavops_admin(request):
+        return Response({"error": "Unauthorized"}, status=403)
+
+    org_id = request.data.get("org_id")
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({"error": "Org not found"}, status=404)
+
+    request.session["admin_impersonating_org_id"] = org.id
+    request.session["admin_impersonating_org_name"] = org.name
+    request.session.modified = True
+
+    return Response({"ok": True, "org_id": org.id, "org_name": org.name})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def clear_impersonation(request):
+    if not _is_mavops_admin(request):
+        return Response({"error": "Unauthorized"}, status=403)
+
+    request.session.pop("admin_impersonating_org_id", None)
+    request.session.pop("admin_impersonating_org_name", None)
+    request.session.modified = True
+
+    return Response({"ok": True})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def impersonation_status(request):
+    org_id = request.session.get("admin_impersonating_org_id")
+    if org_id:
+        return Response({
+            "is_impersonating": True,
+            "org_id": org_id,
+            "org_name": request.session.get("admin_impersonating_org_name"),
+        })
+    return Response({"is_impersonating": False})

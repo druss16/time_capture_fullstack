@@ -785,48 +785,44 @@ def _calc_invoice_profitability(org, start_date: date, end_date: date) -> dict:
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def executive_dashboard(request):
-    """
-    GET /api/analytics/executive/?period=12m
-
-    Query params
-    ------------
-    period : 3m | 6m | 12m (default) | ytd | YYYY-MM-DD:YYYY-MM-DD
-
-    Auth
-    ----
-    Bearer token or session. Role: owner | admin | manager.
-    Plan: professional | executive | trial.
-    """
     user = request.user
-    org = _get_user_org(user)
 
-    if not org:
-        return Response({"error": "No organization found"}, status=404)
+    # ── Admin org override ────────────────────────────────────────────────────
+    org_id_override = request.GET.get("org_id")
+    if org_id_override and (user.is_staff or user.is_superuser):
+        try:
+            org = Organization.objects.get(id=org_id_override)
+        except Organization.DoesNotExist:
+            return Response({"error": "Org not found"}, status=404)
+        membership = None  # staff bypass — no membership needed
+    else:
+        org = _get_user_org(user)
+        if not org:
+            return Response({"error": "No organization found"}, status=404)
+        membership = OrganizationMembership.objects.filter(
+            user=user, organization=org
+        ).first()
+        if not membership or membership.role not in ("owner", "admin", "manager"):
+            return Response(
+                {"error": "Permission denied. Manager role or above required."},
+                status=403,
+            )
 
-    # Role gate
-    membership = OrganizationMembership.objects.filter(
-        user=user, organization=org
-    ).first()
-    if not membership or membership.role not in ("owner", "admin", "manager"):
-        return Response(
-            {"error": "Permission denied. Manager role or above required."},
-            status=403,
-        )
-
-    # Plan gate
+    # ── Plan gate (skip for staff) ────────────────────────────────────────────
     plan = getattr(org, "plan", "none") or "none"
-    if not any(plan.startswith(p) for p in ("professional", "executive")):
-        return Response(
-            {
-                "error": "upgrade_required",
-                "message": "Executive dashboard requires a Professional or Executive plan.",
-                "current_plan": plan,
-                "upgrade_url": "/account/billing",
-            },
-            status=403,
-        )
+    if not (user.is_staff or user.is_superuser):
+        if not any(plan.startswith(p) for p in ("professional", "executive")):
+            return Response(
+                {
+                    "error": "upgrade_required",
+                    "message": "Executive dashboard requires a Professional or Executive plan.",
+                    "current_plan": plan,
+                    "upgrade_url": "/account/billing",
+                },
+                status=403,
+            )
 
-    # Parse period
+    # ── Parse period ──────────────────────────────────────────────────────────
     period = (request.GET.get("period") or "12m").strip()
     try:
         start_date, end_date = _parse_period(period)
@@ -839,7 +835,6 @@ def executive_dashboard(request):
     )
 
     def _safe(fn, *args):
-        """Run KPI calculator and return error dict on failure."""
         try:
             return fn(*args)
         except Exception as exc:
@@ -855,7 +850,7 @@ def executive_dashboard(request):
             "end_date": end_date.isoformat(),
             "generated_at": timezone.now().isoformat(),
             "plan": plan,
-            "role": membership.role,
+            "role": membership.role if membership else "staff",
         },
         "kpis": {
             "realization_rate":      _safe(_calc_realization,            org, start_date, end_date),

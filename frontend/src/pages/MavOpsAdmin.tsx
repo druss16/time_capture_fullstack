@@ -328,28 +328,17 @@ export default function MavOpsAdmin() {
 
   // ── Impersonation ──────────────────────────────────────────────────────────
   const impersonateOrg = async (org: Org) => {
-    try {
-      await fetch(`${API}/mavops/impersonate/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Admin-Secret": ADMIN_SECRET },
-        body: JSON.stringify({ org_id: org.id }),
-        credentials: "include",
-      });
-      setImpersonatingOrg({ id: org.id, name: org.name });
-      flash(`✓ Now viewing as ${org.name} — open the app to browse as this org`);
-    } catch { flash("Failed to impersonate org.", "err"); }
+    localStorage.setItem("impersonating_org_id", String(org.id));
+    localStorage.setItem("impersonating_org_name", org.name);
+    setImpersonatingOrg({ id: org.id, name: org.name });
+    flash(`✓ Now viewing as ${org.name} — open analytics`);
   };
 
   const clearImpersonation = async () => {
-    try {
-      await fetch(`${API}/mavops/impersonate/clear/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Admin-Secret": ADMIN_SECRET },
-        credentials: "include",
-      });
-      setImpersonatingOrg(null);
-      flash("✓ Impersonation cleared");
-    } catch { flash("Failed to clear impersonation.", "err"); }
+    localStorage.removeItem("impersonating_org_id");
+    localStorage.removeItem("impersonating_org_name");
+    setImpersonatingOrg(null);
+    flash("✓ Impersonation cleared");
   };
 
   if (!unlocked) return <PasswordGate onUnlock={handleUnlock} />;
@@ -418,7 +407,9 @@ export default function MavOpsAdmin() {
         <div style={{ background: "#92400e", borderBottom: `1px solid ${T.yellow}`, padding: "10px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: "#fef3c7", ...mono, position: "sticky", top: 57, zIndex: 9 }}>
           <span>
             👁 Viewing app as <strong>{impersonatingOrg.name}</strong> (org #{impersonatingOrg.id}) —{" "}
-            <a href="/analytics" target="_blank" rel="noreferrer" style={{ color: T.yellow, textDecoration: "underline" }}>open analytics</a>
+            <a href={`/analytics?org_id=${impersonatingOrg.id}`} target="_blank" rel="noreferrer" style={{ color: T.yellow, textDecoration: "underline" }}>
+              open analytics
+            </a>
             {" "}to browse as this org
           </span>
           <button onClick={clearImpersonation} style={{ background: "none", border: `1px solid ${T.yellow}`, color: "#fef3c7", padding: "4px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>

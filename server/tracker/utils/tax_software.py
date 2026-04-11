@@ -77,8 +77,13 @@ _UT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# TaxWise: "TaxWise 2024 on Z drive : Version 39.03 : 1040 Individual : Terri : 133-32-2621"
 # TaxWise: "TaxWise 2024 on Z drive : Version 39.03 : 1040 In SMITH JOHN"
 _TW_PATTERN = re.compile(
+    r'TaxWise.*?:\s*(1040|1120-?S?|1065|990(?:EZ)?)\s+(?:Individual|In)\s.*?:\s*(\d{3}-\d{2}-\d{4})\s*$',
+    re.IGNORECASE,
+)
+_TW_PATTERN_NAME = re.compile(
     r'TaxWise.*?:\s*(1040|1120-?S?|1065|990(?:EZ)?)\s+In\s+([A-Z][A-Za-z\s,\.]+)',
     re.IGNORECASE,
 )
@@ -137,6 +142,8 @@ GENERIC_TAX_DIALOGS: set[str] = {
     "taxwise 2023 on z drive",
     "taxwise 2024",
     "taxwise 2023",
+    "taxwise 2024 on z drive : version  39.03",
+    "taxwise 2023 on z drive : version  38.04",
     # Generic Office / Windows
     "book1 - excel",
     "book1",
@@ -201,6 +208,20 @@ def _clean_suffix(name: str) -> str:
         return f"{base} {canonical}"
     return name
 
+def _lookup_name_by_hash(ssn_hash: str) -> Optional[str]:
+    """
+    Cross-reference a TaxpayerBucket by hash to get the real display name.
+    Used by TaxWise (SSN-only titles) to resolve names from UltraTax records.
+    Returns None if no match found — caller falls back to SSN-XXXX.
+    """
+    try:
+        from tracker.models import TaxpayerBucket
+        bucket = TaxpayerBucket.objects.filter(
+            taxpayer_id_hash=ssn_hash
+        ).first()
+        return bucket.display_name if bucket else None
+    except Exception:
+        return None
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -239,13 +260,31 @@ def extract_tax_context(title: str) -> Optional[TaxSoftwareContext]:
         )
 
     # --- TaxWise ---
+    # --- TaxWise (SSN format) ---
+    # "TaxWise 2024 on Z drive : Version 39.03 : 1040 Individual : Terri : 133-32-2621"
     m = _TW_PATTERN.search(title)
+    if m:
+        return_type = m.group(1).upper().replace('-', '')
+        raw_ssn = m.group(2).replace('-', '')   # strip dashes → "133322621"
+        ssn_hash = _hash_id(raw_ssn)            # raw SSN discarded after this line
+
+        # Cross-reference against TaxpayerBucket to get real name if already known
+        name = _lookup_name_by_hash(ssn_hash) or f"SSN-{m.group(2)[-4:]}"
+
+        return TaxSoftwareContext(
+            taxpayer_name=name,
+            taxpayer_id_hash=ssn_hash,
+            return_type=return_type,
+            software="taxwise",
+            category="Tax Preparation",
+        )
+
+    # --- TaxWise (name format, older) ---
+    m = _TW_PATTERN_NAME.search(title)
     if m:
         return_type = m.group(1).upper().replace('-', '')
         raw_name    = m.group(2).strip()
         name = _clean_suffix(_normalize_name(raw_name))
-        # TaxWise doesn't expose SSN in title — use name as dedup key
-        # Two people with the same name will share a bucket (acceptable edge case)
         return TaxSoftwareContext(
             taxpayer_name=name,
             taxpayer_id_hash=_hash_id(name.lower()),

@@ -250,7 +250,6 @@ CORS_ALLOWED_ORIGINS = [
     # Production
     "https://timetracker-frontend-9y52.onrender.com",  # ← ADD THIS
     "https://timetracker.mavops.ai",  # ← ADD THIS TOO for custom domain
-    "x-admin-secret",
 
 ]
 
@@ -260,6 +259,8 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
     "x-agent-user", 
     "x-agent-host",
+    "x-admin-secret",
+
 ]
 
 # -----------------------------------------------------

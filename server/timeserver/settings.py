@@ -250,6 +250,7 @@ CORS_ALLOWED_ORIGINS = [
     # Production
     "https://timetracker-frontend-9y52.onrender.com",  # ← ADD THIS
     "https://timetracker.mavops.ai",  # ← ADD THIS TOO for custom domain
+    "x-admin-secret",
 
 ]
 

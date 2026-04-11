@@ -418,7 +418,7 @@ export default function MavOpsAdmin() {
         <div style={{ background: "#92400e", borderBottom: `1px solid ${T.yellow}`, padding: "10px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: "#fef3c7", ...mono, position: "sticky", top: 57, zIndex: 9 }}>
           <span>
             👁 Viewing app as <strong>{impersonatingOrg.name}</strong> (org #{impersonatingOrg.id}) —{" "}
-            <a href="/dashboard" target="_blank" rel="noreferrer" style={{ color: T.yellow, textDecoration: "underline" }}>open dashboard</a>
+            <a href="/analytics" target="_blank" rel="noreferrer" style={{ color: T.yellow, textDecoration: "underline" }}>open analytics</a>
             {" "}to browse as this org
           </span>
           <button onClick={clearImpersonation} style={{ background: "none", border: `1px solid ${T.yellow}`, color: "#fef3c7", padding: "4px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>

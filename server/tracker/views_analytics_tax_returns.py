@@ -95,20 +95,28 @@ def tax_returns_dashboard(request):
     GET /api/analytics/tax-returns/?period=12m
     """
     user = request.user
-    org = _get_user_org(user)
 
-    if not org:
-        return Response({"error": "No organization found"}, status=404)
-
-    membership = OrganizationMembership.objects.filter(
-        user=user, organization=org
-    ).first()
-    if not membership or membership.role not in ("owner", "admin", "manager"):
-        return Response({"error": "Permission denied. Manager role or above required."}, status=403)
-
-    plan = getattr(org, "plan", "none") or "none"
-    if not any(plan.startswith(p) for p in ("professional", "executive")):
-        return Response({"error": "upgrade_required", "current_plan": plan}, status=403)
+    # ── Admin org override ─────────────────────────────────────────────────
+    org_id_override = request.GET.get("org_id")
+    if org_id_override and (user.is_staff or user.is_superuser):
+        from tracker.models import Organization
+        try:
+            org = Organization.objects.get(id=org_id_override)
+        except Organization.DoesNotExist:
+            return Response({"error": "Org not found"}, status=404)
+        membership = None
+    else:
+        org = _get_user_org(user)
+        if not org:
+            return Response({"error": "No organization found"}, status=404)
+        membership = OrganizationMembership.objects.filter(
+            user=user, organization=org
+        ).first()
+        if not membership or membership.role not in ("owner", "admin", "manager"):
+            return Response({"error": "Permission denied. Manager role or above required."}, status=403)
+        plan = getattr(org, "plan", "none") or "none"
+        if not any(plan.startswith(p) for p in ("professional", "executive")):
+            return Response({"error": "upgrade_required", "current_plan": plan}, status=403)
 
     period = (request.GET.get("period") or "12m").strip()
     try:

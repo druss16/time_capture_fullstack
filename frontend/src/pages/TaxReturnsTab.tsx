@@ -203,7 +203,10 @@ export default function TaxReturnsTab({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/analytics/tax-returns/?period=${period}`, {
+      const params = new URLSearchParams(window.location.search);
+      const orgId = params.get("org_id");
+      const url = `${apiBase}/analytics/tax-returns/?period=${period}${orgId ? `&org_id=${orgId}` : ""}`;
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${_getToken()}` },
       });
       if (!res.ok) {

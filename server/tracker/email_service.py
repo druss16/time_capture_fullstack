@@ -29,7 +29,7 @@ def send_email(
 ):
     """
     Send a transactional email via SendGrid REST API.
-    
+
     Returns:
         True if sent successfully, False otherwise
     """
@@ -89,6 +89,34 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
+def _fmt_hours(decimal_hours) -> str:
+    """
+    Convert decimal hours to human-readable string.
+
+    Examples:
+        0.6833  → '41min'
+        1.5     → '1h 30min'
+        2.0     → '2h'
+        0.0     → '0min'
+
+    Used everywhere hours are displayed in emails.
+    Never pass raw floats or Decimal model values directly into email templates.
+    """
+    try:
+        total_minutes = round(float(decimal_hours) * 60)
+    except (TypeError, ValueError):
+        return "0min"
+    if total_minutes <= 0:
+        return "0min"
+    h, m = divmod(total_minutes, 60)
+    if h and m:
+        return f"{h}h {m}min"
+    elif h:
+        return f"{h}h"
+    else:
+        return f"{m}min"
+
+
 # ============================================================================
 # SHARED HTML WRAPPER
 # ============================================================================
@@ -121,7 +149,7 @@ def _btn(url, gradient, text):
 # PRE-BUILT EMAIL TEMPLATES
 # ============================================================================
 
-# ---------- 1. Team invitation (simple - used by views.py settings_team_invite) ----------
+# ---------- 1. Team invitation ----------
 
 def send_team_invitation(
     to_email: str,
@@ -133,7 +161,6 @@ def send_team_invitation(
 ):
     """Send team member invitation email."""
     login_url = login_url or f"{getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')}/login"
-
     invite_line = f"{invited_by} has invited you" if invited_by else "You've been invited"
 
     body = f'''
@@ -173,7 +200,7 @@ Please change your password after logging in.
     )
 
 
-# ---------- 2. Onboarding invitation (rich - used by views_onboarding.py) ----------
+# ---------- 2. Onboarding invitation (rich) ----------
 
 def send_onboarding_invitation(
     to_email: str,
@@ -288,19 +315,16 @@ def send_timesheet_reminder(
     review_url: str = None,
     date_iso: str = None,
 ):
-    """
-    Send daily timesheet review reminder.
-    """
+    """Send daily timesheet review reminder."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
     if not review_url:
-        if date_iso:
-            review_url = f'{frontend_url}/daily?date={date_iso}'
-        else:
-            review_url = f'{frontend_url}/daily'
+        review_url = f'{frontend_url}/daily?date={date_iso}' if date_iso else f'{frontend_url}/daily'
 
     client_rows = ''.join([
-        f'<tr><td style="padding:8px 0;border-bottom:1px solid #e2e8f0;">{name}</td>'
-        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">{hrs:.1f}h</td></tr>'
+        f'<tr>'
+        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;">{name}</td>'
+        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">{_fmt_hours(hrs)}</td>'
+        f'</tr>'
         for name, hrs in client_breakdown
     ]) or '<tr><td colspan="2" style="padding:8px 0;color:#94a3b8;">No clients assigned yet</td></tr>'
 
@@ -319,24 +343,6 @@ def send_timesheet_reminder(
         <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">
             <a href="{frontend_url}/settings" style="color:#94a3b8;">Manage notification preferences</a>
         </p>'''
-    else:
-        body = f'''
-        <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
-        <p style="color:#475569;font-size:16px;line-height:1.5;">
-            You tracked <strong style="color:#2B9D90;">{total_hours:.1f} hours</strong> on {date_str} that need review:
-        </p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;">{client_rows}</table>
-        {unassigned_html}
-        {_btn(review_url, "#2B9D90 0%,#237F74 100%", "Review Timesheet &rarr;")}
-        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">
-            <a href="{frontend_url}/settings" style="color:#94a3b8;">Manage notification preferences</a>
-        </p>'''
-
-    subj = f"⚠️ No time tracked on {date_str}" if total_hours < 0.1 else f"⏰ Review your time for {date_str}"
-
-    html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Review Your Time", body)
-
-    if total_hours < 0.1:
         plain = f"""Hi {user_name},
 
 No time was tracked on {date_str}. If you worked yesterday, please check that your desktop agent is running.
@@ -345,16 +351,30 @@ Check your timesheet: {review_url}
 
 - TimeTracker"""
     else:
+        body = f'''
+        <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
+        <p style="color:#475569;font-size:16px;line-height:1.5;">
+            You tracked <strong style="color:#2B9D90;">{_fmt_hours(total_hours)}</strong> on {date_str} that need review:
+        </p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">{client_rows}</table>
+        {unassigned_html}
+        {_btn(review_url, "#2B9D90 0%,#237F74 100%", "Review Timesheet &rarr;")}
+        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">
+            <a href="{frontend_url}/settings" style="color:#94a3b8;">Manage notification preferences</a>
+        </p>'''
         plain = f"""Hi {user_name},
 
-You tracked {total_hours:.1f} hours on {date_str} that need review:
+You tracked {_fmt_hours(total_hours)} on {date_str} that need review:
 
-{chr(10).join([f'  - {name}: {hrs:.1f}h' for name, hrs in client_breakdown])}
+{chr(10).join([f'  - {name}: {_fmt_hours(hrs)}' for name, hrs in client_breakdown])}
 {"⚠️ " + str(unassigned_count) + " blocks need client assignment." if unassigned_count else ""}
 
 Review your timesheet: {review_url}
 
 - TimeTracker"""
+
+    subj = f"⚠️ No time tracked on {date_str}" if total_hours < 0.1 else f"⏰ Review your time for {date_str}"
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Review Your Time", body)
 
     return send_email(
         to_email=to_email,
@@ -366,6 +386,7 @@ Review your timesheet: {review_url}
 
 
 # ---------- 4. Weekly summary ----------
+
 def send_weekly_summary_email(
     to_email: str,
     user_name: str,
@@ -379,8 +400,10 @@ def send_weekly_summary_email(
     report_url = f'{frontend_url}/billing?week={week_start_iso}' if week_start_iso else f'{frontend_url}/billing'
 
     client_rows = ''.join([
-        f'<tr><td style="padding:8px 0;border-bottom:1px solid #e2e8f0;">{name}</td>'
-        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">{hrs:.1f}h</td></tr>'
+        f'<tr>'
+        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;">{name}</td>'
+        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">{_fmt_hours(hrs)}</td>'
+        f'</tr>'
         for name, hrs in client_breakdown[:10]
     ]) or '<tr><td colspan="2" style="padding:8px 0;color:#94a3b8;">No clients tracked this week</td></tr>'
 
@@ -390,8 +413,8 @@ def send_weekly_summary_email(
         Here's your weekly summary for <strong>{week_str}</strong>:
     </p>
     <div style="background:#f0fdfa;border:1px solid #99f6e4;padding:16px;border-radius:8px;margin:16px 0;text-align:center;">
-        <p style="margin:0;color:#0f766e;font-size:14px;">Total Hours</p>
-        <p style="margin:4px 0 0;color:#2B9D90;font-size:32px;font-weight:bold;">{total_hours:.1f}h</p>
+        <p style="margin:0;color:#0f766e;font-size:14px;">Total Time</p>
+        <p style="margin:4px 0 0;color:#2B9D90;font-size:32px;font-weight:bold;">{_fmt_hours(total_hours)}</p>
     </div>
     <table style="width:100%;border-collapse:collapse;margin:16px 0;">{client_rows}</table>
     {_btn(report_url, "#2B9D90 0%,#237F74 100%", "View Full Report &rarr;")}
@@ -405,10 +428,10 @@ def send_weekly_summary_email(
 
 Weekly time summary for {week_str}:
 
-Total: {total_hours:.1f} hours
+Total: {_fmt_hours(total_hours)}
 
 By Client:
-{chr(10).join([f'  - {name}: {hrs:.1f}h' for name, hrs in client_breakdown[:10]])}
+{chr(10).join([f'  - {name}: {_fmt_hours(hrs)}' for name, hrs in client_breakdown[:10]])}
 
 View full report: {report_url}
 
@@ -416,7 +439,7 @@ View full report: {report_url}
 
     return send_email(
         to_email=to_email,
-        subject=f"📊 Weekly Summary: {total_hours:.1f} hours ({week_str})",
+        subject=f"📊 Weekly Summary: {_fmt_hours(total_hours)} ({week_str})",
         html_content=html,
         plain_content=plain,
         categories=["weekly_summary"],
@@ -438,15 +461,19 @@ def send_submission_reminder(
     """Monday reminder to submit last week's timesheet."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
 
+    auto_warn_html = '''<div style="background:#fef3c7;border:1px solid #fcd34d;padding:12px 16px;border-radius:8px;margin:16px 0;">
+        <p style="margin:0;color:#92400e;font-size:14px;">⚠️ If not submitted by end of day, it will be <strong>auto-submitted Tuesday 9am</strong>.</p>
+    </div>''' if auto_submit_enabled else ''
+
     body = f'''
         <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
         <p style="color:#475569;font-size:16px;line-height:1.5;">
             Your timesheet for <strong>{week_start_str} - {week_end_str}</strong> hasn't been submitted yet.
         </p>
         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:16px 0;">
-            <p style="margin:0;color:#1e293b;font-size:15px;">📊 <strong>{total_hours} hours</strong> tracked &middot; {block_count} time blocks</p>
+            <p style="margin:0;color:#1e293b;font-size:15px;">📊 <strong>{_fmt_hours(total_hours)}</strong> tracked &middot; {block_count} time blocks</p>
         </div>
-        {"" if not auto_submit_enabled else '<div style="background:#fef3c7;border:1px solid #fcd34d;padding:12px 16px;border-radius:8px;margin:16px 0;"><p style="margin:0;color:#92400e;font-size:14px;">⚠️ If not submitted by end of day, it will be <strong>auto-submitted Tuesday 9am</strong>.</p></div>'}
+        {auto_warn_html}
         {_btn(frontend_url + "/billing?tab=timesheet" + (f"&week={week_start_iso}" if week_start_iso else ""), "#2B9D90 0%,#237F74 100%", "Review &amp; Submit &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Submit Your Timesheet", body)
@@ -456,11 +483,11 @@ def send_submission_reminder(
 Your timesheet for {week_start_str} - {week_end_str} has not been submitted yet.
 
 Summary:
-- {total_hours} hours tracked
+- {_fmt_hours(total_hours)} tracked
 - {block_count} time blocks
 
 Please review and submit by end of day today.
-If not submitted, it will be auto-submitted Tuesday 9am.
+{"It will be auto-submitted Tuesday 9am if not submitted." if auto_submit_enabled else ""}
 
 - TimeTracker"""
 
@@ -484,7 +511,7 @@ def send_auto_submit_notification(
     billable_hours,
     total_amount,
 ):
-    """Notify user their timesheet was auto-submitted."""
+    """Notify user their timesheet was auto-submitted on Tuesday."""
     try:
         total_amount_fmt = f"{float(total_amount):,.2f}"
     except (TypeError, ValueError):
@@ -497,8 +524,8 @@ def send_auto_submit_notification(
             Your timesheet for <strong>{week_start_str} - {week_end_str}</strong> was automatically submitted.
         </p>
         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:16px 0;">
-            <p style="margin:0 0 4px;color:#1e293b;font-size:15px;">Total hours: <strong>{total_hours}</strong></p>
-            <p style="margin:0 0 4px;color:#1e293b;font-size:15px;">Billable hours: <strong>{billable_hours}</strong></p>
+            <p style="margin:0 0 4px;color:#1e293b;font-size:15px;">Total time: <strong>{_fmt_hours(total_hours)}</strong></p>
+            <p style="margin:0 0 4px;color:#1e293b;font-size:15px;">Billable time: <strong>{_fmt_hours(billable_hours)}</strong></p>
             <p style="margin:0;color:#1e293b;font-size:15px;">Amount: <strong>${total_amount_fmt}</strong></p>
         </div>
         <p style="color:#64748b;font-size:14px;">Your manager will review shortly. Need changes? Ask your manager to send it back.</p>
@@ -510,8 +537,8 @@ def send_auto_submit_notification(
 
 Your timesheet for {week_start_str} - {week_end_str} was automatically submitted.
 
-Total hours: {total_hours}
-Billable hours: {billable_hours}
+Total time: {_fmt_hours(total_hours)}
+Billable time: {_fmt_hours(billable_hours)}
 Amount: ${total_amount_fmt}
 
 Your manager will review and approve it shortly.
@@ -544,12 +571,12 @@ def send_approval_notification(
         body = f'''
             <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
             <p style="color:#475569;font-size:16px;line-height:1.5;">
-                Your timesheet for <strong>{period_str}</strong> ({total_hours:.1f} hours) has been approved.
+                Your timesheet for <strong>{period_str}</strong> ({_fmt_hours(total_hours)}) has been approved.
             </p>
             {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
         html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Approved", body)
         subject = f"✅ Timesheet Approved: {period_str}"
-        plain = f"Hi {user_name},\n\nYour timesheet for {period_str} ({total_hours:.1f} hours) has been approved.\n\n- TimeTracker"
+        plain = f"Hi {user_name},\n\nYour timesheet for {period_str} ({_fmt_hours(total_hours)}) has been approved.\n\n- TimeTracker"
     else:
         feedback = f"\nFeedback: {reviewer_notes}" if reviewer_notes else "\nPlease review and resubmit."
         reason_html = f'<div style="background:#fef3c7;border:1px solid #fcd34d;padding:12px 16px;border-radius:8px;margin:16px 0;"><p style="margin:0;color:#92400e;font-size:14px;">Feedback: {reviewer_notes}</p></div>' if reviewer_notes else ''
@@ -592,7 +619,7 @@ def send_manager_pending_approvals(
     body = f'''
         <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {manager_name},</p>
         <p style="color:#475569;font-size:16px;line-height:1.5;">
-            <strong>{timesheet_count} timesheets</strong> are pending approval for the week of <strong>{week_start_str}</strong> ({total_hours:.1f} total hours).
+            <strong>{timesheet_count} timesheets</strong> are pending approval for the week of <strong>{week_start_str}</strong> ({_fmt_hours(total_hours)} total).
         </p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8fafc;border-radius:8px;">{rows_html}</table>
         {_btn(frontend_url + "/approvals", "#2B9D90 0%,#237F74 100%", "Review Timesheets &rarr;")}'''
@@ -601,7 +628,7 @@ def send_manager_pending_approvals(
 
     plain = f"""Hi {manager_name},
 
-{timesheet_count} timesheets pending approval for week of {week_start_str} ({total_hours:.1f} total hours):
+{timesheet_count} timesheets pending approval for week of {week_start_str} ({_fmt_hours(total_hours)} total):
 
 {chr(10).join(summary_lines)}
 
@@ -665,7 +692,7 @@ def send_timesheet_approved(
     body = f'''
         <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
         <p style="color:#475569;font-size:16px;line-height:1.5;">
-            Your timesheet for <strong>{week_str}</strong> ({total_hours:.1f} hours) has been approved by {approved_by}.
+            Your timesheet for <strong>{week_str}</strong> ({_fmt_hours(total_hours)}) has been approved by {approved_by}.
         </p>
         {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
 

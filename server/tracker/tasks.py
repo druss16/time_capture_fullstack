@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# DAILY NOTIFICATION TASKS (NEW)
+# DAILY NOTIFICATION TASKS
 # ============================================================================
 
 @shared_task(name='tracker.tasks.send_daily_timesheet_reminders_task', bind=True, max_retries=3)
@@ -83,8 +83,7 @@ def send_daily_timesheet_reminders_task(self):
                     total_hours=round(total_hours, 1),
                     unassigned_count=unassigned_count,
                     client_breakdown=client_breakdown,
-                    date_iso=yesterday.isoformat(),  # ✅ add this so the link opens that day
-
+                    date_iso=yesterday.isoformat(),
                 )
 
                 sent_count += 1
@@ -107,11 +106,12 @@ def send_daily_timesheet_reminders_task(self):
         logger.error(f"[DAILY-REMINDER] Task failed: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=60 * 5)
 
+
 @shared_task(name='tracker.tasks.send_weekly_summary_task', bind=True, max_retries=3)
 def send_weekly_summary_task(self):
     """
     Monday 9:30am: Send weekly summary email showing last week's time breakdown by client.
-    
+
     Schedule: crontab(hour=9, minute=30, day_of_week=1)  # Monday 9:30am
     """
     try:
@@ -119,28 +119,26 @@ def send_weekly_summary_task(self):
         from django.core.mail import send_mail
         from django.conf import settings
         from django.contrib.auth import get_user_model
-        
+
         User = get_user_model()
         today = timezone.localdate()
-        
+
         # Last week = Monday to Sunday
         days_since_monday = today.weekday()  # Monday = 0
         last_monday = today - timedelta(days=days_since_monday + 7)
         last_sunday = last_monday + timedelta(days=6)
-        
-        # Get all active users
+
         users = User.objects.filter(is_active=True)
-        
+
         sent_count = 0
         skipped_count = 0
-        
+
         for user in users:
             try:
                 if not user.email:
                     skipped_count += 1
                     continue
-                
-                # Check preference
+
                 try:
                     pref = UserPreference.objects.get(user=user)
                     if not getattr(pref, 'email_weekly_summary', True):
@@ -148,39 +146,36 @@ def send_weekly_summary_task(self):
                         continue
                 except UserPreference.DoesNotExist:
                     pass
-                
-                # Get week's blocks
+
                 blocks = Block.objects.filter(
                     user=user,
                     day__gte=last_monday,
                     day__lte=last_sunday,
                 )
-                
+
                 if not blocks.exists():
                     skipped_count += 1
                     continue
-                
-                # Calculate totals
+
                 total_minutes = sum(b.minutes or 0 for b in blocks)
                 total_hours = total_minutes / 60
-                
+
                 if total_hours < 1:
                     skipped_count += 1
                     continue
-                
-                # Client breakdown
+
                 client_hours = {}
                 for block in blocks.filter(client__isnull=False):
                     client_name = block.client.name
                     hrs = (block.minutes or 0) / 60
                     client_hours[client_name] = client_hours.get(client_name, 0) + hrs
-                
+
                 client_breakdown = sorted(
                     client_hours.items(),
                     key=lambda x: x[1],
                     reverse=True
                 )
-                
+
                 # Daily breakdown
                 daily_hours = {}
                 day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -189,10 +184,10 @@ def send_weekly_summary_task(self):
                     day_name = day_names[day_idx]
                     hrs = (block.minutes or 0) / 60
                     daily_hours[day_name] = daily_hours.get(day_name, 0) + hrs
-                
+
                 user_name = user.first_name or user.username
                 week_str = f"{last_monday.strftime('%b %d')} - {last_sunday.strftime('%b %d')}"
-                
+
                 from tracker.email_service import send_weekly_summary_email
                 send_weekly_summary_email(
                     to_email=user.email,
@@ -201,23 +196,23 @@ def send_weekly_summary_task(self):
                     total_hours=total_hours,
                     client_breakdown=client_breakdown,
                 )
-                
+
                 sent_count += 1
                 logger.info(f"[WEEKLY-SUMMARY] Sent to {user.email}: {total_hours:.1f}h")
-                
+
             except Exception as e:
                 logger.error(f"[WEEKLY-SUMMARY] Failed for {user.email}: {e}")
-        
+
         logger.info(
             f"[WEEKLY-SUMMARY] Complete: {sent_count} sent, {skipped_count} skipped"
         )
-        
+
         return {
             'week': f"{last_monday.isoformat()} to {last_sunday.isoformat()}",
             'sent': sent_count,
             'skipped': skipped_count,
         }
-        
+
     except Exception as exc:
         logger.error(f"[WEEKLY-SUMMARY] Task failed: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=60 * 5)
@@ -227,23 +222,22 @@ def send_weekly_summary_task(self):
 def cleanup_old_notification_dismissals():
     """
     Sunday midnight: Clean up old notification dismissal records.
-    
+
     Schedule: crontab(hour=0, minute=0, day_of_week=0)  # Sunday midnight
     """
     try:
         from tracker.models import UserPreference
-        
-        # Clear dismissals older than 7 days
+
         week_ago = (timezone.localdate() - timedelta(days=7)).isoformat()
-        
+
         updated = UserPreference.objects.filter(
             last_timesheet_reminder_dismissed__lt=week_ago
         ).update(last_timesheet_reminder_dismissed=None)
-        
+
         logger.info(f"[CLEANUP] Cleared {updated} old notification dismissals")
-        
+
         return {'cleaned': updated}
-        
+
     except Exception as e:
         logger.error(f"[CLEANUP] Notification dismissal cleanup failed: {e}")
         return {'error': str(e)}
@@ -254,7 +248,7 @@ def send_approval_notification_task(user_id: int, timesheet_id: int, status: str
     """
     Send notification when a timesheet is approved/rejected.
     Called from the approval endpoint (not scheduled).
-    
+
     Args:
         user_id: ID of user who owns the timesheet
         timesheet_id: ID of the timesheet
@@ -264,13 +258,13 @@ def send_approval_notification_task(user_id: int, timesheet_id: int, status: str
     from django.core.mail import send_mail
     from django.conf import settings
     from tracker.models import TimesheetSubmission, UserPreference
-    
+
     User = get_user_model()
-    
+
     try:
         user = User.objects.get(id=user_id)
         timesheet = TimesheetSubmission.objects.get(id=timesheet_id)
-        
+
         # Check user preference
         try:
             pref = UserPreference.objects.get(user=user)
@@ -278,13 +272,13 @@ def send_approval_notification_task(user_id: int, timesheet_id: int, status: str
                 return {'skipped': 'user preference'}
         except UserPreference.DoesNotExist:
             pass
-        
+
         if not user.email:
             return {'skipped': 'no email'}
-        
+
         period = f"{timesheet.period_start.strftime('%b %d')} - {timesheet.period_end.strftime('%b %d')}"
         frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
-        
+
         from tracker.email_service import send_approval_notification
         send_approval_notification(
             to_email=user.email,
@@ -294,52 +288,51 @@ def send_approval_notification_task(user_id: int, timesheet_id: int, status: str
             total_hours=float(timesheet.total_hours),
             reviewer_notes=getattr(timesheet, 'reviewer_notes', '') or '',
         )
-        
+
         logger.info(f"[APPROVAL] Sent {status} notification to {user.email}")
         return {'sent': True, 'status': status}
-        
+
     except Exception as e:
         logger.error(f"[APPROVAL] Failed to send notification: {e}")
         return {'error': str(e)}
 
 
 # ============================================================================
-# TIMESHEET WORKFLOW TASKS (EXISTING)
+# TIMESHEET WORKFLOW TASKS
 # ============================================================================
 
 @shared_task(name='tracker.send_timesheet_reminders')
 def send_timesheet_reminders():
     """
     Monday 9am: Send reminder emails for unsubmitted timesheets from last week.
-    
-    This gives users Monday to review their time before auto-submit on Tuesday.
-    
+
     Schedule: crontab(hour=9, minute=0, day_of_week=1)  # Monday 9am
     """
     from tracker.models import Timesheet, Block
     from django.core.mail import send_mail
     from django.conf import settings
-    
-    today = timezone.now().date()
-    
+
+    # Use localdate() so this respects Django's TIME_ZONE setting
+    today = timezone.localdate()
+
     # Get last week's Monday (the week that just ended)
     # If today is Monday Dec 9, last week was Dec 2-8
     days_since_monday = today.weekday()  # Monday = 0
     last_monday = today - timedelta(days=days_since_monday + 7)
     last_sunday = last_monday + timedelta(days=6)
-    
+
     # Find all DRAFT timesheets for last week
     draft_timesheets = Timesheet.objects.filter(
         week_start=last_monday,
         status='draft'
     ).select_related('user', 'org')
-    
+
     reminders_sent = 0
     skipped = 0
-    
+
     for timesheet in draft_timesheets:
         user = timesheet.user
-        
+
         # Count their blocks for that week
         blocks = Block.objects.filter(
             user=user,
@@ -347,18 +340,18 @@ def send_timesheet_reminders():
             start__date__gte=last_monday,
             start__date__lte=last_sunday,
         )
-        
+
         block_count = blocks.count()
-        
+
         if block_count == 0:
             # No time tracked, skip reminder
             skipped += 1
             continue
-        
+
         # Calculate total hours
         total_minutes = blocks.aggregate(total=Sum('minutes'))['total'] or 0
         total_hours = round(total_minutes / 60, 1)
-        
+
         # Send reminder email
         if user.email:
             try:
@@ -378,12 +371,12 @@ def send_timesheet_reminders():
                 logger.error(f"[TIMESHEET] Failed to send reminder to {user.email}: {e}")
         else:
             logger.warning(f"[TIMESHEET] User {user.username} has no email address")
-    
+
     logger.info(
         f"[TIMESHEET] Reminders complete: {reminders_sent} sent, "
         f"{skipped} skipped (no time), {draft_timesheets.count()} total draft"
     )
-    
+
     return {
         'week': last_monday.isoformat(),
         'draft_timesheets_found': draft_timesheets.count(),
@@ -396,33 +389,55 @@ def send_timesheet_reminders():
 def auto_submit_timesheets():
     """
     Tuesday 9am: Auto-submit any DRAFT timesheets from last week.
-    
-    This ensures all timesheets get submitted even if users forget.
+
     Marks them with auto_submitted=True for audit purposes.
-    
+
     Schedule: crontab(hour=9, minute=0, day_of_week=2)  # Tuesday 9am
     """
     from tracker.models import Timesheet, Block
     from django.core.mail import send_mail
     from django.conf import settings
-    
-    today = timezone.now().date()
-    
-    # Get last week's Monday
+
+    # -------------------------------------------------------------------------
+    # TUESDAY GUARD
+    # Must use localdate() (not now().date()) so Django's TIME_ZONE is respected.
+    # Without this, Render's UTC clock can fire this on Monday night ET and
+    # today.weekday() returns 0 (Monday), making last_monday point at the
+    # CURRENT week — submitting timesheets a full day early.
+    # -------------------------------------------------------------------------
+    today = timezone.localdate()
+
+    if today.weekday() != 1:  # Python: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+        logger.warning(
+            f"[TIMESHEET] auto_submit_timesheets called on {today.strftime('%A %Y-%m-%d')} "
+            f"— expected Tuesday. Aborting to prevent premature submission."
+        )
+        return {
+            'aborted': True,
+            'reason': f'Not Tuesday — got {today.strftime("%A %Y-%m-%d")}',
+        }
+
+    # Get last week's Monday (today is Tuesday, weekday=1)
+    # days_since_monday = 1, so last_monday = today - 8 = correct prior Monday
     days_since_monday = today.weekday()  # Tuesday = 1
     last_monday = today - timedelta(days=days_since_monday + 7)
     last_sunday = last_monday + timedelta(days=6)
-    
+
+    logger.info(
+        f"[TIMESHEET] auto_submit_timesheets running for week "
+        f"{last_monday} - {last_sunday}"
+    )
+
     # Find all DRAFT timesheets for last week
     draft_timesheets = Timesheet.objects.filter(
         week_start=last_monday,
         status='draft'
     ).select_related('user', 'org')
-    
+
     auto_submitted = 0
     skipped_empty = 0
     errors = 0
-    
+
     for timesheet in draft_timesheets:
         try:
             user = timesheet.user
@@ -432,7 +447,7 @@ def auto_submit_timesheets():
             if not getattr(org, 'auto_submit_timesheets', False):
                 skipped_empty += 1
                 continue
-            
+
             # Link blocks to this timesheet
             blocks_updated = Block.objects.filter(
                 user=user,
@@ -441,26 +456,26 @@ def auto_submit_timesheets():
                 start__date__lte=last_sunday,
                 timesheet__isnull=True,  # Not already linked
             ).update(timesheet=timesheet)
-            
+
             # Recalculate totals
             blocks = Block.objects.filter(timesheet=timesheet)
             total_minutes = sum(b.minutes or 0 for b in blocks)
-            
+
             if total_minutes == 0:
                 # No time tracked, skip auto-submit
                 skipped_empty += 1
                 logger.debug(f"[TIMESHEET] Skipping auto-submit for {user.username} - no time tracked")
                 continue
-            
+
             # Use the model's submit method with auto=True
             timesheet.submit(notes='[Auto-submitted by system - Tuesday deadline]', auto=True)
-            
+
             auto_submitted += 1
             logger.info(
                 f"[TIMESHEET] Auto-submitted timesheet for {user.username}, "
                 f"week {last_monday}, {timesheet.total_hours}h"
             )
-            
+
             # Notify the user
             if user.email:
                 try:
@@ -476,16 +491,16 @@ def auto_submit_timesheets():
                     )
                 except Exception as e:
                     logger.warning(f"[TIMESHEET] Failed to notify {user.email}: {e}")
-                    
+
         except Exception as e:
             errors += 1
             logger.error(f"[TIMESHEET] Error auto-submitting timesheet {timesheet.id}: {e}", exc_info=True)
-    
+
     logger.info(
         f"[TIMESHEET] Auto-submit complete: {auto_submitted} submitted, "
-        f"{skipped_empty} skipped (empty), {errors} errors"
+        f"{skipped_empty} skipped, {errors} errors"
     )
-    
+
     return {
         'week': last_monday.isoformat(),
         'draft_timesheets_found': draft_timesheets.count(),
@@ -499,23 +514,23 @@ def auto_submit_timesheets():
 def create_weekly_timesheets():
     """
     Monday 1am: Pre-create DRAFT timesheets for all active users for the new week.
-    
+
     This ensures everyone has a timesheet ready when they start tracking time.
     Also helps with the approval queue visibility.
-    
+
     Schedule: crontab(hour=1, minute=0, day_of_week=1)  # Monday 1am
     """
     from tracker.models import Timesheet, Organization, OrganizationMembership
-    
-    today = timezone.now().date()
-    
+
+    today = timezone.localdate()
+
     # Get this week's Monday
     days_since_monday = today.weekday()
     this_monday = today - timedelta(days=days_since_monday)
-    
+
     created_count = 0
     existing_count = 0
-    
+
     # For each active organization
     for org in Organization.objects.filter(is_active=True):
         # Get all active members
@@ -523,17 +538,17 @@ def create_weekly_timesheets():
             organization=org,
             is_active=True
         ).select_related('user')
-        
+
         for membership in members:
             user = membership.user
-            
+
             # Check if timesheet already exists
             existing = Timesheet.objects.filter(
                 org=org,
                 user=user,
                 week_start=this_monday
             ).exists()
-            
+
             if existing:
                 existing_count += 1
             else:
@@ -545,12 +560,12 @@ def create_weekly_timesheets():
                 )
                 created_count += 1
                 logger.debug(f"[TIMESHEET] Created timesheet for {user.username}, week {this_monday}")
-    
+
     logger.info(
         f"[TIMESHEET] Weekly creation complete: {created_count} created, "
         f"{existing_count} already existed"
     )
-    
+
     return {
         'week': this_monday.isoformat(),
         'timesheets_created': created_count,
@@ -561,38 +576,48 @@ def create_weekly_timesheets():
 @shared_task(name='tracker.notify_managers_pending_approvals')
 def notify_managers_pending_approvals():
     """
-    Tuesday 10am (1 hour after auto-submit): Notify managers of pending approvals.
-    
+    Tuesday 10am: Notify managers of pending approvals (1 hour after auto-submit).
+
     Schedule: crontab(hour=10, minute=0, day_of_week=2)  # Tuesday 10am
     """
     from tracker.models import Timesheet, OrganizationMembership
     from django.core.mail import send_mail
     from django.conf import settings
     from collections import defaultdict
-    
-    today = timezone.now().date()
-    
-    # Get last week
+
+    # TUESDAY GUARD — same reasoning as auto_submit_timesheets
+    today = timezone.localdate()
+
+    if today.weekday() != 1:  # 0=Mon, 1=Tue
+        logger.warning(
+            f"[TIMESHEET] notify_managers_pending_approvals called on "
+            f"{today.strftime('%A %Y-%m-%d')} — expected Tuesday. Aborting."
+        )
+        return {
+            'aborted': True,
+            'reason': f'Not Tuesday — got {today.strftime("%A %Y-%m-%d")}',
+        }
+
     days_since_monday = today.weekday()
     last_monday = today - timedelta(days=days_since_monday + 7)
-    
+
     # Find all SUBMITTED timesheets
     pending = Timesheet.objects.filter(
         week_start=last_monday,
         status='submitted'
     ).select_related('user', 'org')
-    
+
     if not pending.exists():
         logger.info("[TIMESHEET] No pending approvals to notify about")
         return {'notifications_sent': 0}
-    
+
     # Group by org
     by_org = defaultdict(list)
     for ts in pending:
         by_org[ts.org_id].append(ts)
-    
+
     notifications_sent = 0
-    
+
     for org_id, timesheets in by_org.items():
         # Find managers/admins/owners in this org
         managers = OrganizationMembership.objects.filter(
@@ -600,12 +625,12 @@ def notify_managers_pending_approvals():
             role__in=['owner', 'admin', 'manager'],
             is_active=True
         ).select_related('user')
-        
+
         for membership in managers:
             manager = membership.user
             if not manager.email:
                 continue
-            
+
             # Build summary
             summary_lines = []
             total_hours = 0
@@ -614,7 +639,7 @@ def notify_managers_pending_approvals():
                 auto_tag = " (auto-submitted)" if ts.auto_submitted else ""
                 summary_lines.append(f"  • {name}: {ts.total_hours}h{auto_tag}")
                 total_hours += float(ts.total_hours)
-            
+
             try:
                 from tracker.email_service import send_manager_pending_approvals
                 send_manager_pending_approvals(
@@ -629,7 +654,7 @@ def notify_managers_pending_approvals():
                 logger.info(f"[TIMESHEET] Notified manager {manager.email} of {len(timesheets)} pending")
             except Exception as e:
                 logger.error(f"[TIMESHEET] Failed to notify manager {manager.email}: {e}")
-    
+
     return {
         'week': last_monday.isoformat(),
         'pending_timesheets': pending.count(),
@@ -646,13 +671,13 @@ def classify_block_task(self, block_id: int):
     """
     Classify a single block using patterns and AI.
     Called automatically by signal when block is created.
-    
+
     This is the fast path - uses pattern matching first,
     only falls back to AI if patterns don't give high confidence.
-    
+
     Args:
         block_id: ID of block to classify
-    
+
     Returns:
         dict with classification result
     """
@@ -660,25 +685,25 @@ def classify_block_task(self, block_id: int):
         from tracker.models import Block, Client
         from tracker.views import pre_classify_obvious_categories
         from tracker.services.pattern_learning import PatternLearningService
-        
+
         # Get block
         try:
             block = Block.objects.select_related('client', 'user', 'org').get(id=block_id)
         except Block.DoesNotExist:
             logger.warning(f"[CLASSIFY] Block {block_id} not found")
             return {"status": "not_found", "block_id": block_id}
-        
+
         # Skip if already categorized
         if block.is_categorized:
             return {"status": "already_categorized", "block_id": block_id}
-        
+
         # ✅ FIX: Get org and industry_type upfront
         org = getattr(block, 'org', None)
         industry_type = getattr(org, 'industry_type', 'general') or 'general'
-        
+
         # Step 1: Try obvious patterns (CPA tools, meetings, email)
         pre_class = pre_classify_obvious_categories(block, industry_type=industry_type)
-        
+
         if pre_class and pre_class.get('confidence', 0) >= 0.75:
             categories = pre_class.get('categories', {})
             if categories:
@@ -688,12 +713,12 @@ def classify_block_task(self, block_id: int):
                 block.categorized_by = 'pattern'
                 block.ai_confidence = pre_class.get('confidence', 0.0)
                 block.save()
-                
+
                 logger.info(
                     f"[CLASSIFY] ✅ Block {block_id} auto-categorized: "
                     f"{list(categories.keys())} ({pre_class.get('confidence'):.2f})"
                 )
-                
+
                 return {
                     "status": "classified",
                     "block_id": block_id,
@@ -701,14 +726,14 @@ def classify_block_task(self, block_id: int):
                     "confidence": pre_class.get('confidence'),
                     "source": "pattern"
                 }
-        
+
         # Step 2: Try learned patterns
         if block.user:
             learned = PatternLearningService.get_patterns_for_block(block, block.user)
-            
+
             if learned:
                 client_name, category, confidence = learned[0]
-                
+
                 if confidence >= 0.75 and (client_name or category):
                     # ✅ FIX: Client LOOKUP only — never create phantom clients
                     if client_name and not block.client and org:
@@ -721,7 +746,7 @@ def classify_block_task(self, block_id: int):
                             block.client = client
                         except (Client.DoesNotExist, Client.MultipleObjectsReturned):
                             pass  # Don't create phantom clients
-                    
+
                     if category:
                         hours = round(block.minutes / 60.0, 2) if block.minutes else 0.1
                         block.category_hours = {category: hours}
@@ -730,12 +755,12 @@ def classify_block_task(self, block_id: int):
                         block.categorized_by = 'learned'
                         block.ai_confidence = confidence
                         block.save()
-                        
+
                         logger.info(
                             f"[CLASSIFY] ✅ Block {block_id} learned pattern: "
                             f"{client_name or 'none'} / {category} ({confidence:.2f})"
                         )
-                        
+
                         return {
                             "status": "classified",
                             "block_id": block_id,
@@ -744,41 +769,41 @@ def classify_block_task(self, block_id: int):
                             "confidence": confidence,
                             "source": "learned"
                         }
-        
+
         # Step 3: Not confident - leave for manual review
         logger.debug(f"[CLASSIFY] Block {block_id} needs manual review")
-        
+
         return {
             "status": "needs_review",
             "block_id": block_id,
             "reason": "Low confidence"
         }
-        
+
     except Exception as exc:
         logger.error(f"[CLASSIFY] Error on block {block_id}: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=60)
 
 
 # ============================================================================
-# BATCH TASKS (existing)
+# BATCH TASKS
 # ============================================================================
 
 @shared_task(name='tracker.auto_compact_recent_events')
 def auto_compact_recent_events():
     try:
         from tracker.services.compaction import auto_compact_all_active_users
-        
+
         stats = auto_compact_all_active_users(minutes_back=30)
-        
+
         logger.info(
             f"[CELERY] Auto-compact complete: "
             f"{stats['users_processed']} users, "
             f"{stats['blocks_created']} blocks created, "
             f"{stats['errors']} errors"
         )
-        
+
         return stats
-        
+
     except Exception as e:
         logger.error(f"[CELERY] Auto-compact failed: {e}", exc_info=True)
         raise
@@ -786,9 +811,6 @@ def auto_compact_recent_events():
 
 """
 FIXED: ai_classify_uncategorized_blocks — NOW ACTUALLY CALLS OPENAI
-
-Replace the existing ai_classify_uncategorized_blocks task in tracker/tasks.py
-with this version.
 
 WHAT WAS BROKEN:
 - The old task only used PatternLearningService (keyword matching)
@@ -879,7 +901,6 @@ def ai_classify_uncategorized_blocks(self, limit=80):
 
         for block in blocks:
             try:
-                # Try learned patterns
                 if block.user:
                     learned = PatternLearningService.get_patterns_for_block(block, block.user)
                     if learned:
@@ -889,13 +910,11 @@ def ai_classify_uncategorized_blocks(self, limit=80):
                             stats['pattern_classified'] += 1
                             continue
 
-                # Try compaction's auto_categorize (keyword matching)
                 from tracker.services.compaction import auto_categorize_block
                 if auto_categorize_block(block):
                     stats['pattern_classified'] += 1
                     continue
 
-                # Not matched — needs AI
                 still_need_ai.append(block)
 
             except Exception as e:
@@ -926,10 +945,8 @@ def ai_classify_uncategorized_blocks(self, limit=80):
                 org = org_blocks[0].org if org_blocks[0].org else None
                 industry_type = getattr(org, 'industry_type', 'general') or 'general'
 
-                # Build system prompt (categories, rules, seasonal context)
                 system_msg = build_ai_prompt_for_industry(industry_type)
 
-                # Add org context (clients, aliases, training examples)
                 if org:
                     from tracker.views import build_ai_context
                     org_context = build_ai_context(org) or ""
@@ -938,7 +955,6 @@ def ai_classify_uncategorized_blocks(self, limit=80):
                 else:
                     org_context = ""
 
-                # Format blocks for the prompt
                 trimmed = []
                 for b in org_blocks[:50]:  # Cap at 50 per org per run
                     minutes = b.minutes or 0
@@ -985,7 +1001,6 @@ def ai_classify_uncategorized_blocks(self, limit=80):
                 if not isinstance(ai_results, list):
                     raise ValueError("OpenAI did not return a JSON array")
 
-                # Validate/fix category names
                 ai_results = validate_and_fix_ai_response(ai_results, industry_type)
 
                 logger.info(
@@ -1100,14 +1115,13 @@ def ai_classify_uncategorized_blocks(self, limit=80):
         raise self.retry(exc=exc, countdown=120)
 
 
-# ==================================================================
-# HELPER FUNCTIONS (used by the task above)
-# ==================================================================
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
 
 def _apply_pattern_result(block, client_name, category, confidence):
     """Apply a pattern-match result to a block."""
     from tracker.models import Client
-    from django.utils import timezone
 
     if client_name and not block.client:
         org = getattr(block, 'org', None)
@@ -1179,21 +1193,20 @@ def cleanup_old_raw_events(days_to_keep=30):
     """
     Clean up old raw events to prevent database bloat.
     Runs daily at 2 AM.
-    
+
     Raw events are kept for N days, then deleted since blocks
     are the source of truth for billing/reporting.
     """
     try:
         from tracker.models import RawEvent
-        
+
         cutoff = timezone.now() - timedelta(days=days_to_keep)
-        
         count = RawEvent.objects.filter(ts_utc__lt=cutoff).delete()[0]
-        
+
         logger.info(f"[CELERY] Cleaned up {count} raw events older than {days_to_keep} days")
-        
+
         return {'deleted': count}
-        
+
     except Exception as e:
         logger.error(f"[CELERY] Cleanup failed: {e}", exc_info=True)
         raise
@@ -1204,50 +1217,46 @@ def generate_daily_summary(days_back=1):
     """
     Generate daily summary reports for all active users.
     Runs daily at 6 AM for yesterday's data.
-    
+
     This pre-computes summaries for faster dashboard loading.
     """
     try:
         from tracker.models import Block
         from django.contrib.auth import get_user_model
         from collections import defaultdict
-        
+
         User = get_user_model()
-        
+
         target_date = (timezone.now() - timedelta(days=days_back)).date()
-        
-        # Get all blocks for target date
+
         blocks = Block.objects.filter(
             day=target_date,
             is_categorized=True
         ).select_related('user', 'client')
-        
-        # Group by user
+
         by_user = defaultdict(list)
         for block in blocks:
             by_user[block.user_id].append(block)
-        
+
         summaries = []
-        
+
         for user_id, user_blocks in by_user.items():
             try:
                 user = User.objects.get(id=user_id)
-                
-                # Calculate totals
+
                 total_minutes = sum(b.minutes for b in user_blocks if b.minutes)
                 total_hours = round(total_minutes / 60.0, 2)
-                
-                # Group by client
+
                 by_client = defaultdict(lambda: {'minutes': 0, 'categories': defaultdict(float)})
-                
+
                 for block in user_blocks:
                     client_name = block.client.name if block.client else 'Unassigned'
                     by_client[client_name]['minutes'] += block.minutes or 0
-                    
+
                     if block.category_hours:
                         for cat, hours in block.category_hours.items():
                             by_client[client_name]['categories'][cat] += hours
-                
+
                 summary = {
                     'user': user.username,
                     'date': str(target_date),
@@ -1261,42 +1270,42 @@ def generate_daily_summary(days_back=1):
                         for client_name, data in by_client.items()
                     ]
                 }
-                
+
                 summaries.append(summary)
-                
+
             except User.DoesNotExist:
                 pass
-        
+
         logger.info(f"[CELERY] Generated {len(summaries)} daily summaries for {target_date}")
-        
+
         return {
             'date': str(target_date),
             'summaries_generated': len(summaries)
         }
-        
+
     except Exception as e:
         logger.error(f"[CELERY] Daily summary failed: {e}", exc_info=True)
         raise
 
 
 # ============================================================================
-# MANUAL BATCH PROCESSING (callable from shell/admin)
+# MANUAL BATCH PROCESSING
 # ============================================================================
 
 @shared_task(name='tracker.batch_classify_all')
 def batch_classify_all(user_id=None, limit=500):
     """
     Manually trigger batch classification of ALL uncategorized blocks.
-    
+
     This is useful for:
     - Initial backfill of historical data
     - Manually processing a backlog
     - Testing classification logic
-    
+
     Args:
         user_id: Optional - only classify blocks for this user
         limit: Max blocks to process (default 500)
-    
+
     Usage:
         from tracker.tasks import batch_classify_all
         batch_classify_all.delay(limit=500)
@@ -1304,36 +1313,36 @@ def batch_classify_all(user_id=None, limit=500):
     try:
         from tracker.models import Block
         from django.contrib.auth import get_user_model
-        
+
         User = get_user_model()
-        
+
         # Get uncategorized blocks
         qs = Block.objects.filter(is_categorized=False).order_by('-day', '-start')
-        
+
         if user_id:
             qs = qs.filter(user_id=user_id)
-        
+
         blocks = list(qs[:limit])
-        
+
         if not blocks:
             logger.info("[BATCH] No uncategorized blocks found")
             return {"status": "complete", "processed": 0}
-        
+
         logger.info(f"[BATCH] Processing {len(blocks)} uncategorized blocks")
-        
-        # Queue each block for individual classification
+
         for block in blocks:
             classify_block_task.delay(block.id)
-        
+
         return {
             "status": "queued",
             "count": len(blocks),
             "message": f"Queued {len(blocks)} blocks for classification"
         }
-        
+
     except Exception as e:
         logger.error(f"[BATCH] Failed: {e}", exc_info=True)
         raise
+
 
 # ============================================================================
 # ADD THIS TO tracker/tasks.py
@@ -1341,10 +1350,7 @@ def batch_classify_all(user_id=None, limit=500):
 
 @shared_task(name='tracker.push_time_to_quickbooks', bind=True)
 def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_ids=None):
-    """
-    Background push of time entries to QuickBooks.
-    Called from the push-time endpoint when dry_run=False.
-    """
+    """Background push of time entries to QuickBooks."""
     from tracker.models import Organization, Block, OrganizationMembership, Integration
     from tracker.views_integrations import qb_api_call
     from django.db.models import Q
@@ -1359,13 +1365,11 @@ def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_
     except Organization.DoesNotExist:
         return {'status': 'error', 'error': 'Organization not found'}
 
-    # Get integration
     try:
         integration = Integration.objects.get(organization=org, provider='quickbooks', is_connected=True)
     except Integration.DoesNotExist:
         return {'status': 'error', 'error': 'QuickBooks not connected'}
 
-    # Parse dates
     start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
     end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
 
@@ -1373,7 +1377,6 @@ def push_time_to_quickbooks(self, org_id, user_id, start_date, end_date, client_
     start_aware = timezone.make_aware(datetime.combine(start_dt, datetime.min.time()), tz)
     end_aware = timezone.make_aware(datetime.combine(end_dt + timedelta(days=1), datetime.min.time()), tz)
 
-    # Get blocks
     blocks_qs = Block.objects.filter(
         org=org,
         is_categorized=True,
@@ -1563,32 +1566,32 @@ def refresh_integration_tokens():
 def check_payment_grace_periods():
     """Deactivate devices for orgs past their payment grace deadline."""
     from tracker.models import Organization, AgentDevice, OrganizationMembership
-    
+
     now = timezone.now()
     expired_orgs = Organization.objects.filter(
         payment_grace_deadline__isnull=False,
         payment_grace_deadline__lte=now,
     )
-    
+
     total_deactivated = 0
     for org in expired_orgs:
         org_user_ids = OrganizationMembership.objects.filter(
             organization=org
         ).values_list('user_id', flat=True)
-        
+
         deactivated = AgentDevice.objects.filter(
             user_id__in=org_user_ids, is_active=True
         ).update(is_active=False)
-        
+
         total_deactivated += deactivated
-        
+
         org.plan = 'none'
         org.seat_count = 0
         org.payment_grace_deadline = None
         org.save(update_fields=['plan', 'seat_count', 'payment_grace_deadline'])
-        
+
         logger.info(f"[GRACE] Expired for {org.name}, deactivated {deactivated} devices")
-    
+
     return {'expired_orgs': expired_orgs.count(), 'devices_deactivated': total_deactivated}
 
 
@@ -1613,7 +1616,6 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
 
     org = integration.organization
 
-    # Handle deletes/voids
     if operation in ('Delete', 'Void'):
         updated = InvoiceModel.objects.filter(
             org=org, external_id=invoice_id
@@ -1621,7 +1623,6 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
         logger.info(f"QB webhook: marked invoice {invoice_id} as voided ({updated} rows)")
         return
 
-    # Fetch the single invoice
     data, err = qb_api_call(integration, 'GET', f'/invoice/{invoice_id}')
     if err:
         logger.error(f"QB webhook: failed to fetch invoice {invoice_id}: {err}")
@@ -1639,7 +1640,7 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
     client = Client.objects.filter(org=org, quickbooks_id=qb_customer_id).first()
     if not client:
         logger.info(f"QB webhook: invoice {invoice_id} — no matching TT client for QB customer {qb_customer_id}")
-        return  # Will surface in unmatched invoice queue
+        return
 
     total = Decimal(str(inv.get('TotalAmt', 0)))
     balance = Decimal(str(inv.get('Balance', 0)))
@@ -1648,7 +1649,6 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
     doc_number = inv.get('DocNumber') or f"QBO-{invoice_id}"
     inv_date = inv.get('TxnDate', str(date.today()))
 
-    # Conflict detection — don't silently overwrite an existing amount change
     existing = InvoiceModel.objects.filter(org=org, external_id=str(invoice_id)).first()
     if existing and existing.amount != total and existing.status not in ('voided',):
         InvoiceConflict.objects.update_or_create(
@@ -1663,7 +1663,7 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
             }
         )
         logger.info(f"QB webhook: conflict flagged on invoice {doc_number} — ${existing.amount} → ${total}")
-        return  # Hold for user review
+        return
 
     InvoiceModel.objects.update_or_create(
         org=org,
@@ -1680,7 +1680,6 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
         }
     )
 
-    # Update sync timestamp
     integration.last_synced_at = timezone.now()
     integration.save(update_fields=['last_synced_at'])
     logger.info(f"QB webhook: synced invoice {doc_number} for {client.name}")
@@ -1706,7 +1705,7 @@ def reconcile_qb_invoices():
             # Pull last 7 days as a rolling window
             end = date.today().isoformat()
             start = (date.today() - timedelta(days=7)).isoformat()
-            
+
             from tracker.views_integrations import qb_api_call
             query = (
                 f"SELECT * FROM Invoice WHERE TxnDate >= '{start}' "
@@ -1760,6 +1759,10 @@ def reconcile_qb_invoices():
         except Exception as e:
             logger.error(f"QB reconcile failed for org {integration.organization_id}: {e}")
 
+
+# ============================================================================
+# DATABASE MAINTENANCE
+# ============================================================================
 
 from celery import shared_task
 from django.utils import timezone

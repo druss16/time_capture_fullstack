@@ -94,7 +94,7 @@ const HERO_SVG = `<svg viewBox="0 -8 340 520" width="100%" xmlns="http://www.w3.
   <text font-family="DM Sans,system-ui,sans-serif" font-size="6.5" fill="rgba(255,255,255,.4)" x="210" y="34">9:41 AM</text>
   <circle class="pulse" cx="244" cy="30" r="3" fill="#2B9D90"/>
   <!-- UltraTax window BEHIND -->
-  <rect x="20" y="42" width="180" height="110" rx="6" fill="#162D40" stroke="rgba(255,255,255,.06)" stroke-width="1"/>
+  <rect x="20" y="42" width="180" height="100" rx="6" fill="#162D40" stroke="rgba(255,255,255,.06)" stroke-width="1"/>
   <rect x="20" y="42" width="180" height="16" rx="6" fill="#162C42"/>
   <rect x="20" y="50" width="180" height="8" fill="#162C42"/>
   <circle cx="26" cy="47" r="3" fill="#ff5f57" opacity=".7"/>
@@ -111,7 +111,7 @@ const HERO_SVG = `<svg viewBox="0 -8 340 520" width="100%" xmlns="http://www.w3.
   <rect x="28" y="118" width="164" height="10" rx="3" fill="rgba(43,157,144,.12)" stroke="rgba(43,157,144,.25)" stroke-width="1"/>
   <text font-family="DM Sans,system-ui,sans-serif" font-size="6" fill="#2B9D90" x="110" y="125.5" text-anchor="middle">1040 · Hartwell, James R. · 2024</text>
   <rect class="sc" x="28" y="60" width="172" height="2" rx="1" fill="url(#hsg)" clip-path="url(#hcc)" opacity=".4"/>  <!-- Excel window FRONT (active) -->
-  <rect x="140" y="42" width="108" height="110" rx="6" fill="#1A4828" stroke="rgba(255,255,255,.18)" stroke-width="1"/>
+  <rect x="140" y="42" width="108" height="100" rx="6" fill="#1A4828" stroke="rgba(255,255,255,.18)" stroke-width="1"/>
   <rect x="140" y="42" width="108" height="14" rx="6" fill="#0C2414"/>
   <rect x="140" y="48" width="108" height="8" fill="#0C2414"/>
   <text font-family="DM Sans,system-ui,sans-serif" font-size="6" font-weight="600" fill="rgba(255,255,255,.7)" x="194" y="56" text-anchor="middle">Excel — WIP_March.xlsx</text>
@@ -124,18 +124,34 @@ const HERO_SVG = `<svg viewBox="0 -8 340 520" width="100%" xmlns="http://www.w3.
   <rect x="145" y="110" width="70" height="6" rx="1.5" fill="rgba(255,255,255,.06)"/>
   <rect class="xlsc" x="144" y="60" width="100" height="2" rx="1" fill="url(#hsg)" clip-path="url(#xlcc)"/>
 
+
+  <!-- macOS dock / taskbar at screen bottom — shows agent running invisibly -->
+  <rect x="16" y="146" width="236" height="14" rx="0" fill="#07100F"/>
+  <rect x="16" y="151" width="236" height="9" fill="#07100F"/>
+  <!-- Dock app icons -->
+  <rect x="64"  y="153" width="8" height="8" rx="2" fill="#2CA01C" opacity=".7"/>
+  <rect x="76"  y="153" width="8" height="8" rx="2" fill="#217346" opacity=".8"/>
+  <rect x="88"  y="153" width="8" height="8" rx="2" fill="#1F4B99" opacity=".7"/>
+  <rect x="100" y="153" width="8" height="8" rx="2" fill="#0078D4" opacity=".7"/>
+  <line x1="114" y1="153" x2="114" y2="161" stroke="rgba(255,255,255,.12)" stroke-width=".8"/>
+  <!-- System tray right side -->
+  <text font-family="DM Sans,system-ui,sans-serif" font-size="5" fill="rgba(255,255,255,.3)" x="120" y="159">9:41 AM</text>
+  <!-- TimeTracker tray dot — glowing teal -->
+  <circle cx="236" cy="157" r="3.5" fill="#2B9D90" opacity=".9"/>
+  <circle cx="236" cy="157" r="5.5" fill="none" stroke="#2B9D90" stroke-width=".8" opacity=".35"/>
+
 </g>
 
 <!-- Agent badge -->
-<rect x="8" y="150" width="172" height="28" rx="8" fill="rgba(8,20,18,.92)" stroke="rgba(43,157,144,.4)" stroke-width="1"/>
+<rect x="8" y="150" width="214" height="28" rx="8" fill="rgba(8,20,18,.92)" stroke="rgba(43,157,144,.4)" stroke-width="1"/>
 <circle cx="21" cy="164" r="4.5" fill="#2B9D90"/>
-<text font-family="DM Sans,system-ui,sans-serif" font-size="7.5" font-weight="700" fill="white" x="31" y="161">TimeTracker</text>
+<text font-family="DM Sans,system-ui,sans-serif" font-size="7.5" font-weight="700" fill="white" x="31" y="161">TimeTracker — Silent Agent</text>
 <text font-family="DM Sans,system-ui,sans-serif" font-size="7" fill="rgba(255,255,255,.45)" x="31" y="172">Hartwell · Excel · tracking</text>
-<rect x="132" y="156" width="42" height="16" rx="8" fill="rgba(43,157,144,.2)" stroke="rgba(43,157,144,.5)" stroke-width="1"/>
-<text class="tm0" font-family="DM Sans,system-ui,sans-serif" font-size="8" font-weight="700" fill="#2B9D90" x="153" y="167.5" text-anchor="middle">0:21</text>
-<text class="tm1" font-family="DM Sans,system-ui,sans-serif" font-size="8" font-weight="700" fill="#2B9D90" x="153" y="167.5" text-anchor="middle">0:22</text>
-<text class="tm2" font-family="DM Sans,system-ui,sans-serif" font-size="8" font-weight="700" fill="#2B9D90" x="153" y="167.5" text-anchor="middle">0:23</text>
-<text class="tm3" font-family="DM Sans,system-ui,sans-serif" font-size="8" font-weight="700" fill="#2B9D90" x="153" y="167.5" text-anchor="middle">0:24</text>
+<rect x="174" y="156" width="42" height="16" rx="8" fill="rgba(43,157,144,.2)" stroke="rgba(43,157,144,.5)" stroke-width="1"/>
+<text class="tm0" font-family="DM Sans,system-ui,sans-serif" font-size="8" font-weight="700" fill="#2B9D90" x="195" y="167.5" text-anchor="middle">0:21</text>
+<text class="tm1" font-family="DM Sans,system-ui,sans-serif" font-size="8" font-weight="700" fill="#2B9D90" x="195" y="167.5" text-anchor="middle">0:22</text>
+<text class="tm2" font-family="DM Sans,system-ui,sans-serif" font-size="8" font-weight="700" fill="#2B9D90" x="195" y="167.5" text-anchor="middle">0:23</text>
+<text class="tm3" font-family="DM Sans,system-ui,sans-serif" font-size="8" font-weight="700" fill="#2B9D90" x="195" y="167.5" text-anchor="middle">0:24</text>
 
 <!-- Monitor stand -->
 <rect x="118" y="176" width="20" height="8" rx="2" fill="#1A2B28"/>
@@ -699,6 +715,11 @@ const INTEGRATIONS = [
   { name: "Canopy",          category: "Practice Mgmt", domain: "getcanopy.com",          fallback: "C"  },
 ];
 
+const PRICING = [
+  { name: "Professional", price: 29.99, desc: "Perfect for growing firms ready to eliminate manual time tracking.", features: ["Automatic capture","AI client mapping","QB & Xero sync","Approval workflow","Core reports"], highlighted: false },
+  { name: "Executive",    price: 49.99, desc: "For leaders who want deep visibility into profitability and performance.", features: ["Everything in Professional","Profitability dashboard","AI firm insights","Utilization analytics","Priority support"], highlighted: true },
+];
+
 function IntegrationLogo({
   domain,
   name,
@@ -715,12 +736,12 @@ function IntegrationLogo({
       <img
         className="int-logo"
         src={src}
-        alt={`${name} logo`}
+        alt={name}
         loading="lazy"
         referrerPolicy="no-referrer"
         onError={(e) => {
           e.currentTarget.style.display = "none";
-          const fallbackEl = e.currentTarget.nextElementSibling as HTMLDivElement | null;
+          const fallbackEl = e.currentTarget.nextElementSibling as HTMLDivElement;
           if (fallbackEl) fallbackEl.style.display = "flex";
         }}
       />
@@ -730,11 +751,6 @@ function IntegrationLogo({
     </div>
   );
 }
-
-const PRICING = [
-  { name: "Professional", price: 29.99, desc: "Perfect for growing firms ready to eliminate manual time tracking.", features: ["Automatic capture","AI client mapping","QB & Xero sync","Approval workflow","Core reports"], highlighted: false },
-  { name: "Executive",    price: 49.99, desc: "For leaders who want deep visibility into profitability and performance.", features: ["Everything in Professional","Profitability dashboard","AI firm insights","Utilization analytics","Priority support"], highlighted: true },
-];
 
 export default function Home() {
   return (
@@ -775,10 +791,38 @@ export default function Home() {
         .mfade-r{position:absolute;right:0;top:0;bottom:0;width:72px;z-index:2;background:linear-gradient(to left,#fff,transparent);pointer-events:none}
         @keyframes marquee{from{transform:translateX(0)}to{transform:translateX(-50%)}}
         .marquee-track{display:flex;gap:10px;white-space:nowrap;animation:marquee 38s linear infinite}
-        .int-chip{display:inline-flex;align-items:center;gap:10px;padding:9px 15px;border-radius:10px;border:1px solid var(--line);background:var(--bg);flex-shrink:0;transition:border-color 0.15s;min-width:220px} .int-chip:hover{border-color:var(--teal-border)}
-        .int-logo-wrap{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:#fff;overflow:hidden;border:1px solid rgba(0,0,0,0.04)}
-        .int-logo{width:24px;height:24px;object-fit:contain;display:block}
-        .int-fallback{width:100%;height:100%;border-radius:8px;display:flex;align-items:center;justify-content:center;background:var(--teal);color:#fff;font-size:11px;font-weight:800;letter-spacing:-0.02em}
+        .int-chip{display:inline-flex;align-items:center;gap:10px;padding:9px 15px;border-radius:10px;border:1px solid var(--line);background:var(--bg);flex-shrink:0;transition:border-color 0.15s} .int-chip:hover{border-color:var(--teal-border)}
+        .int-logo-wrap{
+          width:32px;
+          height:32px;
+          border-radius:8px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          flex-shrink:0;
+          background:#fff;
+          overflow:hidden;
+          border:1px solid rgba(0,0,0,0.05);
+        }
+
+        .int-logo{
+          width:22px;
+          height:22px;
+          object-fit:contain;
+        }
+
+        .int-fallback{
+          width:100%;
+          height:100%;
+          border-radius:8px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          background:var(--teal);
+          color:#fff;
+          font-size:11px;
+          font-weight:800;
+        }
         .int-name{font-size:12.5px;font-weight:600;color:var(--text);line-height:1.2} .int-cat{font-size:10.5px;color:var(--text-3)}
         .section{max-width:1120px;margin:0 auto;padding:88px 32px}
         .section-eyebrow{font-size:10.5px;font-weight:700;letter-spacing:0.13em;text-transform:uppercase;color:var(--teal-mid);margin-bottom:12px}
@@ -893,18 +937,15 @@ export default function Home() {
         <p className="marquee-eyebrow">Integrates with tools you already trust</p>
         <div style={{position:"relative"}}>
           <div className="mfade-l"/><div className="mfade-r"/>
-          <div className="marquee-track">
-            {[...INTEGRATIONS,...INTEGRATIONS].map((int,i)=>(
-              <div key={`${int.name}-${i}`} className="int-chip">
-                <IntegrationLogo
-                  domain={int.domain}
-                  name={int.name}
-                  fallback={int.fallback}
-                />
-                <div>
-                  <div className="int-name">{int.name}</div>
-                  <div className="int-cat">{int.category}</div>
-                </div>
+            <div className="marquee-track">
+              {[...INTEGRATIONS, ...INTEGRATIONS].map((int, i) => (
+                <div key={`${int.name}-${i}`} className="int-chip">
+                  <IntegrationLogo
+                    domain={int.domain}
+                    name={int.name}
+                    fallback={int.fallback}
+                  />
+                <div><div className="int-name">{int.name}</div><div className="int-cat">{int.category}</div></div>
               </div>
             ))}
           </div>

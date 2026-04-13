@@ -1635,12 +1635,21 @@ def run_agent():
             )
             
             def on_sync_update():
+                global MOUSE_IDLE_PAUSE_S
                 print(f"[SYNC] Data updated: {len(sync.clients)} clients")
                 if hasattr(sync, 'gui_menu_bar') and sync.gui_menu_bar and hasattr(sync.gui_menu_bar, 'refresh_client_menu'):
                     sync.gui_menu_bar.refresh_client_menu(sync.clients)
                     print("[SYNC] GUI menu refreshed")
                 else:
                     print("[SYNC] GUI not ready yet")
+                # Apply org settings from sync
+                if hasattr(sync, 'org_settings') and sync.org_settings:
+                    new_idle_s = sync.org_settings.get("mouse_idle_pause_seconds")
+                    if new_idle_s is not None:
+                        new_idle_s = int(new_idle_s)
+                        if new_idle_s != MOUSE_IDLE_PAUSE_S:
+                            log(f"[SYNC] Idle timeout updated: {MOUSE_IDLE_PAUSE_S}s → {new_idle_s}s")
+                            MOUSE_IDLE_PAUSE_S = new_idle_s
             
             sync.on_update = on_sync_update
             sync.start()
@@ -1883,10 +1892,10 @@ def run_agent():
         log("[AI-SWITCH] ✅ Initialized")
 
         # Keep client list + sensitivity fresh when sync updates
+        # Keep client list + sensitivity fresh when sync updates
         if sync:
             _original_on_sync = sync.on_update
             def _on_sync_with_switcher():
-                global MOUSE_IDLE_PAUSE_S  # ← move to top
                 if _original_on_sync:
                     _original_on_sync()
                 ai_switcher.update_clients(sync.clients)
@@ -1895,12 +1904,6 @@ def run_agent():
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
-                    new_idle_s = sync.org_settings.get("mouse_idle_pause_seconds")
-                    if new_idle_s is not None:
-                        new_idle_s = int(new_idle_s)
-                        if new_idle_s != MOUSE_IDLE_PAUSE_S:
-                            log(f"[SYNC] Idle timeout updated: {MOUSE_IDLE_PAUSE_S}s → {new_idle_s}s")
-                            MOUSE_IDLE_PAUSE_S = new_idle_s
             sync.on_update = _on_sync_with_switcher
 
     except ImportError:

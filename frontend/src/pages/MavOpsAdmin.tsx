@@ -331,7 +331,7 @@ export default function MavOpsAdmin() {
     localStorage.setItem("impersonating_org_id", String(org.id));
     localStorage.setItem("impersonating_org_name", org.name);
     setImpersonatingOrg({ id: org.id, name: org.name });
-    flash(`✓ Now viewing as ${org.name} — open analytics`);
+    window.open("/daily", "_blank");   // ← was just a flash message before
   };
 
   const clearImpersonation = async () => {

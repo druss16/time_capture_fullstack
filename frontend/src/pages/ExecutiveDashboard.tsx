@@ -379,7 +379,8 @@ function _getToken() {
 
 async function fetchDashboard(apiBase: string, period: string): Promise<DashboardResponse> {
   const params = new URLSearchParams(window.location.search);
-  const orgId = params.get("org_id");
+  const orgId = params.get("org_id")                          // URL param (existing)
+    ?? localStorage.getItem("impersonating_org_id");          // ← add localStorage fallback
   const url = `${apiBase}/analytics/executive/?period=${period}${orgId ? `&org_id=${orgId}` : ""}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${_getToken()}`, "Content-Type": "application/json" },
@@ -497,7 +498,7 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
   const params = new URLSearchParams(window.location.search);
   const isAdminOverride = !!params.get("org_id");
   const canAccessAnalysis = isExecutivePlan(meta.plan) || isAdminOverride;
-  
+
   // chart data
   const revData    = (revTrend.trend ?? []).map((t) => ({ month: t.month_label || t.month, revenue: t.revenue, invoices: t.invoice_count }));
   const wipData    = !wip.buckets ? [] : [

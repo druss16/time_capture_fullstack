@@ -206,6 +206,19 @@ from tracker.utils.display_formatter import (
     clean_window_title,
 )
 
+def get_request_org_override(request):
+    """
+    For staff/superuser, allow ?org_id= to override the org context.
+    Used by MavOps admin impersonation. Falls back to normal org resolution.
+    """
+    override_id = request.GET.get("org_id") or request.data.get("org_id")
+    if override_id and (request.user.is_staff or request.user.is_superuser):
+        try:
+            return Organization.objects.get(id=int(override_id))
+        except (Organization.DoesNotExist, ValueError, TypeError):
+            pass
+    return get_org_or_default(request)
+
 def match_client_in_text(text: str, clients: list, known_entities: list = None) -> list:
     """
     Smart client matching that handles various naming patterns.
@@ -1296,7 +1309,7 @@ def blocks_today(request):
     hostname  = request.GET.get("hostname") or None
     limit_str = request.GET.get("limit") or None
     
-    org = get_org_or_default(request)
+    org = get_request_org_override(request)
     
     compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
     
@@ -1562,7 +1575,8 @@ def ai_suggestions_today(request):
     fallback_mode = request.GET.get("fallback") or ""
     debug         = request.GET.get("debug") in ("1", "true", "yes")
 
-    org = get_org_or_default(request)
+    org = get_request_org_override(request)
+
 
     # =========================================================
     # STEP 1: Compact any new unlinked events into blocks
@@ -3493,13 +3507,8 @@ def list_clients(request):
     """
     user = request.user
     
-    org = get_user_org(user)
-    if not org:
-        org, _ = Organization.objects.get_or_create(
-            name="default-org",
-            defaults={"slug": "default-org"}
-        )
-    
+    org = get_request_org_override(request)
+
     # Get user's role in the organization
     membership = OrganizationMembership.objects.filter(
         user=user, organization=org
@@ -4386,7 +4395,7 @@ def today_time(request):
  
     mobile_blocks = Block.objects.filter(
         user=user,
-        org=get_user_org(user),
+        org=get_request_org_override(request),
         hostname='mobile',
         start__gte=start_utc,
         start__lt=end_utc,

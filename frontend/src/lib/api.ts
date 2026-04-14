@@ -38,6 +38,16 @@ function extractErrorMessage(body: any): string {
 // Safe JSON fetch with token-based auth
 // ============================================================================
 export async function safeFetchJson<T = any>(input: string, init: RequestInit = {}): Promise<T> {
+  // ── Org impersonation override ──────────────────────────────────────────
+  const impersonatingOrgId = localStorage.getItem("impersonating_org_id");
+  if (impersonatingOrgId) {
+    try {
+      const u = new URL(input, window.location.origin);
+      u.searchParams.set("org_id", impersonatingOrgId);
+      input = u.toString();
+    } catch {}
+  }
+
   const makeHeaders = () => {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -45,29 +55,27 @@ export async function safeFetchJson<T = any>(input: string, init: RequestInit = 
       "X-Requested-With": "XMLHttpRequest",
       ...(init.headers as Record<string, string> | undefined),
     };
-    
-    // Add Authorization header with token (if exists)
+
     const token = localStorage.getItem('auth_token');
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
-    
-    // Keep CSRF as fallback for cookie-based auth
+
     if (!["GET", "HEAD", "OPTIONS", "TRACE"].includes((init.method || "GET").toUpperCase())) {
       const csrfToken = getCookie("csrftoken");
       if (csrfToken) headers["X-CSRFToken"] = csrfToken;
     }
-    
+
     return headers;
   };
-  
+
   let res = await fetch(input, { credentials: "include", ...init, headers: makeHeaders() });
-  
+
   if (res.status === 403) {
     try { await primeCsrf(); } catch {}
     res = await fetch(input, { credentials: "include", ...init, headers: makeHeaders() });
   }
-  
+
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     const body = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();

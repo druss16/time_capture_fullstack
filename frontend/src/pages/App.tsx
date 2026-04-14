@@ -104,14 +104,6 @@ function MaybeProtected({ children }: { children: React.ReactNode }) {
   return <ProtectedRoute>{children}</ProtectedRoute>;
 }
 
-function AppLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="min-h-screen bg-white">
-      <Navigation />
-      <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
-    </div>
-  );
-}
 
 function AccountLayoutWrapper() {
   const [role, setRole] = useState<'owner' | 'admin' | 'manager' | 'member'>('member');
@@ -121,6 +113,42 @@ function AccountLayoutWrapper() {
       .catch(() => setRole('member'));
   }, []);
   return <AccountLayout role={role} />;
+}
+
+
+function ImpersonationBanner() {
+  const [orgId,   setOrgId]   = useState(() => localStorage.getItem("impersonating_org_id"));
+  const [orgName, setOrgName] = useState(() => localStorage.getItem("impersonating_org_name"));
+  if (!orgId) return null;
+  return (
+    <div style={{
+      background: "#92400e", color: "#fef3c7", padding: "9px 24px",
+      fontSize: 13, display: "flex", justifyContent: "space-between",
+      alignItems: "center", fontFamily: "monospace",
+    }}>
+      <span>👁 MavOps Admin — viewing as <strong>{orgName}</strong> (org #{orgId})</span>
+      <button onClick={() => {
+        localStorage.removeItem("impersonating_org_id");
+        localStorage.removeItem("impersonating_org_name");
+        setOrgId(null);
+        setOrgName(null);
+        window.location.reload(); // reload so all data refetches as real org
+      }} style={{
+        background: "none", border: "1px solid #fef3c7aa", color: "#fef3c7",
+        padding: "3px 14px", cursor: "pointer", borderRadius: 4, fontSize: 12,
+      }}>exit ×</button>
+    </div>
+  );
+}
+
+function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-white">
+      <ImpersonationBanner />
+      <Navigation />
+      <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+    </div>
+  );
 }
 
 function HomeOrRedirect() {

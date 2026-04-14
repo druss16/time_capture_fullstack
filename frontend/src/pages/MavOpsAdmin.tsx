@@ -28,6 +28,10 @@ interface ErrorSummary {
   by_type: { error_type: string; count: number }[];
   by_org: { org: string; count: number }[];
 }
+interface OrgMember {
+  user_id: number; username: string; email: string;
+  first_name: string; last_name: string; role: string;
+}
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const T = {
@@ -109,22 +113,18 @@ function calcMRR(orgs: Org[]) { return orgs.reduce((s, o) => s + (SEAT_PRICES[o.
 function StatusDot({ active }: { active: boolean }) {
   return <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: active ? T.green : T.textMuted, marginRight: 8, boxShadow: active ? `0 0 6px ${T.green}` : "none" }} />;
 }
-
 function Badge({ label, color }: { label: string; color: string }) {
   return <span style={{ display: "inline-block", padding: "3px 9px", background: color + "30", color, fontSize: 11, letterSpacing: 1, textTransform: "uppercase" as const, borderRadius: 3, border: `1px solid ${color}44`, fontFamily: "'DM Mono', monospace" }}>{label}</span>;
 }
-
 function OrgPill({ name }: { name: string }) {
   return <span style={{ display: "inline-block", padding: "2px 10px", background: "#1e2d4a", color: "#7eb3e0", fontSize: 11, border: "1px solid #2d4a6a", borderRadius: 3, fontFamily: "'DM Mono', monospace" }}>{name}</span>;
 }
-
 function VersionBadge({ version, latest }: { version: string; latest: string }) {
   const s = versionStatus(version, latest);
   const colors = { current: T.green, behind: T.yellow, outdated: T.red, dev: T.textMuted };
   const labels = { current: `v${version} ✓`, behind: `v${version} ↑`, outdated: `v${version} !!`, dev: version || "?" };
   return <span style={{ display: "inline-block", padding: "3px 9px", background: colors[s] + "25", color: colors[s], fontSize: 11, borderRadius: 3, border: `1px solid ${colors[s]}44`, ...mono }}>{labels[s]}</span>;
 }
-
 function SeatBar({ used, total }: { used: number; total: number }) {
   const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
   const color = pct >= 90 ? T.red : pct >= 70 ? T.yellow : T.teal;
@@ -137,7 +137,6 @@ function SeatBar({ used, total }: { used: number; total: number }) {
     </div>
   );
 }
-
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const copy = () => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); };
@@ -200,8 +199,6 @@ function Btn({ label, onClick, color = T.teal, outline = false, disabled = false
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 export default function MavOpsAdmin() {
-  const ADMIN_SECRET = import.meta.env.VITE_MAVOPS_ADMIN_SECRET ?? "";
-
   const [latestVersion, setLatestVersion] = useState<string>("0.0.0");
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
@@ -229,22 +226,14 @@ export default function MavOpsAdmin() {
 
   // ── Impersonation state ──
   const [impersonatingOrg, setImpersonatingOrg] = useState<{ id: number; name: string } | null>(null);
+  const [viewAsPickerOrg, setViewAsPickerOrg] = useState<number | null>(null);
+  const [orgMembers, setOrgMembers] = useState<Record<number, OrgMember[]>>({});
+  const [membersLoading, setMembersLoading] = useState<number | null>(null);
 
   const handleUnlock = () => { sessionStorage.setItem("mavops_admin", "1"); setUnlocked(true); };
   const flash = (m: string, type: "ok" | "err" = "ok") => { setMsg(m); setMsgType(type); setTimeout(() => setMsg(""), 5000); };
 
-  useEffect(() => { if (token && tab === "orgs") loadOrgs(); }, []); // eslint-disable-line
-
-  useEffect(() => {
-    fetch("https://api.github.com/repos/druss16/timetracker-releases/releases/latest")
-      .then(r => r.json())
-      .then(d => {
-        const v = (d.tag_name || "").replace(/^v/, "");
-        if (v) setLatestVersion(v);
-      })
-      .catch(() => {});
-  }, []);
-
+  // ── apiFetch defined first so loadOrgMembers can reference it ──
   const apiFetch = useCallback(async (path: string, opts: RequestInit = {}) => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts.headers as any || {}) };
     if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -252,6 +241,29 @@ export default function MavOpsAdmin() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }, [token]);
+
+  // ── Load members for a specific org (cached) ──
+  const loadOrgMembers = useCallback(async (orgId: number) => {
+    if (orgMembers[orgId]) return; // already cached
+    setMembersLoading(orgId);
+    try {
+      const d = await apiFetch(`/mavops/orgs/${orgId}/members/`);
+      setOrgMembers(prev => ({ ...prev, [orgId]: d.members || [] }));
+    } catch {
+      flash("Failed to load members.", "err");
+    } finally {
+      setMembersLoading(null);
+    }
+  }, [apiFetch, orgMembers]);
+
+  useEffect(() => { if (token && tab === "orgs") loadOrgs(); }, []); // eslint-disable-line
+
+  useEffect(() => {
+    fetch("https://api.github.com/repos/druss16/timetracker-releases/releases/latest")
+      .then(r => r.json())
+      .then(d => { const v = (d.tag_name || "").replace(/^v/, ""); if (v) setLatestVersion(v); })
+      .catch(() => {});
+  }, []);
 
   const loadOrgs = useCallback(async () => {
     if (!token) return; setLoading(true);
@@ -309,10 +321,7 @@ export default function MavOpsAdmin() {
 
   const restartDevice = async (deviceId: string) => {
     setRestartingDevice(deviceId);
-    try {
-      await apiFetch("/mavops/restart-device/", { method: "POST", body: JSON.stringify({ device_id: deviceId }) });
-      flash("✓ Restart queued — agent will restart within 10s.");
-    }
+    try { await apiFetch("/mavops/restart-device/", { method: "POST", body: JSON.stringify({ device_id: deviceId }) }); flash("✓ Restart queued — agent will restart within 10s."); }
     catch { flash("Restart failed.", "err"); }
     finally { setRestartingDevice(null); }
   };
@@ -327,19 +336,37 @@ export default function MavOpsAdmin() {
   };
 
   // ── Impersonation ──────────────────────────────────────────────────────────
-  const impersonateOrg = async (org: Org) => {
+  const impersonateOrg = (org: Org, userId: number, username: string) => {
     localStorage.setItem("impersonating_org_id", String(org.id));
     localStorage.setItem("impersonating_org_name", org.name);
+    localStorage.setItem("impersonating_user_id", String(userId));
+    localStorage.setItem("impersonating_user_name", username);
     setImpersonatingOrg({ id: org.id, name: org.name });
-    window.open("/daily", "_blank");   // ← was just a flash message before
+    setViewAsPickerOrg(null);
+    window.open("/daily", "_blank");
+    flash(`✓ Opening as ${username} @ ${org.name}`);
   };
 
-  const clearImpersonation = async () => {
+  const clearImpersonation = () => {
     localStorage.removeItem("impersonating_org_id");
     localStorage.removeItem("impersonating_org_name");
+    localStorage.removeItem("impersonating_user_id");
+    localStorage.removeItem("impersonating_user_name");
     setImpersonatingOrg(null);
+    setViewAsPickerOrg(null);
     flash("✓ Impersonation cleared");
   };
+
+  // Close picker when clicking outside
+  useEffect(() => {
+    if (!viewAsPickerOrg) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-picker]")) setViewAsPickerOrg(null);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [viewAsPickerOrg]);
 
   if (!unlocked) return <PasswordGate onUnlock={handleUnlock} />;
 
@@ -349,7 +376,6 @@ export default function MavOpsAdmin() {
   const outdatedDevices = devices.filter(d => versionStatus(d.agent_version, latestVersion) === "outdated");
   const inactiveDevices = devices.filter(d => (Date.now() - new Date(d.last_seen).getTime()) > 7 * 86400000);
   const recentOrgs = [...orgs].filter(o => o.created_at).sort((a, b) => new Date(b.created_at!).getTime() - new Date(a.created_at!).getTime()).slice(0, 5);
-
   const filteredOrgs = orgs.filter(o => !search || o.name.toLowerCase().includes(search.toLowerCase()));
   const filteredDevices = devices.filter(d => {
     if (showInactiveOnly && (Date.now() - new Date(d.last_seen).getTime()) < 7 * 86400000) return false;
@@ -406,11 +432,14 @@ export default function MavOpsAdmin() {
       {impersonatingOrg && (
         <div style={{ background: "#92400e", borderBottom: `1px solid ${T.yellow}`, padding: "10px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: "#fef3c7", ...mono, position: "sticky", top: 57, zIndex: 9 }}>
           <span>
-            👁 Viewing app as <strong>{impersonatingOrg.name}</strong> (org #{impersonatingOrg.id}) —{" "}
-            <a href={`/analytics?org_id=${impersonatingOrg.id}`} target="_blank" rel="noreferrer" style={{ color: T.yellow, textDecoration: "underline" }}>
+            👁 Viewing as{" "}
+            <strong>{localStorage.getItem("impersonating_user_name") || "?"}</strong>
+            {" "}@{" "}
+            <strong>{impersonatingOrg.name}</strong>
+            {" "}(org #{impersonatingOrg.id}) —{" "}
+            <a href={`/analytics?org_id=${impersonatingOrg.id}&user_id=${localStorage.getItem("impersonating_user_id") || ""}`} target="_blank" rel="noreferrer" style={{ color: T.yellow, textDecoration: "underline" }}>
               open analytics
             </a>
-            {" "}to browse as this org
           </span>
           <button onClick={clearImpersonation} style={{ background: "none", border: `1px solid ${T.yellow}`, color: "#fef3c7", padding: "4px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>
             exit ×
@@ -491,6 +520,9 @@ export default function MavOpsAdmin() {
               const trialAlert = trialDays !== null && trialDays <= 7 && trialDays >= 0;
               const mrr_org = (SEAT_PRICES[org.plan] || 0) * org.seat_count;
               const isViewing = impersonatingOrg?.id === org.id;
+              const isPickerOpen = viewAsPickerOrg === org.id;
+              const members = orgMembers[org.id];
+
               return (
                 <div key={org.id} style={{ ...card, borderColor: isViewing ? T.purple + "99" : trialAlert ? T.yellow + "66" : T.border }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -500,7 +532,7 @@ export default function MavOpsAdmin() {
                         <Badge label={org.plan} color={org.plan === "trial" ? T.yellow : org.plan === "executive" ? T.purple : T.teal} />
                         {mrr_org > 0 && <span style={{ ...mono, fontSize: 12, color: T.green, fontWeight: 600 }}>${mrr_org.toFixed(0)}/mo</span>}
                         {trialAlert && <span style={{ ...mono, fontSize: 12, color: T.yellow, fontWeight: 600 }}>⚠ {trialDays}d left</span>}
-                        {isViewing && <Badge label="viewing as" color={T.purple} />}
+                        {isViewing && <Badge label={`viewing as ${localStorage.getItem("impersonating_user_name") || "?"}`} color={T.purple} />}
                       </div>
                       <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
                         <SeatBar used={org.member_count} total={org.seat_count} />
@@ -508,14 +540,120 @@ export default function MavOpsAdmin() {
                         {org.last_activity && <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>last active {timeAgo(org.last_activity)}</span>}
                       </div>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <Btn
-                        label={isViewing ? "✓ viewing" : "view as"}
-                        onClick={() => isViewing ? clearImpersonation() : impersonateOrg(org)}
-                        color={isViewing ? T.green : T.purple}
-                        outline={isViewing}
-                        small
-                      />
+
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {/* ── View As button + user picker dropdown ── */}
+                      <div style={{ position: "relative" }} data-picker>
+                        {isViewing ? (
+                          <Btn
+                            label="✓ viewing — exit"
+                            onClick={clearImpersonation}
+                            color={T.green}
+                            outline
+                            small
+                          />
+                        ) : (
+                          <Btn
+                            label={isPickerOpen ? "view as ▴" : "view as ▾"}
+                            onClick={() => {
+                              if (isPickerOpen) {
+                                setViewAsPickerOrg(null);
+                              } else {
+                                setViewAsPickerOrg(org.id);
+                                loadOrgMembers(org.id);
+                              }
+                            }}
+                            color={T.purple}
+                            small
+                          />
+                        )}
+
+                        {/* ── User picker dropdown ── */}
+                        {isPickerOpen && (
+                          <div data-picker style={{
+                            position: "absolute", top: "calc(100% + 6px)", right: 0,
+                            background: T.surface, border: `1px solid ${T.purple}66`,
+                            borderRadius: 6, zIndex: 50, minWidth: 260,
+                            boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+                          }}>
+                            {/* header */}
+                            <div style={{
+                              padding: "8px 14px", borderBottom: `1px solid ${T.border}`,
+                              fontSize: 10, color: T.textMuted, ...mono,
+                              letterSpacing: 1.5, textTransform: "uppercase" as const,
+                            }}>
+                              Select user to view as
+                            </div>
+
+                            {/* loading */}
+                            {membersLoading === org.id && (
+                              <div style={{ padding: "14px 16px", color: T.textMuted, fontSize: 12, ...mono }}>
+                                loading members…
+                              </div>
+                            )}
+
+                            {/* empty */}
+                            {members && members.length === 0 && (
+                              <div style={{ padding: "14px 16px", color: T.textMuted, fontSize: 12, ...mono }}>
+                                no members found
+                              </div>
+                            )}
+
+                            {/* member rows */}
+                            {members && members.map((member, idx) => (
+                              <button
+                                key={member.user_id}
+                                onClick={() => impersonateOrg(org, member.user_id, member.username)}
+                                style={{
+                                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                                  width: "100%", padding: "10px 14px",
+                                  background: "none", border: "none",
+                                  borderBottom: idx < members.length - 1 ? `1px solid ${T.border}` : "none",
+                                  cursor: "pointer", textAlign: "left" as const,
+                                }}
+                                onMouseEnter={e => (e.currentTarget.style.background = T.bg)}
+                                onMouseLeave={e => (e.currentTarget.style.background = "none")}
+                              >
+                                <div>
+                                  <div style={{ color: T.text, fontSize: 13, fontWeight: 600 }}>
+                                    {member.username}
+                                  </div>
+                                  <div style={{ color: T.textMuted, fontSize: 11, ...mono, marginTop: 2 }}>
+                                    {member.first_name || member.last_name
+                                      ? `${member.first_name} ${member.last_name}`.trim()
+                                      : member.email || "no email"}
+                                  </div>
+                                </div>
+                                <span style={{
+                                  fontSize: 10, color: T.textMuted, ...mono,
+                                  background: T.bg, padding: "2px 8px", borderRadius: 3,
+                                  border: `1px solid ${T.border}`, flexShrink: 0, marginLeft: 12,
+                                }}>
+                                  {member.role}
+                                </span>
+                              </button>
+                            ))}
+
+                            {/* cancel */}
+                            <div style={{ borderTop: `1px solid ${T.border}` }}>
+                              <button
+                                onClick={() => setViewAsPickerOrg(null)}
+                                style={{
+                                  width: "100%", padding: "8px 14px", background: "none",
+                                  border: "none", color: T.textMuted, cursor: "pointer",
+                                  fontSize: 11, ...mono, textAlign: "center" as const,
+                                }}
+                                onMouseEnter={e => (e.currentTarget.style.color = T.text)}
+                                onMouseLeave={e => (e.currentTarget.style.color = T.textMuted)}
+                              >
+                                cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ── Quick nav buttons ── */}
                       {(["devices", "logs", "errors"] as const).map(t => (
                         <Btn key={t} label={t} onClick={() => { setFilterOrg(org.id); setTab(t); }} outline color={T.textSub} small />
                       ))}
@@ -568,13 +706,7 @@ export default function MavOpsAdmin() {
                     <div style={{ display: "flex", gap: 8 }}>
                       <Btn label="view logs" onClick={() => { setFilterHostname(d.machine_name); setTab("logs"); }} outline />
                       <Btn label={requestingDevice === d.device_id ? "requesting…" : "request logs"} onClick={() => d.device_id ? requestLogs(d.device_id) : flash("No device_id", "err")} disabled={requestingDevice === d.device_id} />
-                      <Btn
-                        label={restartingDevice === d.device_id ? "restarting…" : "restart"}
-                        onClick={() => restartDevice(d.device_id)}
-                        outline
-                        color={T.yellow}
-                        disabled={restartingDevice === d.device_id}
-                      />
+                      <Btn label={restartingDevice === d.device_id ? "restarting…" : "restart"} onClick={() => restartDevice(d.device_id)} outline color={T.yellow} disabled={restartingDevice === d.device_id} />
                     </div>
                   </div>
                 </div>
@@ -645,13 +777,11 @@ export default function MavOpsAdmin() {
                 )}
               </>
             )}
-
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
               {(["all", "open", "resolved"] as const).map(f => (
                 <button key={f} onClick={() => setFilterResolved(f)} style={{ background: filterResolved === f ? T.teal + "25" : "transparent", border: `1px solid ${filterResolved === f ? T.teal : T.border}`, color: filterResolved === f ? T.teal : T.textSub, padding: "6px 16px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono, textTransform: "capitalize" as const, fontWeight: filterResolved === f ? 600 : 400 }}>{f}</button>
               ))}
             </div>
-
             {errors.map(e => (
               <div key={e.id} style={{ ...card, borderColor: e.resolved ? T.border : T.red + "55", opacity: e.resolved ? 0.55 : 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>

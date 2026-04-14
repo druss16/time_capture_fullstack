@@ -433,3 +433,27 @@ def impersonation_status(request):
             "org_name": request.session.get("admin_impersonating_org_name"),
         })
     return Response({"is_impersonating": False})
+
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_org_members(request, org_id):
+    """
+    GET /api/mavops/orgs/<org_id>/members/
+    Returns all members of an org for the user picker.
+    """
+    memberships = OrganizationMembership.objects.filter(
+        organization_id=org_id
+    ).select_related('user').order_by('user__username')
+
+    return Response({
+        'members': [{
+            'user_id': m.user.id,
+            'username': m.user.username,
+            'email': m.user.email or '',
+            'first_name': m.user.first_name or '',
+            'last_name': m.user.last_name or '',
+            'role': m.role,
+        } for m in memberships]
+    })

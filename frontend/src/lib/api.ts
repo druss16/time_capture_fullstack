@@ -38,12 +38,14 @@ function extractErrorMessage(body: any): string {
 // Safe JSON fetch with token-based auth
 // ============================================================================
 export async function safeFetchJson<T = any>(input: string, init: RequestInit = {}): Promise<T> {
-  // ── Org impersonation override ──────────────────────────────────────────
-  const impersonatingOrgId = localStorage.getItem("impersonating_org_id");
+  // ── Org + user impersonation override ───────────────────────────────────
+  const impersonatingOrgId  = localStorage.getItem("impersonating_org_id");
+  const impersonatingUserId = localStorage.getItem("impersonating_user_id");
   if (impersonatingOrgId) {
     try {
       const u = new URL(input, window.location.origin);
       u.searchParams.set("org_id", impersonatingOrgId);
+      if (impersonatingUserId) u.searchParams.set("user_id", impersonatingUserId);
       input = u.toString();
     } catch {}
   }

@@ -117,8 +117,9 @@ function AccountLayoutWrapper() {
 
 
 function ImpersonationBanner() {
-  const [orgId,   setOrgId]   = useState(() => localStorage.getItem("impersonating_org_id"));
+  const [orgId, setOrgId]     = useState(() => localStorage.getItem("impersonating_org_id"));
   const [orgName, setOrgName] = useState(() => localStorage.getItem("impersonating_org_name"));
+  const [userName, setUserName] = useState(() => localStorage.getItem("impersonating_user_name"));
   if (!orgId) return null;
   return (
     <div style={{
@@ -126,13 +127,16 @@ function ImpersonationBanner() {
       fontSize: 13, display: "flex", justifyContent: "space-between",
       alignItems: "center", fontFamily: "monospace",
     }}>
-      <span>👁 MavOps Admin — viewing as <strong>{orgName}</strong> (org #{orgId})</span>
+      <span>
+        👁 MavOps Admin — viewing as <strong>{userName}</strong> @ <strong>{orgName}</strong>
+      </span>
       <button onClick={() => {
         localStorage.removeItem("impersonating_org_id");
         localStorage.removeItem("impersonating_org_name");
-        setOrgId(null);
-        setOrgName(null);
-        window.location.reload(); // reload so all data refetches as real org
+        localStorage.removeItem("impersonating_user_id");
+        localStorage.removeItem("impersonating_user_name");
+        setOrgId(null); setOrgName(null); setUserName(null);
+        window.location.reload();
       }} style={{
         background: "none", border: "1px solid #fef3c7aa", color: "#fef3c7",
         padding: "3px 14px", cursor: "pointer", borderRadius: 4, fontSize: 12,

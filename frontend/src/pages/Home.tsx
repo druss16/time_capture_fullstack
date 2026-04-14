@@ -758,7 +758,7 @@ export default function Home() {
   return (
     <div style={{ fontFamily:"'DM Sans', sans-serif", background:"#F4FAFA", color:"#0D1F1E", minHeight:"100vh" }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap');
+        /* Font loaded via <link> in index.html */
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0} html{scroll-behavior:smooth}
         :root{--teal:#2B9D90;--teal-dark:#1F7269;--teal-mid:#34B5A7;--teal-light:#E6F5F4;--teal-border:#B8DDD9;--text:#0D1F1E;--text-2:#3D5C58;--text-3:#7A9E9A;--line:#DDE9E8;--bg:#F4FAFA;--white:#FFFFFF}
         a{text-decoration:none;color:inherit}
@@ -792,7 +792,7 @@ export default function Home() {
         .mfade-l{position:absolute;left:0;top:0;bottom:0;width:72px;z-index:2;background:linear-gradient(to right,#fff,transparent);pointer-events:none}
         .mfade-r{position:absolute;right:0;top:0;bottom:0;width:72px;z-index:2;background:linear-gradient(to left,#fff,transparent);pointer-events:none}
         @keyframes marquee{from{transform:translateX(0)}to{transform:translateX(-50%)}}
-        .marquee-track{display:flex;gap:10px;white-space:nowrap;animation:marquee 38s linear infinite}
+        .marquee-track{display:flex;gap:10px;white-space:nowrap;animation:marquee 38s linear infinite;will-change:transform}
         .int-chip{display:inline-flex;align-items:center;gap:10px;padding:9px 15px;border-radius:10px;border:1px solid var(--line);background:var(--bg);flex-shrink:0;transition:border-color 0.15s} .int-chip:hover{border-color:var(--teal-border)}
         .int-logo-wrap{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:#fff;overflow:hidden;border:1px solid rgba(0,0,0,0.05);}
         .int-logo{width:22px;height:22px;object-fit:contain;}
@@ -804,7 +804,7 @@ export default function Home() {
         .section-h2{font-size:clamp(22px,2.5vw,30px);font-weight:700;letter-spacing:-0.02em;line-height:1.15;color:var(--text-2);margin-bottom:16px}
         .section-sub{font-size:15px;color:var(--text-3);line-height:1.6;max-width:520px;margin-bottom:40px;margin-top:8px}
         .hr{border:none;border-top:1px solid var(--line)}
-        .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+        .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;content-visibility:auto;contain-intrinsic-size:0 600px}
         @media(max-width:768px){.steps{grid-template-columns:1fr}}
         .step-card{background:var(--white);border:1px solid var(--line);border-radius:20px;padding:28px 28px 32px;transition:transform 0.2s,box-shadow 0.2s,border-color 0.2s;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:0}
         .step-card::before{content:attr(data-step);position:absolute;top:-10px;right:20px;font-size:80px;font-weight:900;letter-spacing:-0.05em;color:var(--teal-light);line-height:1;pointer-events:none;user-select:none}
@@ -813,7 +813,7 @@ export default function Home() {
         .step-anim{margin-bottom:20px;border-radius:12px;overflow:hidden;background:#F8FAF9;border:1px solid var(--line)}
         .step-card h3{font-size:18px;font-weight:800;letter-spacing:-0.02em;margin-bottom:8px;color:var(--text)}
         .step-card p{font-size:13.5px;color:var(--text-2);line-height:1.7}
-        .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+        .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;content-visibility:auto;contain-intrinsic-size:0 800px}
         @media(max-width:900px){.feat-grid{grid-template-columns:repeat(2,1fr)}}
         @media(max-width:560px){.feat-grid{grid-template-columns:1fr}}
         .feat-card{background:var(--white);border:1px solid var(--line);border-radius:20px;padding:32px 28px;transition:transform 0.2s,box-shadow 0.2s,border-color 0.2s;display:flex;flex-direction:column;gap:0}
@@ -893,7 +893,7 @@ export default function Home() {
           <div>
             <div className="hero-eyebrow"><span className="hero-dot"/>Purpose-built for CPA firms</div>
             <h1 className="hero-h1">Recover hours.<br/>Reveal profit.<br/><em>Run smarter.</em></h1>
-            <p className="hero-sub">TimeTracker is an AI-powered time intelligence platform that eliminates human error, captures every billable minute, and unlocks real margin visibilty – allowing leaders to grow with confidence.</p>
+            <p className="hero-sub">TimeTracker is an AI-powered time intelligence platform that eliminates manual timesheets, captures every billable minute, and gives firm leaders the margin data to grow with confidence.</p>
             <div className="hero-btns">
               <a href="/request-access" className="btn-hero-primary">Get Started <ArrowRight size={16}/></a>
               <a href="#how-it-works" className="btn-hero-ghost">Learn How It Works</a>

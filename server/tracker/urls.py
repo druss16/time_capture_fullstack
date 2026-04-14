@@ -14,7 +14,7 @@ router.register(r'blocks-api', views.BlockCategorizationViewSet, basename='block
 
 # ✅ ADD: Billing ViewSets
 router.register(r'billing/rates', views_billing.BillingRateViewSet, basename='billing-rate')
-router.register(r'billing/timesheets', views_billing.TimesheetViewSet, basename='timesheet')
+# router.register(r'billing/timesheets', views_billing.TimesheetViewSet, basename='timesheet')
 
 
 urlpatterns = [

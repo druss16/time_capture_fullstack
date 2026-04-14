@@ -219,6 +219,15 @@ def get_request_org_override(request):
             pass
     return get_org_or_default(request)
 
+def get_request_user_override(request):
+    override_uid = request.GET.get("user_id")
+    if override_uid and (request.user.is_staff or request.user.is_superuser):
+        try:
+            return User.objects.get(id=int(override_uid))
+        except (User.DoesNotExist, ValueError, TypeError):
+            pass
+    return request.user
+
 def match_client_in_text(text: str, clients: list, known_entities: list = None) -> list:
     """
     Smart client matching that handles various naming patterns.
@@ -4186,8 +4195,9 @@ def today_time(request):
     from django.utils.dateparse import parse_date
     
     from tracker.utils.display_names import format_block_for_display, format_duration
-    
-    user = request.user
+
+    # ── Impersonation override ──
+    user = get_request_user_override(request)  # ← swap this in
     
     if not user.is_authenticated:
         return Response(

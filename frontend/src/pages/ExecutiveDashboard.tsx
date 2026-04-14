@@ -496,7 +496,8 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
   const cycletime  = (kpis.invoice_cycle_time    ?? {}) as Partial<CycleTimeKPI>;
 
   const params = new URLSearchParams(window.location.search);
-  const isAdminOverride = !!params.get("org_id");
+  const isAdminOverride = !!params.get("org_id") 
+    || !!localStorage.getItem("impersonating_org_id");
   const canAccessAnalysis = isExecutivePlan(meta.plan) || isAdminOverride;
 
   // chart data

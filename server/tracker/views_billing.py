@@ -287,6 +287,242 @@ class TimesheetViewSet(viewsets.ModelViewSet):
         except ValueError as e:
             return Response({'error': str(e)}, status=400)
 
+    # ============================================================================
+    # ADD THIS @action to TimesheetViewSet in views_billing.py
+    # Paste it after the existing `reopen` action
+    # ============================================================================
+
+    @action(detail=True, methods=['get'], url_path='detail')
+    def detail_view(self, request, pk=None):
+        """
+        Full timesheet detail for manager drawer review.
+        Returns: entries grid + daily block timeline.
+        """
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization'}, status=400)
+
+        # Permission: managers can view anyone's, members only their own
+        membership = OrganizationMembership.objects.filter(
+            user=request.user, organization=org
+        ).first()
+        if not membership:
+            return Response({'error': 'No membership'}, status=403)
+
+        is_manager = membership.role in ('owner', 'admin', 'manager')
+
+        try:
+            if is_manager:
+                timesheet = Timesheet.objects.select_related('user').get(pk=pk, org=org)
+            else:
+                timesheet = Timesheet.objects.select_related('user').get(
+                    pk=pk, org=org, user=request.user
+                )
+        except Timesheet.DoesNotExist:
+            return Response({'error': 'Not found.'}, status=404)
+
+        week_start = timesheet.week_start
+        week_end   = week_start + timedelta(days=6)
+        day_strings = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
+
+        ts_user = timesheet.user
+
+        # ── Build entries grid (same event-based logic as weekly_timesheet_view) ──
+        import datetime as dt_module
+        from datetime import timezone as dt_timezone
+        from django.utils.timezone import localtime
+
+        tz = timezone.get_current_timezone()
+        start_utc = timezone.make_aware(
+            dt_module.datetime.combine(week_start, dt_module.time.min), tz
+        ).astimezone(dt_timezone.utc)
+        end_utc = timezone.make_aware(
+            dt_module.datetime.combine(week_end, dt_module.time.max), tz
+        ).astimezone(dt_timezone.utc)
+
+        from tracker.models import RawEvent
+        events = list(RawEvent.objects.filter(
+            user=ts_user,
+            ts_utc__gte=start_utc,
+            ts_utc__lt=end_utc,
+        ).select_related('block', 'block__client', 'block__task_type').order_by('ts_utc'))
+
+        deleted_block_ids = set(
+            Block.objects.filter(user=ts_user, deleted_at__isnull=False)
+            .values_list('id', flat=True)
+        )
+
+        grid = {}
+        IDLE_CAP = 180  # seconds
+
+        for i, event in enumerate(events):
+            if i + 1 < len(events):
+                gap = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+                duration_min = min(gap, IDLE_CAP) / 60.0
+            else:
+                duration_min = 3.0
+
+            block = event.block
+            if block and block.id in deleted_block_ids:
+                block = None
+
+            if block and block.client_id:
+                client_id      = block.client_id
+                client_name    = block.client.name if block.client else 'Unassigned'
+                task_type_id   = block.task_type_id
+                task_type_name = block.task_type.name if block.task_type else 'General'
+                is_billable    = block.is_billable
+            else:
+                client_id = None; client_name = 'Unassigned'
+                task_type_id = None; task_type_name = 'General'; is_billable = False
+
+            day_str = localtime(event.ts_utc).date().isoformat()
+            if day_str not in day_strings:
+                continue
+
+            key = (client_id, task_type_id)
+            if key not in grid:
+                grid[key] = {
+                    'client_id': client_id, 'client_name': client_name,
+                    'task_type_id': task_type_id, 'task_type_name': task_type_name,
+                    'is_billable': is_billable,
+                    'day_minutes': {d: 0.0 for d in day_strings},
+                }
+            grid[key]['day_minutes'][day_str] += duration_min
+
+        # Mobile blocks
+        for block in Block.objects.filter(
+            user=ts_user, org=org, hostname='mobile',
+            start__gte=start_utc, start__lte=end_utc,
+            is_categorized=True, client__isnull=False, deleted_at__isnull=True,
+        ).select_related('client', 'task_type'):
+            day_str = localtime(block.start).date().isoformat()
+            if day_str not in day_strings:
+                continue
+            key = (block.client_id, block.task_type_id)
+            minutes = float(block.minutes or 0)
+            if key not in grid:
+                grid[key] = {
+                    'client_id': block.client_id,
+                    'client_name': block.client.name,
+                    'task_type_id': block.task_type_id,
+                    'task_type_name': block.task_type.name if block.task_type else 'General',
+                    'is_billable': block.is_billable,
+                    'day_minutes': {d: 0.0 for d in day_strings},
+                }
+            grid[key]['day_minutes'][day_str] += minutes
+
+        entries = []
+        daily_totals  = {d: 0.0 for d in day_strings}
+        grand_total   = 0.0
+        billable_total = 0.0
+
+        for data in grid.values():
+            day_hours = {}
+            row_minutes = 0.0
+            for d in day_strings:
+                m = data['day_minutes'][d]
+                day_hours[d] = round(m / 60, 2)
+                daily_totals[d] += m
+                row_minutes += m
+            row_total = round(row_minutes / 60, 2)
+            grand_total += row_total
+            if data['is_billable']:
+                billable_total += row_total
+            entries.append({
+                'client_id':      data['client_id'],
+                'client_name':    data['client_name'],
+                'task_type_id':   data['task_type_id'],
+                'task_type_name': data['task_type_name'],
+                'is_billable':    data['is_billable'],
+                'days':           day_hours,
+                'total':          row_total,
+            })
+
+        entries.sort(key=lambda e: (not e['is_billable'], e['client_name'] or ''))
+        daily_totals_hours = {d: round(m / 60, 2) for d, m in daily_totals.items()}
+
+        # ── Block-level timeline ──────────────────────────────────────────────
+        # Use compacted blocks (not raw events) for the timeline view —
+        # gives managers clean "I worked on X from 9am–11am" view.
+        blocks_qs = Block.objects.filter(
+            user=ts_user,
+            org=org,
+            start__gte=start_utc,
+            start__lte=end_utc,
+            deleted_at__isnull=True,
+        ).select_related('client', 'task_type').order_by('start')
+
+        days_map = {d: [] for d in day_strings}
+
+        for block in blocks_qs:
+            if not block.start:
+                continue
+            day_str = localtime(block.start).date().isoformat()
+            if day_str not in days_map:
+                continue
+
+            end_dt = block.end if block.end else None
+            duration_minutes = 0
+            if block.end and block.end > block.start:
+                duration_minutes = int((block.end - block.start).total_seconds() // 60)
+            elif block.minutes:
+                duration_minutes = int(block.minutes)
+
+            # Try to get classification source from ClassificationAudit
+            classification_source = None
+            ai_confidence = None
+            try:
+                from tracker.models import ClassificationAudit
+                audit = ClassificationAudit.objects.filter(block=block).order_by('-created_at').first()
+                if audit:
+                    classification_source = getattr(audit, 'source', None)
+                    ai_confidence = float(audit.confidence) if getattr(audit, 'confidence', None) is not None else None
+            except Exception:
+                pass
+
+            days_map[day_str].append({
+                'id':                    block.id,
+                'started_at':            block.start.isoformat(),
+                'ended_at':              end_dt.isoformat() if end_dt else None,
+                'duration_minutes':      duration_minutes,
+                'client_name':           block.client.name if block.client else None,
+                'task_type_name':        block.task_type.name if block.task_type else None,
+                'is_billable':           block.is_billable,
+                'window_title':          getattr(block, 'window_title', None),
+                'application':           getattr(block, 'application', None),
+                'classification_source': classification_source,
+                'ai_confidence':         ai_confidence,
+                'taxpayer_name':         getattr(block, 'taxpayer_name', None),
+            })
+
+        days_list = [
+            {
+                'date':          d,
+                'blocks':        days_map[d],
+                'total_minutes': sum(b['duration_minutes'] for b in days_map[d]),
+            }
+            for d in day_strings
+        ]
+
+        return Response({
+            'timesheet_id':    timesheet.id,
+            'user_name':       f"{ts_user.first_name} {ts_user.last_name}".strip() or ts_user.username,
+            'user_email':      ts_user.email,
+            'week_start':      week_start.isoformat(),
+            'week_end':        week_end.isoformat(),
+            'status':          timesheet.status,
+            'auto_submitted':  getattr(timesheet, 'auto_submitted', False),
+            'submitted_at':    timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
+            'submitted_notes': timesheet.submitted_notes or '',
+            'rejection_reason': getattr(timesheet, 'rejection_reason', None) or '',
+            'entries':         entries,
+            'daily_totals':    daily_totals_hours,
+            'grand_total':     round(grand_total, 2),
+            'billable_total':  round(billable_total, 2),
+            'days':            days_list,
+        })
+
 
 # ===============================
 # APPROVAL QUEUE

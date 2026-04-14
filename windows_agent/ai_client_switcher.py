@@ -1169,7 +1169,8 @@ class AIClientSwitcher:
 
     def _should_skip(self, title: str, exe_name: str) -> bool:
         # Use shared suppression list (same set as block_classifier Stage 0)
-        if title.lower().strip() in GENERIC_TAX_DIALOGS:
+        title_lower = title.lower().strip()
+        if any(title_lower == d or title_lower.startswith(d) for d in GENERIC_TAX_DIALOGS):
             return True
 
         if exe_name and exe_name.lower() in self._skip_exes:

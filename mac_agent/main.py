@@ -85,9 +85,58 @@ except ImportError:
     AIClientSwitcher = None
     print("[WARN] ai_client_switcher not found — disabled")
 
+try:
+    from mac_watchdog import heartbeat_touch, start_watchdog
+    MAC_WATCHDOG_AVAILABLE = True
+except ImportError:
+    MAC_WATCHDOG_AVAILABLE = False
+    print("[WARN] mac_watchdog not found — watchdog disabled")
+    def heartbeat_touch():
+        return time.time()
+
 sync = None  # Global sync manager, initialized in run_agent()
 notif_manager = None  # Global notification manager, initialized in run_agent()
 ai_switcher = None          # ← ADD THIS
+
+# ── Local client cache ────────────────────────────────────────────────────────
+# Eliminates the HTTP round-trip in write_event() every 5 seconds.
+# Updated by _apply_client_switch(). Safety-net backend refresh every 60s.
+_cached_client_id: Optional[int] = None
+_cached_client_name: Optional[str] = None
+_cached_client_updated: float = 0.0
+_CLIENT_CACHE_TTL = 60.0
+_client_cache_lock = threading.Lock()
+
+
+def _set_cached_client(client_id, client_name):
+    global _cached_client_id, _cached_client_name, _cached_client_updated
+    with _client_cache_lock:
+        _cached_client_id = client_id
+        _cached_client_name = client_name
+        _cached_client_updated = time.time()
+
+
+def _get_cached_client():
+    global _cached_client_id, _cached_client_name, _cached_client_updated
+    now = time.time()
+    with _client_cache_lock:
+        if (now - _cached_client_updated) < _CLIENT_CACHE_TTL:
+            return _cached_client_id, _cached_client_name
+    # Stale — refresh from backend
+    api_key = config.get("api_key") or API_KEY
+    if api_key and API_BASE:
+        try:
+            current = get_current_client_from_backend(API_BASE, api_key)
+            if current:
+                cid = current.get("client_id")
+                cname = current.get("client_name")
+                _set_cached_client(cid, cname)
+                return cid, cname
+        except Exception as e:
+            log(f"[CLIENT-CACHE] Backend refresh failed: {e}")
+    with _client_cache_lock:
+        return _cached_client_id, _cached_client_name
+
 
 
 # Push notifications for client reminders
@@ -639,6 +688,8 @@ def _apply_client_switch(client_id, client_name, source="unknown"):
     api_key_val = config.get("api_key") or API_KEY
     if api_key_val and API_BASE:
         set_current_client_backend(API_BASE, api_key_val, client_id)
+        _set_cached_client(client_id, client_name)
+
     
     if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
         gui_menu_bar.state.set_client(client_id, client_name)
@@ -802,6 +853,75 @@ def report_error_to_backend(
     # Send async to not block
     threading.Thread(target=_send, daemon=True).start()
     return True
+
+_last_log_ship: float = 0.0
+
+def ship_logs_to_backend(tail_lines: int = 500, trigger: str = "scheduled"):
+    """
+    Ship the last N lines of agent.log to the backend for remote debugging.
+    Called by the watchdog before exit, and every 30 min by background thread.
+    """
+    api_key = config.get("api_key") or API_KEY
+    if not api_key or not API_BASE:
+        return False
+
+    log_lines = []
+    try:
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                log_lines = f.readlines()[-tail_lines:]
+    except Exception as e:
+        log(f"[LOG-SHIP] Failed to read log: {e}")
+        return False
+
+    if not log_lines:
+        return False
+
+    url = f"{API_BASE}/agent/logs/"
+    payload = {
+        "device_id": get_device_id(),
+        "hostname": platform.node(),
+        "os_username": get_os_username(),
+        "app_version": APP_VERSION,
+        "platform": "macos",
+        "trigger": trigger,
+        "log_lines": log_lines,
+        "log_line_count": len(log_lines),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    def _send():
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                method="POST",
+            )
+            req.add_header("Authorization", f"DeviceKey {api_key}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                log(f"[LOG-SHIP] ✅ Shipped {len(log_lines)} lines ({trigger})")
+        except Exception as e:
+            log(f"[LOG-SHIP] Failed: {e}")
+
+    threading.Thread(target=_send, daemon=True).start()
+    return True
+
+
+def start_log_shipping(interval_minutes: int = 30):
+    """Start background thread that ships logs every N minutes."""
+    def _loop():
+        time.sleep(120)  # Wait a bit after startup before first ship
+        while True:
+            try:
+                ship_logs_to_backend(tail_lines=500, trigger="scheduled")
+            except Exception as e:
+                log(f"[LOG-SHIP] Scheduled ship error: {e}")
+            time.sleep(interval_minutes * 60)
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    log(f"[LOG-SHIP] Started — shipping every {interval_minutes} min")
 
 def maybe_suggest_client(detected_client: dict, current_client_id: int):
     """
@@ -2203,18 +2323,8 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
     )
     conn.commit()
 
-    api_key = config.get("api_key") or API_KEY
-    current_client_id = None
-    current_client_name = None
-
-    if api_key and API_BASE:
-        try:
-            current = get_current_client_from_backend(API_BASE, api_key)
-            if current and current.get("client_id"):
-                current_client_id = current["client_id"]
-                current_client_name = current.get("client_name")
-        except Exception as e:
-            log(f"[CLIENT] Failed to get current client: {e}")
+    # Use local cache — no HTTP call every 5 seconds
+    current_client_id, current_client_name = _get_cached_client()
 
     # Update notification state with current client
     if notif_manager:
@@ -2395,12 +2505,25 @@ def run_agent():
             global _wake_idle_bypass_until
             log("[WAKE] System woke — exiting for LaunchAgent restart")
             _wake_idle_bypass_until = time.time() + 30
-            
+
+            # Notify update checker so it waits for network before checking updates
+            try:
+                from update_checker import notify_wake as _notify_wake
+                _notify_wake()
+            except Exception:
+                pass
+
+            # Ship logs before exit so backend has context if restart fails
+            try:
+                ship_logs_to_backend(tail_lines=100, trigger="pre_wake_exit")
+            except Exception:
+                pass
+
             def _restart():
-                time.sleep(5)
+                time.sleep(3)
                 log("[WAKE] Forcing exit — LaunchAgent will restart cleanly")
-                os._exit(1)  # Non-zero → LaunchAgent restarts automatically
-            
+                os._exit(1)  # Non-zero exit → LaunchAgent KeepAlive restarts us
+
             threading.Thread(target=_restart, daemon=True).start()
             
         nc = NSWorkspace.sharedWorkspace().notificationCenter()
@@ -2515,14 +2638,23 @@ def run_agent():
         
         def on_sync_update():
             log(f"[SYNC] Data updated: {len(sync.clients)} clients")
-            log(f"[SYNC DEBUG] sync id={id(sync)}, gui_menu_bar={getattr(sync, 'gui_menu_bar', 'MISSING')}")
-            
+
             if sync.gui_menu_bar and hasattr(sync.gui_menu_bar, 'refresh_client_menu'):
                 sync.gui_menu_bar.refresh_client_menu(sync.clients)
                 log("[SYNC] GUI menu refreshed")
             else:
                 log("[SYNC] GUI not ready yet")
-                
+
+            # Apply org settings delivered in /sync/full/ payload
+            if hasattr(sync, 'org_settings') and sync.org_settings:
+                new_idle_s = sync.org_settings.get("mouse_idle_pause_seconds")
+                if new_idle_s is not None:
+                    global MOUSE_IDLE_PAUSE_S
+                    new_idle_s = int(new_idle_s)
+                    if new_idle_s != MOUSE_IDLE_PAUSE_S:
+                        log(f"[SYNC] Idle timeout updated: {MOUSE_IDLE_PAUSE_S}s → {new_idle_s}s")
+                        MOUSE_IDLE_PAUSE_S = new_idle_s
+
         sync.on_update = on_sync_update
         sync.start()  # Start background polling
         log(f"[SYNC] Started - polling every {sync.poll_interval}s")
@@ -2977,6 +3109,9 @@ def run_agent():
                 if _original_on_sync:
                     _original_on_sync()
                 ai_switcher.update_clients(sync.clients)
+                # Push org client patterns (Tier-0 rules) to switcher
+                if hasattr(sync, 'client_patterns') and sync.client_patterns:
+                    ai_switcher.update_client_patterns(sync.client_patterns)
                 # Push org AI sensitivity setting to the switcher on every sync
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
@@ -2991,12 +3126,22 @@ def run_agent():
 
     _tracking_stop_event = threading.Event()
 
+    # Heartbeat timestamp — updated at top of every loop iteration.
+    # mac_watchdog fires os._exit(1) if this goes stale > 90s.
+    _last_detect_heartbeat = heartbeat_touch()  # initializes to time.time()
+
+    # Idle wall-clock timestamp — set when entering idle, cleared on exit.
+    # Used by the idle safety cap to prevent multi-hour idle blocks.
+    _idle_entered_at: float = 0.0
+    _IDLE_WALL_CAP_SECONDS = 1800  # 30 minutes — matches Windows _IDLE_WATCHDOG_MAX_MINUTES
+
 
     # === TRACKING LOOP FUNCTION ===
 
     def tracking_loop():
+        import traceback  # ensure available for format_exc() calls in except blocks
         global _last_subscription_check, _subscription_active
-        nonlocal _last_detect_heartbeat
+        nonlocal _last_detect_heartbeat, _idle_entered_at
 
         """Main tracking loop - monitors frontmost app and records dwell time"""
         print("[TRACKING] Initializing...")
@@ -3023,6 +3168,12 @@ def run_agent():
         try:
             while not _tracking_stop_event.is_set():
                 try:
+                    # ── Heartbeat: MUST be first ──────────────────────────────────
+                    # If anything below blocks (osascript hang, Quartz freeze after
+                    # wake), this timestamp goes stale and mac_watchdog fires
+                    # os._exit(1) after WATCHDOG_FROZEN_THRESHOLD (90s).
+                    _last_detect_heartbeat = heartbeat_touch()
+
                     # === SUBSCRIPTION CHECK ===
                     if not _subscription_active:
                         now = time.time()
@@ -3129,14 +3280,47 @@ def run_agent():
                             else:
                                 dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
                             last_flush_time = None
+                            _idle_entered_at = time.time()  # wall-clock cap starts here
                             if not force_idle:
                                 log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
                         
+                        # ── Idle wall-clock safety cap ─────────────────────────────
+                        # Prevents multi-hour idle blocks caused by Power Nap or
+                        # partial wake cycles where os._exit(1) didn't fire cleanly.
+                        if _idle_entered_at > 0 and current_sig == IDLE_SIG:
+                            wall_idle = time.time() - _idle_entered_at
+                            if wall_idle > _IDLE_WALL_CAP_SECONDS:
+                                log(
+                                    f"[IDLE-CAP] ⚠️ Idle wall-clock cap hit "
+                                    f"({int(wall_idle)}s > {_IDLE_WALL_CAP_SECONDS}s) — "
+                                    f"force-flushing idle block"
+                                )
+                                report_error_to_backend(
+                                    "idle_wall_cap",
+                                    f"Idle cap hit: {int(wall_idle)}s",
+                                    context={
+                                        "wall_idle_seconds": wall_idle,
+                                        "hostname": platform.node(),
+                                    },
+                                )
+                                if dwell_start:
+                                    dwell = time.time() - dwell_start
+                                    if dwell >= MIN_DWELL_SECONDS:
+                                        write_event(
+                                            conn, cur, os_user, hostname,
+                                            IDLE_SIG, ts_override=dwell_start
+                                        )
+                                current_sig = None
+                                dwell_start = None
+                                last_flush_time = None
+                                _idle_entered_at = 0.0
+                                continue
+
                         if force_idle:
                             time.sleep(POLL_SECONDS * 3)
                         else:
                             time.sleep(POLL_SECONDS)
-                        _last_detect_heartbeat = time.time()  # ← ADD THIS
+                        _last_detect_heartbeat = heartbeat_touch()
                         consecutive_errors = 0
                         continue
 
@@ -3155,7 +3339,7 @@ def run_agent():
                             log(f"[MEETING] In meeting ({current_sig[0]}), skipping idle check "
                                 f"(mouse idle {int(idle)}s, dwell {int(now - dwell_start)}s)")
                         time.sleep(POLL_SECONDS)
-                        _last_detect_heartbeat = time.time()  # ← ADD HERE TOO
+                        _last_detect_heartbeat = heartbeat_touch()
                         consecutive_errors = 0
                         continue
 
@@ -3179,11 +3363,13 @@ def run_agent():
                             current_sig = None
                             dwell_start = None
                             last_flush_time = None
+                            _idle_entered_at = 0.0  # clear on idle exit
+
 
                     # ── FIX: Reuse the peek we already did (no double call) ──
                     front = front_peek
                     if front:
-                        _last_detect_heartbeat = time.time()  # ← ADD THIS
+                        _last_detect_heartbeat = heartbeat_touch()
                     if not front:
                         if PRINT_EVERY_POLL:
                             log("[POLL] No frontmost")
@@ -3350,39 +3536,17 @@ def run_agent():
     # === RE-CHECK FOR UPDATES EVERY HOUR ===
     start_background_checker(API_BASE, APP_VERSION)
 
-    # Global heartbeat - update every time we successfully detect an app
-    _last_detect_heartbeat = time.time()
-
-    # In the active detection path (after get_frontmost_app returns something):
-    _last_detect_heartbeat = time.time()
-
-    # === WATCHDOG: Restart tracking if it dies ===
-    # In watchdog:
-    def watchdog():
-        nonlocal tracking_thread, _tracking_stop_event
-        while True:
-            time.sleep(30)
-            if not tracking_thread.is_alive():
-                log("[WATCHDOG] ⚠️ Thread dead - restarting")
-                _tracking_stop_event = threading.Event()
-                tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
-                tracking_thread.start()
-            else:
-                heartbeat_age = time.time() - _last_detect_heartbeat
-                since_wake = time.time() - (_wake_idle_bypass_until - 30)
-                if since_wake < 60:
-                    continue
-                if heartbeat_age > 600:
-                    log(f"[WATCHDOG] ⚠️ Restarting frozen thread")
-                    subprocess.run(["pkill", "-f", "osascript"], capture_output=True)
-                    _tracking_stop_event.set()  # ← signal old thread to exit
-                    time.sleep(2)               # ← give it time to die
-                    _tracking_stop_event = threading.Event()  # ← fresh event
-                    tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
-                    tracking_thread.start()
-        watchdog_thread = threading.Thread(target=watchdog, daemon=True)
-        watchdog_thread.start()
-        log("[WATCHDOG] Started watchdog thread")
+    # === LOG SHIPPING (every 30 min → backend visibility for remote debugging) ===
+    start_log_shipping(interval_minutes=30)
+    # === WATCHDOG: Detect dead OR frozen tracking thread ===
+    # Uses mac_watchdog.py heartbeat system (ported from Windows watchdog.py).
+    # Detects hard freezes (osascript/Quartz blocking) via heartbeat staleness.
+    # On freeze/death: os._exit(1) → LaunchAgent KeepAlive restarts cleanly.
+    if MAC_WATCHDOG_AVAILABLE:
+        _thread_ref = [tracking_thread]
+        start_watchdog(_thread_ref, tracking_loop, log, report_error_to_backend)
+    else:
+        log("[WATCHDOG] ⚠️ mac_watchdog not available — running without freeze detection")
 
     # === RUN GUI IN MAIN THREAD ===
     if gui_menu_bar and GUI_AVAILABLE:

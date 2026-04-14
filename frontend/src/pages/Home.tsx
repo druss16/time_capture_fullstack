@@ -716,9 +716,11 @@ const INTEGRATIONS = [
 ];
 
 const PRICING = [
-  { name: "Professional", price: 29.99, desc: "Perfect for growing firms ready to eliminate manual time tracking.", features: ["Automatic capture","AI client mapping","QB & Xero sync","Approval workflow","Core reports"], highlighted: false },
-  { name: "Executive",    price: 49.99, desc: "For leaders who want deep visibility into profitability and performance.", features: ["Everything in Professional","Profitability dashboard","AI firm insights","Utilization analytics","Priority support"], highlighted: true },
+  { name: "Professional", price: 29.99,  desc: "Perfect for growing firms ready to eliminate manual time tracking.", features: ["Automatic capture","AI client mapping","QB & Xero sync","Approval workflow","Core reports"], highlighted: false },
+  { name: "Executive",    price: 49.99,  desc: "For leaders who want deep visibility into profitability and performance.", features: ["Everything in Professional","Profitability dashboard","AI firm insights","Utilization analytics","Priority support"], highlighted: true },
+  { name: "Enterprise",   price: 129.99, desc: "Custom-built for larger firms that need tailored integrations, reporting, and workflows.", features: ["Everything in Executive","Custom integrations","Bespoke reporting","Dedicated onboarding","Custom AI training","SLA & priority support"], highlighted: false },
 ];
+
 
 function IntegrationLogo({
   domain,
@@ -763,7 +765,7 @@ export default function Home() {
         .nav{position:fixed;top:0;left:0;right:0;z-index:100;height:60px;display:flex;align-items:center;border-bottom:1px solid var(--line);background:rgba(248,250,249,0.94);backdrop-filter:blur(12px)}
         .nav-inner{width:100%;max-width:1120px;margin:0 auto;padding:0 32px;display:flex;align-items:center;justify-content:space-between}
         .nav-logo{display:flex;align-items:center;gap:6px} .nav-logo img{width:42px;height:42px}
-        .nav-logo-name{font-size:19px;font-weight:800;letter-spacing:-0.03em;color:#0D1F1A}
+        .nav-logo-name{font-size:20px;font-weight:800;letter-spacing:-0.03em;color:#0D1F1A}
         .nav-logo-by{font-size:13px;font-weight:400;color:var(--text-3)}
         .nav-links{display:flex;gap:28px} .nav-links a{font-size:13.5px;font-weight:500;color:var(--text-2);transition:color 0.15s} .nav-links a:hover{color:var(--text)}
         .nav-right{display:flex;align-items:center;gap:18px}
@@ -771,7 +773,7 @@ export default function Home() {
         .btn-primary{display:inline-flex;align-items:center;gap:6px;padding:9px 20px;border-radius:999px;font-size:13.5px;font-weight:600;font-family:inherit;background:var(--teal);color:#fff;transition:background 0.15s,transform 0.1s;cursor:pointer;border:none} .btn-primary:hover{background:var(--teal-dark)} .btn-primary:active{transform:scale(0.98)}
         .hero-section{background:linear-gradient(160deg,#2B9D90 0%,#1F7269 55%,#174F4A 100%);padding:120px 32px 96px}
         .hero-inner{max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start}
-        .hero-eyebrow{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;letter-spacing:0.13em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:24px}
+        .hero-eyebrow{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:800;letter-spacing:0.13em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:24px}
         .hero-dot{width:6px;height:6px;border-radius:50%;background:#4ADE80;flex-shrink:0}
         .hero-h1{font-size:clamp(36px,4.5vw,56px);font-weight:800;letter-spacing:-0.03em;line-height:1.05;color:#fff;margin-bottom:18px}
         .hero-h1 em{color:rgba(255,255,255,0.38);font-style:normal}
@@ -786,57 +788,30 @@ export default function Home() {
         .hero-visual{display:flex;align-items:flex-start;justify-content:center;padding:0;margin-top:-12px}
         .hero-visual svg{width:100%;max-width:420px;filter:drop-shadow(0 24px 48px rgba(0,0,0,0.28))}
         .marquee-section{border-bottom:1px solid var(--line);padding:24px 0;overflow:hidden;position:relative;background:var(--white)}
-        .marquee-eyebrow{text-align:center;font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-3);margin-bottom:18px}
+        .marquee-eyebrow{text-align:center;font-size:12px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:18px}
         .mfade-l{position:absolute;left:0;top:0;bottom:0;width:72px;z-index:2;background:linear-gradient(to right,#fff,transparent);pointer-events:none}
         .mfade-r{position:absolute;right:0;top:0;bottom:0;width:72px;z-index:2;background:linear-gradient(to left,#fff,transparent);pointer-events:none}
         @keyframes marquee{from{transform:translateX(0)}to{transform:translateX(-50%)}}
         .marquee-track{display:flex;gap:10px;white-space:nowrap;animation:marquee 38s linear infinite}
         .int-chip{display:inline-flex;align-items:center;gap:10px;padding:9px 15px;border-radius:10px;border:1px solid var(--line);background:var(--bg);flex-shrink:0;transition:border-color 0.15s} .int-chip:hover{border-color:var(--teal-border)}
-        .int-logo-wrap{
-          width:32px;
-          height:32px;
-          border-radius:8px;
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          flex-shrink:0;
-          background:#fff;
-          overflow:hidden;
-          border:1px solid rgba(0,0,0,0.05);
-        }
-
-        .int-logo{
-          width:22px;
-          height:22px;
-          object-fit:contain;
-        }
-
-        .int-fallback{
-          width:100%;
-          height:100%;
-          border-radius:8px;
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          background:var(--teal);
-          color:#fff;
-          font-size:11px;
-          font-weight:800;
-        }
+        .int-logo-wrap{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:#fff;overflow:hidden;border:1px solid rgba(0,0,0,0.05);}
+        .int-logo{width:22px;height:22px;object-fit:contain;}
+        .int-fallback{width:100%;height:100%;border-radius:8px;display:flex;align-items:center;justify-content:center;background:var(--teal);color:#fff;font-size:11px;font-weight:800;}
+        
         .int-name{font-size:12.5px;font-weight:600;color:var(--text);line-height:1.2} .int-cat{font-size:10.5px;color:var(--text-3)}
         .section{max-width:1120px;margin:0 auto;padding:88px 32px}
-        .section-eyebrow{font-size:10.5px;font-weight:700;letter-spacing:0.13em;text-transform:uppercase;color:var(--teal-mid);margin-bottom:12px}
-        .section-h2{font-size:clamp(28px,3.5vw,40px);font-weight:800;letter-spacing:-0.025em;line-height:1.1;color:var(--text);margin-bottom:40px}
-        .section-sub{font-size:16px;color:var(--text-2);line-height:1.65;max-width:500px;margin-bottom:40px;margin-top:-24px}
+        .section-eyebrow{font-size:15px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:var(--teal-mid);margin-bottom:12px}
+        .section-h2{font-size:clamp(22px,2.5vw,30px);font-weight:700;letter-spacing:-0.02em;line-height:1.15;color:var(--text-2);margin-bottom:16px}
+        .section-sub{font-size:15px;color:var(--text-3);line-height:1.6;max-width:520px;margin-bottom:40px;margin-top:8px}
         .hr{border:none;border-top:1px solid var(--line)}
         .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
         @media(max-width:768px){.steps{grid-template-columns:1fr}}
         .step-card{background:var(--white);border:1px solid var(--line);border-radius:20px;padding:28px 28px 32px;transition:transform 0.2s,box-shadow 0.2s,border-color 0.2s;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:0}
         .step-card::before{content:attr(data-step);position:absolute;top:-10px;right:20px;font-size:80px;font-weight:900;letter-spacing:-0.05em;color:var(--teal-light);line-height:1;pointer-events:none;user-select:none}
         .step-card:hover{transform:translateY(-3px);box-shadow:0 12px 32px rgba(43,157,144,0.12);border-color:var(--teal-border)}
-        .step-num{font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--teal-mid);margin-bottom:16px}
+        .step-num{font-size:12px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--teal-mid);margin-bottom:16px}
         .step-anim{margin-bottom:20px;border-radius:12px;overflow:hidden;background:#F8FAF9;border:1px solid var(--line)}
-        .step-card h3{font-size:16px;font-weight:800;letter-spacing:-0.02em;margin-bottom:8px;color:var(--text)}
+        .step-card h3{font-size:18px;font-weight:800;letter-spacing:-0.02em;margin-bottom:8px;color:var(--text)}
         .step-card p{font-size:13.5px;color:var(--text-2);line-height:1.7}
         .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
         @media(max-width:900px){.feat-grid{grid-template-columns:repeat(2,1fr)}}
@@ -844,23 +819,23 @@ export default function Home() {
         .feat-card{background:var(--white);border:1px solid var(--line);border-radius:20px;padding:32px 28px;transition:transform 0.2s,box-shadow 0.2s,border-color 0.2s;display:flex;flex-direction:column;gap:0}
         .feat-card:hover{transform:translateY(-3px);box-shadow:0 12px 32px rgba(43,157,144,0.12);border-color:var(--teal-border)}
         .feat-anim{margin-bottom:20px;border-radius:12px;overflow:hidden;background:#F8FAF9;border:1px solid var(--line)}
-        .feat-card h3{font-size:14.5px;font-weight:800;letter-spacing:-0.015em;margin-bottom:8px;color:var(--text)}
+        .feat-card h3{font-size:16px;font-weight:800;letter-spacing:-0.015em;margin-bottom:8px;color:var(--text)}
         .feat-card p{font-size:13px;color:var(--text-2);line-height:1.65}
         .compare-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:14px;overflow:hidden}
         @media(max-width:640px){.compare-grid{grid-template-columns:1fr}}
         .compare-col{padding:40px 36px;background:var(--white)} .compare-col:first-child{border-right:1px solid var(--line);background:var(--bg)}
-        .compare-label{font-size:10.5px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:24px}
+        .compare-label{font-size:12px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:24px}
         .compare-label.old{color:var(--text-3)} .compare-label.new{color:var(--teal-mid)}
         .compare-list{list-style:none;display:flex;flex-direction:column;gap:13px}
         .compare-item{display:flex;align-items:flex-start;gap:10px;font-size:13.5px;line-height:1.5}
         .compare-item.old{color:var(--text-3)} .compare-item.new{color:var(--text)}
         .ci-icon{width:17px;height:17px;border-radius:50%;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700}
         .ci-icon.old{background:#EAEAEA;color:#AAAAAA} .ci-icon.new{background:var(--teal);color:#fff}
-        .pricing-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:780px}
-        @media(max-width:600px){.pricing-grid{grid-template-columns:1fr}}
-        .plan{border:1px solid var(--line);border-radius:16px;padding:36px 32px;background:var(--white)} .plan.exec{background:var(--teal);border-color:var(--teal)}
-        .plan-badge{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;background:var(--teal-mid);color:#fff;padding:3px 9px;border-radius:20px;margin-bottom:18px}
-        .plan-name{font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px}
+        .pricing-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;max-width:1100px;align-items:stretch}
+        @media(max-width:900px){.pricing-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.pricing-grid{grid-template-columns:1fr}}
+        .plan{border:1.5px solid var(--line);border-radius:20px;padding:36px 32px;background:var(--white);display:flex;flex-direction:column} .plan.exec{background:var(--teal);border:2px solid var(--teal-dark);box-shadow:0 20px 60px rgba(43,157,144,0.3),0 0 0 4px rgba(43,157,144,0.15);position:relative;z-index:1}
+        .plan-badge{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;background:rgba(255,255,255,0.2);color:#fff;padding:4px 12px;border-radius:20px;margin-bottom:16px;align-self:flex-start;border:1px solid rgba(255,255,255,0.3)}
+        .plan-name{font-size:12px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px}
         .plan.exec .plan-name{color:rgba(255,255,255,0.4)} .plan:not(.exec) .plan-name{color:var(--text-3)}
         .plan-price{font-size:46px;font-weight:800;letter-spacing:-0.04em;line-height:1}
         .plan.exec .plan-price{color:#fff} .plan:not(.exec) .plan-price{color:var(--text)}
@@ -875,7 +850,7 @@ export default function Home() {
         .plan.exec .plan-feat{color:rgba(255,255,255,0.7)} .plan:not(.exec) .plan-feat{color:var(--text-2)}
         .pf-check{width:15px;height:15px;flex-shrink:0}
         .plan.exec .pf-check{color:#4ADE80} .plan:not(.exec) .pf-check{color:var(--teal)}
-        .plan-cta{display:block;width:100%;text-align:center;padding:12px;border-radius:999px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;border:none;transition:opacity 0.15s,transform 0.1s} .plan-cta:active{transform:scale(0.98)}
+        .plan-cta{display:block;width:100%;text-align:center;padding:13px;border-radius:999px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;border:none;transition:opacity 0.15s,transform 0.1s;margin-top:auto} .plan-cta:active{transform:scale(0.98)}
         .plan.exec .plan-cta{background:var(--teal-mid);color:#fff} .plan.exec .plan-cta:hover{opacity:0.88}
         .plan:not(.exec) .plan-cta{background:var(--teal-light);color:var(--teal-dark)} .plan:not(.exec) .plan-cta:hover{opacity:0.8}
         .pricing-note{font-size:12.5px;color:var(--text-3);margin-top:16px}
@@ -890,7 +865,7 @@ export default function Home() {
         .footer-by{color:var(--text-3);font-weight:400;font-size:12px}
         .footer-links{display:flex;gap:20px} .footer-links a{font-size:12px;color:var(--text-3);transition:color 0.15s} .footer-links a:hover{color:var(--text)}
         .footer-copy{font-size:12px;color:var(--text-3)}
-        @media(max-width:900px){.hero-inner{grid-template-columns:1fr}.hero-visual{width:100%}.nav-links{display:none}.hero-stats{grid-template-columns:1fr 1fr;gap:16px;width:100%;padding-top:28px}.hero-stat{padding-right:0}.hero-stat:not(:first-child){padding-left:0;border-left:none}.hero-stat-val{font-size:26px}}
+        @media(max-width:900px){.hero-inner{grid-template-columns:1fr}.hero-visual{width:100%}.nav-links{display:none}.hero-stats{grid-template-columns:1fr 1fr;gap:16px;width:100%;padding-top:28px}.hero-stat{padding-right:0}.hero-stat:not(:first-child){padding-left:0;border-left:none}.hero-stat-val{font-size:26px}}@media(max-width:600px){.nav-logo-by{display:none}.nav-signin{display:none}.btn-primary{padding:8px 14px;font-size:12.5px}.nav-inner{padding:0 16px}.nav-logo-name{font-size:16px}}
         @media(max-width:480px){.hero-section{padding:100px 20px 64px}.section{padding:56px 20px}.nav-inner{padding:0 20px}.footer-inner{flex-direction:column;align-items:flex-start;gap:16px}.compare-col:first-child{border-right:none;border-bottom:1px solid var(--line)}}
       `}</style>
 
@@ -937,8 +912,8 @@ export default function Home() {
         <p className="marquee-eyebrow">Integrates with tools you already trust</p>
         <div style={{position:"relative"}}>
           <div className="mfade-l"/><div className="mfade-r"/>
-            <div className="marquee-track">
-              {[...INTEGRATIONS, ...INTEGRATIONS].map((int, i) => (
+          <div className="marquee-track">
+            {[...INTEGRATIONS, ...INTEGRATIONS].map((int, i) => (
                 <div key={`${int.name}-${i}`} className="int-chip">
                   <IntegrationLogo
                     domain={int.domain}

@@ -865,7 +865,7 @@ export default function Home() {
         .footer-by{color:var(--text-3);font-weight:400;font-size:12px}
         .footer-links{display:flex;gap:20px} .footer-links a{font-size:12px;color:var(--text-3);transition:color 0.15s} .footer-links a:hover{color:var(--text)}
         .footer-copy{font-size:12px;color:var(--text-3)}
-        @media(max-width:900px){.hero-inner{grid-template-columns:1fr}.hero-visual{width:100%}.nav-links{display:none}.hero-stats{grid-template-columns:1fr 1fr;gap:16px;width:100%;padding-top:28px}.hero-stat{padding-right:0}.hero-stat:not(:first-child){padding-left:0;border-left:none}.hero-stat-val{font-size:26px}}@media(max-width:600px){.nav-logo-by{display:none}.nav-signin{display:none}.btn-primary{padding:8px 14px;font-size:12.5px}.nav-inner{padding:0 16px}.nav-logo-name{font-size:16px}}
+        @media(max-width:900px){.hero-inner{grid-template-columns:1fr}.hero-visual{width:100%}.nav-links{display:none}.hero-stats{grid-template-columns:1fr 1fr;gap:16px;width:100%;padding-top:28px}.hero-stat{padding-right:0}.hero-stat:not(:first-child){padding-left:0;border-left:none}.hero-stat-val{font-size:26px}}@media(max-width:600px){.nav-logo-by{display:none}.nav-signin{font-size:12px;white-space:nowrap}.btn-primary{padding:8px 14px;font-size:12.5px;white-space:nowrap}.nav-inner{padding:0 16px}.nav-logo-name{font-size:16px}.nav-right{gap:10px}}
         @media(max-width:480px){.hero-section{padding:100px 20px 64px}.section{padding:56px 20px}.nav-inner{padding:0 20px}.footer-inner{flex-direction:column;align-items:flex-start;gap:16px}.compare-col:first-child{border-right:none;border-bottom:1px solid var(--line)}}
       `}</style>
 
@@ -893,7 +893,7 @@ export default function Home() {
           <div>
             <div className="hero-eyebrow"><span className="hero-dot"/>Purpose-built for CPA firms</div>
             <h1 className="hero-h1">Recover hours.<br/>Reveal profit.<br/><em>Run smarter.</em></h1>
-            <p className="hero-sub">TimeTracker is an AI-powered time intelligence platform that eliminates manual timesheets, captures every billable minute, and gives firm leaders the margin data to grow with confidence.</p>
+            <p className="hero-sub">TimeTracker is an AI-powered time intelligence platform that eliminates human error, captures every billable minute, and unlocks real margin visibilty – allowing leaders to grow with confidence.</p>
             <div className="hero-btns">
               <a href="/request-access" className="btn-hero-primary">Get Started <ArrowRight size={16}/></a>
               <a href="#how-it-works" className="btn-hero-ghost">Learn How It Works</a>

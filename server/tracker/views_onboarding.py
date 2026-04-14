@@ -437,24 +437,57 @@ def _create_and_invite_user(org, email, role, name, invited_by):
     }
 
 
+# ── Replace team_invite_view in tracker/views_onboarding.py ──────────────────
+#
+# All imports already exist at the top of views_onboarding.py:
+#   - secrets, User, OrganizationMembership
+#   - send_onboarding_invitation (from tracker.email_service)
+#   - _create_and_invite_user (defined earlier in this file)
+#
+# send_team_invitation is a lighter email (no password reset messaging)
+# already defined in email_service.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Replace team_invite_view in tracker/views_onboarding.py ──────────────────
+#
+# All imports already exist at the top of views_onboarding.py:
+#   - secrets, User, OrganizationMembership
+#   - send_onboarding_invitation (from tracker.email_service)
+#   - _create_and_invite_user (defined earlier in this file)
+#
+# send_team_invitation is a lighter email (no password reset messaging)
+# already defined in email_service.py
+# ─────────────────────────────────────────────────────────────────────────────
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def team_invite_view(request):
-    
+    """
+    Single-member invite from the Settings > Team tab.
+
+    Handles three cases:
+      1. User exists + belongs to another org  → add to this org, NO password reset
+      2. User exists + no org (orphaned)        → reset password, add to org, send onboarding email
+      3. Brand new user                         → create, add to org, send onboarding email
+
+    Always errors if user is already a member of THIS org.
+    """
+    from tracker.email_service import send_onboarding_invitation, send_added_to_org
+
     membership = OrganizationMembership.objects.filter(
         user=request.user
     ).select_related('organization').first()
-    
+
     if not membership or membership.role not in ('owner', 'admin'):
         return Response({'error': 'Permission denied'}, status=403)
-    
+
     org = membership.organization
     email = request.data.get('email', '').strip().lower()
-    
+
     if not email:
         return Response({'error': 'Email is required'}, status=400)
 
-    # Seat check
+    # ── Seat check ────────────────────────────────────────────────────────────
     seat_count = org.seat_count or 0
     member_count = OrganizationMembership.objects.filter(organization=org).count()
     if seat_count > 0 and member_count >= seat_count:
@@ -462,10 +495,10 @@ def team_invite_view(request):
             'upgrade_required': True,
             'seat_count': seat_count,
             'current_members': member_count,
-            'message': f'No seats available.',
+            'message': 'No seats available. Add more seats to invite more members.',
         }, status=400)
 
-    # Already in this org?
+    # ── Already a member of THIS org ──────────────────────────────────────────
     if OrganizationMembership.objects.filter(
         user__email=email, organization=org
     ).exists():
@@ -474,31 +507,84 @@ def team_invite_view(request):
             status=400,
         )
 
-    # User exists in DB but not in this org — reset password + re-invite
-    existing = User.objects.filter(email=email).first()
-    if existing:
-        temp_password = secrets.token_urlsafe(12)
-        existing.set_password(temp_password)
-        existing.save()
-        OrganizationMembership.objects.get_or_create(
-            user=existing, organization=org,
-            defaults={'role': 'member', 'invited_by': request.user}
-        )
-        inviter = request.user.get_full_name() or request.user.username
-        email_sent = send_onboarding_invitation(
-            to_email=email,
-            org_name=org.name,
-            temp_password=temp_password,
-            invited_by=inviter,
-        )
-        return Response({
-            'username': existing.username,
-            'temp_password': temp_password if not email_sent else None,
-            'email_sent': email_sent,
-            'resent': True,
-        })
+    inviter = request.user.get_full_name().strip() or request.user.username
 
-    # Brand new user — use the fully wired helper
+    existing = User.objects.filter(email=email).first()
+
+    if existing:
+        # Check if they belong to any OTHER org
+        other_membership = OrganizationMembership.objects.filter(
+            user=existing
+        ).exclude(organization=org).first()
+
+        if other_membership:
+            # ── Case 1: User belongs to another org ──────────────────────────
+            # Do NOT reset their password — they need it for their other org.
+            # Just add them to this org and notify them.
+            OrganizationMembership.objects.get_or_create(
+                user=existing,
+                organization=org,
+                defaults={'role': 'member', 'invited_by': request.user},
+            )
+
+            email_sent = False
+            try:
+                email_sent = send_added_to_org(
+                    to_email=email,
+                    org_name=org.name,
+                    username=existing.username,
+                    invited_by=inviter,
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(
+                    f"[INVITE] Failed to send join notification to {email}: {e}"
+                )
+
+            return Response({
+                'username': existing.username,
+                'temp_password': None,  # Never expose — they already have one
+                'email_sent': email_sent,
+                'resent': False,
+                'added_existing_user': True,
+                'note': 'User added from another org. Password unchanged.',
+            })
+
+        else:
+            # ── Case 2: User exists in DB but has no org (orphaned account) ──
+            # Safe to reset password and send full onboarding email.
+            temp_password = secrets.token_urlsafe(12)
+            existing.set_password(temp_password)
+            existing.save()
+
+            OrganizationMembership.objects.get_or_create(
+                user=existing,
+                organization=org,
+                defaults={'role': 'member', 'invited_by': request.user},
+            )
+
+            email_sent = False
+            try:
+                email_sent = send_onboarding_invitation(
+                    to_email=email,
+                    org_name=org.name,
+                    temp_password=temp_password,
+                    invited_by=inviter,
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(
+                    f"[INVITE] Failed to send onboarding email to {email}: {e}"
+                )
+
+            return Response({
+                'username': existing.username,
+                'temp_password': temp_password if not email_sent else None,
+                'email_sent': email_sent,
+                'resent': True,
+            })
+
+    # ── Case 3: Brand new user ────────────────────────────────────────────────
     result = _create_and_invite_user(
         org=org,
         email=email,
@@ -507,7 +593,7 @@ def team_invite_view(request):
         invited_by=request.user,
     )
     return Response(result, status=201)
-
+    
 @csrf_exempt
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

@@ -199,6 +199,62 @@ Please change your password after logging in.
         categories=["invitation", "onboarding"],
     )
 
+# ── Add this function to tracker/email_service.py ────────────────────────────
+#
+# Paste after send_team_invitation (function #1).
+# Used when an existing user (already in another org) is added to a new org.
+# No password reset — they already have credentials.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def send_added_to_org(
+    to_email: str,
+    org_name: str,
+    username: str,
+    invited_by: str = None,
+    login_url: str = None,
+):
+    """
+    Notify an existing TimeTracker user they've been added to a new organization.
+    Does NOT include a password — they already have one.
+    """
+    login_url = login_url or f"{getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')}/login"
+    invite_line = f"{invited_by} has added you" if invited_by else "You've been added"
+
+    body = f'''
+        <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {username}!</p>
+        <p style="color:#475569;font-size:16px;line-height:1.5;">
+            {invite_line} to <strong>{org_name}</strong> on TimeTracker.
+        </p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:16px 0;">
+            <p style="margin:0 0 4px;color:#64748b;font-size:13px;">Your account:</p>
+            <p style="margin:0;color:#1e293b;font-size:15px;"><strong>Username:</strong> {username}</p>
+            <p style="margin:8px 0 0;color:#64748b;font-size:13px;">
+                Use your existing TimeTracker password to log in.
+            </p>
+        </div>
+        {_btn(login_url, "#2B9D90 0%,#237F74 100%", "Log In to TimeTracker &rarr;")}
+        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">TimeTracker by MavOps</p>'''
+
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "🎉", f"You've been added to {org_name}!", body)
+
+    plain = f"""Hi {username}!
+
+{invite_line} to {org_name} on TimeTracker.
+
+Log in at: {login_url}
+Username: {username}
+Password: Use your existing TimeTracker password
+
+- TimeTracker by MavOps"""
+
+    return send_email(
+        to_email=to_email,
+        subject=f"You've been added to {org_name} on TimeTracker",
+        html_content=html,
+        plain_content=plain,
+        categories=["invitation", "org_added"],
+    )
+
 
 # ---------- 2. Onboarding invitation (rich) ----------
 

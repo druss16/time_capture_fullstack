@@ -437,6 +437,77 @@ def _create_and_invite_user(org, email, role, name, invited_by):
     }
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def team_invite_view(request):
+    
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related('organization').first()
+    
+    if not membership or membership.role not in ('owner', 'admin'):
+        return Response({'error': 'Permission denied'}, status=403)
+    
+    org = membership.organization
+    email = request.data.get('email', '').strip().lower()
+    
+    if not email:
+        return Response({'error': 'Email is required'}, status=400)
+
+    # Seat check
+    seat_count = org.seat_count or 0
+    member_count = OrganizationMembership.objects.filter(organization=org).count()
+    if seat_count > 0 and member_count >= seat_count:
+        return Response({
+            'upgrade_required': True,
+            'seat_count': seat_count,
+            'current_members': member_count,
+            'message': f'No seats available.',
+        }, status=400)
+
+    # Already in this org?
+    if OrganizationMembership.objects.filter(
+        user__email=email, organization=org
+    ).exists():
+        return Response(
+            {'error': f'{email} is already a member of this organization.'},
+            status=400,
+        )
+
+    # User exists in DB but not in this org — reset password + re-invite
+    existing = User.objects.filter(email=email).first()
+    if existing:
+        temp_password = secrets.token_urlsafe(12)
+        existing.set_password(temp_password)
+        existing.save()
+        OrganizationMembership.objects.get_or_create(
+            user=existing, organization=org,
+            defaults={'role': 'member', 'invited_by': request.user}
+        )
+        inviter = request.user.get_full_name() or request.user.username
+        email_sent = send_onboarding_invitation(
+            to_email=email,
+            org_name=org.name,
+            temp_password=temp_password,
+            invited_by=inviter,
+        )
+        return Response({
+            'username': existing.username,
+            'temp_password': temp_password if not email_sent else None,
+            'email_sent': email_sent,
+            'resent': True,
+        })
+
+    # Brand new user — use the fully wired helper
+    result = _create_and_invite_user(
+        org=org,
+        email=email,
+        role='member',
+        name='',
+        invited_by=request.user,
+    )
+    return Response(result, status=201)
+
 @csrf_exempt
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

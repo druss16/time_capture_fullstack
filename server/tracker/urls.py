@@ -165,6 +165,9 @@ urlpatterns = [
     path('settings/client-requests/', views_settings.client_requests),
     path('settings/client-requests/<int:request_id>/approve/', views_settings.approve_client_request),
 
+    path('settings/team/invite/', views_onboarding.team_invite_view),
+
+
     # ===============================
     # ✅ NEW: BILLING & TIMESHEETS
     # ===============================

@@ -362,7 +362,7 @@ urlpatterns = [
     path('watchdog/command/', views_mavops.watchdog_command),
 
 
-    path("analytics/tax-returns/", views_analytics_tax_returns.tax_returns_dashboard)
+    path("analytics/tax-returns/", views_analytics_tax_returns.tax_returns_dashboard),
 
     path('api/mavops/orgs/<int:org_id>/members/', views_mavops.mavops_org_members),
 

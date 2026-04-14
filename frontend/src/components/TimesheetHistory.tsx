@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ChevronDown, ChevronRight, RefreshCw, Clock, CheckCircle2,
   AlertTriangle, Search, X, Filter, ChevronDown as ChevronDownIcon,
-  ArrowRight, User,
+  ArrowRight, User, Calendar,
 } from 'lucide-react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import { cn } from '@/lib/design-system';
@@ -63,6 +63,18 @@ interface HistoryData {
     auto_submitted_count: number;
   };
 }
+
+interface DateRange { start: string; end: string }
+
+const getDefaultDates = (): DateRange => {
+  const today = new Date();
+  // Default: last 3 months
+  const start = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+  return {
+    start: start.toISOString().split('T')[0],
+    end:   today.toISOString().split('T')[0],
+  };
+};
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -238,6 +250,9 @@ export default function TimesheetHistory() {
   const [filterUser, setFilterUser] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const [expanded,   setExpanded]   = useState<Set<number>>(new Set());
+  const [dateRange,  setDateRange]  = useState<DateRange>(getDefaultDates);
+  const [localStart, setLocalStart] = useState(getDefaultDates().start);
+  const [localEnd,   setLocalEnd]   = useState(getDefaultDates().end);
   const filterRef  = useRef<HTMLDivElement>(null);
   const searchRef  = useRef<HTMLInputElement>(null);
 
@@ -250,12 +265,32 @@ export default function TimesheetHistory() {
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
-    try { setData(await safeFetchJson<HistoryData>(`${API_BASE}/billing/timesheet-history/`)); }
+    try {
+      const params = new URLSearchParams({ start_date: dateRange.start, end_date: dateRange.end });
+      setData(await safeFetchJson<HistoryData>(`${API_BASE}/billing/timesheet-history/?${params}`));
+    }
     catch (e: any) { setErr(e?.message || 'Failed to load'); }
     finally { setLoading(false); }
-  }, []);
+  }, [dateRange]);
 
   useEffect(() => { load(); }, [load]);
+
+  const applyDates = () => setDateRange({ start: localStart, end: localEnd });
+
+  const setPreset = (p: string) => {
+    const today = new Date();
+    let s: Date, e: Date = today;
+    switch (p) {
+      case 'thisMonth':  s = new Date(today.getFullYear(), today.getMonth(), 1); e = new Date(today.getFullYear(), today.getMonth()+1, 0); break;
+      case 'lastMonth':  s = new Date(today.getFullYear(), today.getMonth()-1, 1); e = new Date(today.getFullYear(), today.getMonth(), 0); break;
+      case 'last3':      s = new Date(today.getFullYear(), today.getMonth()-2, 1); break;
+      case 'thisYear':   s = new Date(today.getFullYear(), 0, 1); break;
+      default:           s = new Date(today.getFullYear(), today.getMonth()-2, 1);
+    }
+    const start = s.toISOString().split('T')[0];
+    const end   = e.toISOString().split('T')[0];
+    setLocalStart(start); setLocalEnd(end); setDateRange({ start, end });
+  };
 
   const timesheets = data?.timesheets || [];
   const summary    = data?.summary;
@@ -272,7 +307,7 @@ export default function TimesheetHistory() {
 
   const toggleRow = (id: number) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const hasFilter = search || filterUser;
+  const hasFilter = search || filterUser || dateRange.start !== getDefaultDates().start || dateRange.end !== getDefaultDates().end;
   const nonBillableTotal = (parseFloat(String(summary?.total_hours || 0))) - (parseFloat(String(summary?.billable_hours || 0)));
 
   if (loading && !data) return (
@@ -327,9 +362,9 @@ export default function TimesheetHistory() {
         </div>
       </div>
 
-      {/* ── ROW 2: Search / Filter ─────────────────────────────────────── */}
+      {/* ── ROW 2: Search / Date / Filter ─────────────────────────────── */}
       <div className="bg-white rounded-xl border border-border/60 px-4 h-11 flex items-center gap-3 shrink-0">
-        <div className="relative w-56">
+        <div className="relative w-48">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
           <input
             ref={searchRef}
@@ -344,6 +379,24 @@ export default function TimesheetHistory() {
               <X className="w-3.5 h-3.5" />
             </button>
           )}
+        </div>
+
+        {/* Date range */}
+        <div className="flex items-center gap-2 pl-3 border-l border-border/40">
+          <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <input type="date" value={localStart} onChange={e => setLocalStart(e.target.value)}
+            className="text-xs px-2 py-1 bg-slate-50 border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 tabular-nums" />
+          <span className="text-slate-300 text-xs">–</span>
+          <input type="date" value={localEnd} onChange={e => setLocalEnd(e.target.value)}
+            className="text-xs px-2 py-1 bg-slate-50 border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 tabular-nums" />
+          <button onClick={applyDates} className="px-2.5 py-1 text-xs font-semibold bg-primary text-white rounded-lg hover:opacity-90 transition-all">Apply</button>
+        </div>
+
+        {/* Date presets */}
+        <div className="flex items-center gap-1 pl-1 border-l border-border/40">
+          {[['thisMonth','This Mo.'],['lastMonth','Last Mo.'],['last3','Last 3 Mo.'],['thisYear','Year']].map(([p, l]) => (
+            <button key={p} onClick={() => setPreset(p)} className="px-2.5 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">{l}</button>
+          ))}
         </div>
 
         {/* Employee filter */}
@@ -425,7 +478,7 @@ export default function TimesheetHistory() {
                     <p className="text-sm mt-1">
                       {timesheets.length === 0
                         ? 'Approved timesheets will appear here'
-                        : <button onClick={() => { setSearch(''); setFilterUser(''); }} className="text-primary hover:underline">Clear filters</button>
+                        : <button onClick={() => { setSearch(''); setFilterUser(''); const d = getDefaultDates(); setLocalStart(d.start); setLocalEnd(d.end); setDateRange(d); }} className="text-primary hover:underline">Clear filters</button>
                       }
                     </p>
                   </td>

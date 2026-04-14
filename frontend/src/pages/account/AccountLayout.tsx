@@ -1,20 +1,11 @@
 // src/pages/account/AccountLayout.tsx
-/**
- * Shared layout for account settings pages
- * Sidebar navigation for: Profile, Notifications, Desktop Agent, Password, Billing (owner)
- */
+// Account settings layout — styled to match billing/settings sections
+// Uses same bg-slate-50 + bg-white rounded-xl card pattern as the rest of the app
 
 import React from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import {
-  User,
-  CreditCard,
-  KeyRound,
-  ArrowLeft,
-  Download,
-  Bell,
-  ChevronRight,
-} from 'lucide-react';
+import { User, CreditCard, KeyRound, Download, Bell, ChevronRight } from 'lucide-react';
+import { cn } from '@/lib/design-system';
 
 interface AccountLayoutProps {
   role: 'owner' | 'admin' | 'manager' | 'member';
@@ -33,117 +24,76 @@ export default function AccountLayout({ role, mdmManaged }: AccountLayoutProps) 
   const location = useLocation();
 
   const navItems: NavItem[] = [
-    {
-      path: '/account',
-      label: 'Profile',
-      description: 'Name, email, and personal info',
-      icon: User,
-      exact: true,
-    },
-    {
-      path: '/account/notifications',
-      label: 'Notifications',
-      description: 'Email and desktop alerts',
-      icon: Bell,
-    },
-    {
-      path: '/account/password',
-      label: 'Password',
-      description: 'Change your password',
-      icon: KeyRound,
-    },
-    {
-      path: '/account/download',
-      label: 'Desktop Agent',
-      description: 'Download and pair your device',
-      icon: Download,
-    },
-    // Billing only for owners
-    ...(role === 'owner'
-      ? [
-          {
-            path: '/account/billing',
-            label: 'Subscription & Billing',
-            description: 'Plan, seats, and payments',
-            icon: CreditCard,
-          },
-        ]
-      : []),
-  ].filter(item => {
-    // Hide Desktop Agent for non-admin users in MDM-managed orgs
-    if (item.path === '/account/download' && mdmManaged) {
-      return false;
-    }
-    return true;
-  });
+    { path: '/account',               label: 'Profile',               description: 'Name, email, personal info',    icon: User,      exact: true },
+    { path: '/account/notifications', label: 'Notifications',         description: 'Email and desktop alerts',      icon: Bell               },
+    { path: '/account/password',      label: 'Password',              description: 'Change your password',          icon: KeyRound           },
+    { path: '/account/download',      label: 'Desktop Agent',         description: 'Download and pair your device', icon: Download           },
+    ...(role === 'owner' ? [{
+      path: '/account/billing',       label: 'Subscription & Billing', description: 'Plan, seats, and payments',    icon: CreditCard,
+    }] : []),
+  ].filter(item => !(item.path === '/account/download' && mdmManaged));
 
   return (
-    <div className="bg-slate-50 min-h-0">
-      <div className="max-w-5xl mx-auto px-4 py-8">
-        <div className="flex flex-col md:flex-row gap-8">
-          {/* ── Sidebar Navigation ── */}
-          <aside className="md:w-72 flex-shrink-0">
-            <h1 className="text-2xl font-extrabold text-slate-900 mb-1">Account Settings</h1>
-            <p className="text-sm text-slate-500 mb-5">Manage your account and preferences</p>
+    // Fills the content area provided by the app shell — no extra page wrapper
+    <div className="flex gap-6 h-full min-h-0">
 
-            <nav className="bg-white rounded-2xl border-2 border-slate-200 shadow-sm overflow-hidden">
-              {navItems.map((item, idx) => {
-                // Determine active state
-                const isActive = item.exact
-                  ? location.pathname === item.path
-                  : location.pathname.startsWith(item.path);
+      {/* ── Left nav ─────────────────────────────────────────────────────── */}
+      <aside className="w-56 shrink-0 flex flex-col gap-1 pt-0.5">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 px-2 mb-1">
+          Account
+        </p>
 
-                return (
-                  <NavLink
-                    key={item.path}
-                    to={item.path}
-                    end={item.exact}
-                    className={`
-                      flex items-center gap-3 px-5 py-4 transition-all
-                      ${idx < navItems.length - 1 ? 'border-b border-slate-100' : ''}
-                      ${isActive
-                        ? 'bg-teal-50 border-l-4 border-l-teal-500'
-                        : 'border-l-4 border-l-transparent hover:bg-slate-50'
-                      }
-                    `}
-                  >
-                    <div
-                      className={`
-                        w-9 h-9 rounded-xl flex items-center justify-center shrink-0
-                        ${isActive ? 'bg-teal-100 text-teal-600' : 'bg-slate-100 text-slate-400'}
-                      `}
-                    >
-                      <item.icon className="w-[18px] h-[18px]" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div
-                        className={`text-sm font-bold ${
-                          isActive ? 'text-teal-700' : 'text-slate-700'
-                        }`}
-                      >
-                        {item.label}
-                      </div>
-                      <div className="text-xs text-slate-400 truncate">
-                        {item.description}
-                      </div>
-                    </div>
-                    <ChevronRight
-                      className={`w-4 h-4 shrink-0 ${
-                        isActive ? 'text-teal-400' : 'text-slate-300'
-                      }`}
-                    />
-                  </NavLink>
-                );
-              })}
-            </nav>
-          </aside>
+        {navItems.map((item) => {
+          const isActive = item.exact
+            ? location.pathname === item.path
+            : location.pathname.startsWith(item.path);
 
-          {/* ── Main Content ── */}
-          <main className="flex-1 min-w-0">
-            <Outlet />
-          </main>
-        </div>
-      </div>
+          return (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              end={item.exact}
+              className={cn(
+                'group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all relative',
+                isActive
+                  ? 'bg-white border border-border/60 shadow-sm'
+                  : 'hover:bg-white/60 border border-transparent'
+              )}
+            >
+              {/* Active left accent */}
+              <div className={cn(
+                'absolute left-0 top-2 bottom-2 w-0.5 rounded-r transition-all',
+                isActive ? 'bg-primary' : 'bg-transparent'
+              )} />
+
+              <div className={cn(
+                'w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors',
+                isActive
+                  ? 'bg-primary text-white'
+                  : 'bg-slate-100 text-slate-400 group-hover:bg-slate-200'
+              )}>
+                <item.icon className="w-3.5 h-3.5" />
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <p className={cn(
+                  'text-sm font-semibold leading-tight truncate',
+                  isActive ? 'text-slate-800' : 'text-slate-600'
+                )}>
+                  {item.label}
+                </p>
+                <p className="text-[10px] text-slate-400 truncate mt-0.5">{item.description}</p>
+              </div>
+            </NavLink>
+          );
+        })}
+      </aside>
+
+      {/* ── Content ──────────────────────────────────────────────────────── */}
+      <main className="flex-1 min-w-0 min-h-0 overflow-y-auto">
+        <Outlet />
+      </main>
+
     </div>
   );
 }

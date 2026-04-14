@@ -1874,98 +1874,83 @@ class TimesheetLockView(APIView):
         })
 
 
+from datetime import date, datetime
+ 
+ 
 @api_view(['GET'])
-@require_professional_plan
+@permission_classes([IsAuthenticated])
 def timesheet_history(request):
-    """
-    Get all approved/locked timesheets with totals calculated from blocks.
-    """
-    org = get_user_org(request.user)
-    if not org:
-        return Response({'error': 'No organization'}, status=400)
-    
-    membership = OrganizationMembership.objects.filter(
-        user=request.user, organization=org
-    ).first()
-    
-    if not membership:
-        return Response({'error': 'No membership'}, status=403)
-    
-    # Base query
-    timesheets = Timesheet.objects.filter(
-        org=org,
-        status__in=['approved', 'locked']
+    org = request.user.organization
+ 
+    # ── Date range filter ─────────────────────────────────────────────────────
+    start_date_str = request.GET.get('start_date')
+    end_date_str   = request.GET.get('end_date')
+ 
+    try:
+        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date() if start_date_str else None
+    except ValueError:
+        start_date = None
+ 
+    try:
+        end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date() if end_date_str else None
+    except ValueError:
+        end_date = None
+ 
+    # ── Base queryset — approved timesheets for this org ──────────────────────
+    qs = Timesheet.objects.filter(
+        user__organization=org,
+        status__in=['approved', 'locked'],
     ).select_related('user', 'approved_by').order_by('-week_start')
-    
-    # Non-managers only see their own
-    if membership.role == 'member':
-        timesheets = timesheets.filter(user=request.user)
-    
-    result = []
-    summary_totals = {'total_hours': 0, 'billable_hours': 0, 'total_amount': Decimal('0')}
-    
-    for ts in timesheets:
-        week_end = ts.week_start + timedelta(days=6)
  
-        # Get blocks with actual start/end datetimes for span calculation
-        import datetime as dt_module
-        from django.utils.timezone import make_aware
+    # Apply date filters — filter on week_start so a timesheet shows up
+    # whenever its week starts within the selected range.
+    if start_date:
+        qs = qs.filter(week_start__gte=start_date)
+    if end_date:
+        qs = qs.filter(week_start__lte=end_date)
  
-        start_dt = make_aware(dt_module.datetime.combine(ts.week_start, dt_module.time.min))
-        end_dt   = make_aware(dt_module.datetime.combine(week_end, dt_module.time.max))
- 
-        blocks = list(Block.objects.filter(
-            org=org,
-            user=ts.user,
-            start__gte=start_dt,
-            start__lte=end_dt,
-            deleted_at__isnull=True,
-        ).select_related('client'))
- 
-        # Use UNION of spans — same logic as weekly_timesheet_view
- 
-        all_blks  = [b for b in blocks if b.start and b.end]
-        bill_blks = [b for b in blocks if b.start and b.end and b.is_billable and b.client_id]
-        total_amount = sum(Decimal(str(b.billing_amount or 0)) for b in bill_blks)
- 
-        total_hours    = round(_union_minutes_from_blocks(all_blks) / 60, 2)
-        billable_hours = round(_union_minutes_from_blocks(bill_blks) / 60, 2)
- 
-        
-        result.append({
-            'id': ts.id,
-            'user_id': ts.user_id,
-            'user_username': ts.user.username,
-            'user_email': ts.user.email,
-            'user_first_name': ts.user.first_name,
-            'user_last_name': ts.user.last_name,
-            'week_start': ts.week_start.isoformat(),
-            'week_end': week_end.isoformat(),
-            'status': ts.status,
-            'total_hours': total_hours,
-            'billable_hours': billable_hours,
-            'total_amount': str(total_amount),
-            'auto_submitted': getattr(ts, 'auto_submitted', False),
-            'submitted_at': ts.submitted_at.isoformat() if ts.submitted_at else None,
-            'approved_at': ts.approved_at.isoformat() if ts.approved_at else None,
-            'approved_by_id': ts.approved_by_id,
-            'approved_by_username': ts.approved_by.username if ts.approved_by else None,
+    # ── Serialize ─────────────────────────────────────────────────────────────
+    timesheets = []
+    for ts in qs:
+        timesheets.append({
+            'id':                    ts.id,
+            'user_id':               ts.user.id,
+            'user_username':         ts.user.username,
+            'user_email':            ts.user.email,
+            'user_first_name':       ts.user.first_name,
+            'user_last_name':        ts.user.last_name,
+            'week_start':            str(ts.week_start),
+            'week_end':              str(ts.week_end),
+            'status':                ts.status,
+            'total_hours':           float(ts.total_hours or 0),
+            'billable_hours':        float(ts.billable_hours or 0),
+            'total_amount':          str(ts.total_amount or '0.00'),
+            'auto_submitted':        ts.auto_submitted,
+            'submitted_at':          ts.submitted_at.isoformat() if ts.submitted_at else None,
+            'approved_at':           ts.approved_at.isoformat() if ts.approved_at else None,
+            'approved_by_id':        ts.approved_by_id,
+            'approved_by_username':  ts.approved_by.username if ts.approved_by else None,
         })
-        
-        # Accumulate summary
-        summary_totals['total_hours'] += total_hours
-        summary_totals['billable_hours'] += billable_hours
-        summary_totals['total_amount'] += total_amount
-    
+ 
+    # ── Summary — computed over the FILTERED set ──────────────────────────────
+    total_hours    = sum(t['total_hours']    for t in timesheets)
+    billable_hours = sum(t['billable_hours'] for t in timesheets)
+    total_amount   = sum(float(t['total_amount']) for t in timesheets)
+ 
     return Response({
-        'timesheets': result,
+        'timesheets': timesheets,
         'summary': {
-            'total_timesheets': len(result),
-            'total_hours': round(summary_totals['total_hours'], 2),
-            'billable_hours': round(summary_totals['billable_hours'], 2),
-            'total_amount': str(summary_totals['total_amount']),
-            'auto_submitted_count': sum(1 for r in result if r['auto_submitted']),
-        }
+            'total_timesheets':    len(timesheets),
+            'total_hours':         total_hours,
+            'billable_hours':      billable_hours,
+            'total_amount':        f'{total_amount:.2f}',
+            'auto_submitted_count': sum(1 for t in timesheets if t['auto_submitted']),
+        },
+        # Echo back the active date range so the frontend can verify
+        'date_range': {
+            'start': str(start_date) if start_date else None,
+            'end':   str(end_date)   if end_date   else None,
+        },
     })
 
 

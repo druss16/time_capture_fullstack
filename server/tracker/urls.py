@@ -16,6 +16,7 @@ router.register(r'blocks-api', views.BlockCategorizationViewSet, basename='block
 router.register(r'billing/rates', views_billing.BillingRateViewSet, basename='billing-rate')
 router.register(r'billing/timesheets', views_billing.TimesheetViewSet, basename='timesheet')
 
+
 urlpatterns = [
     # -------------------------------
     # Basic / Health
@@ -201,6 +202,7 @@ urlpatterns = [
     path('billing/timesheets/<int:pk>/reject/', views_billing.TimesheetRejectView.as_view(), name='timesheet-reject'),
     path('billing/timesheets/<int:pk>/reopen/', views_billing.TimesheetReopenView.as_view(), name='timesheet-reopen'),
     path('billing/timesheets/<int:pk>/lock/', views_billing.TimesheetLockView.as_view()),  # NEW
+    path('billing/timesheets/<int:pk>/detail/', views_billing.timesheet_detail_view, name='timesheet-detail'),
 
     # History
     path('billing/timesheet-history/', views_billing.timesheet_history),  # NEW

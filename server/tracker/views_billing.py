@@ -545,63 +545,51 @@ def timesheet_detail_view(request, pk):
 # ===============================
 # APPROVAL QUEUE
 # ===============================
-
 @api_view(['GET'])
 def approval_queue(request):
-    """
-    Get all timesheets pending approval.
-    Managers/Admins only.
-    """
     org = get_request_org_override_billing(request)
-
     if not org:
         return Response({'error': 'No organization'}, status=400)
-    
-    membership = OrganizationMembership.objects.filter(
-        user=request.user, organization=org
-    ).first()
-    
-    if not membership or membership.role not in ('owner', 'admin', 'manager'):
-        return Response({'error': 'Insufficient permissions'}, status=403)
-    
+
+    # Staff bypass — no membership check needed
+    if not (request.user.is_staff or request.user.is_superuser):
+        membership = OrganizationMembership.objects.filter(
+            user=request.user, organization=org
+        ).first()
+        if not membership or membership.role not in ('owner', 'admin', 'manager'):
+            return Response({'error': 'Insufficient permissions'}, status=403)
+
     timesheets = Timesheet.objects.filter(
         org=org,
         status='submitted'
     ).select_related('user').order_by('submitted_at')
-    
+
     result = []
     for ts in timesheets:
         blocks = Block.objects.filter(timesheet=ts)
-        
-        total_minutes = sum(b.minutes or 0 for b in blocks)
+        total_minutes    = sum(b.minutes or 0 for b in blocks)
         billable_minutes = sum(b.minutes or 0 for b in blocks if b.is_billable)
-        total_amount = sum(float(b.billing_amount or 0) for b in blocks if b.is_billable)
-        
-        days_pending = 0
-        if ts.submitted_at:
-            days_pending = (timezone.now() - ts.submitted_at).days
-        
+        total_amount     = sum(float(b.billing_amount or 0) for b in blocks if b.is_billable)
+        days_pending = (timezone.now() - ts.submitted_at).days if ts.submitted_at else 0
+
         result.append({
-            'id': ts.id,
-            'user_id': ts.user_id,
-            'user_name': f"{ts.user.first_name} {ts.user.last_name}".strip() or ts.user.username,
-            'user_email': ts.user.email,
-            'week_start': ts.week_start.isoformat(),
-            'week_end': (ts.week_start + timedelta(days=6)).isoformat(),
-            'status': ts.status,
-            'submitted_at': ts.submitted_at.isoformat() if ts.submitted_at else None,
-            'days_pending': days_pending,
-            'notes': ts.submitted_notes or '',
-            'total_hours': round(total_minutes / 60, 2),
+            'id':             ts.id,
+            'user_id':        ts.user_id,
+            'user_name':      f"{ts.user.first_name} {ts.user.last_name}".strip() or ts.user.username,
+            'user_email':     ts.user.email,
+            'week_start':     ts.week_start.isoformat(),
+            'week_end':       (ts.week_start + timedelta(days=6)).isoformat(),
+            'status':         ts.status,
+            'submitted_at':   ts.submitted_at.isoformat() if ts.submitted_at else None,
+            'days_pending':   days_pending,
+            'notes':          ts.submitted_notes or '',
+            'total_hours':    round(total_minutes / 60, 2),
             'billable_hours': round(billable_minutes / 60, 2),
-            'total_amount': round(total_amount, 2),
-            'auto_submitted': ts.auto_submitted,  # ← NEW: Include auto_submitted flag
+            'total_amount':   round(total_amount, 2),
+            'auto_submitted': ts.auto_submitted,
         })
-    
-    return Response({
-        'count': len(result),
-        'timesheets': result
-    })
+
+    return Response({'count': len(result), 'timesheets': result})
 
 
 # ===============================
@@ -1904,7 +1892,20 @@ from datetime import date, datetime
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def timesheet_history(request):
-    org = request.user.organization
+    # ── Admin impersonation override ──
+    override_id = request.GET.get("org_id")
+    if override_id and (request.user.is_staff or request.user.is_superuser):
+        try:
+            org = Organization.objects.get(id=int(override_id))
+        except (Organization.DoesNotExist, ValueError):
+            return Response({"error": "Org not found"}, status=404)
+    else:
+        membership = OrganizationMembership.objects.filter(
+            user=request.user
+        ).select_related('organization').first()
+        if not membership:
+            return Response({"error": "No organization found"}, status=404)
+        org = membership.organization
  
     # ── Date range filter ─────────────────────────────────────────────────────
     start_date_str = request.GET.get('start_date')
@@ -1922,7 +1923,7 @@ def timesheet_history(request):
  
     # ── Base queryset — approved timesheets for this org ──────────────────────
     qs = Timesheet.objects.filter(
-        user__organization=org,
+        org=org,
         status__in=['approved', 'locked'],
     ).select_related('user', 'approved_by').order_by('-week_start')
  
@@ -3195,51 +3196,50 @@ def csv_invoice_template(request):
     response['Content-Disposition'] = f'attachment; filename="invoice_import_template_{org.slug}.csv"'
     return response
 
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 @require_professional_plan
 def list_invoices(request):
-    """List invoices with optional filtering."""
     from .models import Invoice
-    
-    org = get_user_org(request.user)
-    if not org:
-        return Response({'error': 'No organization'}, status=404)
-    
+
+    # ── Admin impersonation override ──
+    override_id = request.GET.get("org_id")
+    if override_id and (request.user.is_staff or request.user.is_superuser):
+        try:
+            org = Organization.objects.get(id=int(override_id))
+        except (Organization.DoesNotExist, ValueError):
+            return Response({"error": "Org not found"}, status=404)
+    else:
+        org = get_user_org(request.user)
+        if not org:
+            return Response({'error': 'No organization'}, status=404)
+
     start_date = request.GET.get('start_date')
-    end_date = request.GET.get('end_date')
-    client_id = request.GET.get('client_id')
-    
+    end_date   = request.GET.get('end_date')
+    client_id  = request.GET.get('client_id')
+
     invoices = Invoice.objects.filter(org=org).select_related('client')
-    
-    if start_date:
-        invoices = invoices.filter(invoice_date__gte=start_date)
-    if end_date:
-        invoices = invoices.filter(invoice_date__lte=end_date)
-    if client_id:
-        invoices = invoices.filter(client_id=client_id)
-    
+
+    if start_date: invoices = invoices.filter(invoice_date__gte=start_date)
+    if end_date:   invoices = invoices.filter(invoice_date__lte=end_date)
+    if client_id:  invoices = invoices.filter(client_id=client_id)
+
     data = [{
-        'id': inv.id,
+        'id':             inv.id,
         'invoice_number': inv.invoice_number,
-        'invoice_date': inv.invoice_date.isoformat(),
-        'amount': float(inv.amount),
-        'hours_billed': float(inv.hours_billed) if inv.hours_billed else None,
-        'client_id': inv.client_id,
-        'client_name': inv.client.name if inv.client else inv.client_code,
-        'client_code': inv.client_code,
-        'source': inv.source,
-        'status': inv.status or 'sent',   # ← ADD THIS
-        'matched': inv.client is not None,
+        'invoice_date':   inv.invoice_date.isoformat(),
+        'amount':         float(inv.amount),
+        'hours_billed':   float(inv.hours_billed) if inv.hours_billed else None,
+        'client_id':      inv.client_id,
+        'client_name':    inv.client.name if inv.client else inv.client_code,
+        'client_code':    inv.client_code,
+        'source':         inv.source,
+        'status':         inv.status or 'sent',
+        'matched':        inv.client is not None,
     } for inv in invoices.order_by('-invoice_date', '-id')[:500]]
+
+    return Response({'invoices': data, 'total': invoices.count()})
     
-    return Response({
-        'invoices': data,
-        'total': invoices.count(),
-    })
-
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_professional_plan

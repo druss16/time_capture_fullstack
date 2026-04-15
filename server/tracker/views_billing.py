@@ -36,6 +36,27 @@ stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", None) or ""
 EXECUTIVE_PLANS = ['executive']
 PROFESSIONAL_PLANS = ['professional', 'executive']  # ← ADD THIS
 
+def get_request_org_override_billing(request):
+    from tracker.models import Organization
+    override_id = request.GET.get("org_id") or (request.data.get("org_id") if hasattr(request, 'data') else None)
+    if override_id and (request.user.is_staff or request.user.is_superuser):
+        try:
+            return Organization.objects.get(id=int(override_id))
+        except (Organization.DoesNotExist, ValueError, TypeError):
+            pass
+    return get_user_org(request.user)
+
+def get_request_user_override_billing(request):
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    override_uid = request.GET.get("user_id")
+    if override_uid and (request.user.is_staff or request.user.is_superuser):
+        try:
+            return User.objects.get(id=int(override_uid))
+        except (User.DoesNotExist, ValueError, TypeError):
+            pass
+    return request.user
+
 
 class RequireExecutivePlanMixin:
     """Mixin that restricts view to Executive/Enterprise plans"""
@@ -531,7 +552,8 @@ def approval_queue(request):
     Get all timesheets pending approval.
     Managers/Admins only.
     """
-    org = get_user_org(request.user)
+    org = get_request_org_override_billing(request)
+
     if not org:
         return Response({'error': 'No organization'}, status=400)
     
@@ -756,7 +778,9 @@ def weekly_timesheet_view(request):
     Event-based weekly timesheet. Matches Daily Review exactly.
     Mobile blocks merged separately (same as today_time Step 5).
     """
-    org = get_user_org(request.user)
+    org = get_request_org_override_billing(request)
+    user = get_request_user_override_billing(request)
+
     if not org:
         return Response({'error': 'No organization'}, status=400)
 
@@ -773,7 +797,7 @@ def weekly_timesheet_view(request):
     week_end   = week_start + timedelta(days=6)
     day_strings = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
 
-    timesheet, _ = Timesheet.get_or_create_for_date(org, request.user, week_start)
+    timesheet, _ = Timesheet.get_or_create_for_date(org, user, week_start)
 
     tz = timezone.get_current_timezone()
     start_local = timezone.make_aware(dt_module.datetime.combine(week_start, dt_module.time.min), tz)
@@ -784,13 +808,13 @@ def weekly_timesheet_view(request):
     # ── Raw events for the week ───────────────────────────────────────────────
     from tracker.models import RawEvent
     events = list(RawEvent.objects.filter(
-        user=request.user,
+        user=user,
         ts_utc__gte=start_utc,
         ts_utc__lt=end_utc,
     ).select_related('block', 'block__client', 'block__task_type').order_by('ts_utc'))
 
     deleted_block_ids = set(
-        Block.objects.filter(user=request.user, deleted_at__isnull=False)
+        Block.objects.filter(user=user, deleted_at__isnull=False)
         .values_list('id', flat=True)
     )
 
@@ -834,7 +858,7 @@ def weekly_timesheet_view(request):
 
     # ── Mobile blocks (no raw events) ────────────────────────────────────────
     for block in Block.objects.filter(
-        user=request.user, org=org, hostname='mobile',
+        user=user, org=org, hostname='mobile',
         start__gte=start_utc, start__lte=end_utc,
         is_categorized=True, client__isnull=False, deleted_at__isnull=True,
     ).select_related('client', 'task_type'):
@@ -900,7 +924,7 @@ def client_summary_view(request):
     Manager/billing view - hours and amounts by client.
     Used for invoicing.
     """
-    org = get_user_org(request.user)
+    org = get_request_org_override_billing(request)
     if not org:
         return Response({'error': 'No organization'}, status=400)
     
@@ -3938,7 +3962,7 @@ def realization_with_editable(request):
     """
     from .models import Invoice
     
-    org = get_user_org(request.user)
+    org = get_request_org_override_billing(request)
     if not org:
         return Response({'error': 'No organization'}, status=404)
     

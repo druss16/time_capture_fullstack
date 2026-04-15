@@ -187,6 +187,13 @@ const BillingPage: React.FC = () => {
         const response = await safeFetchJson<WhoamiResponse>(`${API_BASE}/whoami/`);
         setUserInfo(response);
 
+        // ── Admin impersonation: always grant executive access ──
+        if (localStorage.getItem("impersonating_org_id")) {
+          setOrgPlan('executive');
+          setLoading(false);
+          return;
+        }
+
         if (response.org_id) {
           try {
             const orgResponse = await safeFetchJson<OrgResponse>(`${API_BASE}/settings/org/`);

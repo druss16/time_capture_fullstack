@@ -505,7 +505,7 @@ export const TimesheetDetailDrawer: React.FC<Props> = ({
     setError(null);
     setDetail(null);
     setActiveTab('grid');
-    safeFetchJson<TimesheetDetail>(`${API_BASE}/billing/timesheets/${timesheetId}/`)
+    safeFetchJson<TimesheetDetail>(`${API_BASE}/billing/timesheets/${timesheetId}/detail/`)
       .then(setDetail)
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => setLoading(false));

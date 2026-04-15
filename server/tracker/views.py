@@ -5178,7 +5178,7 @@ from .serializers import (
 @permission_classes([IsAuthenticated])
 def client_options(request):
     """Get clients for dropdown"""
-    org = get_user_org(request.user)
+    org = get_request_org_override(request)
     clients = Client.objects.filter(org=org, is_active=True).order_by('name')
     return Response(ClientListSerializer(clients, many=True).data)
 
@@ -5209,7 +5209,7 @@ def project_options_by_client(request, client_id):
 @permission_classes([IsAuthenticated])
 def task_type_options(request):
     """Get task types for dropdown"""
-    org = get_user_org(request.user)
+    org = get_request_org_override(request)
     task_types = TaskType.objects.filter(org=org, is_active=True).order_by('sort_order', 'name')
     return Response(TaskTypeListSerializer(task_types, many=True).data)
 

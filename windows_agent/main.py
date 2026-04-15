@@ -454,6 +454,27 @@ def setup_logging():
 
 _logger = setup_logging()
 
+# Browser app name suffixes that leak into window titles via win32 fallback
+_BROWSER_TITLE_SUFFIXES = [
+    " \u2013 Microsoft Edge",   # em dash (most common)
+    " - Microsoft Edge",
+    " \u2013 Google Chrome",
+    " - Google Chrome",
+    " \u2013 Brave Browser",
+    " - Brave Browser",
+    " \u2013 Mozilla Firefox",
+    " - Mozilla Firefox",
+]
+
+def normalize_window_title(title: str) -> str:
+    """Strip browser app name suffixes that leak in via win32 GetWindowText."""
+    if not title:
+        return title
+    for suffix in _BROWSER_TITLE_SUFFIXES:
+        if title.endswith(suffix):
+            return title[:-len(suffix)].strip()
+    return title
+
 # ---------------- Logging ----------------
 def log(msg: str, level: str = "info"):
     """Log to console (if verbose) and to file."""
@@ -2386,7 +2407,8 @@ def run_agent():
                             continue
                         
                         app_name, exe_name, pid, window_title = front
-                        
+                        window_title = normalize_window_title(window_title or "")
+
                         extras = try_get_url_or_path(exe_name, window_title)
                         url, fpath = extras.get("url"), extras.get("file_path")
                         

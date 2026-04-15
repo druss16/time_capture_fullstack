@@ -128,7 +128,7 @@ function ExpandedDetail({ timesheetId }: { timesheetId: number }) {
   useEffect(() => {
     (async () => {
       try {
-        const data = await safeFetchJson<TimesheetDetail>(`${API_BASE}/billing/timesheets/${timesheetId}/`);
+        const data = await safeFetchJson<TimesheetDetail>(`${API_BASE}/billing/timesheets/${timesheetId}/detail/`);
         setDetail(data);
         if (data.entries) setExpanded(new Set(data.entries.map(e => e.client_name)));
       } catch (e: any) {

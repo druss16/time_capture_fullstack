@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import { cn } from '@/lib/design-system';
+import { TimesheetDetailDrawer } from './TimesheetDetailDrawer';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -32,27 +33,6 @@ interface Timesheet {
   approved_by_username: string | null;
 }
 
-interface DetailEntry {
-  client_id: number | null;
-  client_name: string;
-  task_type_id: number | null;
-  task_type_name: string;
-  is_billable: boolean;
-  days: Record<string, number>;
-  total: number;
-}
-
-interface TimesheetDetail {
-  id: number;
-  week_start: string;
-  week_end: string;
-  status: string;
-  total_hours: number;
-  billable_hours: number;
-  total_amount: number;
-  entries: DetailEntry[];
-}
-
 interface HistoryData {
   timesheets: Timesheet[];
   summary: {
@@ -68,7 +48,6 @@ interface DateRange { start: string; end: string }
 
 const getDefaultDates = (): DateRange => {
   const today = new Date();
-  // Default: last 3 months
   const start = new Date(today.getFullYear(), today.getMonth() - 2, 1);
   return {
     start: start.toISOString().split('T')[0],
@@ -117,148 +96,27 @@ const AVATAR_COLORS = [
   'bg-violet-500','bg-cyan-500','bg-orange-500','bg-indigo-500',
 ];
 
-// ── Expanded Detail ───────────────────────────────────────────────────────────
-
-function ExpandedDetail({ timesheetId }: { timesheetId: number }) {
-  const [detail,   setDetail]   = useState<TimesheetDetail | null>(null);
-  const [loading,  setLoading]  = useState(true);
-  const [err,      setErr]      = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await safeFetchJson<TimesheetDetail>(`${API_BASE}/billing/timesheets/${timesheetId}/detail/`);
-        setDetail(data);
-        if (data.entries) setExpanded(new Set(data.entries.map(e => e.client_name)));
-      } catch (e: any) {
-        setErr(e?.message || 'Failed to load');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [timesheetId]);
-
-  if (loading) return (
-    <tr><td colSpan={7} className="px-5 py-4">
-      <div className="flex items-center gap-2 text-slate-400 text-sm">
-        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading detail…
-      </div>
-    </td></tr>
-  );
-
-  if (err || !detail) return (
-    <tr><td colSpan={7} className="px-5 py-3">
-      <div className="flex items-center gap-2 text-red-500 text-xs">
-        <AlertTriangle className="w-3.5 h-3.5" /> {err || 'No detail available'}
-      </div>
-    </td></tr>
-  );
-
-  // Group by client
-  const byClient: Record<string, DetailEntry[]> = {};
-  for (const e of detail.entries || []) {
-    const k = e.client_name || 'Unassigned';
-    if (!byClient[k]) byClient[k] = [];
-    byClient[k].push(e);
-  }
-
-  const nonBillable = detail.total_hours - detail.billable_hours;
-
-  return (
-    <tr>
-      <td colSpan={7} className="px-0 pb-0 pt-0 bg-slate-50/60">
-        <div className="mx-4 mb-3 border border-border/40 rounded-xl overflow-hidden bg-white">
-
-          {/* Mini stat strip */}
-          <div className="flex items-center gap-6 px-4 py-2.5 bg-slate-50 border-b border-border/40">
-            <div>
-              <p className="text-xs font-bold tabular-nums text-primary leading-none">{fmtHours(detail.billable_hours)}</p>
-              <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">Billable</p>
-            </div>
-            <div>
-              <p className="text-xs font-bold tabular-nums text-slate-400 leading-none">{fmtHours(nonBillable)}</p>
-              <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">Non-bill</p>
-            </div>
-            <div>
-              <p className="text-xs font-bold tabular-nums text-slate-700 leading-none">{fmtHours(detail.total_hours)}</p>
-              <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">Total</p>
-            </div>
-            <div>
-              <p className="text-xs font-bold tabular-nums text-emerald-600 leading-none">{fmtMoney(detail.total_amount)}</p>
-              <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">Amount</p>
-            </div>
-          </div>
-
-          {/* Client breakdown */}
-          {Object.keys(byClient).length === 0 ? (
-            <p className="px-4 py-3 text-xs text-slate-400 italic">No time entries for this week.</p>
-          ) : (
-            <div className="divide-y divide-border/30">
-              {Object.entries(byClient).map(([clientName, entries]) => {
-                const isOpen = expanded.has(clientName);
-                const total    = entries.reduce((s, e) => s + Number(e.total), 0);
-                const billable = entries.filter(e => e.is_billable).reduce((s, e) => s + Number(e.total), 0);
-
-                return (
-                  <div key={clientName}>
-                    <button
-                      onClick={() => setExpanded(prev => { const n = new Set(prev); n.has(clientName) ? n.delete(clientName) : n.add(clientName); return n; })}
-                      className="w-full flex items-center gap-2.5 px-4 py-2 hover:bg-slate-50/80 transition-colors text-left"
-                    >
-                      {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
-                      <div className={cn('w-1.5 h-1.5 rounded-full shrink-0', billable > 0 ? 'bg-primary' : 'bg-slate-200')} />
-                      <span className="font-semibold text-xs text-slate-700 flex-1">{clientName}</span>
-                      <span className="text-[10px] font-semibold text-primary tabular-nums">{fmtHours(billable)} billable</span>
-                      <span className="text-[10px] text-slate-400 tabular-nums ml-3">{fmtHours(total)} total</span>
-                    </button>
-
-                    {isOpen && (
-                      <div className="bg-slate-50/40 border-t border-border/20">
-                        {entries.map((entry, i) => (
-                          <div key={i} className="flex items-center gap-2.5 px-8 py-1.5 border-b border-border/10 last:border-0 hover:bg-slate-50/60 transition-colors">
-                            <ArrowRight className="w-3 h-3 text-slate-200 shrink-0" />
-                            <span className="text-xs text-slate-600 flex-1">{entry.task_type_name || 'General'}</span>
-                            {!entry.is_billable && (
-                              <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-slate-100 text-slate-400 rounded">Non-bill</span>
-                            )}
-                            <span className={cn('text-xs font-semibold tabular-nums', entry.is_billable ? 'text-primary' : 'text-slate-400')}>
-                              {fmtHours(Number(entry.total))}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </td>
-    </tr>
-  );
-}
-
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function TimesheetHistory() {
-  const [data,       setData]       = useState<HistoryData | null>(null);
-  const [loading,    setLoading]    = useState(true);
-  const [err,        setErr]        = useState<string | null>(null);
-  const [search,     setSearch]     = useState('');
-  const [filterUser, setFilterUser] = useState('');
-  const [showFilter, setShowFilter] = useState(false);
-  const [expanded,   setExpanded]   = useState<Set<number>>(new Set());
-  const [dateRange,  setDateRange]  = useState<DateRange>(getDefaultDates);
-  const [localStart, setLocalStart] = useState(getDefaultDates().start);
-  const [localEnd,   setLocalEnd]   = useState(getDefaultDates().end);
+  const [data,               setData]               = useState<HistoryData | null>(null);
+  const [loading,            setLoading]            = useState(true);
+  const [err,                setErr]                = useState<string | null>(null);
+  const [search,             setSearch]             = useState('');
+  const [filterUser,         setFilterUser]         = useState('');
+  const [showFilter,         setShowFilter]         = useState(false);
+  const [drawerTimesheetId,  setDrawerTimesheetId]  = useState<number | null>(null);
+  const [dateRange,          setDateRange]          = useState<DateRange>(getDefaultDates);
+  const [localStart,         setLocalStart]         = useState(getDefaultDates().start);
+  const [localEnd,           setLocalEnd]           = useState(getDefaultDates().end);
   const filterRef  = useRef<HTMLDivElement>(null);
   const searchRef  = useRef<HTMLInputElement>(null);
 
   // Close filter menu on outside click
   useEffect(() => {
-    const handler = (e: MouseEvent) => { if (filterRef.current && !filterRef.current.contains(e.target as Node)) setShowFilter(false); };
+    const handler = (e: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) setShowFilter(false);
+    };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
@@ -268,9 +126,11 @@ export default function TimesheetHistory() {
     try {
       const params = new URLSearchParams({ start_date: dateRange.start, end_date: dateRange.end });
       setData(await safeFetchJson<HistoryData>(`${API_BASE}/billing/timesheet-history/?${params}`));
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to load');
+    } finally {
+      setLoading(false);
     }
-    catch (e: any) { setErr(e?.message || 'Failed to load'); }
-    finally { setLoading(false); }
   }, [dateRange]);
 
   useEffect(() => { load(); }, [load]);
@@ -281,11 +141,11 @@ export default function TimesheetHistory() {
     const today = new Date();
     let s: Date, e: Date = today;
     switch (p) {
-      case 'thisMonth':  s = new Date(today.getFullYear(), today.getMonth(), 1); e = new Date(today.getFullYear(), today.getMonth()+1, 0); break;
-      case 'lastMonth':  s = new Date(today.getFullYear(), today.getMonth()-1, 1); e = new Date(today.getFullYear(), today.getMonth(), 0); break;
-      case 'last3':      s = new Date(today.getFullYear(), today.getMonth()-2, 1); break;
+      case 'thisMonth':  s = new Date(today.getFullYear(), today.getMonth(), 1);   e = new Date(today.getFullYear(), today.getMonth() + 1, 0); break;
+      case 'lastMonth':  s = new Date(today.getFullYear(), today.getMonth() - 1, 1); e = new Date(today.getFullYear(), today.getMonth(), 0); break;
+      case 'last3':      s = new Date(today.getFullYear(), today.getMonth() - 2, 1); break;
       case 'thisYear':   s = new Date(today.getFullYear(), 0, 1); break;
-      default:           s = new Date(today.getFullYear(), today.getMonth()-2, 1);
+      default:           s = new Date(today.getFullYear(), today.getMonth() - 2, 1);
     }
     const start = s.toISOString().split('T')[0];
     const end   = e.toISOString().split('T')[0];
@@ -305,10 +165,8 @@ export default function TimesheetHistory() {
     return true;
   });
 
-  const toggleRow = (id: number) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-
   const hasFilter = search || filterUser || dateRange.start !== getDefaultDates().start || dateRange.end !== getDefaultDates().end;
-  const nonBillableTotal = (parseFloat(String(summary?.total_hours || 0))) - (parseFloat(String(summary?.billable_hours || 0)));
+  const nonBillableTotal = parseFloat(String(summary?.total_hours || 0)) - parseFloat(String(summary?.billable_hours || 0));
 
   if (loading && !data) return (
     <div className="flex items-center justify-center min-h-[300px]">
@@ -356,7 +214,12 @@ export default function TimesheetHistory() {
               </div>
             </div>
           )}
-          <button onClick={load} disabled={loading} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50" title="Refresh">
+          <button
+            onClick={load}
+            disabled={loading}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50"
+            title="Refresh"
+          >
             <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
           </button>
         </div>
@@ -375,7 +238,10 @@ export default function TimesheetHistory() {
             className="w-full pl-8 pr-7 py-1.5 text-sm bg-slate-50 border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
           />
           {search && (
-            <button onClick={() => { setSearch(''); searchRef.current?.focus(); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+            <button
+              onClick={() => { setSearch(''); searchRef.current?.focus(); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            >
               <X className="w-3.5 h-3.5" />
             </button>
           )}
@@ -384,11 +250,15 @@ export default function TimesheetHistory() {
         {/* Date range */}
         <div className="flex items-center gap-2 pl-3 border-l border-border/40">
           <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-          <input type="date" value={localStart} onChange={e => setLocalStart(e.target.value)}
-            className="text-xs px-2 py-1 bg-slate-50 border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 tabular-nums" />
+          <input
+            type="date" value={localStart} onChange={e => setLocalStart(e.target.value)}
+            className="text-xs px-2 py-1 bg-slate-50 border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 tabular-nums"
+          />
           <span className="text-slate-300 text-xs">–</span>
-          <input type="date" value={localEnd} onChange={e => setLocalEnd(e.target.value)}
-            className="text-xs px-2 py-1 bg-slate-50 border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 tabular-nums" />
+          <input
+            type="date" value={localEnd} onChange={e => setLocalEnd(e.target.value)}
+            className="text-xs px-2 py-1 bg-slate-50 border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 tabular-nums"
+          />
           <button onClick={applyDates} className="px-2.5 py-1 text-xs font-semibold bg-primary text-white rounded-lg hover:opacity-90 transition-all">Apply</button>
         </div>
 
@@ -418,8 +288,11 @@ export default function TimesheetHistory() {
             {showFilter && (
               <div className="absolute top-full mt-1 left-0 bg-white rounded-xl border border-border/60 shadow-lg z-20 py-1 min-w-[180px]">
                 {['', ...users].map(u => (
-                  <button key={u} onClick={() => { setFilterUser(u); setShowFilter(false); }}
-                    className={cn('w-full text-left px-4 py-2 text-sm transition-colors', filterUser === u ? 'text-primary font-semibold bg-primary/5' : 'text-slate-600 hover:bg-slate-50')}>
+                  <button
+                    key={u}
+                    onClick={() => { setFilterUser(u); setShowFilter(false); }}
+                    className={cn('w-full text-left px-4 py-2 text-sm transition-colors', filterUser === u ? 'text-primary font-semibold bg-primary/5' : 'text-slate-600 hover:bg-slate-50')}
+                  >
                     {u || 'All employees'}
                   </button>
                 ))}
@@ -478,87 +351,87 @@ export default function TimesheetHistory() {
                     <p className="text-sm mt-1">
                       {timesheets.length === 0
                         ? 'Approved timesheets will appear here'
-                        : <button onClick={() => { setSearch(''); setFilterUser(''); const d = getDefaultDates(); setLocalStart(d.start); setLocalEnd(d.end); setDateRange(d); }} className="text-primary hover:underline">Clear filters</button>
+                        : (
+                          <button
+                            onClick={() => {
+                              setSearch(''); setFilterUser('');
+                              const d = getDefaultDates();
+                              setLocalStart(d.start); setLocalEnd(d.end); setDateRange(d);
+                            }}
+                            className="text-primary hover:underline"
+                          >
+                            Clear filters
+                          </button>
+                        )
                       }
                     </p>
                   </td>
                 </tr>
               ) : (
-                filtered.map((ts, idx) => {
-                  const isExpanded = expanded.has(ts.id);
-                  const color      = AVATAR_COLORS[ts.user_id % AVATAR_COLORS.length];
-                  const nonBill    = ts.total_hours - ts.billable_hours;
+                filtered.map((ts) => {
+                  const color   = AVATAR_COLORS[ts.user_id % AVATAR_COLORS.length];
+                  const nonBill = ts.total_hours - ts.billable_hours;
 
                   return (
-                    <>
-                      <tr
-                        key={ts.id}
-                        onClick={() => toggleRow(ts.id)}
-                        className={cn(
-                          'cursor-pointer hover:bg-slate-50/60 transition-colors',
-                          isExpanded && 'bg-primary/3',
-                        )}
-                      >
-                        {/* Employee */}
-                        <td className={cn('sticky left-0 z-10 px-4 py-2.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)] transition-colors', isExpanded ? 'bg-primary/3' : 'bg-white')}>
-                          <div className="flex items-center gap-2.5">
-                            <div className={cn('w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0', color)}>
-                              {userInitials(ts)}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="font-semibold text-slate-800 text-sm leading-tight truncate">{userName(ts)}</p>
-                              <p className="text-xs text-slate-400 truncate">{ts.user_email}</p>
-                            </div>
+                    <tr
+                      key={ts.id}
+                      onClick={() => setDrawerTimesheetId(ts.id)}
+                      className="cursor-pointer hover:bg-slate-50/60 transition-colors"
+                    >
+                      {/* Employee */}
+                      <td className="sticky left-0 z-10 px-4 py-2.5 bg-white shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
+                        <div className="flex items-center gap-2.5">
+                          <div className={cn('w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0', color)}>
+                            {userInitials(ts)}
                           </div>
-                        </td>
-
-                        {/* Week */}
-                        <td className="px-4 py-2.5 text-sm text-slate-600 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            {fmtWeek(ts.week_start, ts.week_end)}
-                            {ts.auto_submitted && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
-                                <Clock className="w-2.5 h-2.5" /> Auto
-                              </span>
-                            )}
-                            {isExpanded
-                              ? <ChevronDown className="w-3.5 h-3.5 text-primary ml-1" />
-                              : <ChevronRight className="w-3.5 h-3.5 text-slate-300 ml-1" />
-                            }
+                          <div className="min-w-0">
+                            <p className="font-semibold text-slate-800 text-sm leading-tight truncate">{userName(ts)}</p>
+                            <p className="text-xs text-slate-400 truncate">{ts.user_email}</p>
                           </div>
-                        </td>
+                        </div>
+                      </td>
 
-                        {/* Billable */}
-                        <td className="px-4 py-2.5 text-right tabular-nums">
-                          <p className="text-sm font-bold text-primary leading-none">{fmtHours(ts.billable_hours)}</p>
-                        </td>
-
-                        {/* Non-bill */}
-                        <td className="px-4 py-2.5 text-right tabular-nums">
-                          <p className="text-sm font-bold text-slate-400 leading-none">{fmtHours(nonBill)}</p>
-                        </td>
-
-                        {/* Total */}
-                        <td className="px-4 py-2.5 text-right tabular-nums">
-                          <p className="text-sm font-bold text-slate-700 leading-none">{fmtHours(ts.total_hours)}</p>
-                        </td>
-
-                        {/* Amount */}
-                        <td className="px-4 py-2.5 text-right tabular-nums whitespace-nowrap">
-                          <span className="text-sm font-semibold text-emerald-600">{fmtMoney(ts.total_amount)}</span>
-                        </td>
-
-                        {/* Approved */}
-                        <td className="px-4 py-2.5 text-right">
-                          <p className="text-xs text-slate-500 tabular-nums">{fmtDateTime(ts.approved_at)}</p>
-                          {ts.approved_by_username && (
-                            <p className="text-[10px] text-slate-400">by {ts.approved_by_username}</p>
+                      {/* Week */}
+                      <td className="px-4 py-2.5 text-sm text-slate-600 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          {fmtWeek(ts.week_start, ts.week_end)}
+                          {ts.auto_submitted && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+                              <Clock className="w-2.5 h-2.5" /> Auto
+                            </span>
                           )}
-                        </td>
-                      </tr>
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-300 ml-1" />
+                        </div>
+                      </td>
 
-                      {isExpanded && <ExpandedDetail key={`detail-${ts.id}`} timesheetId={ts.id} />}
-                    </>
+                      {/* Billable */}
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        <p className="text-sm font-bold text-primary leading-none">{fmtHours(ts.billable_hours)}</p>
+                      </td>
+
+                      {/* Non-bill */}
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        <p className="text-sm font-bold text-slate-400 leading-none">{fmtHours(nonBill)}</p>
+                      </td>
+
+                      {/* Total */}
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        <p className="text-sm font-bold text-slate-700 leading-none">{fmtHours(ts.total_hours)}</p>
+                      </td>
+
+                      {/* Amount */}
+                      <td className="px-4 py-2.5 text-right tabular-nums whitespace-nowrap">
+                        <span className="text-sm font-semibold text-emerald-600">{fmtMoney(ts.total_amount)}</span>
+                      </td>
+
+                      {/* Approved */}
+                      <td className="px-4 py-2.5 text-right">
+                        <p className="text-xs text-slate-500 tabular-nums">{fmtDateTime(ts.approved_at)}</p>
+                        {ts.approved_by_username && (
+                          <p className="text-[10px] text-slate-400">by {ts.approved_by_username}</p>
+                        )}
+                      </td>
+                    </tr>
                   );
                 })
               )}
@@ -570,7 +443,7 @@ export default function TimesheetHistory() {
         <div className="px-5 py-3 border-t border-border/50 flex items-center justify-between bg-slate-50/40 shrink-0">
           <p className="text-xs text-slate-400 flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-            Click any row to expand client breakdown
+            Click any row to view timesheet detail
           </p>
           {summary && (
             <p className="text-xs font-semibold text-emerald-600 tabular-nums">{fmtMoney(summary.total_amount)} total value</p>
@@ -578,6 +451,25 @@ export default function TimesheetHistory() {
         </div>
       </div>
 
+      {/* ── Detail Drawer ─────────────────────────────────────────────── */}
+      <TimesheetDetailDrawer
+        timesheetId={drawerTimesheetId}
+        onClose={() => setDrawerTimesheetId(null)}
+        onApprove={async (id) => {
+          await safeFetchJson(`${API_BASE}/billing/timesheets/${id}/approve/`, {
+            method: 'POST',
+            body: JSON.stringify({ notes: '' }),
+          });
+          load();
+        }}
+        onReject={async (id, reason) => {
+          await safeFetchJson(`${API_BASE}/billing/timesheets/${id}/reject/`, {
+            method: 'POST',
+            body: JSON.stringify({ reason }),
+          });
+          load();
+        }}
+      />
     </div>
   );
 }

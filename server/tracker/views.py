@@ -664,19 +664,14 @@ def _signed_cookie_get(request, name: str, default=None):
 # -------------------------------------------------------------------
 # --- utility: org helper (safe default group) ---
 def get_org_or_default(request):
-    """
-    Get org from user or a default dev org ('default-org').
-    Ensures there's always a Group so queries don't crash.
-    """
-    if USE_AUTH and getattr(request, "user", None) and request.user.is_authenticated:
+    if getattr(request, "user", None) and request.user.is_authenticated:
         org = get_user_org(request.user)
-    else:
-        org = None
-    if not org:
-        org, _ = Organization.objects.get_or_create(
-            name="default-org",
-            defaults={"slug": "default-org"}
-        )
+        if org:
+            return org
+    org, _ = Organization.objects.get_or_create(
+        name="default-org",
+        defaults={"slug": "default-org"}
+    )
     return org
 
 

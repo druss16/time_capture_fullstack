@@ -6151,7 +6151,16 @@ def settings_org(request):
     ).select_related('organization').first()
     if not membership:
         return Response({"error": "No organization found"}, status=404)
-    org = membership.organization
+
+    # ── Admin impersonation override ──
+    override_id = request.GET.get("org_id")
+    if override_id and (request.user.is_staff or request.user.is_superuser):
+        try:
+            org = Organization.objects.get(id=int(override_id))
+        except (Organization.DoesNotExist, ValueError, TypeError):
+            org = membership.organization
+    else:
+        org = membership.organization
     is_admin_or_owner = membership.role in ["owner", "admin"]
     profile, _ = OrgProfile.objects.get_or_create(org=org)
     if request.method == "GET":
@@ -6290,7 +6299,7 @@ def _sensitivity_label(value: int) -> str:
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_team_list(request):
     """List all team members in the organization"""
-    org = get_user_org(request.user)
+    org = get_request_org_override(request)
     if not org:
         return Response({"error": "No organization found"}, status=404)
     
@@ -6471,7 +6480,7 @@ def settings_clients(request):
     GET: List all clients for the organization
     POST: Create a new client
     """
-    org = get_user_org(request.user)
+    org = get_request_org_override(request)
     if not org:
         return Response({"error": "No organization found"}, status=404)
     
@@ -6524,7 +6533,7 @@ def settings_client_detail(request, client_id):
     PATCH: Update a client
     DELETE: Delete a client
     """
-    org = get_user_org(request.user)
+    org = get_request_org_override(request)
     if not org:
         return Response({"error": "No organization found"}, status=404)
     
@@ -6573,7 +6582,7 @@ def settings_devices(request):
     """List all registered devices/agents for the organization"""
     from tracker.models import AgentDevice, OrganizationMembership
     
-    org = get_user_org(request.user)
+    org = get_request_org_override(request)
     if not org:
         return Response({"error": "No organization found"}, status=404)
     

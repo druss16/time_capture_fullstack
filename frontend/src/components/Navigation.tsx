@@ -79,13 +79,24 @@ export default function Navigation() {
     navigate(path);
   };
 
-  const displayName = userInfo?.first_name 
-    ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim()
-    : userInfo?.username || '';
+  const impersonatingUserName = localStorage.getItem("impersonating_user_name");
+  const impersonatingOrgName  = localStorage.getItem("impersonating_org_name");
 
-  const initials = userInfo?.first_name 
-    ? `${userInfo.first_name[0]}${userInfo.last_name?.[0] || ''}`.toUpperCase()
-    : userInfo?.username?.charAt(0).toUpperCase() || '?';
+  const displayName = impersonatingUserName
+    ? impersonatingUserName
+    : userInfo?.first_name 
+      ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim()
+      : userInfo?.username || '';
+
+  const orgDisplayName = impersonatingUserName
+    ? impersonatingOrgName || userInfo?.org_name
+    : userInfo?.org_name;
+
+  const initials = impersonatingUserName
+    ? impersonatingUserName.charAt(0).toUpperCase()
+    : userInfo?.first_name 
+      ? `${userInfo.first_name[0]}${userInfo.last_name?.[0] || ''}`.toUpperCase()
+      : userInfo?.username?.charAt(0).toUpperCase() || '?';
 
   const navItems = [
     { path: '/daily',     label: 'Daily Review', icon: Calendar,  show: true                },
@@ -150,7 +161,7 @@ export default function Navigation() {
                   </div>
                   <div className="hidden md:block text-left">
                     <p className="text-sm font-semibold text-white leading-none">{displayName}</p>
-                    {userInfo.org_name && <p className="text-xs text-slate-400">{userInfo.org_name}</p>}
+                    {orgDisplayName && <p className="text-xs text-slate-400">{orgDisplayName}</p>}
                   </div>
                   {userRole && userRole !== 'member' && (
                     <span className={cn('hidden sm:inline text-xs px-2 py-0.5 rounded font-semibold', getRoleColor(userRole))}>

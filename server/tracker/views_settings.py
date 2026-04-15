@@ -67,7 +67,7 @@ def get_visible_clients(user, org):
 @permission_classes([IsAuthenticated])
 def get_my_clients(request):
     """Get clients visible to the current user (for dropdowns)."""
-    get_request_org_override_settings(request)
+    org = get_request_org_override_settings(request)
     if not org:
         return Response({'error': 'No organization'}, status=404)
     
@@ -84,7 +84,7 @@ def client_assignments_list(request):
     GET: List all client assignments
     POST: Create new assignment(s)
     """
-    get_request_org_override_settings(request)
+    org = get_request_org_override_settings(request)
     if not org:
         return Response({'error': 'No organization found'}, status=404)
     
@@ -164,7 +164,7 @@ def client_assignments_list(request):
 @permission_classes([IsAuthenticated])
 def client_assignment_delete(request, assignment_id):
     """Delete a client assignment."""
-    get_request_org_override_settings(request)
+    org = get_request_org_override_settings(request)
     if not org:
         return Response({'error': 'No organization found'}, status=404)
     
@@ -398,7 +398,7 @@ def client_requests(request):
     GET: List pending client requests (admin only)
     POST: Submit a new client request (any user)
     """
-    get_request_org_override_settings(request)
+    org = get_request_org_override_settings(request)
     if not org:
         return Response({'error': 'No organization'}, status=404)
     

@@ -11,12 +11,21 @@ from rest_framework.response import Response
 from .models import ClientRequest, Client, Organization, OrganizationMembership, ClientAssignment
 
 
+def get_request_org_override_settings(request):
+    from tracker.models import Organization
+    override_id = request.GET.get("org_id")
+    if override_id and (request.user.is_staff or request.user.is_superuser):
+        try:
+            return Organization.objects.get(id=int(override_id))
+        except (Organization.DoesNotExist, ValueError, TypeError):
+            pass
+    return get_user_org(request.user)
+
 
 def get_user_org(user):
     """Helper to get user's organization."""
     membership = OrganizationMembership.objects.filter(user=user).select_related('organization').first()
     return membership.organization if membership else None
-
 
 
 def get_visible_clients(user, org):
@@ -58,7 +67,7 @@ def get_visible_clients(user, org):
 @permission_classes([IsAuthenticated])
 def get_my_clients(request):
     """Get clients visible to the current user (for dropdowns)."""
-    org = get_user_org(request.user)
+    get_request_org_override_settings(request)
     if not org:
         return Response({'error': 'No organization'}, status=404)
     
@@ -75,7 +84,7 @@ def client_assignments_list(request):
     GET: List all client assignments
     POST: Create new assignment(s)
     """
-    org = get_user_org(request.user)
+    get_request_org_override_settings(request)
     if not org:
         return Response({'error': 'No organization found'}, status=404)
     
@@ -155,7 +164,7 @@ def client_assignments_list(request):
 @permission_classes([IsAuthenticated])
 def client_assignment_delete(request, assignment_id):
     """Delete a client assignment."""
-    org = get_user_org(request.user)
+    get_request_org_override_settings(request)
     if not org:
         return Response({'error': 'No organization found'}, status=404)
     
@@ -389,7 +398,7 @@ def client_requests(request):
     GET: List pending client requests (admin only)
     POST: Submit a new client request (any user)
     """
-    org = get_user_org(request.user)
+    get_request_org_override_settings(request)
     if not org:
         return Response({'error': 'No organization'}, status=404)
     

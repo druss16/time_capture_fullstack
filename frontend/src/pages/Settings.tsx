@@ -39,6 +39,7 @@ import type {
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
 
+
 // ── Upgrade prompt ────────────────────────────────────────────────────────────
 
 function UpgradePrompt({ featureName }: { featureName: string }) {
@@ -102,6 +103,10 @@ export default function Settings() {
 
   // Load org plan once
   useEffect(() => {
+    if (localStorage.getItem("impersonating_org_id")) {
+      setOrgPlan('executive');
+      return;
+    }
     safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`)
       .then(org => { setOrgInfo(org); setOrgPlan(org.plan || 'professional'); })
       .catch(() => {});

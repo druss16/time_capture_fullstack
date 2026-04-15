@@ -322,17 +322,19 @@ def timesheet_detail_view(request, pk):
     from django.utils.timezone import localtime
     from tracker.models import RawEvent  # adjust if your app is named differently
  
-    org = get_user_org(request.user)
+    org = get_request_org_override_billing(request)
     if not org:
         return Response({'error': 'No organization'}, status=400)
- 
-    membership = OrganizationMembership.objects.filter(
-        user=request.user, organization=org
-    ).first()
-    if not membership:
-        return Response({'error': 'No membership'}, status=403)
- 
-    is_manager = membership.role in ('owner', 'admin', 'manager')
+
+    if request.user.is_staff or request.user.is_superuser:
+        is_manager = True
+    else:
+        membership = OrganizationMembership.objects.filter(
+            user=request.user, organization=org
+        ).first()
+        if not membership:
+            return Response({'error': 'No membership'}, status=403)
+        is_manager = membership.role in ('owner', 'admin', 'manager')
  
     try:
         if is_manager:

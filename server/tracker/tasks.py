@@ -458,7 +458,9 @@ def auto_submit_timesheets():
             ).update(timesheet=timesheet)
 
             # Recalculate totals
-            blocks = Block.objects.filter(timesheet=timesheet)
+            blocks = Block.objects.filter(timesheet=timesheet).exclude(
+                category_hours__has_key='Idle'
+            )
             total_minutes = sum(b.minutes or 0 for b in blocks)
 
             if total_minutes == 0:

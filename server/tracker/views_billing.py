@@ -1945,7 +1945,7 @@ def timesheet_history(request):
             'user_first_name':       ts.user.first_name,
             'user_last_name':        ts.user.last_name,
             'week_start':            str(ts.week_start),
-            'week_end':              str(ts.week_end),
+            'week_end':              str(ts.week_start + timedelta(days=6)),
             'status':                ts.status,
             'total_hours':           float(ts.total_hours or 0),
             'billable_hours':        float(ts.billable_hours or 0),
@@ -3239,7 +3239,7 @@ def list_invoices(request):
     } for inv in invoices.order_by('-invoice_date', '-id')[:500]]
 
     return Response({'invoices': data, 'total': invoices.count()})
-    
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_professional_plan

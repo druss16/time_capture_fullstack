@@ -725,7 +725,7 @@ class AIClientSwitcher:
     def on_window_change(self, app_name: str, exe_name: str, title: str,
                          url: str = None, file_path: str = None, in_meeting: bool = False,
                          bundle_id: str = None):
-        if not self.config["enabled"] or not title or title == self._last_title:
+        if not self.config["enabled"] or not title:
             return
         self._last_title = title
         if in_meeting or time.time() < self._manual_override_until:

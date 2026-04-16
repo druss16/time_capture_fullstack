@@ -38,6 +38,7 @@ jobs:
         working-directory: mac_agent
         run: |
           pyinstaller --onedir --windowed --name "TimeTracker" \
+            --icon timetracker.icns \
             --add-data "version.py:." \
             --add-data "timetracker_gui.py:." \
             --add-data "notifications.py:." \
@@ -269,7 +270,9 @@ jobs:
         working-directory: windows_agent
         run: |
           # Build GUI
+          # Build GUI
           python -m PyInstaller --onedir --windowed --name "TimeTracker" `
+            --icon=timetracker.ico `
             --collect-all customtkinter `
             --collect-all CTkMessagebox `
             --hidden-import=customtkinter `
@@ -278,6 +281,7 @@ jobs:
 
           # Build Agent
           python -m PyInstaller --onedir --noconsole --name "TimeTrackerAgent" `
+            --icon=timetracker.ico `
             --hidden-import=timetracker_gui `
             --hidden-import=mdm_deploy `
             --hidden-import=version `

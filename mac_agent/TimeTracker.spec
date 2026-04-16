@@ -62,6 +62,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='TimeTracker.app',
-    icon=None,
+    icon='timetracker.icns',
     bundle_identifier='com.mavops.timetracker',
 )

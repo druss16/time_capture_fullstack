@@ -729,9 +729,6 @@ class AIClientSwitcher:
         if not self.config["enabled"] or not title:
             logger.info(f"[AI-SWITCH] on_window_change: skipped (disabled/no title)")
             return
-        if title == self._last_title:
-            logger.info(f"[AI-SWITCH] on_window_change: skipped (same title) {title[:60]!r}")
-            return
         self._last_title = title
         if in_meeting or time.time() < self._manual_override_until:
             logger.info(f"[AI-SWITCH] on_window_change: skipped (meeting/override)")

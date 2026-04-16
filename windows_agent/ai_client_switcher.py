@@ -825,7 +825,16 @@ class AIClientSwitcher:
             cur_id      = self._current_client_id
             sensitivity = self.config["ai_sensitivity"]
 
-            # Tier 1a: Pattern cache
+            # Tier 1b: Pre-compiled regex + partial-word — run FIRST, always wins over cache
+            regex_hit = _regex_match(title, file_path, self._matchers, sensitivity)
+            if regex_hit and regex_hit.client_id != cur_id:
+                if regex_hit.confidence >= self.config["local_confidence_threshold"]:
+                    stat_key = "partial_word" if regex_hit.match_method == "partial_word" else "regex"
+                    self.stats[stat_key] += 1
+                    self._queue_switch(regex_hit)
+                    return
+
+            # Tier 1a: Pattern cache — only if regex didn't match
             cached = self._cache.get(title)
             if cached and cached.get("client_id"):
                 if cached["client_id"] != cur_id:
@@ -841,15 +850,6 @@ class AIClientSwitcher:
                         self.stats["cache"] += 1
                         self._queue_switch(match)
                         return
-
-            # Tier 1b: Pre-compiled regex + partial-word
-            regex_hit = _regex_match(title, file_path, self._matchers, sensitivity)
-            if regex_hit and regex_hit.client_id != cur_id:
-                if regex_hit.confidence >= self.config["local_confidence_threshold"]:
-                    stat_key = "partial_word" if regex_hit.match_method == "partial_word" else "regex"
-                    self.stats[stat_key] += 1
-                    self._queue_switch(regex_hit)
-                    return
 
             # Tier 1c: Learned rules
             learned_hit = self._learned.match(search, cur_id)

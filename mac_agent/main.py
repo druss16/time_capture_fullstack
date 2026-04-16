@@ -342,7 +342,7 @@ _DETECTION_STATS = {"system_events": 0, "nsworkspace": 0, "quartz": 0, "failed":
 
 PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 
-MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 180))
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 600))
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 _wake_event = threading.Event()
 _wake_idle_bypass_until = 0.0
@@ -3082,7 +3082,7 @@ def run_agent():
         ai_switcher = AIClientSwitcher(
             config={
                 "enabled": True,
-                "dwell_seconds_before_switch": 8,
+                "dwell_seconds_before_switch": 3,
                 "cooldown_seconds": 120,
                 "manual_override_snooze_minutes": 2,
                 "debug": VERBOSE,

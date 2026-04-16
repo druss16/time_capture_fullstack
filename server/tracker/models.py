@@ -88,7 +88,7 @@ class Organization(models.Model):
         ),
     )
     
-    mouse_idle_pause_seconds = models.IntegerField(default=90)
+    mouse_idle_pause_seconds = models.IntegerField(default=600)
 
     trial_ends_at = models.DateTimeField(null=True, blank=True)
     

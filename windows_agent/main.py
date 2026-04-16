@@ -230,7 +230,7 @@ DEVICE_ID_FILE = _get("device_id_file", os.path.join(APPDATA, "TimeTracker", ".d
 
 POLL_SECONDS = int(_get("poll_seconds", 5))
 MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", 15))
-MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", 90))  # mutable — updated by sync
+MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", 600))  # mutable — updated by sync
 _IDLE_WATCHDOG_MAX_MINUTES = 30    # Force-reset idle if stuck longer than this
 _IDLE_HARD_CAP_HOURS = 2           # Absolute max idle duration regardless of input
 _idle_entered_at: float = 0.0      # Wall time when we entered idle
@@ -1888,7 +1888,7 @@ def run_agent():
         ai_switcher = AIClientSwitcher(
             config={
                 "enabled": True,
-                "dwell_seconds_before_switch": 8,
+                "dwell_seconds_before_switch": 3,
                 "cooldown_seconds": 120,
                 "manual_override_snooze_minutes": 5,
                 "debug": VERBOSE,

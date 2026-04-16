@@ -91,7 +91,7 @@ DEFAULT_CONFIG = {
     # Backend AI
     "ai_timeout": 10,
     "max_ai_calls_per_hour": 60,
-    "ai_debounce_seconds": 5.0,
+    "ai_debounce_seconds": 2.0,
     "ai_max_batch": 5,
 
     # Behavior

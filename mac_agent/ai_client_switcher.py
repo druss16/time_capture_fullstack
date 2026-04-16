@@ -95,7 +95,7 @@ DEFAULT_CONFIG = {
 
     # --- Timing ---
     "dwell_seconds_before_switch": 8,
-    "cooldown_seconds": 120,
+    "cooldown_seconds": 0,
     "manual_override_snooze_minutes": 30,
 
     # --- Backend AI ---

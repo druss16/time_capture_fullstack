@@ -926,13 +926,13 @@ class AIClientSwitcher:
 
 
     def _queue_switch(self, match: ClientMatch):
-        cid = match.client_id
         with self._lock:
-            if cid == self._current_client_id:
+            if match.client_id == self._current_client_id:
                 return
-            if time.time() < self._cooldowns.get(cid, 0):
+            if time.time() < self._cooldowns.get(match.client_id, 0):
                 self.stats["suppressed"] += 1
                 return
+        logger.info(f"[AI-SWITCH] _queue_switch: cid={match.client_id} cur={self._current_client_id} cooldown={self._cooldowns.get(match.client_id, 0):.0f} now={time.time():.0f}")
         # Execute immediately — no dwell, no pending
         self._execute_switch({
             "client_id": match.client_id,

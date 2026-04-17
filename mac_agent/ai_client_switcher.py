@@ -94,7 +94,7 @@ DEFAULT_CONFIG = {
     "partial_name_min_word_len": 5,         # min chars for a word to be a partial needle
 
     # --- Timing ---
-    "dwell_seconds_before_switch": 8,
+    "dwell_seconds_before_switch": 0,
     "cooldown_seconds": 0,
     "manual_override_snooze_minutes": 0,
 
@@ -851,21 +851,23 @@ class AIClientSwitcher:
             if time.time() < self._cooldowns.get(cid, 0):
                 self.stats["suppressed"] += 1
                 return
-            if self._pending_switch and self._pending_switch["client_id"] == cid:
-                return
+            
+            # High confidence exact match — fire instantly on next tick
+            # Low confidence — wait for full dwell to confirm
+            if match.confidence >= 0.90 and match.match_method in ("exact", "alias", "pattern_cache"):
+                first_seen = time.time() - self.config["dwell_seconds_before_switch"]
+            else:
+                first_seen = time.time()
+            
             self._pending_switch = {
                 "client_id": match.client_id,
                 "client_name": match.client_name,
                 "confidence": match.confidence,
                 "method": match.match_method,
                 "reasoning": match.reasoning,
-                "first_seen": time.time(),
+                "first_seen": first_seen,
                 "match": match,
             }
-            if self.config.get("debug"):
-                logger.info(f"[AI-SWITCH] Pending: {match.client_name} "
-                            f"(conf={match.confidence:.2f}, via={match.match_method})")
-
     # =================================================================
     # Backend AI Batch Queue
     # =================================================================

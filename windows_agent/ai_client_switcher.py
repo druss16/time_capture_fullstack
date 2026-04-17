@@ -84,7 +84,7 @@ DEFAULT_CONFIG = {
     "partial_name_min_word_len": 5,
 
     # Timing
-    "dwell_seconds_before_switch": 8,
+    "dwell_seconds_before_switch": 0,
     "cooldown_seconds": 0,
     "manual_override_snooze_minutes": 0,
 
@@ -931,28 +931,30 @@ class AIClientSwitcher:
             logger.error(f"[AI-SWITCH] detect error: {e}")
 
     def _queue_switch(self, match: ClientMatch):
+        cid = match.client_id
         with self._lock:
-            if match.client_id == self._current_client_id:
+            if cid == self._current_client_id:
                 return
-            if time.time() < self._cooldowns.get(match.client_id, 0):
+            if time.time() < self._cooldowns.get(cid, 0):
                 self.stats["suppressed"] += 1
                 return
-            if self._pending_switch and self._pending_switch["client_id"] == match.client_id:
-                return
+            
+            # High confidence exact match — fire instantly on next tick
+            # Low confidence — wait for full dwell to confirm
+            if match.confidence >= 0.90 and match.match_method in ("exact", "alias", "pattern_cache"):
+                first_seen = time.time() - self.config["dwell_seconds_before_switch"]
+            else:
+                first_seen = time.time()
+            
             self._pending_switch = {
-                "client_id":   match.client_id,
+                "client_id": match.client_id,
                 "client_name": match.client_name,
-                "confidence":  match.confidence,
-                "method":      match.match_method,
-                "reasoning":   match.reasoning,
-                "first_seen":  time.time(),
-                "match":       match,
+                "confidence": match.confidence,
+                "method": match.match_method,
+                "reasoning": match.reasoning,
+                "first_seen": first_seen,
+                "match": match,
             }
-            if self.config.get("debug"):
-                logger.info(
-                    f"[AI-SWITCH] Pending: {match.client_name} "
-                    f"(conf={match.confidence:.2f}, via={match.match_method})"
-                )
 
     # =================================================================
     # Backend AI Batch Queue (unchanged)

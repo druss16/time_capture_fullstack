@@ -1888,7 +1888,7 @@ def run_agent():
         ai_switcher = AIClientSwitcher(
             config={
                 "enabled": True,
-                "dwell_seconds_before_switch": 3,
+                "dwell_seconds_before_switch": 0,
                 "cooldown_seconds": 120,
                 "manual_override_snooze_minutes": 5,
                 "debug": VERBOSE,

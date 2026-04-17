@@ -2499,21 +2499,43 @@ def run_agent():
 
     # Setup sleep/wake handler to prevent morning stalls
     try:
-        from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification
-        
+        from AppKit import (
+            NSWorkspace,
+            NSWorkspaceDidWakeNotification,
+            NSWorkspaceWillSleepNotification,
+        )
+
+        _last_sleep_time = [time.time()]  # list so inner functions can mutate
+
+        def on_sleep(notification):
+            _last_sleep_time[0] = time.time()
+            log("[SLEEP] System going to sleep")
+
         def on_wake(notification):
             global _wake_idle_bypass_until
-            log("[WAKE] System woke — exiting for LaunchAgent restart")
+            sleep_duration = time.time() - _last_sleep_time[0]
+
+            # Brief wake (Power Nap, display sleep, short lid close) — don't restart.
+            # The freeze bug this exit fix was built for only occurs after real sleep.
+            if sleep_duration < 60:
+                log(f"[WAKE] Brief wake ({int(sleep_duration)}s) — skipping restart")
+                _wake_idle_bypass_until = time.time() + 10
+                try:
+                    from update_checker import notify_wake as _notify_wake
+                    _notify_wake()
+                except Exception:
+                    pass
+                return
+
+            log(f"[WAKE] System woke after {int(sleep_duration)}s — exiting for LaunchAgent restart")
             _wake_idle_bypass_until = time.time() + 30
 
-            # Notify update checker so it waits for network before checking updates
             try:
                 from update_checker import notify_wake as _notify_wake
                 _notify_wake()
             except Exception:
                 pass
 
-            # Ship logs before exit so backend has context if restart fails
             try:
                 ship_logs_to_backend(tail_lines=100, trigger="pre_wake_exit")
             except Exception:
@@ -2525,13 +2547,19 @@ def run_agent():
                 os._exit(1)  # Non-zero exit → LaunchAgent KeepAlive restarts us
 
             threading.Thread(target=_restart, daemon=True).start()
-            
+
         nc = NSWorkspace.sharedWorkspace().notificationCenter()
         nc.addObserverForName_object_queue_usingBlock_(
             NSWorkspaceDidWakeNotification,
             None,
             None,
             on_wake
+        )
+        nc.addObserverForName_object_queue_usingBlock_(
+            NSWorkspaceWillSleepNotification,
+            None,
+            None,
+            on_sleep
         )
         print("[SLEEP] Sleep/wake handler registered")
     except Exception as e:

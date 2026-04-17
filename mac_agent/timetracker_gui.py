@@ -1937,15 +1937,26 @@ class TimeTrackerSystemTray:
         if self.app and hasattr(self.app, '_rebuild_menu'):
             try:
                 import rumps
+
+                # Hold a strong reference on the controller so the timer isn't
+                # garbage-collected before it fires. Previous local-variable
+                # version was being reaped intermittently, causing the bullet
+                # to stay stale.
                 def _rebuild_once(timer):
                     try:
                         self.app._rebuild_menu()
                     except Exception as e:
                         print(f"[GUI] _rebuild_menu error: {e}")
                     finally:
-                        timer.stop()
-                t = rumps.Timer(_rebuild_once, 0.01)
-                t.start()
+                        try:
+                            timer.stop()
+                        except Exception:
+                            pass
+                        # Drop the strong ref now that the timer is done
+                        self._pending_rebuild_timer = None
+
+                self._pending_rebuild_timer = rumps.Timer(_rebuild_once, 0.05)
+                self._pending_rebuild_timer.start()
             except Exception as e:
                 print(f"[GUI] Failed to schedule menu rebuild: {e}")
     

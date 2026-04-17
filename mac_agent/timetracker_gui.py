@@ -1930,6 +1930,24 @@ class TimeTrackerSystemTray:
         self.client_mgr.clients = clients
         self.client_mgr.save()
         print(f"[GUI] Updated client cache ({len(clients)} clients)")
+
+        # Rebuild the actual NSMenu so (a) new clients from the web app appear,
+        # and (b) the ● selected marker follows the current client.
+        # Must run on the rumps main thread — schedule via rumps.Timer.
+        if self.app and hasattr(self.app, '_rebuild_menu'):
+            try:
+                import rumps
+                def _rebuild_once(timer):
+                    try:
+                        self.app._rebuild_menu()
+                    except Exception as e:
+                        print(f"[GUI] _rebuild_menu error: {e}")
+                    finally:
+                        timer.stop()
+                t = rumps.Timer(_rebuild_once, 0.01)
+                t.start()
+            except Exception as e:
+                print(f"[GUI] Failed to schedule menu rebuild: {e}")
     
     def run(self):
         if RUMPS_AVAILABLE:

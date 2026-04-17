@@ -727,12 +727,16 @@ class AIClientSwitcher:
                          bundle_id: str = None):
         if not self.config["enabled"] or not title:
             return
+        logger.info(f"[AI-SWITCH] on_window_change fired: {title[:60]!r} cur={self._current_client_id}")
         self._last_title = title
         if in_meeting or time.time() < self._manual_override_until:
+            logger.info(f"[AI-SWITCH] on_window_change: skipped (meeting/override) override_until={self._manual_override_until:.0f} now={time.time():.0f}")
             return
         if self._should_skip(title, exe_name):
+            logger.info(f"[AI-SWITCH] on_window_change: skipped by _should_skip")
             self._clear_pending()
             return
+        logger.info(f"[AI-SWITCH] on_window_change: launching _detect")
         threading.Thread(
             target=self._detect,
             args=(app_name, exe_name, title, url, file_path),

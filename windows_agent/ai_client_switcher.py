@@ -725,17 +725,17 @@ class AIClientSwitcher:
             logger.info(f"[AI-SWITCH] Manual override: {client_name} (snoozed {snooze_min}min)")
 
     def on_window_change(self, app_name: str, exe_name: str, title: str,
-                         url: str = None, file_path: str = None, in_meeting: bool = False):
+                         url: str = None, file_path: str = None, in_meeting: bool = False,
+                         bundle_id: str = None):
         if not self.config["enabled"] or not title:
-            logger.info(f"[AI-SWITCH] on_window_change: skipped (disabled/no title)")
             return
+        logger.info(f"[AI-SWITCH] on_window_change fired: {title[:60]!r} cur={self._current_client_id}")
         self._last_title = title
         if in_meeting or time.time() < self._manual_override_until:
-            logger.info(f"[AI-SWITCH] on_window_change: skipped (meeting/override)")
+            logger.info(f"[AI-SWITCH] on_window_change: skipped (meeting/override) override_until={self._manual_override_until:.0f} now={time.time():.0f}")
             return
-        skip = self._should_skip(title, exe_name)
-        logger.info(f"[AI-SWITCH] on_window_change: should_skip={skip} title={title[:60]!r}")
-        if skip:
+        if self._should_skip(title, exe_name):
+            logger.info(f"[AI-SWITCH] on_window_change: skipped by _should_skip")
             self._clear_pending()
             return
         logger.info(f"[AI-SWITCH] on_window_change: launching _detect")
@@ -744,7 +744,7 @@ class AIClientSwitcher:
             args=(app_name, exe_name, title, url, file_path),
             daemon=True,
         ).start()
-
+        
     def on_dwell_tick(self):
         if not self._pending_switch:
             return

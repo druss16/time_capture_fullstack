@@ -744,18 +744,10 @@ class AIClientSwitcher:
             args=(app_name, exe_name, title, url, file_path),
             daemon=True,
         ).start()
-        
+
     def on_dwell_tick(self):
-        if not self._pending_switch:
-            return
-        fire = None
-        with self._lock:
-            p = self._pending_switch
-            if p and (time.time() - p["first_seen"]) >= self.config["dwell_seconds_before_switch"]:
-                fire = p
-                self._pending_switch = None
-        if fire:
-            self._execute_switch(fire)
+        pass  # Switches execute immediately in _queue_switch
+
 
     def undo_last_switch(self) -> bool:
         if not self._switch_history:
@@ -930,6 +922,7 @@ class AIClientSwitcher:
         except Exception as e:
             logger.error(f"[AI-SWITCH] detect error: {e}")
 
+
     def _queue_switch(self, match: ClientMatch):
         cid = match.client_id
         with self._lock:
@@ -938,23 +931,15 @@ class AIClientSwitcher:
             if time.time() < self._cooldowns.get(cid, 0):
                 self.stats["suppressed"] += 1
                 return
-            
-            # High confidence exact match — fire instantly on next tick
-            # Low confidence — wait for full dwell to confirm
-            if match.confidence >= 0.90 and match.match_method in ("exact", "alias", "pattern_cache"):
-                first_seen = time.time() - self.config["dwell_seconds_before_switch"]
-            else:
-                first_seen = time.time()
-            
-            self._pending_switch = {
-                "client_id": match.client_id,
-                "client_name": match.client_name,
-                "confidence": match.confidence,
-                "method": match.match_method,
-                "reasoning": match.reasoning,
-                "first_seen": first_seen,
-                "match": match,
-            }
+        # Execute immediately — no dwell, no pending
+        self._execute_switch({
+            "client_id": match.client_id,
+            "client_name": match.client_name,
+            "confidence": match.confidence,
+            "method": match.match_method,
+            "reasoning": match.reasoning,
+            "match": match,
+        })
 
     # =================================================================
     # Backend AI Batch Queue (unchanged)

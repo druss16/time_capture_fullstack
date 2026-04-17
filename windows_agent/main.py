@@ -1889,8 +1889,8 @@ def run_agent():
             config={
                 "enabled": True,
                 "dwell_seconds_before_switch": 0,
-                "cooldown_seconds": 120,
-                "manual_override_snooze_minutes": 5,
+                "cooldown_seconds": 0,
+                "manual_override_snooze_minutes": 0,
                 "debug": VERBOSE,
             },
             api_base=API_BASE,

@@ -820,7 +820,6 @@ class AIClientSwitcher:
             # Tier 1b: Pre-compiled regex + partial-word — run FIRST, always wins over cache
             regex_hit = _regex_match(title, file_path, self._matchers, sensitivity)
             logger.info(f"[AI-SWITCH] _detect: regex_hit={regex_hit} cur_id={cur_id}")
-            logger.info(f"[AI-SWITCH] _queue_switch: cid={cid} cur={self._current_client_id} cooldown={self._cooldowns.get(cid, 0):.0f} now={time.time():.0f}")
             if regex_hit and regex_hit.client_id != cur_id:
                 if regex_hit.confidence >= self.config["local_confidence_threshold"]:
                     stat_key = "partial_word" if regex_hit.match_method == "partial_word" else "regex"

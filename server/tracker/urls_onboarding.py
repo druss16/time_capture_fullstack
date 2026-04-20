@@ -28,4 +28,5 @@ urlpatterns = [
     
     # Agent download
     path('download/', views_onboarding.agent_download_info, name='agent_download_info'),
+
 ]

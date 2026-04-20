@@ -30,6 +30,11 @@ MIN_BLOCK_MINUTES = 0.5
 SESSION_GAP = timedelta(minutes=30)
 AUTO_CATEGORIZE_THRESHOLD = 0.70
 
+# How long (in seconds) each raw event represents. Must match the agent's
+# POLL_SECONDS (main.py). Used as the "trailing duration" for the last event
+# in a series when there's no next event to measure against.
+AGENT_POLL_SECONDS = 5
+
 
 def _safe_device_id(device_id) -> int:
     if device_id is None:
@@ -58,11 +63,247 @@ def _calculate_minutes_from_events(events_qs) -> int:
             duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
             duration = min(duration, IDLE_CAP.total_seconds())  # 3 min cap
         else:
-            duration = 180  # 3 min for last event (was 300)
+            duration = AGENT_POLL_SECONDS  # 3 min for last event (was 300)
         total_seconds += duration
     
     return int(total_seconds / 60)
 
+
+def _extract_and_persist_meeting_blocks(
+    events: list, user, org, day: date_type, hostname: Optional[str]
+) -> int:
+    """
+    Pull meeting start/end pairs out of raw_events and create standalone
+    Block records. Meeting blocks bypass the regular compaction pipeline —
+    no idle cap, no per-app grouping, no merging with adjacent activity.
+
+    Meeting events come from the agent's MeetingDetector and have:
+      app_name == 'Meeting'       → meeting start
+      app_name == 'Meeting-End'   → meeting end
+      bundle_id == 'meeting:zoom' (or 'teams', 'meet', etc.)
+
+    Start/end pairs are matched by meeting_app within the same user/day.
+    Dangling starts (no matching end) are NOT persisted — they'll be picked
+    up by the next compaction run once the end event arrives. This handles
+    users who are still in a meeting when compaction runs.
+
+    Returns: count of meeting blocks created.
+    """
+    # Build starts dict keyed by meeting_app, ordered by time
+    starts = {}  # meeting_app → list of RawEvent
+    ends = {}    # meeting_app → list of RawEvent
+
+    for event in events:
+        app = event.app_name or ''
+        bundle = event.bundle_id or ''
+
+        if not bundle.startswith('meeting:'):
+            continue
+
+        meeting_app = bundle.split(':', 1)[1]
+
+        if app == 'Meeting':
+            starts.setdefault(meeting_app, []).append(event)
+        elif app == 'Meeting-End':
+            ends.setdefault(meeting_app, []).append(event)
+
+    if not starts:
+        return 0
+
+    created = 0
+    with transaction.atomic():
+        for meeting_app, start_events in starts.items():
+            end_events = ends.get(meeting_app, [])
+
+            # Pair each start with the earliest end that comes after it
+            for start_ev in start_events:
+                # Find first end event after this start
+                matching_end = next(
+                    (e for e in end_events if e.ts_utc > start_ev.ts_utc),
+                    None
+                )
+
+                if not matching_end:
+                    # Dangling start — user still in meeting. Skip for now.
+                    logger.debug(
+                        f"[COMPACT-MEETING] Dangling start for {meeting_app} "
+                        f"at {start_ev.ts_utc} — will pick up next run"
+                    )
+                    continue
+
+                # Remove this end from pool so it's not reused
+                end_events.remove(matching_end)
+
+                # Build and save the meeting block
+                block = _create_meeting_block(
+                    start_ev, matching_end, meeting_app, user, org, day, hostname
+                )
+                if block:
+                    # Link both events to this block
+                    RawEvent.objects.filter(
+                        id__in=[start_ev.id, matching_end.id]
+                    ).update(block=block)
+                    created += 1
+
+    return created
+
+
+def _create_meeting_block(
+    start_event, end_event, meeting_app: str,
+    user, org, day: date_type, hostname: Optional[str]
+) -> Optional[Block]:
+    """
+    Create a single meeting Block record from a start/end event pair.
+
+    Meeting blocks are:
+      - Always auto-categorized to 'Client Meeting' (no AI call needed)
+      - Locked (is_categorized=True) so they skip the classifier
+      - Billable by default
+      - Duration comes from actual timestamps (no 3-min cap)
+      - Attributed to whatever client was active when the meeting started
+        (the agent's AI switcher tries to set this based on meeting title)
+    """
+    # Duration from actual timestamps — NO IDLE CAP for meetings
+    duration_seconds = (end_event.ts_utc - start_event.ts_utc).total_seconds()
+    minutes = max(1, int(duration_seconds / 60))
+
+    # Skip implausibly short meetings (< 1 min — probably detector flapping)
+    if minutes < 1:
+        logger.warning(
+            f"[COMPACT-MEETING] Skipping {meeting_app} block: "
+            f"duration {duration_seconds:.0f}s is too short"
+        )
+        return None
+
+    # Safety cap: single meeting shouldn't exceed 8 hours — if it does,
+    # something went wrong (end event lost, sleep/wake confusion). Cap it.
+    if duration_seconds > 8 * 3600:
+        logger.warning(
+            f"[COMPACT-MEETING] {meeting_app} block capped: "
+            f"raw duration {duration_seconds/3600:.1f}h > 8h"
+        )
+        minutes = 8 * 60
+
+    # Client attribution from start event (set by agent's AI switcher)
+    client = None
+    client_id = getattr(start_event, 'current_client_id', None)
+    if client_id:
+        try:
+            client = Client.objects.get(id=client_id)
+        except Client.DoesNotExist:
+            client = None
+
+    # Fall back to device's current client if none on event
+    if not client:
+        device_id = _safe_device_id(getattr(start_event, 'device_id', None))
+        if device_id:
+            client = get_current_client_for_user(user, device_id=device_id)
+
+    # Billing rate
+    billing_rate = _resolve_billing_rate(
+        org, user, client.id if client else None, task_type_id=None
+    )
+    billing_amount = round((minutes / 60) * float(billing_rate), 2)
+
+    # Hours for category_hours dict
+    hours = round(minutes / 60.0, 2)
+
+    # Window title — prefer the start event's (meeting titles are set at start)
+    title = start_event.window_title or f"{meeting_app.title()} meeting"
+
+    try:
+        new_block = Block.objects.create(
+            org=org,
+            user=user,
+            device_id=_safe_device_id(getattr(start_event, 'device_id', None)),
+            hostname=start_event.hostname or hostname or "unknown",
+            start=start_event.ts_utc,
+            end=end_event.ts_utc,
+            day=day,
+            minutes=minutes,
+            title=f"{meeting_app.title()} Meeting",
+            window_title=title,
+            url="",
+            file_path="",
+            app_name=f"{meeting_app.title()} Meeting",
+            bundle_id=f"meeting:{meeting_app}",
+            hints={
+                'is_meeting': True,
+                'meeting_app': meeting_app,
+                'meeting_detection_sources':
+                    (getattr(start_event, 'ctx', {}) or {})
+                    .get('meeting_detector', {})
+                    .get('detection_sources'),
+                'meeting_detection_confidence':
+                    (getattr(start_event, 'ctx', {}) or {})
+                    .get('meeting_detector', {})
+                    .get('confidence'),
+            },
+            client=client,
+            category_hours={"Client Meeting": hours},
+            is_categorized=True,   # locked — no AI classification needed
+            categorized_at=timezone.now(),
+            categorized_by="meeting_detector",
+            ai_category="Client Meeting",
+            ai_confidence=0.95,
+            approved=False,
+            is_billable=True,
+            billing_rate=billing_rate,
+            billing_amount=billing_amount,
+        )
+
+        logger.info(
+            f"[COMPACT-MEETING] Created {meeting_app} block {new_block.id}: "
+            f"{minutes} min, client={client.name if client else 'UNATTRIBUTED'}"
+        )
+        return new_block
+
+    except Exception as e:
+        logger.exception(f"[COMPACT-MEETING] Failed to create block: {e}")
+        return None
+
+def _filter_idle_inside_meetings(user, day: date_type) -> int:
+    """
+    Safety net: delete any idle blocks that fall entirely within a meeting
+    block's time range. The agent should already suppress idle during
+    meetings, but this catches any that leak through.
+
+    Returns: count of idle blocks deleted.
+    """
+    meetings = list(Block.objects.filter(
+        user=user,
+        day=day,
+        bundle_id__startswith='meeting:',
+    ).only('id', 'start', 'end'))
+
+    if not meetings:
+        return 0
+
+    deleted = 0
+    for meeting in meetings:
+        if not (meeting.start and meeting.end):
+            continue
+
+        idle_blocks = Block.objects.filter(
+            user=user,
+            day=day,
+            bundle_id='__idle__',
+            start__gte=meeting.start,
+            end__lte=meeting.end,
+        )
+
+        count = idle_blocks.count()
+        if count:
+            # Unlink raw_events first so they don't get orphaned
+            RawEvent.objects.filter(block__in=idle_blocks).update(block=None)
+            idle_blocks.delete()
+            deleted += count
+            logger.info(
+                f"[COMPACT-MEETING] Deleted {count} idle block(s) "
+                f"inside {meeting.bundle_id} window {meeting.id}"
+            )
+
+    return deleted
 
 # =============================================================================
 # AUTO-CATEGORIZATION PATTERNS
@@ -248,23 +489,46 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         ts_utc__date=day,
         block__isnull=True
     ).order_by('ts_utc')
-    
+
     if hostname:
         qs = qs.filter(hostname=hostname)
-    
+
     events = list(qs)
     if not events:
         return 0
-    
+
     logger.info(f"[COMPACT] Processing {len(events)} unlinked events for {user.username}")
-    
-    # Calculate durations
+
+    # ─────────────────────────────────────────────────────────────
+    # Stage 0: Extract meeting blocks FIRST
+    # Meeting start/end pairs form standalone blocks that run in
+    # PARALLEL with regular foreground activity (Word, Chrome, etc.)
+    # User in a Zoom call while taking notes in Word = 2 blocks.
+    # ─────────────────────────────────────────────────────────────
+    meeting_block_count = _extract_and_persist_meeting_blocks(
+        events, user, org, day, hostname
+    )
+    if meeting_block_count:
+        logger.info(f"[COMPACT] Created {meeting_block_count} meeting blocks")
+
+    # Filter out meeting events from what goes through normal compaction
+    events = [
+        e for e in events
+        if not (
+            (e.app_name in ('Meeting', 'Meeting-End'))
+            and (e.bundle_id or '').startswith('meeting:')
+        )
+    ]
+    if not events:
+        return meeting_block_count
+
+    # Calculate durations (for remaining non-meeting events)
     events_with_duration = []
     for i, event in enumerate(events):
         if i + 1 < len(events):
             duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
         else:
-            duration = 180  # 3 min for last event
+            duration = AGENT_POLL_SECONDS  # 3 min for last event
         duration = min(duration, IDLE_CAP.total_seconds())  # 3 min cap
         
         events_with_duration.append({
@@ -450,8 +714,17 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         if auto_categorize_block(block):
             auto_cat_count += 1
     
-    logger.info(f"[COMPACT] Created {created_count}, merged {merged_count}, auto-cat {auto_cat_count}")
-    return created_count + merged_count
+    # Safety net: remove any idle blocks that leaked inside meeting windows
+    idle_cleaned = 0
+    if meeting_block_count:
+        idle_cleaned = _filter_idle_inside_meetings(user, day)
+
+    logger.info(
+        f"[COMPACT] Created {created_count}, merged {merged_count}, "
+        f"auto-cat {auto_cat_count}, meetings {meeting_block_count}, "
+        f"idle-cleaned {idle_cleaned}"
+    )
+    return created_count + merged_count + meeting_block_count
 
 def _resolve_billing_rate(org, user, client_id, task_type_id=None):
     from decimal import Decimal
@@ -567,11 +840,11 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
                 duration = (source_events[i + 1].ts_utc - event.ts_utc).total_seconds()
                 duration = min(duration, IDLE_CAP.total_seconds())
             else:
-                duration = 180  # 3 min for last event
+                duration = AGENT_POLL_SECONDS  # 3 min for last event
             total_seconds += duration
-        minutes = int(total_seconds / 60)
+        minutes = max(1, int(total_seconds / 60))
     else:
-        minutes = 3  # fallback
+        minutes = 1  # fallback
     
     # Get client for ALL blocks (including idle)
     client = None

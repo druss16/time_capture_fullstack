@@ -87,6 +87,16 @@ except ImportError:
     PUSH_NOTIF_AVAILABLE = False
     print("[WARN] notifications.py not found - push notifications disabled")
 
+# Meeting detection (Zoom, Teams, Meet, etc.)
+try:
+    from meeting_detector import MeetingDetector, MeetingState
+    MEETING_DETECTOR_AVAILABLE = True
+except ImportError:
+    MEETING_DETECTOR_AVAILABLE = False
+    MeetingDetector = None
+    MeetingState = None
+    print("[WARN] meeting_detector.py not found - meeting capture disabled")
+
 # Fix Windows console encoding for Unicode characters
 import io
 if sys.platform == 'win32':
@@ -102,7 +112,6 @@ register_hotkey = None
 ai_switcher = None  # Will be initialized after GUI setup
 # Single instance lock — named mutex held for entire process lifetime
 _lock_mutex = None
-
 
 # ---------------- Check Active Subscriptions ----------------
 # Near top with other globals
@@ -240,6 +249,22 @@ CONTEXT_PORT = int(_get("context_port", 7321))
 CONTROL_POLL_S = int(_get("agent_control_poll_seconds", 10))
 
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
+
+# Synthetic signature for Meeting events — forms its own block in compactor
+def _meeting_sig(meeting_app: str, title: str = None):
+    """Build a window signature for a Meeting event.
+
+    Format matches the (app_name, bundle_id, window_title, url, file_path) tuple
+    that write_event expects. bundle_id uses 'meeting:' prefix so the backend
+    compactor recognizes it as a meeting block.
+    """
+    return (
+        "Meeting",
+        f"meeting:{meeting_app}",
+        title or f"{meeting_app.title()} meeting",
+        None,
+        None,
+    )
 
 # Idle safety limits
 MAX_IDLE_SECONDS = 3600          # 1 hour max idle before force-reset
@@ -1912,6 +1937,7 @@ def run_agent():
         
         log("[AI-SWITCH] ✅ Initialized")
 
+
         # Keep client list + sensitivity fresh when sync updates
         # Keep client list + sensitivity fresh when sync updates
         if sync:
@@ -1929,6 +1955,94 @@ def run_agent():
 
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
+
+    # === MEETING DETECTOR ===
+    meeting_detector = None
+    if MEETING_DETECTOR_AVAILABLE:
+        try:
+            # Helper to get current foreground title — used for browser meeting detection
+            def _get_fg_title():
+                try:
+                    info = get_foreground_window_info()
+                    if info:
+                        return info[3]  # window_title is index 3
+                except Exception:
+                    pass
+                return None
+
+            def _on_meeting_start(state):
+                """Fired when a meeting is detected starting.
+
+                - Attempts client classification via AI switcher on the meeting title
+                - High confidence → auto-attribute (toast notification)
+                - Medium confidence → nudge-style confirm prompt
+                - Low/no match → meeting block gets no client, prompt at end
+                """
+                log(f"[MEETING] Started: {state.app} — {state.title or '(no title)'}")
+
+                # Try AI classification if we have a title and switcher is available
+                if state.title and ai_switcher and hasattr(ai_switcher, 'classify_text'):
+                    try:
+                        match = ai_switcher.classify_text(state.title)
+                        if match:
+                            cid, cname, conf = match.get("client_id"), match.get("client_name"), match.get("confidence", 0)
+                            if conf >= 0.85 and cid:
+                                log(f"[MEETING] High-conf match: {cname} ({conf:.0%}) — auto-attributing")
+                                _apply_client_switch(cid, cname, source="meeting_detector")
+                                # Passive toast
+                                if notif_manager:
+                                    try:
+                                        notif_manager.notify_meeting_attributed(cname, state.title)
+                                    except Exception:
+                                        pass
+                            elif conf >= 0.45 and cid:
+                                log(f"[MEETING] Medium-conf match: {cname} ({conf:.0%}) — nudging")
+                                if notif_manager:
+                                    try:
+                                        notif_manager.notify_meeting_confirm(cid, cname, state.title)
+                                    except Exception:
+                                        pass
+                            else:
+                                log(f"[MEETING] Low-conf match — leaving unattributed")
+                    except Exception as e:
+                        log(f"[MEETING] Classification error: {e}")
+
+            def _on_meeting_end(state):
+                """Fired when a meeting ends.
+
+                If the meeting never got a client attribution, prompt the user now.
+                """
+                dur = int(state.ended_at - state.started_at) if state.started_at else 0
+                log(f"[MEETING] Ended: {state.app} ({dur}s)")
+
+                # If no client was attributed during the meeting, prompt now
+                current_cid, _ = _get_cached_client()
+                needs_attribution = not current_cid
+                if needs_attribution and notif_manager:
+                    try:
+                        notif_manager.notify_meeting_needs_client(
+                            meeting_title=state.title,
+                            meeting_app=state.app,
+                            duration_seconds=dur,
+                        )
+                    except Exception as e:
+                        log(f"[MEETING] Needs-attribution prompt failed: {e}")
+
+            meeting_detector = MeetingDetector(
+                on_meeting_start=_on_meeting_start,
+                on_meeting_end=_on_meeting_end,
+                context_bus=_CONTEXT,
+                get_foreground_title=_get_fg_title,
+                enabled=True,
+            )
+            meeting_detector.start()
+            log("[MEETING] ✅ Detector initialized")
+        except Exception as e:
+            log(f"[MEETING] Failed to initialize: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        log("[MEETING] Module not available — meeting capture disabled")
                         
 
     log("=== Windows Activity Agent starting… (Ctrl+C to stop) ===")
@@ -2126,6 +2240,31 @@ def run_agent():
                     heartbeat_touch()   # ← add this
                     progress_tick()
 
+                    # ── Drain meeting detector events every tick ──
+                    # Runs regardless of idle/meeting/focus state. Events carry
+                    # their own timestamps (state.started_at / state.ended_at) so
+                    # they're correct even if drained a few seconds after the
+                    # actual start/end.
+                    if meeting_detector:
+                        for kind, state in meeting_detector.drain_events():
+                            if kind == "start":
+                                sig = _meeting_sig(state.app, state.title)
+                                try:
+                                    write_event(conn, cur, os_user, hostname, sig,
+                                               ts_override=state.started_at)
+                                    log(f"[MEETING] Wrote START event: {sig[0]} / {sig[2]}")
+                                except Exception as e:
+                                    log(f"[MEETING] Failed to write start event: {e}")
+                            elif kind == "end":
+                                sig = ("Meeting-End", f"meeting:{state.app}",
+                                       state.title or "", None, None)
+                                try:
+                                    write_event(conn, cur, os_user, hostname, sig,
+                                               ts_override=state.ended_at)
+                                    log(f"[MEETING] Wrote END event")
+                                except Exception as e:
+                                    log(f"[MEETING] Failed to write end event: {e}")
+
                     # ── IDLE WATCHDOG: force-exit idle if stuck > 30 min ──────────
                     # GetLastInputInfo returns stale values on some machines after
                     # screen lock or sleep (Wendy/Terri pattern). If we've been in
@@ -2277,6 +2416,55 @@ def run_agent():
                             if current_sig != IDLE_SIG:
                                 log(f"[IDLE] Lock screen detected ({peek_app}) → entering idle immediately")
 
+
+                    # === MEETING IDLE SUPPRESSION ===
+                    # If we're in a meeting, mouse idle is EXPECTED (people listen,
+                    # don't move their mouse). Suppress the idle watchdog so the
+                    # foreground dwell keeps accumulating and the parallel Meeting
+                    # block forms independently.
+                    in_meeting = False
+                    if meeting_detector and meeting_detector.is_active():
+                        in_meeting = True
+                        if idle >= MOUSE_IDLE_PAUSE_S and current_sig != IDLE_SIG:
+                            # Log once per minute to avoid spam
+                            _now = time.time()
+                            if not hasattr(tracking_loop, '_last_meeting_idle_log'):
+                                tracking_loop._last_meeting_idle_log = 0.0
+                            if _now - tracking_loop._last_meeting_idle_log > 60:
+                                log(f"[MEETING] Suppressing idle (mouse idle {int(idle)}s, but in meeting)")
+                                tracking_loop._last_meeting_idle_log = _now
+
+                    if in_meeting:
+                        # Continue normal foreground capture — meeting runs in parallel
+                        # Fall through to the foreground-capture path below, skipping idle
+                        front = front_peek
+                        if front:
+                            app_name, exe_name, pid, window_title = front
+                            window_title = normalize_window_title(window_title or "")
+                            extras = try_get_url_or_path(exe_name, window_title)
+                            url, fpath = extras.get("url"), extras.get("file_path")
+                            sig = (app_name, exe_name, window_title, url, fpath)
+
+                            if sig != current_sig:
+                                if current_sig and current_sig != IDLE_SIG and dwell_start:
+                                    dwell = time.time() - dwell_start
+                                    if dwell >= MIN_DWELL_SECONDS:
+                                        write_event(conn, cur, os_user, hostname, current_sig)
+                                current_sig = sig
+                                dwell_start = time.time()
+                                record_window_change()
+                                if ai_switcher:
+                                    ai_switcher.on_window_change(app_name, exe_name, window_title, url, fpath)
+
+                            if ai_switcher:
+                                ai_switcher.on_dwell_tick()
+
+                        time.sleep(POLL_SECONDS)
+                        consecutive_errors = 0
+                        continue
+
+                    # === END MEETING IDLE SUPPRESSION ===
+
                     if force_idle or idle >= MOUSE_IDLE_PAUSE_S:
                         if current_sig != IDLE_SIG:
                             if notif_manager:
@@ -2391,7 +2579,8 @@ def run_agent():
                             # ── FIX 4: After waking from idle, re-peek foreground ──
                             # Use the front_peek we already grabbed above
                             # instead of calling get_foreground_window_info() again
-                        
+
+
                         # Reuse the peek we already did (avoid double call)
                         front = front_peek
                         if not front:
@@ -2521,6 +2710,14 @@ def run_agent():
             log("[SYNC] Stopped")
         except Exception as e:
             log(f"[SYNC] Error stopping: {e}")
+
+    # Stop meeting detector
+    if meeting_detector:
+        try:
+            meeting_detector.stop()
+            log("[MEETING] Stopped")
+        except Exception as e:
+            log(f"[MEETING] Error stopping: {e}")
     
     # Stop notification worker
     if notif_worker:

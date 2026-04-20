@@ -1229,6 +1229,28 @@ class Block(models.Model):
         help_text='Xero Invoice ID after push'
     )
 
+    is_meeting = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True if this block represents a detected video/audio meeting"
+    )
+    meeting_app = models.CharField(
+        max_length=32,
+        null=True,
+        blank=True,
+        help_text="Canonical meeting app key: zoom, teams, meet, webex, facetime, slack, discord"
+    )
+    meeting_detection_confidence = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="0.0-1.0 confidence score from detector (signal count / 3)"
+    )
+    meeting_detection_sources = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="List of detection sources: ['audio','camera','process','title']"
+    )
+
     # ===============================
     # AI Classification Metadata
     # ===============================

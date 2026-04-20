@@ -238,13 +238,20 @@ def _already_nagged(version: str) -> bool:
                 data = json.load(f)
                 if data.get("version") != version:
                     return False
+                # If download succeeded but we're still on old version, retry
+                if data.get("download_ok"):
+                    try:
+                        from version import APP_VERSION
+                        if APP_VERSION != version:
+                            _log(f"[UPDATE] Nag says installed but still on {APP_VERSION} — retrying")
+                            return False
+                    except Exception:
+                        pass
                 nag_ts = data.get("ts", 0)
                 if time.time() - nag_ts > 86400:
-                    _log(f"[UPDATE] Nag for v{version} is stale (>24h) - will retry")
                     return False
-                if not data.get("download_ok", False):
+                if not data.get("download_ok"):
                     if time.time() - nag_ts > 3600:
-                        _log(f"[UPDATE] Previous download of v{version} failed - retrying")
                         return False
                 return True
     except Exception:

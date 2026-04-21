@@ -1,6 +1,12 @@
-#!/usr/bin/env python3
 """
 AI Client Auto-Switcher for TimeTracker Windows Agent
+
+v1.2.94: Three-layer bulletproof guard against false switches from
+noise titles (QB redraws, Office splashes, browser tab flickers, etc.)
+
+  Layer 1: Known app-chrome title patterns
+  Layer 2: Signal-strength check (strip chrome tokens, require real content)
+  Layer 3: Stability gate — title must persist >= 2s before detection fires
 
 Two-tier client detection from window titles:
   Tier 0: Org-admin ClientPattern rules (highest priority)
@@ -11,13 +17,6 @@ Two-tier client detection from window titles:
     - CPA file-naming convention detection
     - Partial-word matching (scales with sensitivity)
   Tier 2: Backend AI classification (smart, server-side) — ambiguous cases only
-
-CHANGES FROM PREVIOUS VERSION:
-  - GENERIC_TAX_DIALOGS and GENERIC_TAX_EXES imported from tax_software_constants.py
-    (agent-local file, no Django dependency — mirrors tracker/utils/tax_software.py)
-  - _should_skip() uses the shared set so both agent + backend stay in sync
-  - Tax software bare exe names (utw25.exe etc.) added to skip list
-  - No logic changes to switching pipeline itself
 
 SYNC NOTE:
   tax_software_constants.py (this folder) mirrors tracker/utils/tax_software.py
@@ -42,6 +41,141 @@ from tax_software_constants import (
     TAX_SOFTWARE_TAXWISE_PATTERN,
     INTERNAL_TAX_CLIENT_NAME,
 )
+
+# =====================================================================
+# Three-Layer Guard Against False Switches From Noise Titles
+# =====================================================================
+# Problem this solves:
+#   Apps sometimes briefly redraw their title bar with no document
+#   context (e.g. " QuickBooks Accountant Desktop Plus 2024" with
+#   leading space where client name used to be). Feeding these to
+#   learned_partial causes non-deterministic false switches based on
+#   which app-chrome tokens happen to be in a learned rule.
+#
+# These three layers are AND-gated. A title must pass all three
+# before the matching tiers run.
+
+# Layer 1: Pure-chrome titles we've seen in the wild ------------------
+_CHROME_ONLY_PATTERNS = [
+    # QuickBooks Desktop — company file not loaded yet
+    re.compile(r'^\s*QuickBooks(\s+Accountant)?\s+Desktop(\s+Plus)?(\s+\d{4})?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*QuickBooks\s+Desktop\s+Login\s*$', re.IGNORECASE),
+    re.compile(r'^\s*QuickBooks\s*$', re.IGNORECASE),
+
+    # Tax software — no return open
+    re.compile(r'^\s*UltraTax\s+CS\s*$', re.IGNORECASE),
+    re.compile(r'^\s*TaxWise(\s+\d{4})?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Lacerte(\s+\d{4})?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*CCH\s+Axcess(\s+Tax)?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*ProSeries(\s+\d{4})?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Drake\s+Tax(\s+\d{4})?\s*$', re.IGNORECASE),
+
+    # Office — no document
+    re.compile(r'^\s*Microsoft\s+(Excel|Word|PowerPoint|Outlook|Access|Project|Publisher|OneNote|Visio)\s*$', re.IGNORECASE),
+    re.compile(r'^\s*(Excel|Word|PowerPoint|Outlook|OneNote)\s*$', re.IGNORECASE),
+
+    # Browsers — no page / between tabs
+    re.compile(r'^\s*(Google\s+Chrome|Microsoft\s+Edge|Brave(\s+Browser)?|Firefox|Opera|Safari)\s*$', re.IGNORECASE),
+    re.compile(r'^\s*New\s+Tab\s*$', re.IGNORECASE),
+
+    # Collaboration / comms
+    re.compile(r'^\s*Microsoft\s+Teams\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Slack\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Zoom(\s+Meetings?)?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Webex\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Discord\s*$', re.IGNORECASE),
+
+    # Misc productivity
+    re.compile(r'^\s*Adobe\s+Acrobat(\s+(DC|Pro|Reader))?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*File\s+Explorer\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Windows\s+Explorer\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Notepad(\+\+)?\s*$', re.IGNORECASE),
+    re.compile(r'^\s*Visual\s+Studio(\s+Code)?\s*$', re.IGNORECASE),
+]
+
+
+def _is_chrome_only_title(title: str) -> bool:
+    """Layer 1: title is empty or matches a known app-chrome pattern."""
+    if not title or not title.strip():
+        return True
+    for pat in _CHROME_ONLY_PATTERNS:
+        if pat.match(title):
+            return True
+    return False
+
+
+# Layer 2: Signal-strength check --------------------------------------
+# Words that appear in app branding but carry zero client signal.
+# When we strip these out of a title, whatever remains is the "real"
+# content. If nothing substantive remains, the title has no signal
+# and no tier should match on it.
+_CHROME_TOKENS = {
+    # Vendors
+    "microsoft", "google", "adobe", "intuit", "mozilla",
+    # Product families
+    "quickbooks", "qb", "excel", "word", "powerpoint", "outlook",
+    "onenote", "access", "project", "publisher", "visio",
+    "chrome", "edge", "brave", "firefox", "opera", "safari",
+    "teams", "slack", "zoom", "webex", "discord",
+    "acrobat", "reader", "notepad", "explorer", "code",
+    # Tax software
+    "ultratax", "taxwise", "lacerte", "proseries", "drake",
+    "cch", "axcess", "atx", "prosystem", "fx",
+    # Generic qualifiers
+    "desktop", "professional", "enterprise", "premier", "accountant",
+    "plus", "pro", "standard", "edition", "version", "home", "business",
+    "student", "personal", "family", "suite", "online", "cloud",
+    "login", "sign", "in", "signin", "new", "tab", "untitled", "document",
+    "workbook", "presentation", "file", "window", "blank", "loading",
+    # Years / versions
+    "20", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026",
+    "v1", "v2", "v3",
+    # Separators that sometimes leak in
+    "the", "and", "for", "of", "a", "an",
+}
+
+# Minimum "real content" length after stripping chrome tokens.
+# Empirically, any real client name or document name will have at
+# least 3 alpha chars in a single run. Noise titles have 0-2.
+_MIN_SIGNAL_CHARS = 3
+
+
+def _has_client_signal(title: str, file_path: str = None) -> bool:
+    """
+    Layer 2: does the title contain any content that's not app chrome?
+
+    If a file_path is present, we automatically have signal — file paths
+    always carry document context even when titles don't.
+    """
+    if file_path:
+        return True
+    if not title:
+        return False
+
+    # Tokenize on common separators
+    tokens = re.split(r'[\s\-\u2013\u2014|:/\\.,()\[\]{}*<>"\']+', title.lower())
+    signal_tokens = [
+        t for t in tokens
+        if t and t not in _CHROME_TOKENS and not t.isdigit() and len(t) >= 2
+    ]
+
+    if not signal_tokens:
+        return False
+
+    # Require at least one token with real alphabetic content
+    total_alpha = sum(len(t) for t in signal_tokens if any(c.isalpha() for c in t))
+    return total_alpha >= _MIN_SIGNAL_CHARS
+
+
+# Layer 3: Stability gate ---------------------------------------------
+# A title must persist for this many seconds before we act on it.
+# Glitch titles (QB redraws, Office splash flashes, tab-switch flickers)
+# are sub-second. Legitimate switches are always user-initiated and
+# remain on screen for many seconds. 2.0s is the sweet spot: long
+# enough to filter glitches, short enough that the user doesn't feel
+# the delay on real switches.
+_STABILITY_SECONDS = 2.0
+
 
 # =====================================================================
 # Data Structures
@@ -598,23 +732,22 @@ class AIClientSwitcher:
         )
 
         # ── Auto-clear stale pattern cache on version upgrade ──────────────
-        # ── Auto-clear stale pattern cache on version upgrade ──────────────
         try:
             from version import APP_VERSION
         except Exception:
             APP_VERSION = "unknown"
-        
-        logger.info(f"[AI-SWITCH] Version: {APP_VERSION}")  # ← ADD THIS
-        
+
+        logger.info(f"[AI-SWITCH] Version: {APP_VERSION}")
+
         try:
             cache_version_file = os.path.expanduser("~/.timetracker/ai_cache_version.txt")
             cached_version = ""
             if os.path.exists(cache_version_file):
                 with open(cache_version_file) as f:
                     cached_version = f.read().strip()
-            
-            logger.info(f"[AI-SWITCH] Cache version: {cached_version} → {APP_VERSION}")  # ← ADD THIS
-            
+
+            logger.info(f"[AI-SWITCH] Cache version: {cached_version} → {APP_VERSION}")
+
             if cached_version != APP_VERSION:
                 cache_path = self.config["pattern_cache_file"]
                 if os.path.exists(cache_path):
@@ -636,6 +769,16 @@ class AIClientSwitcher:
         self._current_client_id:   Optional[int] = None
         self._current_client_name: Optional[str] = None
         self._pending_switch:      Optional[dict] = None
+
+        # Layer 3: Stability gate state
+        # Track titles we've seen recently but haven't acted on yet.
+        # A title must persist for >= _STABILITY_SECONDS before _detect
+        # processes it. This filters sub-second title glitches.
+        self._pending_title: Optional[str] = None
+        self._pending_title_first_seen: float = 0.0
+        self._pending_title_context: Optional[tuple] = None
+        self._stability_timer: Optional[threading.Timer] = None
+
         self._cooldowns:           Dict[int, float] = {}
         self._manual_override_until: float = 0.0
         self._switch_history: List[SwitchEvent] = []
@@ -643,7 +786,6 @@ class AIClientSwitcher:
         self._last_title = ""
 
         self._skip_exes = set(self.config.get("skip_exes", set()))
-        # Merge in tax software exe names from shared constant
 
         self._skip_patterns = [
             re.compile(p, re.IGNORECASE)
@@ -663,6 +805,7 @@ class AIClientSwitcher:
             f"local_thresh={self.config['local_confidence_threshold']}, "
             f"partial={'on' if self.config['partial_name_matching'] else 'off'}, "
             f"dwell={self.config['dwell_seconds_before_switch']}s, "
+            f"stability={_STABILITY_SECONDS}s, "
             f"backend_ai={'yes' if self._backend_ai_available else 'no'}"
         )
 
@@ -691,7 +834,7 @@ class AIClientSwitcher:
         logger.info(f"[AI-SWITCH] Sensitivity updated live → {self.config['ai_sensitivity']}")
 
     # =================================================================
-    # Public API (unchanged)
+    # Public API
     # =================================================================
 
     def update_clients(self, clients: list):
@@ -723,31 +866,123 @@ class AIClientSwitcher:
             self._pending_switch = None
             self._last_title = ""
             logger.info(f"[AI-SWITCH] Manual override: {client_name} (snoozed {snooze_min}min)")
+        # Cancel any in-flight stability timer — user took control
+        self._cancel_stability_timer()
 
     def on_window_change(self, app_name: str, exe_name: str, title: str,
                          url: str = None, file_path: str = None, in_meeting: bool = False,
                          bundle_id: str = None):
+        """
+        Called on every foreground-window change.
+
+        Applies three-layer guard BEFORE running detection:
+          Layer 1: chrome-only titles → drop immediately
+          Layer 2: no signal content  → drop immediately
+          Layer 3: stability gate     → wait _STABILITY_SECONDS, then detect
+
+        All three gates must pass before _detect() runs.
+        """
         if not self.config["enabled"] or not title:
             return
+
         logger.info(f"[AI-SWITCH] on_window_change fired: {title[:60]!r} cur={self._current_client_id}")
         self._last_title = title
+
+        # Short-circuit: meeting mode or manual override
         if in_meeting or time.time() < self._manual_override_until:
-            logger.info(f"[AI-SWITCH] on_window_change: skipped (meeting/override) override_until={self._manual_override_until:.0f} now={time.time():.0f}")
+            logger.info(
+                f"[AI-SWITCH] on_window_change: skipped (meeting/override) "
+                f"override_until={self._manual_override_until:.0f} now={time.time():.0f}"
+            )
             return
+
+        # Existing exe/pattern skip list (browsers, explorer, etc.)
         if self._should_skip(title, exe_name):
             logger.info(f"[AI-SWITCH] on_window_change: skipped by _should_skip")
             self._clear_pending()
+            self._cancel_stability_timer()
             return
-        logger.info(f"[AI-SWITCH] on_window_change: launching _detect")
-        threading.Thread(
-            target=self._detect,
-            args=(app_name, exe_name, title, url, file_path),
-            daemon=True,
-        ).start()
+
+        # ── LAYER 1: Chrome-only titles ────────────────────────────────
+        # "QuickBooks Desktop 2024" with no company file, "Microsoft Excel"
+        # with no workbook, etc. Hold current client, drop immediately.
+        if _is_chrome_only_title(title):
+            logger.info(
+                f"[AI-SWITCH] Layer 1 drop: chrome-only title {title[:60]!r} "
+                f"— holding cur={self._current_client_id}"
+            )
+            self.stats["suppressed"] += 1
+            self._cancel_stability_timer()
+            return
+
+        # ── LAYER 2: Signal-strength check ─────────────────────────────
+        # Title has no content after stripping app-chrome words.
+        # Catches any app we haven't explicitly listed in Layer 1.
+        if not _has_client_signal(title, file_path):
+            logger.info(
+                f"[AI-SWITCH] Layer 2 drop: no client signal in {title[:60]!r} "
+                f"— holding cur={self._current_client_id}"
+            )
+            self.stats["suppressed"] += 1
+            self._cancel_stability_timer()
+            return
+
+        # ── LAYER 3: Stability gate ────────────────────────────────────
+        # Start (or reset) a timer. _detect only runs if this title is
+        # still the active title after _STABILITY_SECONDS. A flash lasting
+        # <2s will be replaced by a new title and its timer will cancel
+        # this one before it fires.
+        self._arm_stability_timer(app_name, exe_name, title, url, file_path)
+
+    def _arm_stability_timer(self, app_name, exe_name, title, url, file_path):
+        """
+        Schedule _detect() to run in _STABILITY_SECONDS, unless another
+        title arrives first and cancels this timer.
+        """
+        # Cancel any previously armed timer — newer title wins
+        self._cancel_stability_timer()
+
+        self._pending_title = title
+        self._pending_title_first_seen = time.time()
+        self._pending_title_context = (app_name, exe_name, url, file_path)
+
+        def _fire():
+            # Re-check: only detect if this title is still the pending one
+            # (i.e. no newer title arrived and reset it)
+            if self._pending_title != title:
+                logger.info(
+                    f"[AI-SWITCH] Layer 3: stability timer fired but title changed; skipping"
+                )
+                return
+
+            age = time.time() - self._pending_title_first_seen
+            logger.info(
+                f"[AI-SWITCH] Layer 3 pass: {title[:60]!r} stable for {age:.1f}s → running _detect"
+            )
+            threading.Thread(
+                target=self._detect,
+                args=(app_name, exe_name, title, url, file_path),
+                daemon=True,
+            ).start()
+
+        self._stability_timer = threading.Timer(_STABILITY_SECONDS, _fire)
+        self._stability_timer.daemon = True
+        self._stability_timer.start()
+
+    def _cancel_stability_timer(self):
+        """Cancel the pending stability timer, if any."""
+        if self._stability_timer is not None:
+            try:
+                self._stability_timer.cancel()
+            except Exception:
+                pass
+            self._stability_timer = None
+        self._pending_title = None
+        self._pending_title_first_seen = 0.0
+        self._pending_title_context = None
 
     def on_dwell_tick(self):
         pass  # Switches execute immediately in _queue_switch
-
 
     def undo_last_switch(self) -> bool:
         if not self._switch_history:
@@ -806,13 +1041,24 @@ class AIClientSwitcher:
 
     # =================================================================
     # Detection Pipeline
-    # KEY CHANGE: _should_skip now uses shared GENERIC_TAX_DIALOGS
     # =================================================================
 
     def _detect(self, app_name: str, exe_name: str, title: str,
                 url: str, file_path: str):
         try:
             logger.info(f"[AI-SWITCH] _detect entered: {title[:60]!r}")
+
+            # Defense in depth: on_window_change already applies these
+            # guards, but catch any direct callers that bypass it.
+            if _is_chrome_only_title(title):
+                logger.info(f"[AI-SWITCH] _detect safety-net: chrome-only — holding")
+                self.stats["suppressed"] += 1
+                return
+            if not _has_client_signal(title, file_path):
+                logger.info(f"[AI-SWITCH] _detect safety-net: no signal — holding")
+                self.stats["suppressed"] += 1
+                return
+
             search      = f"{title} {file_path}" if file_path else title
             cur_id      = self._current_client_id
             sensitivity = self.config["ai_sensitivity"]
@@ -1149,7 +1395,6 @@ class AIClientSwitcher:
 
     # =================================================================
     # Helpers
-    # KEY CHANGE: _should_skip uses shared GENERIC_TAX_DIALOGS set
     # =================================================================
 
     def _should_skip(self, title: str, exe_name: str) -> bool:

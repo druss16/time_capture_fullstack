@@ -1668,6 +1668,153 @@ class OrgProfile(models.Model):
 # ===============================
 # ======  CLASSIFICATION RULES ==
 # ===============================
+class OrgRoutingRule(models.Model):
+    """
+    A per-firm rule that routes window activity to a specific client
+    based on what app/title/file is in focus.
+    """
+ 
+    # -- What triggers the rule -----------------------------------------
+    MATCH_TYPE_CHOICES = [
+        ('exe', 'Exact Process Name (exe)'),
+        ('exe_family', 'App Family (matches multiple versions)'),
+        ('title_contains', 'Title Contains (case-insensitive)'),
+        ('title_regex', 'Title Matches Regex'),
+        ('file_path_contains', 'File Path Contains'),
+    ]
+    match_type = models.CharField(
+        max_length=32,
+        choices=MATCH_TYPE_CHOICES,
+        help_text="What part of the window event this rule matches on.",
+    )
+    match_value = models.CharField(
+        max_length=255,
+        help_text=(
+            "The value to match. For exe_family, use a short key like "
+            "'taxwise', 'ultratax', 'lacerte' — agent maps these to exe "
+            "name prefixes."
+        ),
+    )
+ 
+    # -- What happens when it triggers ----------------------------------
+    ACTION_CHOICES = [
+        ('route_to_client', 'Route Tracking to a Specific Client'),
+        ('never_switch_away', 'Stay on Currently Selected Client'),
+        ('suppress', 'Ignore This Window Entirely'),
+    ]
+    action = models.CharField(
+        max_length=32,
+        choices=ACTION_CHOICES,
+        default='route_to_client',
+    )
+    target_client = models.ForeignKey(
+        'tracker.Client',            # ← adjust to your app label
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='routing_rules',
+        help_text="Required when action='route_to_client'.",
+    )
+ 
+    # -- Scope and ordering ---------------------------------------------
+    org = models.ForeignKey(
+        'tracker.Organization',
+        on_delete=models.CASCADE,
+        related_name='routing_rules',
+    )
+    priority = models.IntegerField(
+        default=100,
+        help_text=(
+            "Higher priority rules evaluated first. Defaults:\n"
+            "  500 = org-specific hard rules (tax software, etc.)\n"
+            "  300 = default baseline rules shipped to all orgs\n"
+            "  100 = user-created soft rules"
+        ),
+    )
+    enabled = models.BooleanField(default=True)
+ 
+    # -- Metadata / audit -----------------------------------------------
+    description = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Human-readable explanation; shown in admin UI.",
+    )
+    is_default = models.BooleanField(
+        default=False,
+        help_text=(
+            "True for rules seeded from default_routing_rules.json. "
+            "Firm admins can disable but not delete these; MavOps can "
+            "push updates to them globally."
+        ),
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='routing_rules_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+ 
+    # Telemetry — updated asynchronously by the rule firing pipeline
+    fire_count = models.IntegerField(default=0)
+    last_fired_at = models.DateTimeField(null=True, blank=True)
+ 
+    class Meta:
+        ordering = ['-priority', 'id']
+        indexes = [
+            models.Index(fields=['org', 'enabled', '-priority']),
+        ]
+ 
+    def __str__(self):
+        action_desc = self.get_action_display()
+        if self.action == 'route_to_client' and self.target_client:
+            action_desc = f"→ {self.target_client.name}"
+        return f"[{self.org.name}] {self.match_type}='{self.match_value}' {action_desc}"
+ 
+    def clean(self):
+        """Validate that routing rules have targets and regexes compile."""
+        from django.core.exceptions import ValidationError
+ 
+        if self.action == 'route_to_client' and not self.target_client_id:
+            raise ValidationError({
+                'target_client': 'Required when action is "Route to Client".'
+            })
+ 
+        if self.action == 'route_to_client' and self.target_client:
+            if self.target_client.org_id != self.org_id:
+                raise ValidationError({
+                    'target_client': 'Client must belong to the same org as the rule.',
+                })
+ 
+        if self.match_type == 'title_regex':
+            import re
+            try:
+                re.compile(self.match_value)
+            except re.error as e:
+                raise ValidationError({
+                    'match_value': f'Invalid regex: {e}',
+                })
+ 
+    # -- Serialization for agent sync -----------------------------------
+    def to_agent_dict(self) -> dict:
+        """
+        Serialize for the agent sync endpoint. Keep keys stable —
+        the agent deserializes these in ai_client_switcher.py.
+        """
+        return {
+            'id': self.id,
+            'match_type': self.match_type,
+            'match_value': self.match_value,
+            'action': self.action,
+            'target_client_id': self.target_client_id,
+            'target_client_name': self.target_client.name if self.target_client else None,
+            'priority': self.priority,
+            'description': self.description,
+        }
+
+
 class ClientPattern(models.Model):
     org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="client_patterns", db_index=True)
     MATCH_TYPES = [

@@ -1940,6 +1940,7 @@ def run_agent():
 
         # Keep client list + sensitivity fresh when sync updates
         # Keep client list + sensitivity fresh when sync updates
+        # Keep client list + patterns + routing rules + sensitivity fresh when sync updates
         if sync:
             _original_on_sync = sync.on_update
             def _on_sync_with_switcher():
@@ -1948,10 +1949,16 @@ def run_agent():
                 ai_switcher.update_clients(sync.clients)
                 if hasattr(sync, 'client_patterns') and sync.client_patterns:
                     ai_switcher.update_client_patterns(sync.client_patterns)
+                # v1.2.95: Tier -1 org routing rules
+                if hasattr(sync, 'routing_rules'):
+                    ai_switcher.update_routing_rules(sync.routing_rules or [])
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
             sync.on_update = _on_sync_with_switcher
+            # Push any rules that already arrived before switcher was created
+            if hasattr(sync, 'routing_rules') and sync.routing_rules:
+                ai_switcher.update_routing_rules(sync.routing_rules)
 
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")

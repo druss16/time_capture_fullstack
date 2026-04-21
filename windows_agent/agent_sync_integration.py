@@ -41,6 +41,7 @@ class AgentSync:
         self.projects: List[Dict] = []
         self.task_types: List[Dict] = []
         self.client_patterns: List[Dict] = []
+        self.routing_rules: List[Dict] = []
         self.org_settings: Dict = {}
         
         # State
@@ -122,7 +123,7 @@ class AgentSync:
             needs_sync = False
             changed_entities = []
             
-            for key in ['clients', 'projects', 'task_types', 'client_patterns']:
+            for key in ['clients', 'projects', 'task_types', 'client_patterns', 'routing_rules']:
                 new_hash = entities.get(key, {}).get('hash', '')
                 old_hash = self._hashes.get(key, '')
                 if new_hash and new_hash != old_hash:
@@ -146,12 +147,13 @@ class AgentSync:
             if not data:
                 log("[SYNC] Full sync failed (no response)")
                 return
-            
+
             self.clients = data.get('clients', [])
             self.projects = data.get('projects', [])
             self.task_types = data.get('task_types', [])
-            self.client_patterns = data.get('client_patterns', [])   # ← NEW
-            self.org_settings = data.get('org_settings', {})          # ← NEW
+            self.client_patterns = data.get('client_patterns', [])
+            self.routing_rules = data.get('routing_rules', [])
+            self.org_settings = data.get('org_settings', {})
             self.last_sync = datetime.now()
             
             # Update hashes from full sync if available
@@ -198,8 +200,9 @@ class AgentSync:
                     'clients': self.clients,
                     'projects': self.projects,
                     'task_types': self.task_types,
-                    'client_patterns': self.client_patterns,             # ← NEW
-                    'org_settings': self.org_settings,                   # ← NEW
+                    'client_patterns': self.client_patterns,
+                    'routing_rules': self.routing_rules,                 # v1.2.95
+                    'org_settings': self.org_settings,
                     'hashes': self._hashes,
                 }, f)
         except Exception as e:
@@ -214,8 +217,9 @@ class AgentSync:
                 self.clients = data.get('clients', [])
                 self.projects = data.get('projects', [])
                 self.task_types = data.get('task_types', [])
-                self.client_patterns = data.get('client_patterns', [])   # ← NEW
-                self.org_settings = data.get('org_settings', {})          # ← NEW
+                self.client_patterns = data.get('client_patterns', [])
+                self.routing_rules = data.get('routing_rules', [])
+                self.org_settings = data.get('org_settings', {})
                 self._hashes = data.get('hashes', {})
                 log(f"[SYNC] Loaded {len(self.clients)} clients from cache")
             except Exception as e:

@@ -13,7 +13,8 @@ from rest_framework.response import Response
 
 from .models import (
     Client, Project, TaskType, ClientAssignment,
-    OrganizationMembership, Organization, ClientPattern
+    OrganizationMembership, Organization, ClientPattern,
+    OrgRoutingRule,
 )
 from .auth import AgentKeyAuthentication, BearerTokenAuthentication
 
@@ -72,6 +73,14 @@ def sync_status(request):
     except Exception:
         pattern_stats = {'latest_id': None, 'count': 0}
 
+    # ── OrgRoutingRule hash (v1.2.95) ─────────────────────────────────────────
+    try:
+        routing_rule_stats = OrgRoutingRule.objects.filter(org=org, enabled=True).aggregate(
+            latest_id=Max('id'), count=Count('id')
+        )
+    except Exception:
+        routing_rule_stats = {'latest_id': None, 'count': 0}
+
     def make_hash(stats):
         latest_id = stats.get('latest_id') or 0
         count = stats.get('count') or 0
@@ -101,9 +110,13 @@ def sync_status(request):
                 'count': assignment_stats.get('count') or 0,
                 'hash': make_hash(assignment_stats),
             },
-            'client_patterns': {                          # ← NEW
+            'client_patterns': {
                 'count': pattern_stats.get('count') or 0,
                 'hash': make_hash(pattern_stats),
+            },
+            'routing_rules': {                           # v1.2.95
+                'count': routing_rule_stats.get('count') or 0,
+                'hash': make_hash(routing_rule_stats),
             },
         },
         'user': {
@@ -330,6 +343,18 @@ def sync_full(request):
     except Exception:
         client_patterns = []
 
+    # Org routing rules (Tier -1 — highest priority, v1.2.95)
+    try:
+        routing_rules = [
+            r.to_agent_dict() for r in
+            OrgRoutingRule.objects
+                .filter(org=org, enabled=True)
+                .select_related('target_client')
+                .order_by('-priority', 'id')
+        ]
+    except Exception:
+        routing_rules = []
+
     # Org settings relevant to agent
     org_settings = {
         'ai_sensitivity': getattr(org, 'ai_sensitivity', 50) or 50,
@@ -352,6 +377,7 @@ def sync_full(request):
         'projects': project_list,
         'task_types': task_types,
         'client_patterns': client_patterns,              # ← NEW
+        'routing_rules': routing_rules,                  # ← NEW (v1.2.95)
         'org_settings': org_settings,                   # ← NEW
         'synced_at': timezone.now().isoformat(),
     })

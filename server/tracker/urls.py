@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -365,6 +365,14 @@ urlpatterns = [
     path("analytics/tax-returns/", views_analytics_tax_returns.tax_returns_dashboard),
 
     path('mavops/orgs/<int:org_id>/members/', views_mavops.mavops_org_members),
+
+    path('orgs/<int:org_id>/routing-rules/', views_routing_rules.list_create_rules, name='routing_rules_list_create'),
+
+    path('orgs/<int:org_id>/routing-rules/<int:rule_id>/', views_routing_rules.detail_update_delete_rule, name='routing_rules_detail'),
+    
+    path('orgs/<int:org_id>/routing-rules/test/', views_routing_rules.test_rules, name='routing_rules_test'),
+
+    path('routing-rules/fire/', views_routing_rules.report_routing_rule_fire, name='routing_rules_fire'),
 
 
 ]

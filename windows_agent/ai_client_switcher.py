@@ -1,22 +1,26 @@
 """
 AI Client Auto-Switcher for TimeTracker Windows Agent
 
+v1.2.95:
+  * NEW: Tier -1 Org Routing Rules — hard rules from the backend that
+         take priority over all other matchers. Per-firm configurable
+         via admin UI. Used for "UltraTax always → Internal - Tax" etc.
+  * NEW: Learned-rules auto-cleanup on version upgrade — the Maconi-style
+         false-positive rules built from pre-v1.2.94 buggy data are wiped
+         when the version bumps past 1.2.94.
+
 v1.2.94: Three-layer bulletproof guard against false switches from
 noise titles (QB redraws, Office splashes, browser tab flickers, etc.)
-
   Layer 1: Known app-chrome title patterns
   Layer 2: Signal-strength check (strip chrome tokens, require real content)
   Layer 3: Stability gate — title must persist >= 2s before detection fires
 
-Two-tier client detection from window titles:
-  Tier 0: Org-admin ClientPattern rules (highest priority)
-  Tier 1: Local pattern matching (instant, free) — covers ~80% of cases
-    - Pre-compiled regex matchers for client names + aliases
-    - Persistent pattern cache (remembers prior AI decisions)
-    - Learned rules that strengthen with repeated confirms
-    - CPA file-naming convention detection
-    - Partial-word matching (scales with sensitivity)
-  Tier 2: Backend AI classification (smart, server-side) — ambiguous cases only
+Full tier order (highest priority first):
+  Tier -1: OrgRoutingRule (backend, per-firm)                    ← v1.2.95
+  Tier  0: ClientPattern (title substring → client)
+  Tier  1: Local matching (regex, cache, learned, CPA file conv)
+  Tier  1e: Tax-software catch-all → Internal - Tax
+  Tier  2: Backend AI classify
 
 SYNC NOTE:
   tax_software_constants.py (this folder) mirrors tracker/utils/tax_software.py
@@ -49,11 +53,7 @@ from tax_software_constants import (
 #   Apps sometimes briefly redraw their title bar with no document
 #   context (e.g. " QuickBooks Accountant Desktop Plus 2024" with
 #   leading space where client name used to be). Feeding these to
-#   learned_partial causes non-deterministic false switches based on
-#   which app-chrome tokens happen to be in a learned rule.
-#
-# These three layers are AND-gated. A title must pass all three
-# before the matching tiers run.
+#   learned_partial causes non-deterministic false switches.
 
 # Layer 1: Pure-chrome titles we've seen in the wild ------------------
 _CHROME_ONLY_PATTERNS = [
@@ -105,54 +105,35 @@ def _is_chrome_only_title(title: str) -> bool:
 
 
 # Layer 2: Signal-strength check --------------------------------------
-# Words that appear in app branding but carry zero client signal.
-# When we strip these out of a title, whatever remains is the "real"
-# content. If nothing substantive remains, the title has no signal
-# and no tier should match on it.
 _CHROME_TOKENS = {
-    # Vendors
     "microsoft", "google", "adobe", "intuit", "mozilla",
-    # Product families
     "quickbooks", "qb", "excel", "word", "powerpoint", "outlook",
     "onenote", "access", "project", "publisher", "visio",
     "chrome", "edge", "brave", "firefox", "opera", "safari",
     "teams", "slack", "zoom", "webex", "discord",
     "acrobat", "reader", "notepad", "explorer", "code",
-    # Tax software
     "ultratax", "taxwise", "lacerte", "proseries", "drake",
     "cch", "axcess", "atx", "prosystem", "fx",
-    # Generic qualifiers
     "desktop", "professional", "enterprise", "premier", "accountant",
     "plus", "pro", "standard", "edition", "version", "home", "business",
     "student", "personal", "family", "suite", "online", "cloud",
     "login", "sign", "in", "signin", "new", "tab", "untitled", "document",
     "workbook", "presentation", "file", "window", "blank", "loading",
-    # Years / versions
     "20", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026",
     "v1", "v2", "v3",
-    # Separators that sometimes leak in
     "the", "and", "for", "of", "a", "an",
 }
 
-# Minimum "real content" length after stripping chrome tokens.
-# Empirically, any real client name or document name will have at
-# least 3 alpha chars in a single run. Noise titles have 0-2.
 _MIN_SIGNAL_CHARS = 3
 
 
 def _has_client_signal(title: str, file_path: str = None) -> bool:
-    """
-    Layer 2: does the title contain any content that's not app chrome?
-
-    If a file_path is present, we automatically have signal — file paths
-    always carry document context even when titles don't.
-    """
+    """Layer 2: title has real content beyond app branding?"""
     if file_path:
         return True
     if not title:
         return False
 
-    # Tokenize on common separators
     tokens = re.split(r'[\s\-\u2013\u2014|:/\\.,()\[\]{}*<>"\']+', title.lower())
     signal_tokens = [
         t for t in tokens
@@ -162,19 +143,157 @@ def _has_client_signal(title: str, file_path: str = None) -> bool:
     if not signal_tokens:
         return False
 
-    # Require at least one token with real alphabetic content
     total_alpha = sum(len(t) for t in signal_tokens if any(c.isalpha() for c in t))
     return total_alpha >= _MIN_SIGNAL_CHARS
 
 
 # Layer 3: Stability gate ---------------------------------------------
-# A title must persist for this many seconds before we act on it.
-# Glitch titles (QB redraws, Office splash flashes, tab-switch flickers)
-# are sub-second. Legitimate switches are always user-initiated and
-# remain on screen for many seconds. 2.0s is the sweet spot: long
-# enough to filter glitches, short enough that the user doesn't feel
-# the delay on real switches.
 _STABILITY_SECONDS = 2.0
+
+
+# =====================================================================
+# Tier -1: Org Routing Rules (v1.2.95)
+# =====================================================================
+# Hard rules that take priority over every other matcher.
+# Fetched from backend via sync.routing_rules.
+#
+# The matching logic MUST stay in sync with backend
+# views_routing_rules._rule_matches() so the admin's "Test this title"
+# simulator matches what the agent actually does.
+
+# Shared exe family → process name prefixes. Keep in sync with
+# views_routing_rules.EXE_FAMILIES on the backend.
+_EXE_FAMILIES = {
+    'taxwise':     ['utw', 'taxwise'],
+    'ultratax':    ['uts', 'ultratax'],
+    'lacerte':     ['lacerte', 'lacertepro'],
+    'proseries':   ['proseries', 'ps'],
+    'drake':       ['drake'],
+    'quickbooks':  ['qbw', 'qb', 'quickbooks'],
+    'excel':       ['excel'],
+    'word':        ['winword'],
+    'powerpoint':  ['powerpnt'],
+    'outlook':     ['outlook'],
+    'chrome':      ['chrome'],
+    'edge':        ['msedge'],
+    'firefox':     ['firefox'],
+    'teams':       ['teams', 'ms-teams'],
+    'slack':       ['slack'],
+    'zoom':        ['zoom'],
+}
+
+
+def _exe_family_matches(family_key: str, exe_name: str) -> bool:
+    """Given 'taxwise' and 'utw25.exe', return True."""
+    if not exe_name:
+        return False
+    prefixes = _EXE_FAMILIES.get(family_key.lower(), [family_key.lower()])
+    exe_low = exe_name.lower().replace('.exe', '').strip()
+    return any(exe_low.startswith(p) for p in prefixes)
+
+
+class OrgRoutingRuleEngine:
+    """
+    Evaluates per-org routing rules fetched from the backend.
+
+    Rules are fetched via sync and passed in via update_rules().
+    Call match() on every window change before running other tiers.
+    """
+
+    def __init__(self, rules: Optional[List[dict]] = None):
+        self._rules: List[dict] = []
+        self._api_base: str = ""
+        self._api_key: str = ""
+        self.update_rules(rules or [])
+
+    def set_api(self, api_base: str, api_key: str):
+        """Set API credentials for telemetry (fire_count reporting)."""
+        self._api_base = api_base
+        self._api_key = api_key
+
+    def update_rules(self, rules: List[dict]):
+        """Replace the rule set; called from sync."""
+        # Sort by priority descending so the first match wins
+        self._rules = sorted(
+            rules or [],
+            key=lambda r: r.get('priority', 0),
+            reverse=True,
+        )
+        logger.info(f"[AI-SWITCH] OrgRoutingRuleEngine: {len(self._rules)} rules loaded")
+        for r in self._rules:
+            logger.info(
+                f"  · [{r.get('priority', 0)}] {r.get('match_type')}={r.get('match_value')!r} "
+                f"→ {r.get('action')} (client={r.get('target_client_name') or 'n/a'})"
+            )
+
+    def match(self, title: str, exe: str, file_path: str) -> Optional[dict]:
+        """
+        Return the first matching rule (highest priority wins), or None.
+        Returns the raw rule dict so caller can inspect action/target/etc.
+        """
+        if not self._rules:
+            return None
+
+        for rule in self._rules:
+            if self._rule_matches(rule, title, exe, file_path):
+                logger.info(
+                    f"[AI-SWITCH] OrgRule fire: id={rule.get('id')} "
+                    f"{rule.get('match_type')}={rule.get('match_value')!r} "
+                    f"→ {rule.get('action')} "
+                    f"({rule.get('target_client_name') or 'n/a'})"
+                )
+                self._report_fire(rule.get('id'))
+                return rule
+        return None
+
+    @staticmethod
+    def _rule_matches(rule: dict, title: str, exe: str, file_path: str) -> bool:
+        mv = (rule.get('match_value') or '').lower()
+        mt = rule.get('match_type')
+        title_l = (title or '').lower()
+        exe_l = (exe or '').lower()
+        path_l = (file_path or '').lower()
+
+        if mt == 'exe':
+            return exe_l == mv or exe_l == f"{mv}.exe"
+
+        if mt == 'exe_family':
+            return _exe_family_matches(mv, exe_l)
+
+        if mt == 'title_contains':
+            return mv in title_l
+
+        if mt == 'title_regex':
+            try:
+                return bool(re.search(rule['match_value'], title or '', re.IGNORECASE))
+            except re.error:
+                return False
+
+        if mt == 'file_path_contains':
+            return mv in path_l
+
+        return False
+
+    def _report_fire(self, rule_id: Optional[int]):
+        """Fire-and-forget telemetry to the backend (non-blocking)."""
+        if not rule_id or not self._api_base or not self._api_key:
+            return
+
+        def _send():
+            try:
+                url = f"{self._api_base.rstrip('/')}/routing-rules/fire/"
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps({'rule_id': rule_id}).encode('utf-8'),
+                    method='POST',
+                )
+                req.add_header('Authorization', f'DeviceKey {self._api_key}')
+                req.add_header('Content-Type', 'application/json')
+                urllib.request.urlopen(req, timeout=3).read()
+            except Exception as e:
+                logger.debug(f"[AI-SWITCH] OrgRule fire telemetry failed: {e}")
+
+        threading.Thread(target=_send, daemon=True).start()
 
 
 # =====================================================================
@@ -210,37 +329,31 @@ DEFAULT_CONFIG = {
     "enabled": True,
     "ai_sensitivity": 50,
 
-    # Computed by _apply_sensitivity() — do not hand-edit
     "local_confidence_threshold": 0.80,
     "openai_confidence_threshold": 0.75,
     "suggest_threshold": 0.55,
     "partial_name_matching": False,
     "partial_name_min_word_len": 5,
 
-    # Timing
     "dwell_seconds_before_switch": 0,
     "cooldown_seconds": 0,
     "manual_override_snooze_minutes": 0,
 
-    # Backend AI
     "ai_timeout": 10,
     "max_ai_calls_per_hour": 60,
     "ai_debounce_seconds": 2.0,
     "ai_max_batch": 5,
 
-    # Behavior
     "learn_from_confirms": True,
     "notify_on_switch": True,
     "undo_window_seconds": 120,
     "max_switch_history": 50,
     "debug": False,
 
-    # Pattern Cache
     "pattern_cache_file": os.path.expanduser("~/.timetracker/ai_pattern_cache.json"),
     "max_cache_entries": 2000,
     "cache_ttl_days": 30,
 
-    # Skip Rules
     "skip_exes": {
         "explorer.exe", "searchapp.exe", "searchui.exe",
         "shellexperiencehost.exe", "startmenuexperiencehost.exe",
@@ -267,7 +380,7 @@ _GENERIC_WORD_BLOCKLIST = {
 
 
 # =====================================================================
-# Sensitivity → Threshold Mapping (unchanged)
+# Sensitivity → Threshold Mapping
 # =====================================================================
 
 def _sensitivity_to_thresholds(sensitivity: int) -> dict:
@@ -303,7 +416,7 @@ def _partial_word_confidence(word_len: int, sensitivity: int) -> float:
 
 
 # =====================================================================
-# Pattern Cache (unchanged)
+# Pattern Cache
 # =====================================================================
 
 class PatternCache:
@@ -377,7 +490,7 @@ class PatternCache:
 
 
 # =====================================================================
-# Pre-compiled Regex Matchers (unchanged)
+# Pre-compiled Regex Matchers
 # =====================================================================
 
 _BOUNDARY = r'[\s_\-./\\|:,()\'"<>*\u2013\u2014]'
@@ -491,7 +604,7 @@ def _regex_match(title: str, file_path: str, matchers: list,
 
 
 # =====================================================================
-# Learned Rules (unchanged)
+# Learned Rules
 # =====================================================================
 
 class LearnedRules:
@@ -595,7 +708,7 @@ class LearnedRules:
 
 
 # =====================================================================
-# CPA File Convention Matcher (unchanged)
+# CPA File Convention Matcher
 # =====================================================================
 
 def _cpa_file_match(title: str, clients: list, current_client_id: int = None) -> Optional[ClientMatch]:
@@ -628,7 +741,7 @@ def _cpa_file_match(title: str, clients: list, current_client_id: int = None) ->
 
 
 # =====================================================================
-# Backend AI Classifier (unchanged)
+# Backend AI Classifier
 # =====================================================================
 
 def _call_backend_classify(titles: list, api_base: str, api_key: str,
@@ -724,6 +837,11 @@ class AIClientSwitcher:
         sensitivity       = self.config["ai_sensitivity"]
         self._matchers    = _build_client_matchers(clients, sensitivity)
         self._client_patterns: List[Dict] = []
+
+        # v1.2.95: Tier -1 routing engine
+        self._routing_engine = OrgRoutingRuleEngine()
+        self._routing_engine.set_api(api_base, api_key)
+
         self._learned     = LearnedRules()
         self._cache       = PatternCache(
             self.config["pattern_cache_file"],
@@ -731,7 +849,7 @@ class AIClientSwitcher:
             self.config["cache_ttl_days"],
         )
 
-        # ── Auto-clear stale pattern cache on version upgrade ──────────────
+        # ── Auto-clear stale pattern cache + learned rules on version upgrade ─
         try:
             from version import APP_VERSION
         except Exception:
@@ -754,6 +872,26 @@ class AIClientSwitcher:
                     os.remove(cache_path)
                     self._cache._data = {}
                     logger.info(f"[AI-SWITCH] Pattern cache cleared on upgrade {cached_version or 'unknown'} → {APP_VERSION}")
+
+                # v1.2.95: Wipe learned rules on upgrade from pre-v1.2.94
+                # Rules created before the chrome-only guard landed are
+                # contaminated by false-positive training. Cleaner to start
+                # fresh than to scrub — user re-teaches quickly from confirms.
+                if cached_version and cached_version < "1.2.94":
+                    learned_path = self._learned.path
+                    if os.path.exists(learned_path):
+                        backup_path = learned_path + f".pre_{APP_VERSION}.bak"
+                        try:
+                            os.rename(learned_path, backup_path)
+                            logger.info(
+                                f"[AI-SWITCH] Wiped learned rules (backed up to {backup_path}) "
+                                f"— upgrade {cached_version} → {APP_VERSION} crossed the "
+                                f"chrome-guard threshold (v1.2.94)"
+                            )
+                        except Exception as e:
+                            logger.warning(f"[AI-SWITCH] Learned rules wipe failed: {e}")
+                    self._learned.rules = {}
+
                 with open(cache_version_file, "w") as f:
                     f.write(APP_VERSION)
         except Exception as e:
@@ -771,9 +909,6 @@ class AIClientSwitcher:
         self._pending_switch:      Optional[dict] = None
 
         # Layer 3: Stability gate state
-        # Track titles we've seen recently but haven't acted on yet.
-        # A title must persist for >= _STABILITY_SECONDS before _detect
-        # processes it. This filters sub-second title glitches.
         self._pending_title: Optional[str] = None
         self._pending_title_first_seen: float = 0.0
         self._pending_title_context: Optional[tuple] = None
@@ -795,6 +930,7 @@ class AIClientSwitcher:
         self.stats = {
             "regex": 0, "cache": 0, "learned": 0, "file_conv": 0,
             "backend_ai": 0, "partial_word": 0, "switches": 0, "suppressed": 0,
+            "org_rule": 0,
         }
 
         self._backend_ai_available = bool(api_base and api_key)
@@ -810,7 +946,7 @@ class AIClientSwitcher:
         )
 
     # =================================================================
-    # Sensitivity Management (unchanged)
+    # Sensitivity Management
     # =================================================================
 
     def _apply_sensitivity(self):
@@ -853,6 +989,13 @@ class AIClientSwitcher:
         )
         logger.info(f"[AI-SWITCH] Updated {len(self._client_patterns)} client patterns (Tier 0)")
 
+    def update_routing_rules(self, rules: list):
+        """
+        v1.2.95: Update the Tier -1 org routing rules from backend sync payload.
+        Called by sync when rules change server-side.
+        """
+        self._routing_engine.update_rules(rules or [])
+
     def set_current_client(self, client_id: int, client_name: str):
         self._current_client_id   = client_id
         self._current_client_name = client_name
@@ -866,7 +1009,6 @@ class AIClientSwitcher:
             self._pending_switch = None
             self._last_title = ""
             logger.info(f"[AI-SWITCH] Manual override: {client_name} (snoozed {snooze_min}min)")
-        # Cancel any in-flight stability timer — user took control
         self._cancel_stability_timer()
 
     def on_window_change(self, app_name: str, exe_name: str, title: str,
@@ -875,12 +1017,12 @@ class AIClientSwitcher:
         """
         Called on every foreground-window change.
 
-        Applies three-layer guard BEFORE running detection:
-          Layer 1: chrome-only titles → drop immediately
-          Layer 2: no signal content  → drop immediately
-          Layer 3: stability gate     → wait _STABILITY_SECONDS, then detect
-
-        All three gates must pass before _detect() runs.
+        Applies guards BEFORE running detection:
+          - Tier -1 exe match peek: if an org rule matches on exe/path alone,
+            bypass chrome guards so empty titles like "UltraTax CS" still route
+          - Layer 1: chrome-only titles → drop
+          - Layer 2: no signal content → drop
+          - Layer 3: stability gate → wait _STABILITY_SECONDS, then detect
         """
         if not self.config["enabled"] or not title:
             return
@@ -888,7 +1030,6 @@ class AIClientSwitcher:
         logger.info(f"[AI-SWITCH] on_window_change fired: {title[:60]!r} cur={self._current_client_id}")
         self._last_title = title
 
-        # Short-circuit: meeting mode or manual override
         if in_meeting or time.time() < self._manual_override_until:
             logger.info(
                 f"[AI-SWITCH] on_window_change: skipped (meeting/override) "
@@ -896,16 +1037,29 @@ class AIClientSwitcher:
             )
             return
 
-        # Existing exe/pattern skip list (browsers, explorer, etc.)
         if self._should_skip(title, exe_name):
             logger.info(f"[AI-SWITCH] on_window_change: skipped by _should_skip")
             self._clear_pending()
             self._cancel_stability_timer()
             return
 
+        # ── Does an org routing rule match on exe/path? ────────────────
+        # If yes, chrome guards do NOT apply — org admin hard rules beat
+        # everything else. This is what makes "UltraTax → Internal-Tax"
+        # fire even when the title is bare "UltraTax CS" with no return.
+        org_rule_exe_match = bool(
+            self._routing_engine.match(title, exe_name, file_path)
+        )
+        if org_rule_exe_match:
+            logger.info(
+                f"[AI-SWITCH] Org rule matches on exe/path — bypassing chrome guards"
+            )
+            # Still gate through Layer 3 stability so a 100ms flash
+            # doesn't auto-switch, but skip Layers 1 & 2.
+            self._arm_stability_timer(app_name, exe_name, title, url, file_path)
+            return
+
         # ── LAYER 1: Chrome-only titles ────────────────────────────────
-        # "QuickBooks Desktop 2024" with no company file, "Microsoft Excel"
-        # with no workbook, etc. Hold current client, drop immediately.
         if _is_chrome_only_title(title):
             logger.info(
                 f"[AI-SWITCH] Layer 1 drop: chrome-only title {title[:60]!r} "
@@ -916,8 +1070,6 @@ class AIClientSwitcher:
             return
 
         # ── LAYER 2: Signal-strength check ─────────────────────────────
-        # Title has no content after stripping app-chrome words.
-        # Catches any app we haven't explicitly listed in Layer 1.
         if not _has_client_signal(title, file_path):
             logger.info(
                 f"[AI-SWITCH] Layer 2 drop: no client signal in {title[:60]!r} "
@@ -928,10 +1080,6 @@ class AIClientSwitcher:
             return
 
         # ── LAYER 3: Stability gate ────────────────────────────────────
-        # Start (or reset) a timer. _detect only runs if this title is
-        # still the active title after _STABILITY_SECONDS. A flash lasting
-        # <2s will be replaced by a new title and its timer will cancel
-        # this one before it fires.
         self._arm_stability_timer(app_name, exe_name, title, url, file_path)
 
     def _arm_stability_timer(self, app_name, exe_name, title, url, file_path):
@@ -939,7 +1087,6 @@ class AIClientSwitcher:
         Schedule _detect() to run in _STABILITY_SECONDS, unless another
         title arrives first and cancels this timer.
         """
-        # Cancel any previously armed timer — newer title wins
         self._cancel_stability_timer()
 
         self._pending_title = title
@@ -947,8 +1094,6 @@ class AIClientSwitcher:
         self._pending_title_context = (app_name, exe_name, url, file_path)
 
         def _fire():
-            # Re-check: only detect if this title is still the pending one
-            # (i.e. no newer title arrived and reset it)
             if self._pending_title != title:
                 logger.info(
                     f"[AI-SWITCH] Layer 3: stability timer fired but title changed; skipping"
@@ -970,7 +1115,6 @@ class AIClientSwitcher:
         self._stability_timer.start()
 
     def _cancel_stability_timer(self):
-        """Cancel the pending stability timer, if any."""
         if self._stability_timer is not None:
             try:
                 self._stability_timer.cancel()
@@ -1001,7 +1145,7 @@ class AIClientSwitcher:
         return self._switch_history[-1] if self._switch_history else None
 
     # =================================================================
-    # Tier 0 — Org admin patterns (unchanged)
+    # Tier 0 — Org admin patterns
     # =================================================================
 
     def _tier0_pattern_match(self, app_name: str, title: str) -> Optional[ClientMatch]:
@@ -1048,8 +1192,57 @@ class AIClientSwitcher:
         try:
             logger.info(f"[AI-SWITCH] _detect entered: {title[:60]!r}")
 
+            cur_id = self._current_client_id
+
+            # ── Tier -1: Org routing rules (v1.2.95) ──────────────────
+            # HIGHEST priority. Runs before chrome guards because org rules
+            # can match on exe/file_path alone — e.g. "UltraTax → Internal-Tax"
+            # fires even when UltraTax's title is just "UltraTax CS" with no
+            # return open. This is exactly what TL Wall wants.
+            rule_hit = self._routing_engine.match(title, exe_name, file_path)
+            if rule_hit:
+                action = rule_hit.get('action')
+
+                if action == 'suppress':
+                    logger.info(
+                        f"[AI-SWITCH] Tier -1: suppress — rule {rule_hit.get('id')} "
+                        f"matched, ignoring window"
+                    )
+                    self.stats["suppressed"] += 1
+                    return
+
+                if action == 'never_switch_away':
+                    logger.info(
+                        f"[AI-SWITCH] Tier -1: never_switch_away — rule {rule_hit.get('id')} "
+                        f"holds cur={cur_id}"
+                    )
+                    return
+
+                if action == 'route_to_client':
+                    target_id = rule_hit.get('target_client_id')
+                    target_name = rule_hit.get('target_client_name')
+                    if target_id and target_id != cur_id:
+                        match = ClientMatch(
+                            client_id=int(target_id),
+                            client_name=target_name or "",
+                            confidence=1.0,
+                            match_method="org_routing_rule",
+                            matched_token=rule_hit.get('match_value', '')[:80],
+                            reasoning=(
+                                f"Org rule: {rule_hit.get('match_type')}="
+                                f"{rule_hit.get('match_value')!r} → {target_name}"
+                            ),
+                        )
+                        self.stats["org_rule"] += 1
+                        self._queue_switch(match)
+                        return
+                    # Already on target client — no-op
+                    return
+
             # Defense in depth: on_window_change already applies these
             # guards, but catch any direct callers that bypass it.
+            # Note: runs AFTER Tier -1 so org rules can fire on chrome-only
+            # titles (e.g. bare "UltraTax CS" → Internal - Tax via exe match).
             if _is_chrome_only_title(title):
                 logger.info(f"[AI-SWITCH] _detect safety-net: chrome-only — holding")
                 self.stats["suppressed"] += 1
@@ -1060,10 +1253,9 @@ class AIClientSwitcher:
                 return
 
             search      = f"{title} {file_path}" if file_path else title
-            cur_id      = self._current_client_id
             sensitivity = self.config["ai_sensitivity"]
 
-            # Tier 1b: Pre-compiled regex + partial-word — run FIRST, always wins over cache
+            # Tier 1b: Pre-compiled regex + partial-word
             regex_hit = _regex_match(title, file_path, self._matchers, sensitivity)
             logger.info(f"[AI-SWITCH] _detect: regex_hit={regex_hit} cur_id={cur_id}")
             if regex_hit and regex_hit.client_id != cur_id:
@@ -1073,7 +1265,7 @@ class AIClientSwitcher:
                     self._queue_switch(regex_hit)
                     return
 
-            # Tier 1a: Pattern cache — only if regex didn't match
+            # Tier 1a: Pattern cache
             cached = self._cache.get(title)
             if cached and cached.get("client_id"):
                 if cached["client_id"] != cur_id:
@@ -1105,15 +1297,12 @@ class AIClientSwitcher:
                 self._queue_switch(file_hit)
                 return
 
-            # --- Tier 1e: Tax software open return → Internal - Tax ──────────────
-            # When UltraTax/TaxWise has an individual return open and no client
-            # matched, switch to the Internal - Tax client so time isn't orphaned.
+            # Tier 1e: Tax software open return → Internal - Tax
             logger.info(f"[AI-SWITCH] Tier1e check: regex={regex_hit}, learned={learned_hit}, file={file_hit}, title={title[:60]}")
 
             if not regex_hit and not learned_hit and not file_hit:
                 if (TAX_SOFTWARE_RETURN_PATTERN.search(title or '')
                         or TAX_SOFTWARE_TAXWISE_PATTERN.search(title or '')):
-                    # Find the Internal - Tax client in our client list
                     internal_client = next(
                         (c for c in self._clients
                          if c.get('name', '').lower() == INTERNAL_TAX_CLIENT_NAME.lower()),
@@ -1132,7 +1321,7 @@ class AIClientSwitcher:
                         self._queue_switch(match)
                         return
 
-            # Tier 0 fallback: Org-admin rules
+            # Tier 0 fallback: Org-admin patterns
             if self._client_patterns:
                 tier0_hit = self._tier0_pattern_match(app_name, title)
                 if tier0_hit and tier0_hit.client_id != cur_id:
@@ -1178,7 +1367,6 @@ class AIClientSwitcher:
                 self.stats["suppressed"] += 1
                 return
         logger.info(f"[AI-SWITCH] _queue_switch: cid={match.client_id} cur={self._current_client_id} cooldown={self._cooldowns.get(match.client_id, 0):.0f} now={time.time():.0f}")
-        # Execute immediately — no dwell, no pending
         self._execute_switch({
             "client_id": match.client_id,
             "client_name": match.client_name,
@@ -1189,7 +1377,7 @@ class AIClientSwitcher:
         })
 
     # =================================================================
-    # Backend AI Batch Queue (unchanged)
+    # Backend AI Batch Queue
     # =================================================================
 
     def _enqueue_for_ai(self, title: str, file_path: str, app_name: str):
@@ -1260,7 +1448,7 @@ class AIClientSwitcher:
         threading.Thread(target=_run, daemon=True).start()
 
     # =================================================================
-    # Switch Execution (unchanged)
+    # Switch Execution
     # =================================================================
 
     def _execute_switch(self, data: dict):
@@ -1326,7 +1514,7 @@ class AIClientSwitcher:
             self.notif_manager.set_current_client(client_id, client_name)
 
     # =================================================================
-    # Notifications (unchanged)
+    # Notifications
     # =================================================================
 
     def _notify_switch(self, new_name: str, old_name: str,
@@ -1398,7 +1586,6 @@ class AIClientSwitcher:
     # =================================================================
 
     def _should_skip(self, title: str, exe_name: str) -> bool:
-        # Use shared suppression list (same set as block_classifier Stage 0)
         title_lower = title.lower().strip()
         if any(title_lower == d or title_lower.startswith(d) for d in GENERIC_TAX_DIALOGS):
             return True

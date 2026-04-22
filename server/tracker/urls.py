@@ -357,6 +357,34 @@ urlpatterns = [
     path('mavops/impersonate/clear/',  views_mavops.clear_impersonation,     name='mavops-impersonate-clear'),
     path('mavops/impersonate/status/', views_mavops.impersonation_status,    name='mavops-impersonate-status'),
 
+    # ── MavOps admin: routing rules (cross-org management) ──────────
+    path('mavops/routing-rules/orgs/',
+         views_mavops.mavops_routing_rules_orgs,
+         name='mavops-rr-orgs'),
+
+    path('mavops/routing-rules/orgs/<int:org_id>/',
+         views_mavops.mavops_routing_rules_for_org,
+         name='mavops-rr-for-org'),
+
+    path('mavops/routing-rules/orgs/<int:org_id>/create/',
+         views_mavops.mavops_create_routing_rule,
+         name='mavops-rr-create'),
+
+    path('mavops/routing-rules/orgs/<int:org_id>/<int:rule_id>/',
+         views_mavops.mavops_update_delete_routing_rule,
+         name='mavops-rr-detail'),
+
+    path('mavops/routing-rules/orgs/<int:org_id>/test/',
+         views_mavops.mavops_test_routing_rules,
+         name='mavops-rr-test'),
+
+    path('mavops/routing-rules/orgs/<int:org_id>/copy-from/',
+         views_mavops.mavops_copy_routing_rules,
+         name='mavops-rr-copy'),
+
+    path('mavops/routing-rules/top-firing/',
+         views_mavops.mavops_top_firing_rules,
+         name='mavops-rr-top-firing'),
 
     path('mavops/kill-agent/', views_mavops.mavops_kill_agent),
     path('watchdog/command/', views_mavops.watchdog_command),

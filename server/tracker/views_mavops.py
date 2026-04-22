@@ -8,13 +8,15 @@ from rest_framework.decorators import api_view, authentication_classes, permissi
 from rest_framework.permissions import IsAuthenticated, BasePermission, AllowAny
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db.models import Count, Max
+from django.db.models import Count, Max, Sum, Q
 from datetime import timedelta
 
 from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
 from tracker.models import (
-    AgentDevice, AgentLog, Organization, OrganizationMembership,
+    AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client
 )
+
+from django.db import transaction
 
 
 class IsStaff(BasePermission):
@@ -456,4 +458,431 @@ def mavops_org_members(request, org_id):
             'last_name': m.user.last_name or '',
             'role': m.role,
         } for m in memberships]
+    })
+
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_routing_rules_orgs(request):
+    """
+    GET /api/mavops/routing-rules/orgs/
+    Returns all orgs with rule counts + fire stats for the overview page.
+    """
+    orgs = Organization.objects.all().order_by('name')
+ 
+    result = []
+    for org in orgs:
+        rules_qs = OrgRoutingRule.objects.filter(org=org)
+        stats = rules_qs.aggregate(
+            rule_count=Count('id'),
+            enabled_count=Count('id', filter=Q(enabled=True)),
+            custom_count=Count('id', filter=Q(is_default=False)),
+            default_count=Count('id', filter=Q(is_default=True)),
+            total_fires=Sum('fire_count'),
+            last_fire_at=Max('last_fired_at'),
+        )
+        result.append({
+            'id': org.id,
+            'name': org.name,
+            'rule_count': stats['rule_count'] or 0,
+            'enabled_count': stats['enabled_count'] or 0,
+            'custom_count': stats['custom_count'] or 0,
+            'default_count': stats['default_count'] or 0,
+            'total_fires': stats['total_fires'] or 0,
+            'last_fire_at': (
+                stats['last_fire_at'].isoformat() if stats['last_fire_at'] else None
+            ),
+        })
+ 
+    return Response({'orgs': result, 'total': len(result)})
+ 
+ 
+# ── List rules for a single org (with target client info) ──────────────────
+ 
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_routing_rules_for_org(request, org_id):
+    """
+    GET /api/mavops/routing-rules/orgs/<org_id>/
+    Returns all rules for one org + the org's client list (for target dropdowns).
+    """
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Org not found'}, status=404)
+ 
+    rules = (
+        OrgRoutingRule.objects
+        .filter(org=org)
+        .select_related('target_client', 'created_by')
+        .order_by('-priority', 'id')
+    )
+ 
+    clients = Client.objects.filter(org=org, is_active=True).order_by('name')
+ 
+    return Response({
+        'org': {'id': org.id, 'name': org.name},
+        'rules': [
+            {
+                'id': r.id,
+                'match_type': r.match_type,
+                'match_value': r.match_value,
+                'action': r.action,
+                'target_client_id': r.target_client_id,
+                'target_client_name': r.target_client.name if r.target_client else None,
+                'priority': r.priority,
+                'enabled': r.enabled,
+                'description': r.description,
+                'is_default': r.is_default,
+                'fire_count': r.fire_count,
+                'last_fired_at': (
+                    r.last_fired_at.isoformat() if r.last_fired_at else None
+                ),
+                'created_by': r.created_by.username if r.created_by else None,
+                'created_at': r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rules
+        ],
+        'clients': [{'id': c.id, 'name': c.name} for c in clients],
+    })
+ 
+ 
+# ── Create rule ────────────────────────────────────────────────────────────
+ 
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_create_routing_rule(request, org_id):
+    """POST /api/mavops/routing-rules/orgs/<org_id>/create/"""
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Org not found'}, status=404)
+ 
+    data = request.data
+    target_client = None
+    if data.get('target_client_id'):
+        try:
+            target_client = Client.objects.get(id=data['target_client_id'], org=org)
+        except Client.DoesNotExist:
+            return Response({'error': 'Target client not found in this org'}, status=400)
+ 
+    try:
+        rule = OrgRoutingRule(
+            org=org,
+            match_type=data['match_type'],
+            match_value=data['match_value'],
+            action=data.get('action', 'route_to_client'),
+            target_client=target_client,
+            priority=int(data.get('priority', 100)),
+            enabled=bool(data.get('enabled', True)),
+            description=data.get('description', ''),
+            is_default=False,
+            created_by=request.user,
+        )
+        rule.full_clean()
+        rule.save()
+        return Response({'ok': True, 'rule_id': rule.id})
+    except Exception as e:
+        return Response({'ok': False, 'error': str(e)}, status=400)
+ 
+ 
+# ── Update / delete rule ───────────────────────────────────────────────────
+ 
+@api_view(['PATCH', 'DELETE'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_update_delete_routing_rule(request, org_id, rule_id):
+    """
+    PATCH  /api/mavops/routing-rules/orgs/<org_id>/<rule_id>/
+    DELETE /api/mavops/routing-rules/orgs/<org_id>/<rule_id>/
+    """
+    try:
+        org = Organization.objects.get(id=org_id)
+        rule = OrgRoutingRule.objects.get(id=rule_id, org=org)
+    except (Organization.DoesNotExist, OrgRoutingRule.DoesNotExist):
+        return Response({'error': 'Not found'}, status=404)
+ 
+    if request.method == 'DELETE':
+        if rule.is_default:
+            return Response(
+                {'error': 'Default rules cannot be deleted. Disable instead.'},
+                status=400,
+            )
+        rule.delete()
+        return Response({'ok': True})
+ 
+    # PATCH
+    data = request.data
+    try:
+        if 'match_type' in data and not rule.is_default:
+            rule.match_type = data['match_type']
+        if 'match_value' in data and not rule.is_default:
+            rule.match_value = data['match_value']
+        if 'action' in data:
+            rule.action = data['action']
+        if 'target_client_id' in data:
+            if data['target_client_id']:
+                rule.target_client = Client.objects.get(
+                    id=data['target_client_id'], org=org
+                )
+            else:
+                rule.target_client = None
+        if 'priority' in data:
+            rule.priority = int(data['priority'])
+        if 'enabled' in data:
+            rule.enabled = bool(data['enabled'])
+        if 'description' in data:
+            rule.description = data['description']
+ 
+        rule.full_clean()
+        rule.save()
+        return Response({'ok': True})
+    except Exception as e:
+        return Response({'ok': False, 'error': str(e)}, status=400)
+ 
+ 
+# ── Test simulator ─────────────────────────────────────────────────────────
+# Mirrors agent's OrgRoutingRuleEngine._rule_matches() — keep in sync!
+ 
+_MAVOPS_EXE_FAMILIES = {
+    'taxwise':    ['utw', 'taxwise'],
+    'ultratax':   ['uts', 'ultratax'],
+    'lacerte':    ['lacerte', 'lacertepro'],
+    'proseries':  ['proseries', 'ps'],
+    'drake':      ['drake'],
+    'quickbooks': ['qbw', 'qb', 'quickbooks'],
+    'excel':      ['excel'],
+    'word':       ['winword'],
+    'powerpoint': ['powerpnt'],
+    'outlook':    ['outlook'],
+    'chrome':     ['chrome'],
+    'edge':       ['msedge'],
+    'firefox':    ['firefox'],
+    'teams':      ['teams', 'ms-teams'],
+    'slack':      ['slack'],
+    'zoom':       ['zoom'],
+}
+ 
+ 
+def _mavops_rule_matches(rule, title, exe, file_path):
+    import re as _re
+    mv = (rule.match_value or '').lower()
+    title_l = (title or '').lower()
+    exe_l = (exe or '').lower()
+    path_l = (file_path or '').lower()
+ 
+    if rule.match_type == 'exe':
+        return exe_l == mv or exe_l == f"{mv}.exe"
+ 
+    if rule.match_type == 'exe_family':
+        prefixes = _MAVOPS_EXE_FAMILIES.get(mv, [mv])
+        exe_stripped = exe_l.replace('.exe', '').strip()
+        return any(exe_stripped.startswith(p) for p in prefixes) if exe_stripped else False
+ 
+    if rule.match_type == 'title_contains':
+        return mv in title_l
+ 
+    if rule.match_type == 'title_regex':
+        try:
+            return bool(_re.search(rule.match_value, title or '', _re.IGNORECASE))
+        except _re.error:
+            return False
+ 
+    if rule.match_type == 'file_path_contains':
+        return mv in path_l
+ 
+    return False
+ 
+ 
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_test_routing_rules(request, org_id):
+    """POST /api/mavops/routing-rules/orgs/<org_id>/test/
+    Body: {title, exe, file_path}
+    Returns which rules match + winning outcome.
+    """
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Org not found'}, status=404)
+ 
+    title = request.data.get('title', '')
+    exe = request.data.get('exe', '')
+    file_path = request.data.get('file_path', '')
+ 
+    rules = (
+        OrgRoutingRule.objects
+        .filter(org=org, enabled=True)
+        .select_related('target_client')
+        .order_by('-priority', 'id')
+    )
+ 
+    matches = []
+    winning = None
+    for r in rules:
+        if _mavops_rule_matches(r, title, exe, file_path):
+            matches.append({
+                'rule_id': r.id,
+                'match_type': r.match_type,
+                'match_value': r.match_value,
+                'action': r.action,
+                'target_client_name': r.target_client.name if r.target_client else None,
+                'priority': r.priority,
+                'description': r.description,
+            })
+            if winning is None:
+                winning = r
+ 
+    if winning is None:
+        outcome = {
+            'action': 'fall_through',
+            'message': 'No org rule matched. Agent falls through to regex/learned/AI tiers.',
+        }
+    elif winning.action == 'route_to_client':
+        name = winning.target_client.name if winning.target_client else 'MISSING'
+        outcome = {
+            'action': 'route_to_client',
+            'target_client_name': name,
+            'message': f'Would switch active client to "{name}".',
+        }
+    elif winning.action == 'never_switch_away':
+        outcome = {
+            'action': 'never_switch_away',
+            'message': 'Would hold current client — no switch allowed.',
+        }
+    elif winning.action == 'suppress':
+        outcome = {
+            'action': 'suppress',
+            'message': 'Would ignore this window entirely.',
+        }
+    else:
+        outcome = {'action': 'unknown', 'message': 'Unknown action.'}
+ 
+    return Response({
+        'input': {'title': title, 'exe': exe, 'file_path': file_path},
+        'matches': matches,
+        'winning_rule_id': winning.id if winning else None,
+        'outcome': outcome,
+    })
+ 
+ 
+# ── Top firing rules (cross-org telemetry) ─────────────────────────────────
+ 
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_top_firing_rules(request):
+    """
+    GET /api/mavops/routing-rules/top-firing/
+    Top 10 rules by fire_count across ALL orgs.
+    """
+    rules = (
+        OrgRoutingRule.objects
+        .filter(fire_count__gt=0)
+        .select_related('org', 'target_client')
+        .order_by('-fire_count')[:10]
+    )
+ 
+    return Response({
+        'rules': [
+            {
+                'org_id': r.org_id,
+                'org_name': r.org.name,
+                'rule_id': r.id,
+                'match_type': r.match_type,
+                'match_value': r.match_value,
+                'target_client_name': r.target_client.name if r.target_client else None,
+                'fire_count': r.fire_count,
+                'last_fired_at': r.last_fired_at.isoformat() if r.last_fired_at else None,
+            }
+            for r in rules
+        ]
+    })
+ 
+ 
+# ── Copy rules from source org → destination org ───────────────────────────
+ 
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_copy_routing_rules(request, org_id):
+    """
+    POST /api/mavops/routing-rules/orgs/<org_id>/copy-from/
+    Body: {source_org_id: N}
+    Returns: {copied, skipped_duplicates, skipped_missing_client}
+    """
+    from django.db import transaction as _tx
+ 
+    try:
+        dest_org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Destination org not found'}, status=404)
+ 
+    source_id = request.data.get('source_org_id')
+    if not source_id:
+        return Response({'error': 'source_org_id required'}, status=400)
+    if int(source_id) == int(org_id):
+        return Response({'error': 'Source and destination are the same org'}, status=400)
+ 
+    try:
+        source_org = Organization.objects.get(id=source_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Source org not found'}, status=404)
+ 
+    source_rules = OrgRoutingRule.objects.filter(
+        org=source_org, enabled=True,
+    ).select_related('target_client')
+ 
+    existing_keys = set(
+        OrgRoutingRule.objects.filter(org=dest_org).values_list(
+            'match_type', 'match_value',
+        )
+    )
+ 
+    dest_client_by_name = {
+        c.name.lower(): c
+        for c in Client.objects.filter(org=dest_org, is_active=True)
+    }
+ 
+    copied = 0
+    skipped_duplicates = 0
+    skipped_missing_client = 0
+ 
+    with _tx.atomic():
+        for src in source_rules:
+            if (src.match_type, src.match_value) in existing_keys:
+                skipped_duplicates += 1
+                continue
+ 
+            new_target = None
+            if src.target_client:
+                new_target = dest_client_by_name.get(src.target_client.name.lower())
+                if not new_target:
+                    skipped_missing_client += 1
+                    continue
+ 
+            OrgRoutingRule.objects.create(
+                org=dest_org,
+                match_type=src.match_type,
+                match_value=src.match_value,
+                action=src.action,
+                target_client=new_target,
+                priority=src.priority,
+                enabled=src.enabled,
+                description=src.description or f'Copied from {source_org.name}',
+                is_default=False,
+                created_by=request.user,
+            )
+            copied += 1
+ 
+    return Response({
+        'ok': True,
+        'copied': copied,
+        'skipped_duplicates': skipped_duplicates,
+        'skipped_missing_client': skipped_missing_client,
+        'source_org_name': source_org.name,
     })

@@ -1854,51 +1854,162 @@ def run_agent():
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
             
             # === QUICK SWITCHER (Alt+Ctrl+T) - FIXED ===
+            # === QUICK SWITCHER (Alt+Ctrl+T) ===
+            # v1.2.96: Use native Windows RegisterHotKey to avoid system-wide
+            # keyboard hook. The `keyboard` library with suppress=True installs
+            # a WH_KEYBOARD_LL hook that can freeze keyboard input system-wide
+            # when the agent is blocked on I/O (backend calls, sync polling).
+            # Wayne@TL Wall reported exactly this symptom. Native RegisterHotKey
+            # is the standard Windows approach — zero hook, zero risk.
             if gui_menu_bar:
-                try:
-                    import keyboard
-                    
-                    _hotkey_lock = threading.Lock()
-                    _hotkey_last = [0]
-                    
-                    def on_hotkey_pressed():
-                        with _hotkey_lock:
-                            now = time.time() * 1000
-                            if now - _hotkey_last[0] < 1500:
-                                return
-                            _hotkey_last[0] = now
-                        
-                        log("[HOTKEY] Alt+Ctrl+T pressed!")
-                        
-                        try:
-                            keyboard.release('alt')
-                            keyboard.release('ctrl')
-                            keyboard.release('t')
-                        except:
-                            pass
-                        time.sleep(0.02)
-                        
+                _hotkey_lock = threading.Lock()
+                _hotkey_last = [0]
+ 
+                def on_hotkey_pressed():
+                    """Called when Alt+Ctrl+T fires. Debounced to 1.5s."""
+                    with _hotkey_lock:
+                        now = time.time() * 1000
+                        if now - _hotkey_last[0] < 1500:
+                            return
+                        _hotkey_last[0] = now
+ 
+                    log("[HOTKEY] Alt+Ctrl+T pressed!")
+                    # Brief delay to let user release keys before picker grabs focus
+                    time.sleep(0.02)
+                    try:
                         gui_menu_bar._show_client_picker()
-
-                    global register_hotkey
-
-                    def register_hotkey():
-                        """Register (or re-register) the global hotkey."""
+                    except Exception as e:
+                        log(f"[HOTKEY] Picker launch failed: {e}")
+ 
+                # ── Attempt 1: Native Windows RegisterHotKey ──────────────────
+                # This uses the same Windows API that every other app uses
+                # for system-wide shortcuts (e.g. Win+D, Alt+Tab). No hook
+                # installed — Windows delivers a WM_HOTKEY message to our
+                # message pump thread when the combo is pressed.
+                _native_hotkey_registered = False
+                try:
+                    from ctypes import wintypes
+ 
+                    MOD_ALT = 0x0001
+                    MOD_CONTROL = 0x0002
+                    MOD_NOREPEAT = 0x4000  # Don't fire on key-repeat
+                    WM_HOTKEY = 0x0312
+                    VK_T = 0x54
+                    HOTKEY_ID = 1
+ 
+                    _user32 = ctypes.windll.user32
+ 
+                    # GetMessageW needs correct argtypes/restype or it silently
+                    # truncates on 64-bit Python. Declare them explicitly.
+                    _user32.GetMessageW.argtypes = [
+                        ctypes.POINTER(wintypes.MSG), wintypes.HWND,
+                        wintypes.UINT, wintypes.UINT,
+                    ]
+                    _user32.GetMessageW.restype = wintypes.BOOL
+                    _user32.RegisterHotKey.argtypes = [
+                        wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT,
+                    ]
+                    _user32.RegisterHotKey.restype = wintypes.BOOL
+                    _user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+                    _user32.UnregisterHotKey.restype = wintypes.BOOL
+ 
+                    # Must register + pump on the SAME thread. Spawn dedicated thread.
+                    _hotkey_ready = threading.Event()
+                    _hotkey_success = [False]
+ 
+                    def _native_hotkey_loop():
+                        """Dedicated thread: registers hotkey + pumps WM_HOTKEY messages."""
+                        # RegisterHotKey with hWnd=None means messages are posted
+                        # to THIS thread's message queue (not any window).
+                        ok = _user32.RegisterHotKey(
+                            None, HOTKEY_ID,
+                            MOD_ALT | MOD_CONTROL | MOD_NOREPEAT,
+                            VK_T,
+                        )
+                        if not ok:
+                            err = ctypes.windll.kernel32.GetLastError()
+                            log(f"[HOTKEY] RegisterHotKey failed (err={err}) — will fall back to keyboard lib")
+                            _hotkey_ready.set()
+                            return
+ 
+                        _hotkey_success[0] = True
+                        _hotkey_ready.set()
+                        log("[HOTKEY] ✅ Alt+Ctrl+T registered (native Windows API, no hook)")
+ 
                         try:
-                            keyboard.unhook_all()
-                        except:
-                            pass
-                        keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed, suppress=False)
-                        log("[QUICK] Hotkey registered - Alt+Ctrl+T")
-                    
-                    register_hotkey()
-                    
-                except ImportError:
-                    log("[QUICK] keyboard module not installed")
-                    register_hotkey = None
+                            msg = wintypes.MSG()
+                            while True:
+                                # Block until WM_HOTKEY arrives (or thread exits)
+                                result = _user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                                if result == 0 or result == -1:
+                                    break
+                                if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
+                                    # Dispatch on a worker thread so a slow picker
+                                    # can't block future hotkey presses.
+                                    threading.Thread(
+                                        target=on_hotkey_pressed, daemon=True
+                                    ).start()
+                        except Exception as e:
+                            log(f"[HOTKEY] Native pump error: {e}")
+                        finally:
+                            try:
+                                _user32.UnregisterHotKey(None, HOTKEY_ID)
+                            except Exception:
+                                pass
+ 
+                    _hotkey_thread = threading.Thread(
+                        target=_native_hotkey_loop, daemon=True, name="NativeHotkey",
+                    )
+                    _hotkey_thread.start()
+ 
+                    # Wait up to 3 seconds for registration to complete
+                    _hotkey_ready.wait(timeout=3.0)
+                    _native_hotkey_registered = _hotkey_success[0]
+ 
                 except Exception as e:
-                    log(f"[QUICK] Failed to setup hotkey: {e}")
-                    register_hotkey = None
+                    log(f"[HOTKEY] Native RegisterHotKey setup error: {e}")
+                    _native_hotkey_registered = False
+ 
+                # ── Set up register_hotkey() for the wake-from-sleep handler ──
+                # (main.py's power handler calls register_hotkey() on wake.
+                # With native RegisterHotKey, Windows preserves the registration
+                # across sleep, so this becomes a no-op.)
+                global register_hotkey
+                if _native_hotkey_registered:
+                    def register_hotkey():
+                        """No-op — native hotkey survives sleep/wake."""
+                        pass
+                else:
+                    # ── Attempt 2: Fallback to keyboard library (NO SUPPRESS) ─
+                    # Only runs if native API failed. suppress=False avoids
+                    # installing the system-wide low-level hook that caused
+                    # Wayne's keyboard lockup. Tradeoff: the Alt+Ctrl+T
+                    # keystroke will pass through to the active app as well,
+                    # but most apps don't bind that combo so it's harmless.
+                    try:
+                        import keyboard as _kb_lib
+ 
+                        def register_hotkey():
+                            """Register (or re-register) the fallback hotkey."""
+                            try:
+                                _kb_lib.unhook_all()
+                            except Exception:
+                                pass
+                            _kb_lib.add_hotkey(
+                                'alt+ctrl+t',
+                                on_hotkey_pressed,
+                                suppress=False,  # v1.2.96: NEVER suppress — causes system freezes
+                            )
+                            log("[HOTKEY] ⚠️ Fallback: keyboard lib registered (suppress=False)")
+ 
+                        register_hotkey()
+ 
+                    except ImportError:
+                        log("[HOTKEY] ❌ Both native API failed AND keyboard lib not installed — no hotkey")
+                        register_hotkey = None
+                    except Exception as e:
+                        log(f"[HOTKEY] ❌ Fallback also failed: {e}")
+                        register_hotkey = None
 
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
@@ -2734,7 +2845,7 @@ def run_agent():
         except Exception as e:
             log(f"[NOTIF] Error stopping: {e}")
     
-    # Stop hotkey listener
+    # Stop hotkey listener (only matters if keyboard lib fallback was used)
     try:
         import keyboard
         keyboard.unhook_all()

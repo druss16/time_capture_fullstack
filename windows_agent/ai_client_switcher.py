@@ -345,7 +345,7 @@ DEFAULT_CONFIG = {
     "ai_max_batch": 5,
 
     "learn_from_confirms": True,
-    "notify_on_switch": True,
+    "notify_on_switch": False,
     "undo_window_seconds": 120,
     "max_switch_history": 50,
     "debug": False,

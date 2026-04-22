@@ -345,7 +345,10 @@ DEFAULT_CONFIG = {
     "ai_max_batch": 5,
 
     "learn_from_confirms": True,
-    "notify_on_switch": False,
+    "notify_on_switch": False,   # v1.2.96: win10toast steals focus on Win10/11,
+                                 # causes "black box flash" + interrupted keyboard
+                                 # input. Switches happen silently until we build
+                                 # a non-focus-stealing notification mechanism.
     "undo_window_seconds": 120,
     "max_switch_history": 50,
     "debug": False,
@@ -631,7 +634,131 @@ class LearnedRules:
         except Exception as e:
             logger.warning(f"[AI-SWITCH] Save rules failed: {e}")
 
+    @staticmethod
+    def _title_contains_client(title: str, client_name: str) -> bool:
+        """
+        v1.2.96: Returns True if the title contains the client's name in a
+        recognizable form. Used to gate learning from email titles — only
+        learn when the client is actually named in the title.
+
+        Handles common fuzziness at CPA firms:
+          - "St." vs "Saint"          (prefix substitution)
+          - Apostrophes                ("Mary's" vs "Marys")
+          - Abbreviated suffixes       ("Cemetery" vs "Cem")
+          - Legal suffixes             ("Inc", "LLC", "Corp", "Ltd")
+          - Case / whitespace / punct
+
+        Strategy: normalize both sides, then check if at least 2 of the
+        client's "distinctive" words appear in the title (or, for short
+        client names, require the whole name to match).
+        """
+        if not title or not client_name:
+            return False
+
+        def _normalize(s: str) -> str:
+            s = s.lower()
+            # Common abbreviation expansions
+            s = re.sub(r'\bst\.?\s', 'saint ', s)
+            s = re.sub(r'\bmt\.?\s', 'mount ', s)
+            s = re.sub(r'\bft\.?\s', 'fort ', s)
+            # Strip apostrophes — "Mary's" == "Marys"
+            s = s.replace("'", "").replace("\u2019", "")
+            # Strip punctuation (keep word boundaries)
+            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014]+', ' ', s)
+            # Collapse whitespace
+            s = re.sub(r'\s+', ' ', s).strip()
+            return s
+
+        title_n  = _normalize(title)
+        client_n = _normalize(client_name)
+
+        # Direct substring hit — easiest case
+        if client_n and client_n in title_n:
+            return True
+
+        # Token-based fallback: at least 2 of the client's distinctive
+        # tokens must appear in the title. Distinctive = 4+ chars AND
+        # not in stop-words / generic business suffixes.
+        _GENERIC_SUFFIXES = {
+            'inc', 'llc', 'ltd', 'corp', 'co', 'company', 'group',
+            'associates', 'partners', 'services', 'holdings', 'trust',
+            'llp', 'pllc', 'pc',
+        }
+        client_tokens = [
+            t for t in client_n.split()
+            if len(t) >= 4
+            and t not in _STOP_WORDS
+            and t not in _GENERIC_SUFFIXES
+        ]
+
+        # If the client name has no distinctive tokens (e.g. "TL Inc"),
+        # fall back to requiring a full substring match — which we
+        # already checked above. Be conservative: reject.
+        if not client_tokens:
+            return False
+
+        # Handle abbreviated variants: also check if a distinctive token
+        # appears as a prefix of any title word (e.g. "Cemetery" matches
+        # "Cem" in title, OR "Cem" matches "Cemetery"). We pick a 4-char
+        # floor so trivial prefixes don't slip through.
+        title_tokens = title_n.split()
+        matches = 0
+        for ct in client_tokens:
+            # Direct token match
+            if ct in title_tokens:
+                matches += 1
+                continue
+            # Fuzzy prefix (4+ chars of client token OR title token must
+            # share a prefix of 4+ chars)
+            for tt in title_tokens:
+                if len(tt) < 4:
+                    continue
+                # One is a prefix of the other, shared prefix >= 4 chars
+                common_prefix = 0
+                for a, b in zip(ct, tt):
+                    if a != b:
+                        break
+                    common_prefix += 1
+                if common_prefix >= 4:
+                    matches += 1
+                    break
+
+        # Require at least 2 matching distinctive tokens for multi-word
+        # client names. For single-word distinctive names, 1 token is
+        # enough since the direct substring check above already failed.
+        if len(client_tokens) == 1:
+            return matches >= 1
+        return matches >= 2
+
     def learn(self, title: str, client_id: int, client_name: str, source: str = "ai"):
+        # v1.2.96: Only learn from email titles when the client name is
+        # actually present in the title. Otherwise the agent picks up junk
+        # like "Tax - Inbox - Outlook" and associates it with whatever
+        # client happened to be active when the user read that email.
+        #
+        # GOOD — learns:
+        #   "St. Mary's Cemetery - Q3 Financials - Outlook" → St. Mary's Cemetery
+        #   "Benjamin Essig - 1040 Draft - Message (Plain Text)" → Benjamin Essig
+        # BAD — skips:
+        #   "Tax - Inbox - Tax - Outlook" → no client signal
+        #   "Inbox - wayne@tlwallaccounting.com - Outlook" → no client signal
+        #   "Rejected electronic file - Message (Plain Text)" → no client signal
+        title_low = (title or '').lower()
+        email_markers = [
+            'inbox', 'outlook', '- mail', 'deleted items', 'sent items',
+            'drafts', 'junk email', 'message (plain text)', 'message (html)',
+        ]
+        is_email = any(m in title_low for m in email_markers)
+
+        if is_email:
+            if not self._title_contains_client(title, client_name):
+                logger.debug(
+                    f"[AI-SWITCH] Not learning from email (no strong client match): "
+                    f"{title[:60]!r} → {client_name!r}"
+                )
+                return
+            # else: email IS about this client by name — safe to learn
+
         for pat in self._extract_patterns(title):
             key = pat.lower()
             if key in self.rules:
@@ -657,6 +784,19 @@ class LearnedRules:
         best_conf = 0.0
         for pat in self._extract_patterns(title):
             key = pat.lower()
+
+            # v1.2.96: Skip matches that are purely stop-words or too short.
+            # At a tax firm, titles like "Tax - Inbox - Tax - Outlook" contain
+            # only stop-words, and caused constant false-positive switches
+            # between random clients whose historical titles happened to
+            # contain "tax." See Wayne@TL Wall outbreak 2026-04-22.
+            key_tokens = set(re.split(r'[\s_\-.,|:/\\&()]+', key))
+            key_tokens.discard('')
+            if not key_tokens:
+                continue
+            if all(t in _STOP_WORDS or len(t) < 3 for t in key_tokens):
+                continue
+
             if key in self.rules:
                 rule = self.rules[key]
                 if rule["client_id"] != current_client_id and rule["confidence"] > best_conf:
@@ -672,8 +812,25 @@ class LearnedRules:
             for rk, rule in self.rules.items():
                 if rule["client_id"] == current_client_id:
                     continue
+
+                # v1.2.96: Require at least one 5+ char non-stop-word shared
+                # token before considering a fuzzy learned_partial match.
+                # Short tokens ("tax", "and", "inc") create constant cross-
+                # client noise at a CPA firm where every client has one.
+                rk_tokens = set(re.split(r'[\s_\-.,|:/\\&()]+', rk.lower()))
+                shared_strong = [
+                    t for t in (rk_tokens & key_tokens)
+                    if len(t) >= 5 and t not in _STOP_WORDS
+                ]
+                if not shared_strong:
+                    continue
+
                 if key in rk or rk in key:
-                    adj = rule["confidence"] * 0.85
+                    # v1.2.96: Tighten penalty 0.85x → 0.70x. This drops weak
+                    # learned_partial confidence below the 0.70 default switch
+                    # threshold so spurious matches can't fire on their own —
+                    # they require corroboration from regex/cache tiers.
+                    adj = rule["confidence"] * 0.70
                     if adj > best_conf:
                         best = ClientMatch(
                             client_id=rule["client_id"],
@@ -873,11 +1030,18 @@ class AIClientSwitcher:
                     self._cache._data = {}
                     logger.info(f"[AI-SWITCH] Pattern cache cleared on upgrade {cached_version or 'unknown'} → {APP_VERSION}")
 
-                # v1.2.95: Wipe learned rules on upgrade from pre-v1.2.94
-                # Rules created before the chrome-only guard landed are
-                # contaminated by false-positive training. Cleaner to start
-                # fresh than to scrub — user re-teaches quickly from confirms.
-                if cached_version and cached_version < "1.2.94":
+                # v1.2.96: Wipe learned rules on upgrade from pre-1.2.96.
+                # v1.2.95's wipe (pre-1.2.94 guard) evidently didn't catch all
+                # contaminated rule sets — Wayne@TL Wall still saw learned_partial
+                # false positives on Outlook "Tax" folder. Widened the wipe guard
+                # so ANY upgrade into 1.2.96+ from an older version clears the
+                # contaminated learned rules, regardless of prior version.
+                needs_wipe = (
+                    cached_version == "" or
+                    cached_version == "unknown" or
+                    cached_version < "1.2.96"
+                )
+                if needs_wipe:
                     learned_path = self._learned.path
                     if os.path.exists(learned_path):
                         backup_path = learned_path + f".pre_{APP_VERSION}.bak"
@@ -885,8 +1049,8 @@ class AIClientSwitcher:
                             os.rename(learned_path, backup_path)
                             logger.info(
                                 f"[AI-SWITCH] Wiped learned rules (backed up to {backup_path}) "
-                                f"— upgrade {cached_version} → {APP_VERSION} crossed the "
-                                f"chrome-guard threshold (v1.2.94)"
+                                f"— upgrade {cached_version or 'unknown'} → {APP_VERSION} "
+                                f"crossed the learned-partial hardening threshold (v1.2.96)"
                             )
                         except Exception as e:
                             logger.warning(f"[AI-SWITCH] Learned rules wipe failed: {e}")

@@ -1888,7 +1888,7 @@ def run_agent():
                             keyboard.unhook_all()
                         except:
                             pass
-                        keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed, suppress=True)
+                        keyboard.add_hotkey('alt+ctrl+t', on_hotkey_pressed, suppress=False)
                         log("[QUICK] Hotkey registered - Alt+Ctrl+T")
                     
                     register_hotkey()

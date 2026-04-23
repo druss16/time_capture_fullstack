@@ -641,16 +641,22 @@ class MeetingDetector:
             if p.title and p.app not in app_titles:
                 app_titles[p.app] = p.title
 
-        # Special case: "zoom" with ONLY process source and no audio/camera
-        # is almost certainly the tray app, not a real meeting. Filter out.
+        # Process alone is never enough. Meeting apps (Teams, Zoom, Slack,
+        # Webex) run persistent background processes even when no call is
+        # active. Browser window titles alone can also be misleading
+        # (e.g., "Zoom Meeting" left in a browser tab).
+        #
+        # Require: at least one STRONG signal (audio or camera), OR
+        #          at least 2 independent signals of any kind.
         filtered = {}
         for app, sources in app_sources.items():
-            if app == "zoom" and sources == {"process"}:
-                # Zoom.exe/CptHost.exe without audio or camera = tray/startup
-                # We still trust CptHost if it's there — check via process name
-                # But since we've canonicalized to "zoom", use a heuristic:
-                # accept only if we have >= 1 non-process source
-                logger.debug("[MEETING] Dropping zoom: process-only signal")
+            has_strong = bool(sources & {"audio", "camera"})
+            has_multiple = len(sources) >= 2
+            if not (has_strong or has_multiple):
+                logger.debug(
+                    f"[MEETING] Dropping {app}: weak signal "
+                    f"(sources={sources}, need audio/camera or 2+ signals)"
+                )
                 continue
             filtered[app] = sources
 

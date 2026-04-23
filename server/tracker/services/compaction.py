@@ -15,6 +15,7 @@ from django.db import transaction
 from django.db.models import Q, Count
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+from decimal import Decimal
 
 from tracker.models import Block, RawEvent, Client
 from tracker.utils.blocks import is_idle_activity, get_current_client_for_user
@@ -305,6 +306,81 @@ def _filter_idle_inside_meetings(user, day: date_type) -> int:
             )
 
     return deleted
+
+
+def _filter_foreground_inside_meetings(user, day: date_type) -> int:
+    """
+    Mark foreground blocks non-billable when they fall entirely within a
+    meeting block that has an attributed client.
+    
+    Rationale: when a user is in a meeting with Client A, that hour is
+    billed to Client A even if other app windows are open in the foreground
+    (notes in Excel, reference docs, etc). The foreground blocks remain
+    in the database for audit purposes but don't count toward billable totals.
+    
+    Rules (confirmed with product):
+    - Only applies when meeting.client_id IS NOT NULL (attributed only)
+    - Only blocks 100% INSIDE the meeting window (partial overlaps left alone)
+    - Manually-categorized blocks are respected (user override wins)
+    - Meeting blocks themselves are skipped (don't affect each other)
+    - Already-non-billable blocks unchanged (idempotent)
+    - Model auto-zeros billing_amount when is_billable flips to False
+    
+    Returns: count of foreground blocks marked non-billable.
+    """
+    # 1. Find attributed meeting blocks for this user/day
+    meetings = list(Block.objects.filter(
+        user=user,
+        day=day,
+        bundle_id__startswith='meeting:',
+        client__isnull=False,  # ← key: only attributed meetings
+    ).only('id', 'start', 'end', 'client_id', 'bundle_id'))
+
+    if not meetings:
+        return 0
+
+    suppressed = 0
+    for meeting in meetings:
+        if not (meeting.start and meeting.end):
+            continue
+
+        # 2. Find foreground blocks 100% inside this meeting's time range
+        #    Exclude: meeting blocks, idle blocks, manually-categorized blocks,
+        #    already-non-billable blocks
+        candidates = Block.objects.filter(
+            user=user,
+            day=day,
+            start__gte=meeting.start,
+            end__lte=meeting.end,
+            is_billable=True,  # skip already non-billable
+        ).exclude(
+            bundle_id__startswith='meeting:',  # don't touch meetings
+        ).exclude(
+            bundle_id='__idle__',  # idle filter handles those separately
+        ).exclude(
+            categorized_by='manual',  # respect user's deliberate choice
+        ).exclude(
+            categorized_by='correction',  # respect user corrections
+        )
+
+        count = candidates.count()
+        if count:
+            # Save each block individually to trigger model's save() method,
+            # which auto-zeros billing_amount when is_billable becomes False.
+            # (Bulk update would bypass that logic.)
+            for blk in candidates:
+                blk.is_billable = False
+                blk.billing_amount = Decimal('0.00')  # explicit — don't rely on save() hook
+                blk.save(update_fields=['is_billable', 'billing_amount'])
+
+            suppressed += count
+            logger.info(
+                f"[COMPACT-MEETING] Suppressed {count} foreground block(s) "
+                f"inside {meeting.bundle_id} client={meeting.client_id} "
+                f"window {meeting.id}"
+            )
+
+    return suppressed
 
 # =============================================================================
 # AUTO-CATEGORIZATION PATTERNS
@@ -715,15 +791,17 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         if auto_categorize_block(block):
             auto_cat_count += 1
     
-    # Safety net: remove any idle blocks that leaked inside meeting windows
+    # Safety nets: filter idle + foreground blocks inside meeting windows
     idle_cleaned = 0
+    foreground_suppressed = 0
     if meeting_block_count:
         idle_cleaned = _filter_idle_inside_meetings(user, day)
+        foreground_suppressed = _filter_foreground_inside_meetings(user, day)
 
     logger.info(
         f"[COMPACT] Created {created_count}, merged {merged_count}, "
         f"auto-cat {auto_cat_count}, meetings {meeting_block_count}, "
-        f"idle-cleaned {idle_cleaned}"
+        f"idle-cleaned {idle_cleaned}, fg-suppressed {foreground_suppressed}"
     )
     return created_count + merged_count + meeting_block_count
 

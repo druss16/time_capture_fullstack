@@ -262,7 +262,8 @@ class WindowsMeetingProbe(_BaseProbe):
                     logger.debug(f"[MEETING] Audio session probe error: {e}")
 
         except Exception as e:
-            logger.warning(f"[MEETING] pycaw enumeration failed: {e}")
+            logger.debug(f"[MEETING] pycaw enumeration failed: {e}")
+
 
         self._last_audio_check = now
         self._last_audio_result = results

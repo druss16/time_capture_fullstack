@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -402,5 +402,34 @@ urlpatterns = [
 
     path('routing-rules/fire/', views_routing_rules.report_routing_rule_fire, name='routing_rules_fire'),
 
+    # ===============================
+    # ✅ NEW: Rule Templates + LLM (PR #2)
+    # ===============================
+
+    # Templates API — list + create from template + bulk
+    path('mavops/rule-templates/',
+         views_rule_templates.list_rule_templates,
+         name='mavops-rule-templates'),
+    path('mavops/orgs/<int:org_id>/rules/from-template/',
+         views_rule_templates.create_rule_from_template,
+         name='mavops-create-rule-from-template'),
+    path('mavops/orgs/<int:org_id>/rules/from-template/bulk/',
+         views_rule_templates.bulk_create_rules_from_templates,
+         name='mavops-bulk-create-rules'),
+
+    # LLM #1: Suggest rules from firm context
+    path('mavops/orgs/<int:org_id>/rules/suggest/',
+         views_rule_templates.suggest_rules,
+         name='mavops-suggest-rules'),
+
+    # LLM #2: Parse natural language into a rule
+    path('mavops/orgs/<int:org_id>/rules/parse/',
+         views_rule_templates.parse_rule,
+         name='mavops-parse-rule'),
+
+    # LLM #3: Explain why a block was categorized this way
+    path('mavops/blocks/<int:block_id>/explain/',
+         views_rule_templates.explain_block,
+         name='mavops-explain-block'),
 
 ]

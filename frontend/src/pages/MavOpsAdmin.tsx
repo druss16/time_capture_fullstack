@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 
+import {
+  TemplatePickerModal,
+  SuggestRulesWizard,
+  ExplainBlockModal,
+} from "./MavOpsAdminRules";
+
 const API = "https://timetracker-api-k375.onrender.com/api";
 const SEAT_PRICES: Record<string, number> = { professional: 34.99, executive: 49.99, trial: 0, none: 0 };
 
@@ -259,6 +265,9 @@ function RoutingRulesTab({ apiFetch, flash, filterOrg, setFilterOrg }: RoutingRu
   const [editingRule, setEditingRule] = useState<RoutingRule | null>(null);
   const [showCopyModal, setShowCopyModal] = useState(false);
 
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [showSuggestWizard, setShowSuggestWizard] = useState(false);
+
   const [testerInput, setTesterInput] = useState({ title: "", exe: "", file_path: "" });
   const [testerResult, setTesterResult] = useState<TestResult | null>(null);
 
@@ -445,7 +454,9 @@ function RoutingRulesTab({ apiFetch, flash, filterOrg, setFilterOrg }: RoutingRu
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Btn label="copy from another org" onClick={() => setShowCopyModal(true)} outline color={T.textSub} small />
-          <Btn label="+ new rule" onClick={() => { setEditingRule(null); setShowRuleForm(true); }} small />
+          <Btn label="✨ suggest rules" onClick={() => setShowSuggestWizard(true)} color={T.purple} small />
+          <Btn label="+ new rule" onClick={() => setShowTemplatePicker(true)} small />
+          <Btn label="+ raw" onClick={() => { setEditingRule(null); setShowRuleForm(true); }} outline color={T.textMuted} small />
         </div>
       </div>
 
@@ -592,6 +603,31 @@ function RoutingRulesTab({ apiFetch, flash, filterOrg, setFilterOrg }: RoutingRu
           flash={flash}
           onClose={() => setShowCopyModal(false)}
           onCopied={() => { setShowCopyModal(false); loadOrgRules(selectedOrg.id); }}
+        />
+      )}
+
+      {showTemplatePicker && selectedOrg && (
+        <TemplatePickerModal
+          orgId={selectedOrg.id}
+          orgName={selectedOrg.name}
+          apiFetch={apiFetch}
+          flash={flash}
+          onClose={() => setShowTemplatePicker(false)}
+          onRuleCreated={() => loadOrgRules(selectedOrg.id)}
+        />
+      )}
+
+      {showSuggestWizard && selectedOrg && (
+        <SuggestRulesWizard
+          orgId={selectedOrg.id}
+          orgName={selectedOrg.name}
+          apiFetch={apiFetch}
+          flash={flash}
+          onClose={() => setShowSuggestWizard(false)}
+          onRulesCreated={(count) => {
+            flash(`✓ Created ${count} rule${count === 1 ? "" : "s"}`);
+            loadOrgRules(selectedOrg.id);
+          }}
         />
       )}
     </div>

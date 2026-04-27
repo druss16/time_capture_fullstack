@@ -316,6 +316,16 @@ class BlockClassifier:
                 reasoning=f"Internal firm work: {internal_cat}",
             )
 
+        # ── Stage 0c: Org rules (categorization-stage) ─────────────────
+        from tracker.services.rules.classifier_engine import ClassifierRuleEngine
+        rule_result = ClassifierRuleEngine(org=self.org).apply(block)
+        if rule_result:
+            logger.debug(
+                f"[CLASSIFIER] Block {block.id} resolved by ORG_RULE "
+                f"({rule_result.overall_confidence:.2f})"
+            )
+            return rule_result
+
         # ── Stage 1: Tax software extraction ───────────────────────────
         from tracker.utils.tax_software import extract_tax_context
         tax_ctx = extract_tax_context(title)

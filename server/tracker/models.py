@@ -1815,6 +1815,131 @@ class OrgRoutingRule(models.Model):
         }
 
 
+
+"""
+Add this model to server/tracker/models.py — anywhere works, but the
+"CLASSIFICATION RULES" section (right after OrgRoutingRule) is most natural.
+
+After adding, run:
+    python manage.py makemigrations tracker
+    python manage.py migrate tracker
+"""
+
+from django.db import models
+from django.utils import timezone
+
+
+class RuleFireLog(models.Model):
+    """
+    Audit log of every rule fire, across all engines.
+
+    PURPOSE
+    -------
+    1. Customer-support debugging ("why was this block categorized?")
+    2. LLM #3 (rule explanation) — reads from this table
+    3. Top-firing-rules dashboard
+    4. Silent-regression detection (rule fires drop suddenly)
+    5. Compliance — defensible audit of every billing-affecting decision
+
+    DATA RETENTION
+    --------------
+    Rows here grow linearly with usage. Recommend a periodic cleanup
+    task (e.g. delete rows > 90 days old, or archive to cold storage).
+    For now, no auto-cleanup — let it accumulate while we observe usage.
+
+    ENGINES THAT WRITE HERE
+    -----------------------
+    - AgentEngine        (windows_agent — via /api/routing-rules/fire/)
+    - ClassifierEngine   (block_classifier.py Stage 0c)
+    - CompactionEngine   (compaction.py)
+    - PostSaveEngine     (post_save signal on Block)
+    """
+
+    # ---- Which rule fired ----
+    rule = models.ForeignKey(
+        'OrgRoutingRule',
+        on_delete=models.CASCADE,
+        related_name='fire_logs',
+        db_index=True,
+        help_text='The rule that fired.',
+    )
+    rule_version = models.IntegerField(
+        default=1,
+        help_text=(
+            'Snapshot of the rule version at fire time. Lets us tell '
+            "if a rule's behavior changed since this fire."
+        ),
+    )
+
+    # ---- Org scoping (denormalized for fast filtering) ----
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='rule_fire_logs',
+        db_index=True,
+    )
+
+    # ---- What it fired on ----
+    block = models.ForeignKey(
+        'Block',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='rule_fires',
+        help_text='The block, if applicable. Null for agent-stage fires.',
+    )
+
+    # ---- Which engine ----
+    ENGINE_CHOICES = [
+        ('agent',      'Desktop Agent'),
+        ('classifier', 'Block Classifier'),
+        ('compaction', 'Compaction'),
+        ('post_save',  'Post-Save Signal'),
+    ]
+    engine = models.CharField(
+        max_length=20,
+        choices=ENGINE_CHOICES,
+        db_index=True,
+    )
+
+    # ---- The match context (what the rule "saw") ----
+    context = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            'What the engine saw when matching: window title, exe, file_path, '
+            'duration, etc. Useful for debugging and LLM #3 explanations.'
+        ),
+    )
+
+    # ---- The outcome (what the rule "did") ----
+    outcome = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            'What the rule did: assigned category, switched client, flagged, '
+            'marked non-billable, etc.'
+        ),
+    )
+
+    # ---- Timing ----
+    fired_at = models.DateTimeField(
+        default=timezone.now,
+        db_index=True,
+    )
+
+    class Meta:
+        ordering = ['-fired_at']
+        indexes = [
+            models.Index(fields=['org', '-fired_at']),
+            models.Index(fields=['rule', '-fired_at']),
+            models.Index(fields=['block', '-fired_at']),
+            models.Index(fields=['engine', '-fired_at']),
+        ]
+
+    def __str__(self):
+        block_ref = f'block {self.block_id}' if self.block_id else 'no-block'
+        return f'[{self.engine}] rule {self.rule_id} fired on {block_ref} @ {self.fired_at:%Y-%m-%d %H:%M}'
+
 class ClientPattern(models.Model):
     org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="client_patterns", db_index=True)
     MATCH_TYPES = [

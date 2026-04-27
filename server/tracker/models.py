@@ -1701,6 +1701,10 @@ class OrgRoutingRule(models.Model):
         ('route_to_client', 'Route Tracking to a Specific Client'),
         ('never_switch_away', 'Stay on Currently Selected Client'),
         ('suppress', 'Ignore This Window Entirely'),
+        ('assign_category',   'Assign Category'),
+        ('mark_non_billable', 'Mark Non-Billable'),
+        ('cap_duration_at',   'Cap Duration At'),
+        ('flag_for_review',   'Flag For Review'),
     ]
     action = models.CharField(
         max_length=32,
@@ -1732,7 +1736,53 @@ class OrgRoutingRule(models.Model):
         ),
     )
     enabled = models.BooleanField(default=True)
- 
+
+
+    # ──────────────────────────────────────────────────────────────
+    # Rule system extension fields (PR #1)
+    # ──────────────────────────────────────────────────────────────
+
+    CATEGORY_CHOICES = [
+        ('routing', 'Routing'),
+        ('categorization', 'Categorization'),
+        ('billing', 'Billing'),
+        ('flagging', 'Flagging'),
+    ]
+    category = models.CharField(
+        max_length=20,
+        choices=CATEGORY_CHOICES,
+        default='routing',
+        help_text="What kind of rule this is — drives which engine evaluates it.",
+    )
+
+    RUNS_AT_CHOICES = [
+        ('agent', 'Agent (live, on-device)'),
+        ('classifier', 'Classifier (server, real-time)'),
+        ('compaction', 'Compaction (server, hourly)'),
+        ('post_save', 'Post-save (server, after write)'),
+    ]
+    runs_at = models.CharField(
+        max_length=20,
+        choices=RUNS_AT_CHOICES,
+        default='agent',
+        help_text="Which engine stage evaluates this rule.",
+    )
+
+    target_category = models.CharField(
+        max_length=100, blank=True, default='',
+        help_text="For categorization rules: the category name to assign.",
+    )
+
+    threshold_minutes = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="For flagging/billing rules: minutes threshold (e.g. flag blocks > 240 min).",
+    )
+
+    flag_reason = models.CharField(
+        max_length=200, blank=True, default='',
+        help_text="For flagging rules: human-readable reason shown to reviewers.",
+    )
+     
     # -- Metadata / audit -----------------------------------------------
     description = models.CharField(
         max_length=255,

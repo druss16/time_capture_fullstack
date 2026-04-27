@@ -78,25 +78,26 @@ interface TestResult {
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const T = {
-  bg:        "#111827",
-  surface:   "#1e2533",
-  border:    "#2d3748",
-  borderHi:  "#4a5568",
-  text:      "#f0f4f8",
-  textSub:   "#94a3b8",
-  textMuted: "#64748b",
-  teal:      "#2b9d90",
-  tealHi:    "#34b5a7",
-  yellow:    "#f59e0b",
-  red:       "#ef4444",
-  purple:    "#a78bfa",
-  green:     "#10b981",
+  bg:        "#0f1419",   // was "#111827" — slightly deeper, warmer black
+  surface:   "#1a2231",   // was "#1e2533" — touch warmer, more depth from bg
+  surfaceHi: "#222d3f",   // NEW — for hover states + emphasized cards
+  border:    "#2a3548",   // was "#2d3748" — slightly more visible
+  borderHi:  "#3d4a63",   // was "#4a5568" — accent borders
+  text:      "#f1f5f9",   // was "#f0f4f8" — barely changed, slightly cooler white
+  textSub:   "#b0bccd",   // was "#94a3b8" — ⬆ now AA-compliant on bg
+  textMuted: "#8593a8",   // was "#64748b" — ⬆ MUCH better readability
+  teal:      "#2dd4bf",   // was "#2b9d90" — brighter, more modern teal
+  tealHi:    "#5eead4",   // was "#34b5a7" — softer hover variant
+  yellow:    "#fbbf24",   // was "#f59e0b" — warmer
+  red:       "#f87171",   // was "#ef4444" — softer, less alarming
+  purple:    "#c4b5fd",   // was "#a78bfa" — gentler
+  green:     "#34d399",   // was "#10b981" — brighter, stays readable
 };
 
 const mono = { fontFamily: "'DM Mono', monospace" };
 const card: React.CSSProperties = {
   background: T.surface, border: `1px solid ${T.border}`,
-  padding: 20, marginBottom: 10, borderRadius: 6,
+  padding: 20, marginBottom: 10, borderRadius: 8,  // was 6
 };
 
 // ─── Password Gate ─────────────────────────────────────────────────────────────
@@ -1028,7 +1029,12 @@ export default function MavOpsAdmin() {
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;600;700&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
         ::-webkit-scrollbar{width:6px} ::-webkit-scrollbar-track{background:${T.bg}} ::-webkit-scrollbar-thumb{background:${T.teal};border-radius:3px}
-        input::placeholder{color:${T.textMuted}} button:hover{opacity:0.85} select{appearance:none}
+        input::placeholder{color:${T.textMuted}} 
+        button:hover{opacity:0.9; transition:opacity 0.15s ease}  /* was 0.85, no transition */
+        select{appearance:none}
+        
+        /* NEW — smoother card hovers (kicks in for cards with cursor:pointer) */
+        [style*="cursor: pointer"]:hover { transition: background 0.15s ease, border-color 0.15s ease; }
       `}</style>
 
       {/* ── Header ── */}
@@ -1140,6 +1146,32 @@ export default function MavOpsAdmin() {
               </div>
             )}
 
+            {/* Column headers */}
+            {/* Column headers */}
+            {filteredOrgs.length > 0 && (
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(220px, 1.5fr) 130px 100px 120px 110px 90px minmax(380px, auto)",
+                alignItems: "center",
+                gap: 16,
+                padding: "8px 20px",
+                color: T.textMuted,
+                fontSize: 10,
+                letterSpacing: 1.5,
+                textTransform: "uppercase" as const,
+                fontWeight: 600,
+                ...mono,
+              }}>
+                <div>Org</div>
+                <div style={{ textAlign: "center" as const }}>Plan</div>
+                <div style={{ textAlign: "center" as const }}>MRR</div>
+                <div style={{ textAlign: "center" as const }}>Seats</div>
+                <div style={{ textAlign: "left" as const }}>Devices</div>
+                <div style={{ textAlign: "left" as const }}>Active</div>
+                <div></div>
+              </div>
+            )}
+
             {filteredOrgs.map(org => {
               const trialDays = daysUntil(org.trial_ends_at);
               const trialAlert = trialDays !== null && trialDays <= 7 && trialDays >= 0;
@@ -1147,36 +1179,96 @@ export default function MavOpsAdmin() {
               const isViewing = impersonatingOrg?.id === org.id;
               const isPickerOpen = viewAsPickerOrg === org.id;
               const members = orgMembers[org.id];
+              
+              // Health signals
+              const seatPct = org.seat_count > 0 ? (org.member_count / org.seat_count) : 0;
+              const seatsHealth = seatPct >= 1 ? "full" : seatPct >= 0.85 ? "near" : "ok";
+              const devicesHealth = org.active_devices === 0 && org.member_count > 0 ? "warn" : "ok";
+              const seatColor = seatsHealth === "full" ? T.red : seatsHealth === "near" ? T.yellow : T.teal;
+              const deviceColor = devicesHealth === "warn" ? T.red : org.active_devices > 0 ? T.green : T.textMuted;
 
               return (
-                <div key={org.id} style={{ ...card, borderColor: isViewing ? T.purple + "99" : trialAlert ? T.yellow + "66" : T.border }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                        <span style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{org.name}</span>
-                        <Badge label={org.plan} color={org.plan === "trial" ? T.yellow : org.plan === "executive" ? T.purple : T.teal} />
-                        {mrr_org > 0 && <span style={{ ...mono, fontSize: 12, color: T.green, fontWeight: 600 }}>${mrr_org.toFixed(0)}/mo</span>}
-                        {trialAlert && <span style={{ ...mono, fontSize: 12, color: T.yellow, fontWeight: 600 }}>⚠ {trialDays}d left</span>}
-                        {isViewing && <Badge label={`viewing as ${localStorage.getItem("impersonating_user_name") || "?"}`} color={T.purple} />}
-                      </div>
-                      <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
-                        <SeatBar used={org.member_count} total={org.seat_count} />
-                        <span style={{ color: org.active_devices > 0 ? T.teal : T.textMuted, fontSize: 13, ...mono }}>{org.active_devices} active devices</span>
-                        {org.last_activity && <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>last active {timeAgo(org.last_activity)}</span>}
-                      </div>
+                <div
+                  key={org.id}
+                  style={{
+                    ...card,
+                    padding: "16px 20px",
+                    borderColor: isViewing ? T.purple + "99" : trialAlert ? T.yellow + "66" : T.border,
+                    transition: "border-color 0.15s ease, background 0.15s ease",
+                  }}
+                  onMouseEnter={e => {
+                    if (!isViewing && !trialAlert) e.currentTarget.style.borderColor = T.borderHi;
+                  }}
+                  onMouseLeave={e => {
+                    if (!isViewing && !trialAlert) e.currentTarget.style.borderColor = T.border;
+                  }}
+                >
+                  <div style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(200px, 1.5fr) auto 90px 110px 100px 90px auto",
+                    alignItems: "center",
+                    gap: 16,
+                  }}>
+                    {/* COL 1 — name */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                      <span style={{
+                        fontSize: 16, fontWeight: 700, color: T.text,
+                        whiteSpace: "nowrap" as const, overflow: "hidden" as const, textOverflow: "ellipsis" as const,
+                      }}>
+                        {org.name}
+                      </span>
+                      {trialAlert && (
+                        <span style={{ ...mono, fontSize: 11, color: T.yellow, fontWeight: 600, whiteSpace: "nowrap" as const }}>
+                          ⚠ {trialDays}d
+                        </span>
+                      )}
+                      {isViewing && (
+                        <Badge label="viewing" color={T.purple} />
+                      )}
                     </div>
 
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {/* COL 2 — plan badge */}
+                    <div>
+                      <Badge label={org.plan} color={org.plan === "trial" ? T.yellow : org.plan === "executive" ? T.purple : T.teal} />
+                    </div>
+
+                    {/* COL 3 — MRR */}
+                    <div style={{ ...mono, fontSize: 12, fontWeight: 600, textAlign: "right" as const,
+                         color: mrr_org > 0 ? T.green : T.textMuted }}>
+                      {mrr_org > 0 ? `$${mrr_org.toFixed(0)}/mo` : "—"}
+                    </div>
+
+                    {/* COL 4 — seats */}
+                    <div style={{ ...mono, fontSize: 12, fontWeight: 600, textAlign: "right" as const, color: seatColor }}>
+                      {org.member_count}/{org.seat_count} seats
+                    </div>
+
+                    {/* COL 5 — devices */}
+                    <div style={{ ...mono, fontSize: 12, fontWeight: 600, textAlign: "right" as const, color: deviceColor }}>
+                      {org.active_devices} {org.active_devices === 1 ? "device" : "devices"}
+                    </div>
+
+                    {/* COL 6 — activity */}
+                    <div style={{ ...mono, fontSize: 11, color: T.textMuted, textAlign: "right" as const }}>
+                      {org.last_activity ? timeAgo(org.last_activity) : "—"}
+                    </div>
+
+                    {/* COL 7 — actions */}
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
                       <div style={{ position: "relative" }} data-picker>
                         {isViewing ? (
-                          <Btn label="✓ viewing — exit" onClick={clearImpersonation} color={T.green} outline small />
+                          <Btn label="✓ exit" onClick={clearImpersonation} color={T.green} outline small />
                         ) : (
-                          <Btn label={isPickerOpen ? "view as ▴" : "view as ▾"}
+                          <Btn
+                            label={isPickerOpen ? "view ▴" : "view ▾"}
                             onClick={() => {
                               if (isPickerOpen) setViewAsPickerOrg(null);
                               else { setViewAsPickerOrg(org.id); loadOrgMembers(org.id); }
                             }}
-                            color={T.purple} small />
+                            color={T.purple}
+                            outline
+                            small
+                          />
                         )}
 
                         {isPickerOpen && (
@@ -1225,7 +1317,14 @@ export default function MavOpsAdmin() {
                       </div>
 
                       {(["devices", "logs", "errors", "rules"] as const).map(t => (
-                        <Btn key={t} label={t} onClick={() => { setFilterOrg(org.id); setTab(t); }} outline color={T.textSub} small />
+                        <Btn
+                          key={t}
+                          label={t}
+                          onClick={() => { setFilterOrg(org.id); setTab(t); }}
+                          outline
+                          color={T.textSub}
+                          small
+                        />
                       ))}
                     </div>
                   </div>

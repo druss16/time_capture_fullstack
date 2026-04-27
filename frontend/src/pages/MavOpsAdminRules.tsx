@@ -23,28 +23,29 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
-// (Duplicated from MavOpsAdmin so this file is self-contained.)
+// Mirrors MavOpsAdmin.tsx — keep these in sync when changing colors.
 const T = {
-  bg:        "#111827",
-  surface:   "#1e2533",
-  border:    "#2d3748",
-  borderHi:  "#4a5568",
-  text:      "#f0f4f8",
-  textSub:   "#94a3b8",
-  textMuted: "#64748b",
-  teal:      "#2b9d90",
-  tealHi:    "#34b5a7",
-  yellow:    "#f59e0b",
-  red:       "#ef4444",
-  purple:    "#a78bfa",
-  green:     "#10b981",
+  bg:        "#0f1419",   // was "#111827" — slightly deeper, warmer black
+  surface:   "#1a2231",   // was "#1e2533" — touch warmer, more depth from bg
+  surfaceHi: "#222d3f",   // NEW — for hover states + emphasized cards
+  border:    "#2a3548",   // was "#2d3748" — slightly more visible
+  borderHi:  "#3d4a63",   // was "#4a5568" — accent borders
+  text:      "#f1f5f9",   // was "#f0f4f8" — barely changed, slightly cooler white
+  textSub:   "#b0bccd",   // was "#94a3b8" — ⬆ now AA-compliant on bg
+  textMuted: "#8593a8",   // was "#64748b" — ⬆ MUCH better readability
+  teal:      "#2dd4bf",   // was "#2b9d90" — brighter, more modern teal
+  tealHi:    "#5eead4",   // was "#34b5a7" — softer hover variant
+  yellow:    "#fbbf24",   // was "#f59e0b" — warmer
+  red:       "#f87171",   // was "#ef4444" — softer, less alarming
+  purple:    "#c4b5fd",   // was "#a78bfa" — gentler
+  green:     "#34d399",   // was "#10b981" — brighter, stays readable
 };
 
 const mono = { fontFamily: "'DM Mono', monospace" };
 
 const card: React.CSSProperties = {
   background: T.surface, border: `1px solid ${T.border}`,
-  padding: 20, marginBottom: 10, borderRadius: 6,
+  padding: 20, marginBottom: 10, borderRadius: 8,  // was 6, matches dashboard
 };
 
 // ─── Types (mirror PR #2 API responses) ──────────────────────────────────────

@@ -207,3 +207,6 @@ coverage.xml
 *.tmp
 temp/
 tmp/.expo/
+
+# Security scan output - generated locally, do not commit
+security-reports/

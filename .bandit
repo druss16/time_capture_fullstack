@@ -1,0 +1,15 @@
+# .bandit
+# Place at repo root. Bandit picks this up automatically.
+
+[bandit]
+exclude_dirs = ['venv', '.venv', 'node_modules', 'tests', 'test', 'migrations', 'build', 'dist', 'security-reports']
+
+# Skip these specific checks (uncomment if too noisy):
+#   B101: assert_used (fine in tests, but you've already excluded tests)
+#   B404: import_subprocess (you legitimately use subprocess in agents)
+#   B603: subprocess_without_shell_equals_true (same as above)
+skips = ['B101']
+
+# These are the checks most relevant to Django + agents:
+# Run `bandit --tests B102,B103,...` to be explicit, or just leave it default to run all.
+# Severity floor: only report Medium and High (-ll)

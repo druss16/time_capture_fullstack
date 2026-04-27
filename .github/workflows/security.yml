@@ -1,0 +1,199 @@
+name: Security Scan
+
+# Runs on every push to main, every PR, and weekly on Sunday at 06:00 UTC
+# Weekly run catches newly-disclosed CVEs in dependencies you haven't changed
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  schedule:
+    - cron: '0 6 * * 0'
+  workflow_dispatch:  # allows manual trigger from Actions tab
+
+permissions:
+  contents: read
+  security-events: write   # required for uploading SARIF results
+  pull-requests: write     # required for PR comments
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Secret scanning - catches API keys, tokens, passwords in git history
+  # ---------------------------------------------------------------------------
+  secrets-scan:
+    name: Secret Scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we scan past commits too
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE only required for orgs >25 users; not needed for you yet
+        continue-on-error: false   # FAIL the build if a secret is found
+
+  # ---------------------------------------------------------------------------
+  # 2. Python SAST - bandit catches Django/Python security anti-patterns
+  # ---------------------------------------------------------------------------
+  python-sast:
+    name: Python SAST (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install bandit
+        run: pip install bandit[toml]
+
+      - name: Run bandit on Django backend
+        # Adjust paths to match your repo layout. Common Django paths:
+        #   ./backend  ./api  ./server  ./mavops  etc.
+        # The -ll flag = report only Medium severity and above (less noise)
+        # Add agent paths once you confirm where the Python source lives.
+        run: |
+          bandit -r . \
+            -x ./venv,./node_modules,./.venv,./tests,./test,./migrations,./build,./dist \
+            -ll \
+            -f sarif \
+            -o bandit-results.sarif || true
+
+      - name: Upload bandit SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
+
+  # ---------------------------------------------------------------------------
+  # 3. Python dependency CVEs - pip-audit checks requirements.txt
+  # ---------------------------------------------------------------------------
+  python-deps:
+    name: Python Dependency Scan (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit Python dependencies
+        # Replace with the path to your actual requirements file(s).
+        # If you have multiple (requirements.txt, requirements-dev.txt, agent/requirements.txt)
+        # add a step for each.
+        run: |
+          if [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt --strict
+          fi
+          if [ -f agent/requirements.txt ]; then
+            pip-audit -r agent/requirements.txt --strict
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 4. JS/TS dependency CVEs - npm audit on React frontend & React Native app
+  # ---------------------------------------------------------------------------
+  js-deps:
+    name: JS Dependency Scan (npm audit)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Add every directory in your repo that has its own package.json
+        # Common: frontend, mobile, web, app
+        path: ['frontend', 'mobile']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if path exists
+        id: check
+        run: |
+          if [ -d "${{ matrix.path }}" ] && [ -f "${{ matrix.path }}/package.json" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Node
+        if: steps.check.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run npm audit
+        if: steps.check.outputs.exists == 'true'
+        working-directory: ${{ matrix.path }}
+        # --audit-level=high means only fail on High/Critical.
+        # Tighten to "moderate" once you've cleaned up the easy ones.
+        run: npm audit --audit-level=high
+
+  # ---------------------------------------------------------------------------
+  # 5. Semgrep - multi-language SAST with Django/React/security rule packs
+  # ---------------------------------------------------------------------------
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep with security rulesets
+        # The "auto" config picks Django/React/JS/Python rules based on what's in repo.
+        # Specific packs: p/django, p/react, p/javascript, p/python, p/owasp-top-ten, p/secrets
+        run: |
+          semgrep ci \
+            --config=p/default \
+            --config=p/django \
+            --config=p/react \
+            --config=p/owasp-top-ten \
+            --config=p/secrets \
+            --sarif --output=semgrep-results.sarif || true
+        env:
+          SEMGREP_RULES: p/default p/django p/react p/owasp-top-ten p/secrets
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+  # ---------------------------------------------------------------------------
+  # 6. CodeQL - GitHub's deep semantic analysis (free for public, GHAS for private)
+  # If you're on a paid GHAS plan or willing to make this repo public, keep this.
+  # Otherwise comment out this whole job.
+  # ---------------------------------------------------------------------------
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['python', 'javascript-typescript']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

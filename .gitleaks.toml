@@ -1,0 +1,76 @@
+# .gitleaks.toml
+#
+# Place at repo root. Gitleaks will pick this up automatically.
+# Extends the default rules with allowlists for things that look like secrets but aren't.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Global allowlist for test fixtures, READMEs, and historical rotated secrets"
+
+# Whitelist the initial commit — secrets in it (DJANGO_SECRET_KEY, POSTGRES_PASSWORD) were rotated 2026-04-27
+commits = [
+  "593ce316eac3d67f5bf8385bf2d1b54de0058bf1",
+]
+
+paths = [
+  '''(?i).*test.*\.(py|js|ts|jsx|tsx|json)$''',
+  '''(?i).*fixtures?/.*''',
+  '''(?i).*__mocks__/.*''',
+  '''(?i)docs/.*''',
+  '''(?i).*README\.md$''',
+  '''.*\.lock$''',
+  '''.*\.min\.js$''',
+  '''node_modules/.*''',
+  '''venv/.*''',
+  '''\.venv/.*''',
+  '''build/.*''',
+  '''dist/.*''',
+]
+
+regexes = [
+  '''sk_test_[A-Za-z0-9]{24,}''',
+  '''pk_test_[A-Za-z0-9]{24,}''',
+  '''(?i)example|placeholder|your-key-here|xxx+|todo|fixme''',
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+]
+
+# ============================================================================
+# Custom rules for TimeTracker-specific secrets
+# ============================================================================
+
+[[rules]]
+id = "mavops-admin-secret"
+description = "MavOps admin secret leaked"
+regex = '''(?i)MAVOPS_ADMIN_SECRET\s*[=:]\s*['"]?([A-Za-z0-9_\-]{16,})['"]?'''
+keywords = ["MAVOPS_ADMIN_SECRET"]
+[rules.allowlist]
+regexes = ['''(?i)(your[-_]?secret|placeholder|xxx+|example|change[-_]?me)''']
+
+[[rules]]
+id = "timetracker-device-key"
+description = "TimeTracker DeviceKey token"
+regex = '''(?i)device[_-]?key\s*[=:]\s*['"]?([A-Za-z0-9_\-]{32,})['"]?'''
+keywords = ["device_key", "DeviceKey", "device-key"]
+
+[[rules]]
+id = "neon-postgres-url"
+description = "Neon Postgres connection string"
+regex = '''postgresql://[^:]+:[^@]+@[a-z0-9\-]+\.neon\.tech'''
+keywords = ["neon.tech"]
+
+[[rules]]
+id = "render-api-key"
+description = "Render API key"
+regex = '''rnd_[A-Za-z0-9]{20,}'''
+keywords = ["rnd_"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9_\-]{32,}'''
+keywords = ["sk-ant-"]
+
+

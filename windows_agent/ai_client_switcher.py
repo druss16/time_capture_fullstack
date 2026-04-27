@@ -19,7 +19,7 @@ Full tier order (highest priority first):
   Tier -1: OrgRoutingRule (backend, per-firm)                    ← v1.2.95
   Tier  0: ClientPattern (title substring → client)
   Tier  1: Local matching (regex, cache, learned, CPA file conv)
-  Tier  1e: Tax-software catch-all → Internal - Tax
+  Tier  1e: Removed v1.2.97 — see comment in _detect()
   Tier  2: Backend AI classify
 
 SYNC NOTE:
@@ -40,10 +40,6 @@ logger = logging.getLogger("timetracker")
 # ---------------------------------------------------------------------------
 from tax_software_constants import (
     GENERIC_TAX_DIALOGS,
-    GENERIC_TAX_EXES,
-    TAX_SOFTWARE_RETURN_PATTERN,
-    TAX_SOFTWARE_TAXWISE_PATTERN,
-    INTERNAL_TAX_CLIENT_NAME,
 )
 
 # =====================================================================
@@ -1461,30 +1457,6 @@ class AIClientSwitcher:
                 self._queue_switch(file_hit)
                 return
 
-            # Tier 1e: Tax software open return → Internal - Tax
-            logger.info(f"[AI-SWITCH] Tier1e check: regex={regex_hit}, learned={learned_hit}, file={file_hit}, title={title[:60]}")
-
-            if not regex_hit and not learned_hit and not file_hit:
-                if (TAX_SOFTWARE_RETURN_PATTERN.search(title or '')
-                        or TAX_SOFTWARE_TAXWISE_PATTERN.search(title or '')):
-                    internal_client = next(
-                        (c for c in self._clients
-                         if c.get('name', '').lower() == INTERNAL_TAX_CLIENT_NAME.lower()),
-                        None
-                    )
-                    if internal_client and internal_client['id'] != cur_id:
-                        match = ClientMatch(
-                            client_id=internal_client['id'],
-                            client_name=internal_client['name'],
-                            confidence=0.92,
-                            match_method="tax_software_return",
-                            matched_token=title[:80],
-                            reasoning="Tax software open return — routing to Internal - Tax",
-                        )
-                        self.stats["regex"] += 1
-                        self._queue_switch(match)
-                        return
-
             # Tier 0 fallback: Org-admin patterns
             if self._client_patterns:
                 tier0_hit = self._tier0_pattern_match(app_name, title)
@@ -1492,6 +1464,15 @@ class AIClientSwitcher:
                     self.stats["regex"] += 1
                     self._queue_switch(tier0_hit)
                     return
+
+            # Tier 1e removed (v1.2.97) — replaced by org routing rules in Tier -1.
+            # TL Wall's TaxWise/UltraTax/Lacerte/ProSeries/Drake → Internal-Tax routing
+            # is now handled by their 5 OrgRoutingRule entries (priority 300, all enabled).
+            # Other firms get whatever rules they configure via the admin dashboard.
+            # Migration audit (2026-04-27): 218 fires on TaxWise rule confirmed the engine
+            # had taken over in production before this fallback was deleted.
+            # If you're adding tax-software defaults for new firms, do it via OrgRoutingRule,
+            # not here. See views_routing_rules.py for the API.
 
             # Suggestion only
             best_local = regex_hit or learned_hit or file_hit

@@ -55,7 +55,7 @@ const INFO: Record<string, string> = {
   "Revenue Trend": "Monthly invoiced revenue. Reflects actual billed amounts — only as accurate as your imported invoices.",
   "WIP Aging": "Approved, uninvoiced work bucketed by age. 61–90+ day buckets are at risk of write-off — prioritize invoicing these first.",
   "Timesheet Compliance Chart": "Month-by-month compliance trend. Dips often correlate with busy season, staff changes, or onboarding.",
-  "Realization Rate by Client": "Per-client realization: invoiced hours ÷ worked hours. Clients below 85% are being under-billed — review scope creep or write-down habits.",
+  "Realization Rate by Client": "Worked hours vs. billed hours per client. Where the gold bar is shorter than the gray bar, work happened that never made it onto an invoice — pure revenue leakage. Where the gold bar is longer, you're billing fixed-fee or premium rates above hours worked.",
   "Client Profitability": "Revenue (from billing_amount on time blocks) minus labor cost (hours × employee cost rate). All clients appear here even without imported invoices.",
   "Staff Utilization": "Hours per staff member: billable vs. non-billable. Low billable % may indicate admin overload or available capacity.",
   "Staff Detail": "Per-person breakdown of billable hours, total hours, and utilization rate. Useful for capacity planning and performance reviews.",
@@ -275,20 +275,131 @@ function RevenueChart({ data, height = 260 }: { data: { month: string; revenue: 
   );
 }
 
-function RealizChart({ data, height }: { data: { name: string; realization: number; status: StatusKey }[]; height?: number }) {
-  const h = height ?? Math.max(200, data.length * 40 + 40);
+type RealizDatum = {
+  name: string;
+  worked: number;
+  billed: number;
+  gap: number;
+  realization: number;
+  status: StatusKey;
+};
+
+function RealizTooltip(props: TooltipProps<number, string>) {
+  const { active, payload } = props as { active?: boolean; payload?: Array<{ payload: RealizDatum }> };
+  if (!active || !payload || !payload.length) return null;
+  const d = payload[0].payload as RealizDatum;
+  const underbilled = d.gap > 0;
   return (
-    <ResponsiveContainer width="100%" height={h}>
-      <BarChart data={data} layout="vertical" margin={{ left: 20, right: 40 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
-        <XAxis type="number" domain={[0, 150]} tickFormatter={(v: number) => `${v}%`} tick={{ fill: C.slate, fontSize: 11 }} />
-        <YAxis type="category" dataKey="name" tick={{ fill: C.white, fontSize: 12 }} width={130} />
-        <Tooltip content={<CustomTooltip suffix="%" />} />
-        <Bar dataKey="realization" name="Realization" radius={[0, 4, 4, 0] as [number,number,number,number]}>
-          {data.map((d, i) => <Cell key={i} fill={STATUS_COLOR[d.status] ?? C.gold} />)}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
+    <div style={{
+      background: C.navy, border: `1px solid ${C.border}`, borderRadius: 8,
+      padding: "10px 14px", fontSize: 12, color: C.white, minWidth: 220,
+    }}>
+      <div style={{ fontWeight: 600, color: C.gold, marginBottom: 6 }}>{d.name}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", margin: "2px 0" }}>
+        <span style={{ color: C.slate }}>Worked:</span>
+        <span>{d.worked.toFixed(1)}h</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", margin: "2px 0" }}>
+        <span style={{ color: C.slate }}>Billed:</span>
+        <span style={{ color: C.gold }}>{d.billed.toFixed(1)}h</span>
+      </div>
+      <div style={{ height: 1, background: C.border, margin: "6px 0" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", margin: "2px 0" }}>
+        <span style={{ color: C.slate }}>Gap:</span>
+        <span style={{ color: underbilled ? C.rose : "#22c55e", fontWeight: 600 }}>
+          {underbilled ? "−" : "+"}{Math.abs(d.gap).toFixed(1)}h
+        </span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", margin: "2px 0" }}>
+        <span style={{ color: C.slate }}>Realization:</span>
+        <span style={{ color: STATUS_COLOR[d.status] }}>{d.realization.toFixed(1)}%</span>
+      </div>
+      <div style={{ marginTop: 6, fontSize: 11, color: underbilled ? C.rose : "#22c55e", fontStyle: "italic" }}>
+        {underbilled ? "Under-billed — hours not making it to invoice" : "Over-realization — fixed-fee or premium rate"}
+      </div>
+    </div>
+  );
+}
+
+function RealizChart({ data, height }: { data: RealizDatum[]; height?: number }) {
+  const h = height ?? Math.max(280, data.length * 48 + 80);
+
+  // Summary strip totals
+  const totalWorked = data.reduce((s, d) => s + d.worked, 0);
+  const totalBilled = data.reduce((s, d) => s + d.billed, 0);
+  const totalGap = totalWorked - totalBilled;
+  const gapColor = totalGap > 0 ? C.rose : "#22c55e";
+
+  const stat: CSSProperties = {
+    flex: 1, padding: "12px 16px", background: C.navy,
+    border: `1px solid ${C.border}`, borderRadius: 8, textAlign: "center",
+  };
+  const statLabel: CSSProperties = {
+    fontSize: 11, color: C.slate, textTransform: "uppercase",
+    letterSpacing: 1, marginBottom: 4,
+  };
+  const statValue: CSSProperties = { fontSize: 22, fontWeight: 600 };
+
+  return (
+    <div>
+      {/* Summary strip */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <div style={stat}>
+          <div style={statLabel}>Total Worked</div>
+          <div style={{ ...statValue, color: C.white }}>{totalWorked.toFixed(0)}h</div>
+        </div>
+        <div style={stat}>
+          <div style={statLabel}>Total Billed</div>
+          <div style={{ ...statValue, color: C.gold }}>{totalBilled.toFixed(0)}h</div>
+        </div>
+        <div style={stat}>
+          <div style={statLabel}>Gap</div>
+          <div style={{ ...statValue, color: gapColor }}>
+            {totalGap > 0 ? "−" : "+"}{Math.abs(totalGap).toFixed(0)}h
+          </div>
+        </div>
+      </div>
+
+      {/* Paired bar chart */}
+      <ResponsiveContainer width="100%" height={h}>
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ left: 20, right: 60, top: 10, bottom: 10 }}
+          barCategoryGap={"20%"}
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
+          <XAxis
+            type="number"
+            tickFormatter={(v: number) => `${v}h`}
+            tick={{ fill: C.slate, fontSize: 11 }}
+          />
+          <YAxis
+            type="category"
+            dataKey="name"
+            tick={{ fill: C.white, fontSize: 12 }}
+            width={150}
+          />
+          <Tooltip content={<RealizTooltip />} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
+          <Legend wrapperStyle={{ fontSize: 12, color: C.slate, paddingTop: 8 }} />
+          <Bar
+            dataKey="worked"
+            name="Worked Hours"
+            fill={C.slate}
+            radius={[0, 4, 4, 0] as [number, number, number, number]}
+          />
+          <Bar
+            dataKey="billed"
+            name="Billed Hours"
+            radius={[0, 4, 4, 0] as [number, number, number, number]}
+          >
+            {data.map((d, i) => (
+              <Cell key={i} fill={d.gap > 0 ? C.rose : C.gold} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -508,8 +619,18 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
     { name: "61–90 days", value: wip.buckets["61_90"] || 0 },
     { name: "90+ days",   value: wip.buckets["90_plus"] || 0 },
   ];
-  const realizData = [...(realiz.clients ?? [])].sort((a, b) => b.realization - a.realization).slice(0, 10)
-    .map((c) => ({ name: c.client_name, realization: c.realization, status: c.status }));
+  // Sort by largest GAP first (worked - billed), so worst leakage is at top of chart
+  const realizData = [...(realiz.clients ?? [])]
+    .map((c) => ({
+      name: c.client_name,
+      worked: c.worked_hours,
+      billed: c.billed_hours,
+      gap: c.worked_hours - c.billed_hours,
+      realization: c.realization,
+      status: c.status,
+    }))
+    .sort((a, b) => b.gap - a.gap)
+    .slice(0, 12);
   const staffData  = (utiliz.staff ?? []).slice(0, 8).map((s) => ({
     name: s.name.split(" ")[0],
     billable:    parseFloat(s.billable_hours.toFixed(1)),
@@ -524,7 +645,14 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
 
   // CSV datasets
   const csvRevenue    = revData.map((r)    => ({ Month: r.month, Revenue: r.revenue, Invoices: r.invoices }));
-  const csvRealiz     = realizData.map((r) => ({ Client: r.name, "Realization %": r.realization, Status: r.status }));
+  const csvRealiz     = realizData.map((r) => ({
+    Client: r.name,
+    "Worked Hours": r.worked,
+    "Billed Hours": r.billed,
+    "Gap (hrs)": r.gap,
+    "Realization %": r.realization,
+    Status: r.status,
+  }));
   const csvProfit     = (profit.clients ?? []).map((c) => ({ Client: c.client_name, Revenue: c.revenue, Cost: c.cost, Margin: c.margin, "Margin %": c.margin_pct, Hours: c.hours }));
   const csvStaff      = (utiliz.staff ?? []).map((s) => ({ Name: s.name, "Billable Hrs": s.billable_hours, "Total Hrs": s.total_hours, "Utilization %": s.utilization }));
   const csvCompliance = (compliance.trend ?? []).map((t) => ({ Month: t.month, "Compliance %": t.compliance, Total: t.total, Compliant: t.compliant }));
@@ -637,36 +765,73 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
          <RealizChart data={realizData} />}
       </InfoCard>
 
-      <SectionTitle infoKey="Client Profitability">Client Profitability</SectionTitle>
-      <InfoCard infoKey="Client Profitability" csvData={csvProfit} csvFilename={`client-profitability-${period}.csv`}>
-        {loading ? <div style={{ height: 200, background: C.navyLt, borderRadius: 8 }} /> : (
+      <SectionTitle infoKey="Invoice Profitability by Client">Client Profitability (Actual Invoices)</SectionTitle>
+      <InfoCard
+        infoKey="Invoice Profitability by Client"
+        csvData={invClients.map((c) => ({
+          Client: c.client_name,
+          "Invoiced $": c.invoiced_amount,
+          "Worked Cost $": c.worked_cost,
+          Margin: c.margin,
+          "Margin %": c.margin_pct,
+          "Worked Hrs": c.worked_hours,
+          "Realization %": c.realization ?? "",
+        }))}
+        csvFilename={`invoice-profitability-${period}.csv`}
+      >
+        {loading ? <div style={{ height: 200, background: C.navyLt, borderRadius: 8 }} /> :
+         !invProfit.has_invoices ? (
+            <p style={{ color: C.slate, textAlign: "center", padding: 40 }}>
+              No invoices imported yet. Profitability requires invoiced revenue — go to Settings → Invoices to import from QuickBooks, Xero, or CSV.
+            </p>
+         ) : (
           <table style={s.table}>
-            <thead><tr>{["Client","Revenue","Cost","Margin","Margin %","Hours"].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Client","Invoiced","Labor Cost","Margin","Margin %","Hours"].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
             <tbody>
-              {(profit.clients ?? []).map((r) => (
+              {invClients.map((r) => (
                 <tr key={r.client_id}>
                   <td style={s.td}>{r.client_name}</td>
-                  <td style={s.td}>${r.revenue.toLocaleString()}</td>
-                  <td style={s.td}>${r.cost.toLocaleString()}</td>
-                  <td style={{ ...s.td, color: r.margin >= 0 ? C.teal : C.rose }}>${r.margin.toLocaleString()}</td>
+                  <td style={s.td}>${r.invoiced_amount.toLocaleString()}</td>
+                  <td style={s.td}>${r.worked_cost.toLocaleString()}</td>
+                  <td style={{ ...s.td, color: r.margin >= 0 ? C.teal : C.rose, fontWeight: 600 }}>
+                    {r.margin < 0 ? "−" : ""}${Math.abs(r.margin).toLocaleString()}
+                  </td>
                   <td style={s.td}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div style={{ flex: 1, height: 6, background: C.navyLt, borderRadius: 3 }}>
-                        <div style={{ width: `${Math.min(100, Math.max(0, r.margin_pct))}%`, height: "100%", background: r.margin_pct >= 40 ? C.teal : r.margin_pct >= 20 ? C.gold : C.rose, borderRadius: 3 }} />
+                        <div style={{
+                          width: `${Math.min(100, Math.max(0, r.margin_pct))}%`,
+                          height: "100%",
+                          background: r.margin_pct >= 40 ? C.teal : r.margin_pct >= 20 ? C.gold : C.rose,
+                          borderRadius: 3,
+                        }} />
                       </div>
-                      <span style={{ fontSize: 12, color: C.slate, minWidth: 36 }}>{r.margin_pct.toFixed(1)}%</span>
+                      <span style={{
+                        fontSize: 12,
+                        color: r.margin_pct < 0 ? C.rose : C.slate,
+                        minWidth: 50,
+                        fontWeight: r.margin_pct < 0 ? 600 : 400,
+                      }}>
+                        {r.margin_pct.toFixed(1)}%
+                      </span>
                     </div>
                   </td>
-                  <td style={{ ...s.td, color: C.slate }}>{r.hours.toFixed(1)}h</td>
+                  <td style={{ ...s.td, color: C.slate }}>{r.worked_hours.toFixed(1)}h</td>
                 </tr>
               ))}
-              {profit.totals && (
+              {invProfit.totals && (
                 <tr style={{ borderTop: `2px solid ${C.border}` }}>
                   <td style={{ ...s.td, color: C.gold, fontWeight: 600 }}>TOTAL</td>
-                  <td style={{ ...s.td, color: C.gold }}>${profit.totals.revenue?.toLocaleString()}</td>
-                  <td style={{ ...s.td, color: C.gold }}>${profit.totals.cost?.toLocaleString()}</td>
-                  <td style={{ ...s.td, color: C.teal }}>${profit.totals.margin?.toLocaleString()}</td>
-                  <td style={{ ...s.td, color: C.gold }}>{profit.totals.margin_pct?.toFixed(1)}%</td>
+                  <td style={{ ...s.td, color: C.gold }}>${invProfit.totals.invoiced_amount?.toLocaleString()}</td>
+                  <td style={{ ...s.td, color: C.gold }}>${invProfit.totals.worked_cost?.toLocaleString()}</td>
+                  <td style={{
+                    ...s.td,
+                    color: (invProfit.totals.margin ?? 0) >= 0 ? C.teal : C.rose,
+                    fontWeight: 600,
+                  }}>
+                    ${invProfit.totals.margin?.toLocaleString()}
+                  </td>
+                  <td style={{ ...s.td, color: C.gold }}>{invProfit.totals.margin_pct?.toFixed(1)}%</td>
                   <td style={s.td} />
                 </tr>
               )}

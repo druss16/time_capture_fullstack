@@ -605,13 +605,32 @@ def _path_depth_boost(needle: str, file_path: str) -> float:
         boost = 0.03
     else:
         boost = 0.0
- 
-    # Penalty for very-early matches — these are usually user/sync/desktop
-    # folders ("users", "mavops", "onedrive", "dropbox", etc.) and almost
-    # never represent the actual client context for the file.
-    if deepest_hit_idx < 3:
-        boost -= 0.05
- 
+
+
+    # Penalty for matches in user/sync/desktop folders. These are NEVER the
+    # actual client context for the file. We need a heavy penalty to overcome
+    # the +0.05 path-mention boost AND the +0.03 primary-name boost AND drop
+    # below the 0.80 switch threshold.
+    #
+    # Specifically: the user folder ALWAYS contains the OS username (here,
+    # "mavops") which is also a real client name in this org. Without a heavy
+    # penalty, every Excel/Word/PDF on the user's machine triggers a switch
+    # to the company that owns the machine.
+    NOISE_FOLDER_NAMES = {
+        "users", "user", "home",
+        "onedrive", "dropbox", "icloud", "icloud drive", "box", "google drive",
+        "desktop", "documents", "downloads", "pictures", "music", "videos",
+        "appdata", "local", "roaming", "library",
+    }
+    # If the match is ONLY in the noise-folder region of the path
+    # (first 3 segments) AND no deeper segment also contains it, kill it.
+    only_in_noise = deepest_hit_idx < 3
+    if only_in_noise:
+        # Heavy penalty: -0.30 drops a 0.96 confidence to 0.66 (below 0.80
+        # switch threshold AND below 0.65 learned threshold). Effectively
+        # disqualifies user-folder name matches.
+        boost -= 0.30
+
     return boost
 
 def _regex_match(title: str, file_path: str, matchers: list,
@@ -1870,3 +1889,24 @@ class AIClientSwitcher:
     def _clear_pending(self):
         with self._lock:
             self._pending_switch = None
+
+if __name__ == "__main__":
+    test_clients = [
+        {"id": 20, "name": "MAVOPS"},
+        {"id": 141, "name": "Little Nero's Pizza"},
+        {"id": 453, "name": "PureADK"},
+    ]
+    matchers = _build_client_matchers(test_clients, sensitivity=70)
+
+    cases = [
+        ("Little_Neros_Daily_Sales_March_2026  -  Protected View - Excel",
+         r"C:\Users\mavops\OneDrive\Desktop\Little Nero's Pizza\Little_Neros_Daily_Sales_March_2026.xlsx"),
+        ("PureADK_Client_Invoice_Lake_Placid_Outfitters.pdf - Edge",
+         r"C:\Users\mavops\Downloads\PureADK_Client_Invoice_Lake_Placid_Outfitters.pdf"),
+    ]
+    for title, path in cases:
+        result = _regex_match(title, path, matchers, sensitivity=70)
+        if result:
+            print(f"{title[:50]:50s}  →  {result.client_name:25s} conf={result.confidence:.2f}")
+        else:
+            print(f"{title[:50]:50s}  →  NO MATCH")

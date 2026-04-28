@@ -141,7 +141,6 @@ def create_internal_client(sender, instance, created, **kwargs):
             defaults={
                 'name': 'Internal - Tax',
                 'is_active': True,
-                'is_billable': False,
                 'visibility': 'all',
             }
         )
@@ -154,7 +153,7 @@ def create_internal_client(sender, instance, created, **kwargs):
 
 def backfill_internal_clients():
     """
-    One-time helper to create 'Internal' client for all existing orgs.
+    One-time helper to create 'Internal' + 'Internal - Tax' clients for all existing orgs.
     
     Run from Django shell:
         from tracker.signals import backfill_internal_clients
@@ -162,10 +161,12 @@ def backfill_internal_clients():
     """
     from tracker.models import Client
     
-    created_count = 0
-    skipped_count = 0
+    internal_created = 0
+    internal_tax_created = 0
+    skipped = 0
     
     for org in Organization.objects.all():
+        # Internal
         _, was_created = Client.objects.get_or_create(
             org=org,
             code='INTERNAL',
@@ -176,13 +177,34 @@ def backfill_internal_clients():
             }
         )
         if was_created:
-            created_count += 1
-            logger.info(f"[BACKFILL] Created 'Internal' client for: {org.name}")
+            internal_created += 1
+            logger.info(f"[BACKFILL] Created 'Internal' for: {org.name}")
         else:
-            skipped_count += 1
+            skipped += 1
+        
+        # Internal - Tax
+        _, was_created = Client.objects.get_or_create(
+            org=org,
+            code='INTERNAL_TAX',
+            defaults={
+                'name': 'Internal - Tax',
+                'is_active': True,
+                'visibility': 'all',
+            }
+        )
+        if was_created:
+            internal_tax_created += 1
+            logger.info(f"[BACKFILL] Created 'Internal - Tax' for: {org.name}")
     
-    logger.info(f"[BACKFILL] Done. Created: {created_count}, Already existed: {skipped_count}")
-    return {'created': created_count, 'skipped': skipped_count}
+    logger.info(
+        f"[BACKFILL] Done. Internal created: {internal_created}, "
+        f"Internal-Tax created: {internal_tax_created}, Internal already existed: {skipped}"
+    )
+    return {
+        'internal_created': internal_created,
+        'internal_tax_created': internal_tax_created,
+        'internal_skipped': skipped,
+    }
 
 
 # ────────────────────────────────────────────────────────────────────────────────

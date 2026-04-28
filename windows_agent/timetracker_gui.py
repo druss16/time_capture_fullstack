@@ -968,32 +968,45 @@ class TimeTrackerSystemTray:
         self._picker_open = False
     
     def _create_image(self):
-        """Create system tray icon"""
+        """Load system tray icon from bundled .ico file (falls back to drawn icon)"""
+        import sys
+        
+        # When PyInstaller-frozen, bundled files unpack to sys._MEIPASS
+        # Otherwise look next to this .py file
+        if getattr(sys, 'frozen', False):
+            base = sys._MEIPASS
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        
+        icon_path = os.path.join(base, 'timetracker.ico')
+        
+        if os.path.exists(icon_path):
+            try:
+                return Image.open(icon_path)
+            except Exception as e:
+                print(f"[TRAY] Failed to load {icon_path}: {e}")
+        else:
+            print(f"[TRAY] Icon not found at {icon_path}, using fallback")
+        
+        # Fallback: original drawn icon (only used if .ico file is missing or broken)
         size = 64
         img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        
         draw.rounded_rectangle(
             [(4, 4), (size-4, size-4)],
             radius=12,
             fill=COLORS["tray_bg"]
         )
-        
         center = size // 2
         radius = 18
-        
         draw.ellipse(
-            [(center - radius, center - radius), 
-             (center + radius, center + radius)],
-            outline='white',
-            width=3
+            [(center - radius, center - radius), (center + radius, center + radius)],
+            outline='white', width=3,
         )
-        
         draw.line([(center, center), (center, center - 10)], fill='white', width=3)
         draw.line([(center, center), (center + 8, center)], fill='white', width=2)
-        
         return img
-        
+            
     def _build_menu_items(self):
         """Build system tray menu items"""
         

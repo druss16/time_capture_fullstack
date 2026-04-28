@@ -4235,6 +4235,27 @@ def today_time(request):
     
     if not events:
         return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
+
+    # =========================================================================
+    # Pre-load meeting blocks for this day.
+    # Meetings use BLOCK-LEVEL canonical duration (not event-walking),
+    # because the Meeting/Meeting-End raw events only get a few seconds each
+    # under the IDLE_CAP_SECONDS rule, vastly underrepresenting meeting time.
+    # =========================================================================
+    meeting_blocks = list(Block.objects.filter(
+        user=user,
+        day=target_date,
+        bundle_id__startswith='meeting:',
+    ).exclude(
+        deleted_at__isnull=False,
+    ).select_related('client'))
+
+    # Tuples for fast overlap checks: (start, end, block)
+    meeting_windows = [
+        (mb.start, mb.end, mb)
+        for mb in meeting_blocks
+        if mb.start and mb.end
+    ]
     
     # =========================================================================
     # STEP 2: Calculate duration for each event
@@ -4257,6 +4278,15 @@ def today_time(request):
 
         if block and block.id in deleted_block_ids:
             block = None
+
+        # Skip events that fall inside a meeting block's window.
+        # The meeting block itself will provide canonical attribution
+        # via the post-loop append below.
+        if meeting_windows and any(
+            mw_start <= event.ts_utc <= mw_end
+            for mw_start, mw_end, _ in meeting_windows
+        ):
+            continue
 
         if block:
             client_id = block.client_id
@@ -4292,6 +4322,35 @@ def today_time(request):
             'window_title':     event.window_title or '',
             'url':              event.url or '',
             'block_id':         block.id if block else None,
+        })
+
+    # =========================================================================
+    # STEP 2.5: Inject meeting blocks as canonical entries
+    # Each meeting block contributes its full block.minutes (not event-walked).
+    # Unattributed meetings (no client) are skipped — they won't bill anyone.
+    # =========================================================================
+    for mb in meeting_blocks:
+        if not mb.client_id:
+            continue
+        
+        mb_minutes = float(mb.minutes or 0)
+        if mb_minutes <= 0:
+            continue
+        
+        client_name = mb.client.name if mb.client else 'Unattributed'
+        
+        event_durations.append({
+            'ts':               mb.start,
+            'duration_minutes': mb_minutes,
+            'client_id':        mb.client_id,
+            'client_name':      client_name,
+            'category':         'Client Meeting',
+            'is_idle':          False,
+            'is_billable':      True,
+            'app_name':         mb.app_name or 'Meeting',
+            'window_title':     mb.window_title or '',
+            'url':              '',
+            'block_id':         mb.id,
         })
     
     # =========================================================================

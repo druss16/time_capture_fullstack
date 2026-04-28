@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Windows Explorer Folder Watcher
 
@@ -396,7 +394,7 @@ class ExplorerFolderWatcher:
             self.ai_switcher.on_window_change(
                 app_name="Explorer",
                 exe_name="explorer.exe",
-                window_title=path,
+                title=path,
                 url=None,
                 file_path=path,
             )

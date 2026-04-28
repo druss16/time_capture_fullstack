@@ -142,6 +142,7 @@ MEETING_TITLE_PATTERNS = {
     " zoom ": "zoom",
     "meet.google.com": "meet",
     "google meet": "meet",
+    "meet - ": "meet",
     "| microsoft teams": "teams",
     "- microsoft teams": "teams",
     "teams.microsoft.com": "teams",

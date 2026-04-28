@@ -147,6 +147,15 @@ def _has_client_signal(title: str, file_path: str = None) -> bool:
 _STABILITY_SECONDS = 2.0
 
 
+_PATH_NOISE_FOLDERS = {
+    "users", "user", "home",
+    "onedrive", "dropbox", "icloud", "icloud drive", "box", "google drive",
+    "desktop", "documents", "downloads", "pictures", "music", "videos",
+    "appdata", "local", "roaming", "library",
+    "c:", "d:", "e:",
+}
+ 
+
 # =====================================================================
 # Tier -1: Org Routing Rules (v1.2.95)
 # =====================================================================
@@ -553,6 +562,58 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
     return matchers
 
 
+def _path_depth_boost(needle: str, file_path: str) -> float:
+    """
+    Return a confidence adjustment based on WHERE in the path `needle`
+    appears. Deeper = more relevant. Filename matches win over folder
+    matches. Very-early matches (likely user/sync folders) get penalized.
+ 
+    Returns a delta to add to confidence (can be negative).
+    """
+    if not file_path or not needle:
+        return 0.0
+ 
+    # Normalize separators so we handle / \ and mixed
+    path_norm = file_path.replace("\\", "/").lower()
+    needle_low = needle.lower()
+ 
+    # Split into segments — drop empty ones (handles leading / and double //)
+    segments = [s for s in path_norm.split("/") if s]
+    if not segments:
+        return 0.0
+ 
+    # Find which segment(s) contain the needle, prefer the deepest hit
+    deepest_hit_idx = -1
+    for i, seg in enumerate(segments):
+        if needle_low in seg:
+            deepest_hit_idx = i
+ 
+    if deepest_hit_idx < 0:
+        return 0.0  # not in path at all (matched on title only)
+ 
+    last_idx = len(segments) - 1
+    distance_from_end = last_idx - deepest_hit_idx
+ 
+    # Filename match (last segment) — strongest boost
+    if distance_from_end == 0:
+        boost = 0.10
+    # Folder containing the file (2nd-to-last)
+    elif distance_from_end == 1:
+        boost = 0.07
+    # One level up
+    elif distance_from_end == 2:
+        boost = 0.03
+    else:
+        boost = 0.0
+ 
+    # Penalty for very-early matches — these are usually user/sync/desktop
+    # folders ("users", "mavops", "onedrive", "dropbox", etc.) and almost
+    # never represent the actual client context for the file.
+    if deepest_hit_idx < 3:
+        boost -= 0.05
+ 
+    return boost
+
 def _regex_match(title: str, file_path: str, matchers: list,
                  sensitivity: int = 50) -> Optional[ClientMatch]:
     search_text = _normalize(f"{title or ''} {file_path or ''}")
@@ -583,10 +644,35 @@ def _regex_match(title: str, file_path: str, matchers: list,
                     conf = min(1.0, conf + 0.03)
                 method = "exact" if is_primary else "alias"
 
+            # Existing flat boost for any path mention
             if file_path and needle.lower() in (file_path or "").lower():
                 conf = min(1.0, conf + 0.05)
-
-            if best is None or conf > best.confidence:
+ 
+            # NEW: depth-aware boost. Filename matches and last-folder matches
+            # win over earlier-in-path matches (which are usually user folders,
+            # sync folders, desktop, etc.)
+            depth_delta = _path_depth_boost(needle, file_path)
+            conf = max(0.0, min(1.0, conf + depth_delta))
+ 
+            this_depth = 0
+            if file_path:
+                segs = [s for s in file_path.replace("\\", "/").lower().split("/") if s]
+                for seg_idx, seg in enumerate(segs):
+                    if needle.lower() in seg:
+                        this_depth = seg_idx
+ 
+            is_better = False
+            if best is None:
+                is_better = True
+            elif conf > best.confidence:
+                is_better = True
+            elif conf == best.confidence:
+                # Tiebreaker: prefer deeper match
+                best_depth = getattr(best, "_path_depth", -1)
+                if this_depth > best_depth:
+                    is_better = True
+ 
+            if is_better:
                 best = ClientMatch(
                     client_id=m["client_id"],
                     client_name=m["client_name"],
@@ -599,6 +685,10 @@ def _regex_match(title: str, file_path: str, matchers: list,
                         else f"Found '{needle}' in window title/path"
                     ),
                 )
+                # Stash the depth for tiebreaker comparison on the next iteration
+                # (ClientMatch is a dataclass so we just attach an extra attribute)
+                best._path_depth = this_depth
+
     return best
 
 

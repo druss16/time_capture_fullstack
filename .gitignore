@@ -207,3 +207,4 @@ coverage.xml
 *.tmp
 temp/
 tmp/.expo/
+security-reports/

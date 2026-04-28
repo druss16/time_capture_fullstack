@@ -25,3 +25,5 @@ keyboard>=0.13.5
 
 # Optional: Build standalone executable
 # pyinstaller>=6.0.0
+
+uiautomation>=2.0.18

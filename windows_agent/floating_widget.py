@@ -3,12 +3,27 @@
 """
 Floating Client Widget - Always visible current client indicator
 
-Features:
-- Small floating window showing current client
-- Draggable to any position
-- Collapsible to just an icon
-- Click to open client picker
-- Remembers position between sessions
+Mac-style minimal pinned toolbar:
+- Frameless always-on-top pill, sits just above the Windows taskbar
+- Shows current client name only (no "switch" hint, no extra chrome)
+- Click anywhere on it → opens the client picker
+- Drag to move; snaps to screen edges; position persists
+- Auto-fades to 55% opacity when not hovered, 98% on hover
+- Collapsible to icon-only mode (kept for backward compatibility)
+- Hide via × → reappears via "Show Client Widget" tray menu
+
+Public API (preserved from prior version, used by gui_systemtray.py and main.py):
+    WIDGET_AVAILABLE: bool
+    FloatingClientWidget: class
+        .create(parent_root=None) -> root window or None
+        .run()                   -> blocking mainloop
+        .update_client(id, name) -> updates display
+        .show()                  -> deiconify + persist visible=True
+        .destroy()               -> cleanup
+        .root                    -> the CTk window (or CTkToplevel)
+        .is_visible              -> bool
+        ._save_state()           -> persist position/visibility
+    create_floating_widget(tray_controller) -> FloatingClientWidget | None
 """
 
 import os
@@ -22,6 +37,7 @@ try:
 except ImportError:
     WIDGET_AVAILABLE = False
 
+
 # Colors matching the app theme
 COLORS = {
     "primary": "#14B8A6",
@@ -30,56 +46,76 @@ COLORS = {
     "bg_card": "#252525",
     "text": "#FFFFFF",
     "text_muted": "#888888",
-    "no_client": "#EF4444",  # Red for no client
+    "no_client": "#EF4444",
 }
 
 WIDGET_STATE_FILE = os.path.expanduser("~/.timetracker/widget_state.json")
 
+# ---- Geometry / behavior tunables ----
+WIDGET_WIDTH = 200
+WIDGET_HEIGHT = 36
+COLLAPSED_WIDTH = 45
+COLLAPSED_HEIGHT = 35
+
+EDGE_SNAP_THRESHOLD = 24      # px — snap when within this distance of an edge
+TASKBAR_CLEARANCE = 56        # px above bottom edge so widget clears taskbar
+DEFAULT_MARGIN = 12           # px from edge for default position
+
+# Opacity behavior — Mac-like "out of the way" feel
+OPACITY_IDLE = 0.55
+OPACITY_HOVER = 0.98
+FADE_DELAY_MS = 1500          # ms after mouseleave before fading
+
+# Drag detection — clicks under this pixel threshold open the picker
+DRAG_THRESHOLD_PX = 4
+
+# Background polling interval for client updates (matches old behavior)
+POLL_INTERVAL_S = 2.0
+
 
 class FloatingClientWidget:
-    """
-    Floating always-on-top widget showing current client.
-    
-    Expanded view:
-    ┌─────────────────────────┐
-    │ ⏱ Acme Corp      ─  ✕ │
-    └─────────────────────────┘
-    
-    Collapsed view:
-    ┌────┐
-    │ ⏱ │
-    └────┘
-    """
-    
+    """Mac-style minimal pinned client toolbar for Windows."""
+
     def __init__(self, on_click_callback=None, get_client_callback=None):
         """
         Args:
-            on_click_callback: Called when user clicks to switch client
+            on_click_callback: Called when user clicks the widget (opens picker)
             get_client_callback: Returns {"client_id": int, "client_name": str}
         """
         self.on_click = on_click_callback
         self.get_client = get_client_callback
-        
+
         self.root = None
         self.is_collapsed = False
         self.is_visible = True
-        self.is_dragging = False
-        self.drag_start_x = 0
-        self.drag_start_y = 0
-        
+
+        # Drag state — measure motion to distinguish click from drag
+        self._press_x = 0
+        self._press_y = 0
+        self._drag_offset_x = 0
+        self._drag_offset_y = 0
+        self._drag_started = False
+
+        # Fade state
+        self._fade_after_id = None
+
+        # Polling thread
+        self._update_running = False
+
         self.current_client_name = "No Client"
         self.current_client_id = None
-        
-        # Load saved state
-        self._load_state()
-        
-    def _load_state(self):
-        """Load widget position and collapse state"""
+
+        # Saved-state defaults (overwritten by _load_state)
         self.saved_x = None
         self.saved_y = None
-        self.is_collapsed = False
-        self.is_visible = True
-        
+
+        self._load_state()
+
+    # ------------------------------------------------------------------
+    # Persisted state
+    # ------------------------------------------------------------------
+    def _load_state(self):
+        """Load widget position and collapse state from disk."""
         if os.path.exists(WIDGET_STATE_FILE):
             try:
                 with open(WIDGET_STATE_FILE, 'r') as f:
@@ -90,14 +126,16 @@ class FloatingClientWidget:
                     self.is_visible = state.get('visible', True)
             except Exception:
                 pass
-    
+
     def _save_state(self):
-        """Save widget position and collapse state"""
+        """Save widget position and collapse state to disk."""
         try:
             os.makedirs(os.path.dirname(WIDGET_STATE_FILE), exist_ok=True)
+            x = self.root.winfo_x() if (self.root and self._root_alive()) else self.saved_x
+            y = self.root.winfo_y() if (self.root and self._root_alive()) else self.saved_y
             state = {
-                'x': self.root.winfo_x() if self.root else self.saved_x,
-                'y': self.root.winfo_y() if self.root else self.saved_y,
+                'x': x,
+                'y': y,
                 'collapsed': self.is_collapsed,
                 'visible': self.is_visible,
             }
@@ -105,308 +143,401 @@ class FloatingClientWidget:
                 json.dump(state, f)
         except Exception as e:
             print(f"[WIDGET] Failed to save state: {e}")
-    
+
+    def _root_alive(self):
+        try:
+            return bool(self.root) and bool(self.root.winfo_exists())
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
     def create(self, parent_root=None):
         if not WIDGET_AVAILABLE:
             print("[WIDGET] customtkinter not available")
             return None
-        
-        # REMOVED the is_visible early return — always allow creation
-        # The user can re-hide it if they want
-        
-        self.is_visible = True  # Reset on create
+
+        # Reset visibility to True on create — explicit show() / hide() controls it
+        self.is_visible = True
         ctk.set_appearance_mode("dark")
-        
-        # Use provided root or create new one
+
         if parent_root:
             self.root = ctk.CTkToplevel(parent_root)
         else:
-            # Create standalone - must be called from main thread
             self.root = ctk.CTk()
-        
+
         self.root.title("TimeTracker")
-        self.root.overrideredirect(True)  # Remove window decorations
-        self.root.attributes('-topmost', True)  # Always on top
-        
+        self.root.overrideredirect(True)         # no title bar
+        self.root.attributes('-topmost', True)   # always on top
+
+        # Keep out of Alt+Tab
         try:
-            self.root.attributes('-alpha', 0.95)  # Slightly transparent
-        except:
+            self.root.attributes('-toolwindow', True)
+        except Exception:
             pass
-        
-        # Set initial size based on collapsed state
+
+        # Initial size
         if self.is_collapsed:
-            self.root.geometry("45x35")
+            w, h = COLLAPSED_WIDTH, COLLAPSED_HEIGHT
         else:
-            self.root.geometry("220x50")
-        
-        # Position window
-        if self.saved_x is not None and self.saved_y is not None:
-            self.root.geometry(f"+{self.saved_x}+{self.saved_y}")
-        else:
-            # Default to top-right corner
-            self.root.update_idletasks()
-            screen_w = self.root.winfo_screenwidth()
-            self.root.geometry(f"+{screen_w - 240}+10")
-        
+            w, h = WIDGET_WIDTH, WIDGET_HEIGHT
+
+        # Initial position — saved, otherwise bottom-right above taskbar
+        x, y = self._compute_initial_position(w, h)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
         self._build_ui()
+        self._apply_opacity(OPACITY_IDLE)
         self._start_update_loop()
-        
+
         return self.root
-    
+
     def run(self):
-        """Run the widget mainloop (call from main thread)"""
+        """Run the widget mainloop (call from main thread)."""
         if self.root:
             self.root.mainloop()
-    
+
+    def destroy(self):
+        """Clean up the widget."""
+        self._update_running = False
+        self._save_state()
+        if self.root:
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+            self.root = None
+
+    # ------------------------------------------------------------------
+    # Positioning
+    # ------------------------------------------------------------------
+    def _compute_initial_position(self, w, h):
+        """Use saved position if valid, else bottom-right above taskbar."""
+        try:
+            self.root.update_idletasks()
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+        except Exception:
+            screen_w, screen_h = 1920, 1080  # safe defaults
+
+        if self.saved_x is not None and self.saved_y is not None:
+            x = max(0, min(self.saved_x, screen_w - w))
+            y = max(0, min(self.saved_y, screen_h - h))
+            return x, y
+
+        # Default: bottom-right, just above the taskbar
+        x = screen_w - w - DEFAULT_MARGIN
+        y = screen_h - h - TASKBAR_CLEARANCE
+        return x, y
+
+    def _snap_to_edges(self, x, y, w, h):
+        """Snap to nearest screen edge if within threshold."""
+        try:
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+        except Exception:
+            return x, y
+
+        if x < EDGE_SNAP_THRESHOLD:
+            x = DEFAULT_MARGIN
+        elif x + w > screen_w - EDGE_SNAP_THRESHOLD:
+            x = screen_w - w - DEFAULT_MARGIN
+
+        if y < EDGE_SNAP_THRESHOLD:
+            y = DEFAULT_MARGIN
+        elif y + h > screen_h - EDGE_SNAP_THRESHOLD:
+            y = screen_h - h - TASKBAR_CLEARANCE
+
+        return x, y
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
     def _build_ui(self):
-        """Build the widget UI"""
-        # Main container with rounded corners effect
+        """Build the minimal Mac-style UI."""
+        # Outer container — gives us the rounded "card" look + accent border
         self.container = ctk.CTkFrame(
             self.root,
-            fg_color=COLORS["bg_dark"],
-            corner_radius=8,
+            fg_color=COLORS["bg_card"],
+            corner_radius=10,
             border_width=1,
-            border_color=COLORS["primary"]
+            border_color=COLORS["primary"],
         )
-        self.container.pack(fill="both", expand=True, padx=1, pady=1)
-        
-        # Make it draggable
-        self.container.bind("<Button-1>", self._start_drag)
-        self.container.bind("<B1-Motion>", self._do_drag)
-        self.container.bind("<ButtonRelease-1>", self._stop_drag)
-        
-        # Inner content frame
+        self.container.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # Inner content — keeps the body separate from the close button
         self.content = ctk.CTkFrame(self.container, fg_color="transparent")
-        self.content.pack(fill="both", expand=True, padx=5, pady=3)
-        
-        # Left side - icon and client info
-        left_frame = ctk.CTkFrame(self.content, fg_color="transparent")
-        left_frame.pack(side="left", fill="both", expand=True)
-        left_frame.bind("<Button-1>", self._start_drag)
-        left_frame.bind("<B1-Motion>", self._do_drag)
-        
-        # Top row - icon and client name
-        top_row = ctk.CTkFrame(left_frame, fg_color="transparent")
-        top_row.pack(fill="x")
-        top_row.bind("<Button-1>", self._start_drag)
-        top_row.bind("<B1-Motion>", self._do_drag)
-        
-        # Icon (always visible)
+        self.content.pack(fill="both", expand=True, padx=4, pady=2)
+
+        # Accent dot (also acts as the "collapsed" icon)
         self.icon_label = ctk.CTkLabel(
-            top_row,
-            text="⏱",
-            font=ctk.CTkFont(size=14),
+            self.content,
+            text="●",
+            font=ctk.CTkFont(family="Segoe UI", size=14),
             text_color=COLORS["primary"],
-            cursor="hand2"  # Show hand cursor since clicking expands
+            width=14,
+            cursor="hand2",
         )
-        self.icon_label.pack(side="left")
-        self.icon_label.bind("<Button-1>", self._on_icon_click)
-        self.icon_label.bind("<B1-Motion>", self._do_drag)
-        
-        # Client name
+        self.icon_label.pack(side="left", padx=(8, 6))
+
+        # Client name label
         self.client_label = ctk.CTkLabel(
-            top_row,
-            text=self.current_client_name,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            self.content,
+            text=self._truncate(self.current_client_name),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color=COLORS["text"],
-            anchor="w"
+            anchor="w",
+            cursor="hand2",
         )
         if not self.is_collapsed:
-            self.client_label.pack(side="left", fill="x", expand=True, padx=(5, 0))
-        self.client_label.bind("<Button-1>", self._start_drag)
-        self.client_label.bind("<B1-Motion>", self._do_drag)
-        
-        # Hotkey hint (shown below client name when expanded)
-        self.hint_label = ctk.CTkLabel(
-            left_frame,
-            text="Alt+Ctrl+T to switch",
-            font=ctk.CTkFont(size=9),
+            self.client_label.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        # Close (hide) button — only widget in expanded mode
+        self.close_btn = ctk.CTkLabel(
+            self.content,
+            text="×",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
             text_color=COLORS["text_muted"],
-            anchor="w"
+            width=18,
+            cursor="hand2",
         )
         if not self.is_collapsed:
-            self.hint_label.pack(fill="x", padx=(19, 0))  # Align with client name
-        self.hint_label.bind("<Button-1>", self._start_drag)
-        self.hint_label.bind("<B1-Motion>", self._do_drag)
-        
-        # Buttons frame (hidden when collapsed)
-        self.buttons_frame = ctk.CTkFrame(self.content, fg_color="transparent")
-        if not self.is_collapsed:
-            self.buttons_frame.pack(side="right")
-        
-        # Collapse button
-        self.collapse_btn = ctk.CTkButton(
-            self.buttons_frame,
-            text="─",
-            width=20,
-            height=20,
-            corner_radius=3,
-            fg_color="transparent",
-            hover_color=COLORS["bg_card"],
-            text_color=COLORS["text_muted"],
-            command=self._toggle_collapse
-        )
-        self.collapse_btn.pack(side="left", padx=1)
-        
-        # Close button
-        self.close_btn = ctk.CTkButton(
-            self.buttons_frame,
-            text="✕",
-            width=20,
-            height=20,
-            corner_radius=3,
-            fg_color="transparent",
-            hover_color="#EF4444",
-            text_color=COLORS["text_muted"],
-            command=self._hide
-        )
-        self.close_btn.pack(side="left", padx=1)
-        
-        # Update initial appearance
+            self.close_btn.pack(side="right", padx=(0, 6))
+        # Hover styling for the close button
+        self.close_btn.bind("<Enter>",
+                            lambda e: self.close_btn.configure(text_color=COLORS["no_client"]))
+        self.close_btn.bind("<Leave>",
+                            lambda e: self.close_btn.configure(text_color=COLORS["text_muted"]))
+        self.close_btn.bind("<Button-1>", lambda e: self._hide())
+
+        # Bind drag/click handlers on body widgets (NOT the close button)
+        for widget in (self.container, self.content, self.icon_label, self.client_label):
+            widget.bind("<ButtonPress-1>", self._on_press)
+            widget.bind("<B1-Motion>", self._on_drag)
+            widget.bind("<ButtonRelease-1>", self._on_release)
+
+        # Hover anywhere on the widget → fade in
+        for widget in (self.root, self.container, self.content,
+                       self.icon_label, self.client_label, self.close_btn):
+            widget.bind("<Enter>", self._on_enter, add="+")
+            widget.bind("<Leave>", self._on_leave, add="+")
+
+        # Right-click anywhere → hide (matches Mac menubar item behavior)
+        for widget in (self.container, self.content, self.icon_label, self.client_label):
+            widget.bind("<Button-3>", lambda e: self._hide())
+
+        # Initial color state
         self._update_appearance()
-    
-    def _start_drag(self, event):
-        """Start dragging the widget"""
-        self.is_dragging = True
-        self.drag_start_x = event.x
-        self.drag_start_y = event.y
-    
-    def _do_drag(self, event):
-        """Handle dragging"""
-        if self.is_dragging:
-            x = self.root.winfo_x() + event.x - self.drag_start_x
-            y = self.root.winfo_y() + event.y - self.drag_start_y
-            self.root.geometry(f"+{x}+{y}")
-    
-    def _stop_drag(self, event):
-        """Stop dragging and save position"""
-        self.is_dragging = False
-        self._save_state()
-    
-    def _on_icon_click(self, event):
-        """Handle click on icon - expand if collapsed"""
+
+    # ------------------------------------------------------------------
+    # Drag + click
+    # ------------------------------------------------------------------
+    def _on_press(self, event):
+        self._press_x = event.x_root
+        self._press_y = event.y_root
+        self._drag_offset_x = event.x_root - self.root.winfo_x()
+        self._drag_offset_y = event.y_root - self.root.winfo_y()
+        self._drag_started = False
+
+    def _on_drag(self, event):
+        # Only start dragging once the mouse moves past the threshold —
+        # this preserves quick clicks as "open picker"
+        if not self._drag_started:
+            dx = abs(event.x_root - self._press_x)
+            dy = abs(event.y_root - self._press_y)
+            if dx > DRAG_THRESHOLD_PX or dy > DRAG_THRESHOLD_PX:
+                self._drag_started = True
+
+        if self._drag_started:
+            new_x = event.x_root - self._drag_offset_x
+            new_y = event.y_root - self._drag_offset_y
+            self.root.geometry(f"+{new_x}+{new_y}")
+
+    def _on_release(self, event):
+        if self._drag_started:
+            # Drag ended — snap and persist
+            try:
+                w = self.root.winfo_width()
+                h = self.root.winfo_height()
+                x = self.root.winfo_x()
+                y = self.root.winfo_y()
+                x, y = self._snap_to_edges(x, y, w, h)
+                self.root.geometry(f"{w}x{h}+{x}+{y}")
+            except Exception:
+                pass
+            self._save_state()
+            self._drag_started = False
+            return
+
+        # No drag — treat as click
         if self.is_collapsed:
             self._toggle_collapse()
-        # If not collapsed, do nothing (just drag)
-    
-    def _on_client_click(self, event):
-        """Handle click on client name - open picker"""
-        if not self.is_dragging and self.on_click:
-            self.on_click()
-    
+        elif self.on_click:
+            try:
+                self.on_click()
+            except Exception as e:
+                print(f"[WIDGET] on_click error: {e}")
+
+    # ------------------------------------------------------------------
+    # Hover / fade
+    # ------------------------------------------------------------------
+    def _on_enter(self, _event=None):
+        self._cancel_fade()
+        self._apply_opacity(OPACITY_HOVER)
+
+    def _on_leave(self, _event=None):
+        self._schedule_fade()
+
+    def _schedule_fade(self):
+        self._cancel_fade()
+        if self._root_alive():
+            self._fade_after_id = self.root.after(
+                FADE_DELAY_MS, lambda: self._apply_opacity(OPACITY_IDLE)
+            )
+
+    def _cancel_fade(self):
+        if self._fade_after_id and self._root_alive():
+            try:
+                self.root.after_cancel(self._fade_after_id)
+            except Exception:
+                pass
+        self._fade_after_id = None
+
+    def _apply_opacity(self, alpha):
+        if not self._root_alive():
+            return
+        try:
+            self.root.attributes('-alpha', alpha)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Collapse / expand
+    # ------------------------------------------------------------------
     def _toggle_collapse(self):
-        """Toggle between expanded and collapsed view"""
+        """Toggle between expanded pill and icon-only collapsed mode."""
         self.is_collapsed = not self.is_collapsed
-        
+
         if self.is_collapsed:
-            # Collapse - hide client name, hint, and buttons
             self.client_label.pack_forget()
-            self.hint_label.pack_forget()
-            self.buttons_frame.pack_forget()
-            self.root.geometry("45x35")
+            self.close_btn.pack_forget()
+            self.root.geometry(f"{COLLAPSED_WIDTH}x{COLLAPSED_HEIGHT}")
         else:
-            # Expand - show everything
-            self.client_label.pack(side="left", fill="x", expand=True, padx=(5, 0))
-            self.hint_label.pack(fill="x", padx=(19, 0))
-            self.buttons_frame.pack(side="right")
-            self.root.geometry("220x50")
-        
+            self.client_label.pack(side="left", fill="x", expand=True, padx=(0, 6))
+            self.close_btn.pack(side="right", padx=(0, 6))
+            self.root.geometry(f"{WIDGET_WIDTH}x{WIDGET_HEIGHT}")
+
         self._save_state()
-    
+
+    # ------------------------------------------------------------------
+    # Show / hide
+    # ------------------------------------------------------------------
     def _hide(self):
-        """Hide the widget (can be shown again from tray)"""
+        """Hide the widget (persisted — reopen via tray menu)."""
         self.is_visible = False
         self._save_state()
         if self.root:
-            self.root.withdraw()  # Hide, don't destroy
-    
+            self.root.withdraw()
+
     def show(self):
-        """Show the widget if hidden"""
+        """Show the widget if hidden."""
         self.is_visible = True
         self._save_state()
         if self.root:
-            self.root.deiconify()
-            self.root.attributes('-topmost', True)
-            self.root.lift()
+            try:
+                self.root.deiconify()
+                self.root.attributes('-topmost', True)
+                self.root.lift()
+                self._apply_opacity(OPACITY_HOVER)
+                self._schedule_fade()
+            except Exception:
+                pass
         else:
-            # Widget was destroyed, recreate it
+            # Widget was destroyed — recreate
             self.create()
             if self.root:
                 self.root.mainloop()
-    
+
+    # ------------------------------------------------------------------
+    # Client display
+    # ------------------------------------------------------------------
     def update_client(self, client_id, client_name):
-        """Update the displayed client"""
+        """Update the displayed client (called by tray controller)."""
         self.current_client_id = client_id
         self.current_client_name = client_name or "No Client"
-        self._update_appearance()
-    
+        # Schedule on main thread if called from background
+        if self._root_alive():
+            try:
+                self.root.after(0, self._update_appearance)
+                # Briefly flash to full opacity so the user sees the change
+                self.root.after(0, lambda: self._apply_opacity(OPACITY_HOVER))
+                self.root.after(0, self._schedule_fade)
+            except Exception:
+                pass
+
     def _update_appearance(self):
-        """Update colors based on client state"""
-        if not self.root or not self.root.winfo_exists():
+        """Update colors and text based on current client state."""
+        if not self._root_alive():
             return
-        
+
         try:
-            # Update client label text
-            display_name = self.current_client_name
-            if len(display_name) > 18:
-                display_name = display_name[:16] + "..."
-            self.client_label.configure(text=display_name)
-            
-            # Change colors based on whether client is selected
+            self.client_label.configure(text=self._truncate(self.current_client_name))
+
             if self.current_client_id:
-                # Has client - green/teal theme
+                # Has client — teal accent
                 self.container.configure(border_color=COLORS["primary"])
                 self.icon_label.configure(text_color=COLORS["primary"])
                 self.client_label.configure(text_color=COLORS["text"])
             else:
-                # No client - red warning
+                # No client — red warning
                 self.container.configure(border_color=COLORS["no_client"])
                 self.icon_label.configure(text_color=COLORS["no_client"])
                 self.client_label.configure(text_color=COLORS["no_client"])
         except Exception:
             pass
-    
+
+    # ------------------------------------------------------------------
+    # Background poller (kept from old behavior so widget stays in sync
+    # even if update_client() is missed somewhere)
+    # ------------------------------------------------------------------
     def _start_update_loop(self):
-        """Start background loop to poll for client updates"""
         self._update_running = True
-        
+
         def update_loop():
             while self._update_running:
                 try:
                     if self.get_client:
-                        client_info = self.get_client()
-                        if client_info:
-                            new_id = client_info.get("client_id")
-                            new_name = client_info.get("client_name") or "No Client"
-                            
-                            if new_id != self.current_client_id or new_name != self.current_client_name:
+                        info = self.get_client()
+                        if info:
+                            new_id = info.get("client_id")
+                            new_name = info.get("client_name") or "No Client"
+                            if (new_id != self.current_client_id
+                                    or new_name != self.current_client_name):
                                 self.current_client_id = new_id
                                 self.current_client_name = new_name
-                                
-                                # Schedule UI update on main thread (don't touch tkinter here)
-                                try:
-                                    if self.root:
+                                if self._root_alive():
+                                    try:
                                         self.root.after(0, self._update_appearance)
-                                except Exception:
-                                    pass
+                                    except Exception:
+                                        pass
                 except Exception as e:
                     print(f"[WIDGET] Update error: {e}")
-                
-                _time.sleep(2)
-        
-        thread = threading.Thread(target=update_loop, daemon=True)
-        thread.start()
 
-    def destroy(self):
-        """Clean up the widget"""
-        self._update_running = False  # Stop the loop first
-        self._save_state()
-        if self.root:
-            try:
-                self.root.destroy()
-            except:
-                pass
-            self.root = None
+                _time.sleep(POLL_INTERVAL_S)
+
+        threading.Thread(target=update_loop, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _truncate(text, max_len=22):
+        if not text:
+            return "No Client"
+        if len(text) <= max_len:
+            return text
+        return text[: max_len - 1] + "…"
 
 
 # ============================================================
@@ -415,66 +546,65 @@ class FloatingClientWidget:
 def create_floating_widget(tray_controller):
     """
     Create and attach a floating widget to the system tray controller.
-    
+
     Args:
         tray_controller: TimeTrackerSystemTray instance
-    
+
     Returns:
-        FloatingClientWidget instance
+        FloatingClientWidget instance, or None if customtkinter unavailable.
     """
     if not WIDGET_AVAILABLE:
         print("[WIDGET] Cannot create widget - customtkinter not available")
         return None
-    
+
     def on_click():
-        """Open client picker when widget is clicked"""
+        """Open client picker when widget body is clicked."""
         if hasattr(tray_controller, '_show_client_picker'):
-            tray_controller._show_client_picker()
-    
+            try:
+                tray_controller._show_client_picker()
+            except Exception as e:
+                print(f"[WIDGET] Failed to open picker: {e}")
+
     def get_client():
-        """Get current client from tray state"""
+        """Get current client from tray state."""
         if hasattr(tray_controller, 'state'):
             return {
                 "client_id": tray_controller.state.current_client_id,
-                "client_name": tray_controller.state.current_client_name
+                "client_name": tray_controller.state.current_client_name,
             }
         return {"client_id": None, "client_name": "No Client"}
-    
+
     widget = FloatingClientWidget(
         on_click_callback=on_click,
-        get_client_callback=get_client
+        get_client_callback=get_client,
     )
-    
     return widget
 
 
 if __name__ == "__main__":
-    # Test the widget standalone
-    import customtkinter as ctk
-    
+    # Standalone test
     test_client = {"id": 1, "name": "Test Client Inc"}
-    
+
     def on_click():
-        print("Widget clicked!")
-    
+        print("Widget clicked — would open picker here")
+
     def get_client():
         return {"client_id": test_client["id"], "client_name": test_client["name"]}
-    
+
     widget = FloatingClientWidget(
         on_click_callback=on_click,
-        get_client_callback=get_client
+        get_client_callback=get_client,
     )
     widget.create()
-    
-    # Test updating client after 3 seconds
+
     def test_no_client():
         test_client["id"] = None
         test_client["name"] = "No Client"
-    
+
     def test_new_client():
         test_client["id"] = 2
-        test_client["name"] = "Another Client Corp"
-    
+        test_client["name"] = "Varacchi 1040 - 2024 Tax Return"
+
     if widget.root:
         widget.root.after(3000, test_no_client)
         widget.root.after(6000, test_new_client)

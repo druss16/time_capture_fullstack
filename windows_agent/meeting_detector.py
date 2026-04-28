@@ -23,6 +23,19 @@ Detection signals (priority order):
 
 Any two signals = high confidence. One signal = medium confidence, still fires
 after hysteresis clears.
+
+v1.2.98: Browser meeting fixes
+  * NEW: Chrome/Edge/Firefox/Brave map to "_browser" pseudo-app — audio
+         sessions on browsers count as a signal but only when paired with
+         a meeting title probe. Fixes Google Meet detection (was completely
+         broken: Chrome wasn't in MEETING_APPS_WINDOWS, so audio probe
+         never matched, leaving title probe as the only possible signal).
+  * NEW: probe_browser_windows() enumerates ALL visible browser windows
+         instead of only checking foreground title. Meet now detects even
+         when user has switched to Excel/Outlook or is screen-sharing.
+  * NEW: Aggregator promotes browser+title combos — chrome.exe with audio
+         + "meet.google.com" in any window title = {audio, title} = passes
+         the 2+ signal filter.
 """
 
 import os
@@ -85,7 +98,7 @@ logger = logging.getLogger('timetracker.meeting')
 # Maps platform-specific process names / identifiers to canonical app keys
 
 MEETING_APPS_WINDOWS = {
-    # exe name (lowercase) → canonical key
+    # Native meeting apps
     "cpthost.exe": "zoom",           # Zoom meeting subprocess (NOT Zoom.exe tray)
     "zoom.exe": "zoom",              # fallback — main Zoom process during active call
     "ms-teams.exe": "teams",         # new Teams
@@ -96,6 +109,15 @@ MEETING_APPS_WINDOWS = {
     "slack.exe": "slack",            # Slack Huddles
     "discord.exe": "discord",
     "googlemeet.exe": "meet",        # rare — Meet PWA
+
+    # v1.2.98: Browsers map to special "_browser" pseudo-app.
+    # The aggregator in _poll_once() promotes browser audio/camera signals
+    # onto whichever real meeting app the title probe identified. This is
+    # what makes Google Meet (and browser-based Zoom/Teams/Webex) detect.
+    "chrome.exe": "_browser",
+    "msedge.exe": "_browser",
+    "firefox.exe": "_browser",
+    "brave.exe": "_browser",
 }
 
 MEETING_APPS_MAC = {
@@ -213,7 +235,12 @@ class WindowsMeetingProbe(_BaseProbe):
         self._last_audio_result: List[DetectionProbe] = []
 
     def probe_audio(self) -> List[DetectionProbe]:
-        """Check Windows audio sessions for active meeting app streams."""
+        """Check Windows audio sessions for active meeting app streams.
+
+        v1.2.98: Browsers (chrome.exe etc.) now match too — they map to
+        the "_browser" pseudo-app. The aggregator in _poll_once() promotes
+        these onto the real meeting app identified by the title probe.
+        """
         if not _PYCAW_AVAILABLE:
             return []
 
@@ -330,7 +357,12 @@ class WindowsMeetingProbe(_BaseProbe):
         return results
 
     def probe_process(self) -> List[DetectionProbe]:
-        """Scan running processes for meeting subprocesses."""
+        """Scan running processes for meeting subprocesses.
+
+        v1.2.98: Skip browsers here — they're long-lived background
+        processes that don't indicate an active meeting on their own.
+        Their meeting state comes from probe_audio + probe_browser_windows.
+        """
         if not _PSUTIL_AVAILABLE:
             return []
 
@@ -344,7 +376,8 @@ class WindowsMeetingProbe(_BaseProbe):
                     continue
 
                 app = MEETING_APPS_WINDOWS.get(name)
-                if not app or app in seen_apps:
+                # Skip browsers — process alone tells us nothing here
+                if not app or app == "_browser" or app in seen_apps:
                     continue
 
                 # Special case: Zoom.exe is always running when Zoom is installed
@@ -356,6 +389,52 @@ class WindowsMeetingProbe(_BaseProbe):
                 ))
         except Exception as e:
             logger.debug(f"[MEETING] Process scan error: {e}")
+
+        return results
+
+    def probe_browser_windows(self) -> List[DetectionProbe]:
+        """v1.2.98: Scan ALL visible browser windows for meeting patterns.
+
+        Unlike probe_browser_title() in the base class (which only checks
+        the foreground title via callback), this enumerates every visible
+        window so meetings are detected even when:
+          - User has switched to Excel/Outlook/etc.
+          - User is screen-sharing (which steals foreground)
+          - Meet tab is in a background browser window
+
+        This is the second half of the Google Meet fix — without this,
+        we only see Meet when the user is staring directly at it.
+        """
+        if not _WIN32_AVAILABLE:
+            return []
+
+        results = []
+        seen_apps = set()
+
+        def _enum_handler(hwnd, _):
+            try:
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                title = win32gui.GetWindowText(hwnd)
+                if not title:
+                    return
+                title_lower = title.lower()
+                for pattern, app in MEETING_TITLE_PATTERNS.items():
+                    if pattern in title_lower and app not in seen_apps:
+                        seen_apps.add(app)
+                        results.append(DetectionProbe(
+                            active=True, app=app,
+                            source=DetectionSource.TITLE,
+                            title=title.strip()
+                        ))
+                        break
+            except Exception:
+                pass
+
+        try:
+            win32gui.EnumWindows(_enum_handler, None)
+        except Exception as e:
+            logger.debug(f"[MEETING] EnumWindows error: {e}")
 
         return results
 
@@ -623,7 +702,17 @@ class MeetingDetector:
             except Exception as e:
                 logger.debug(f"[MEETING] {probe_name} probe failed: {e}")
 
-        # Browser title probe needs foreground title from caller
+        # v1.2.98: Scan ALL browser windows on Windows — not just foreground.
+        # This is what makes Meet detect when user has switched to Excel
+        # or is screen-sharing (which steals foreground).
+        if IS_WINDOWS and hasattr(self.probe, 'probe_browser_windows'):
+            try:
+                probes.extend(self.probe.probe_browser_windows())
+            except Exception as e:
+                logger.debug(f"[MEETING] browser_windows probe failed: {e}")
+
+        # Browser title probe needs foreground title from caller (Mac path
+        # and Windows fallback for non-foreground-stealing cases)
         if self.get_foreground_title:
             try:
                 title = self.get_foreground_title()
@@ -641,6 +730,37 @@ class MeetingDetector:
             app_sources.setdefault(p.app, set()).add(p.source.value)
             if p.title and p.app not in app_titles:
                 app_titles[p.app] = p.title
+
+        # === v1.2.98: Browser-meeting promotion ===
+        # If a browser has audio/camera AND a title probe identified a
+        # meeting app, merge them: the meeting app inherits the browser's
+        # signals. This is the Google Meet fix (and also catches
+        # Zoom-in-browser, Teams-in-browser, Webex-in-browser).
+        #
+        # Example: chrome.exe audio session active → "_browser" with
+        # sources={"audio"}. Title probe sees "meet.google.com" → "meet"
+        # with sources={"title"}. After promotion: "meet" with
+        # sources={"title", "audio"} — passes the 2+ signal filter.
+        browser_signals = app_sources.pop("_browser", set())
+        if browser_signals:
+            promoted_any = False
+            for app, sources in list(app_sources.items()):
+                if "title" in sources:
+                    # Title probe identified a meeting in a browser tab —
+                    # inherit the browser's audio/camera signals
+                    app_sources[app] = sources | browser_signals
+                    promoted_any = True
+                    logger.debug(
+                        f"[MEETING] Promoted browser meeting: {app} "
+                        f"now has sources={app_sources[app]}"
+                    )
+            if not promoted_any:
+                # Browser has audio but no meeting title — could be
+                # Spotify, YouTube, etc. Drop silently.
+                logger.debug(
+                    f"[MEETING] Browser audio with no meeting title — "
+                    f"likely media playback, ignoring"
+                )
 
         # Process alone is never enough. Meeting apps (Teams, Zoom, Slack,
         # Webex) run persistent background processes even when no call is

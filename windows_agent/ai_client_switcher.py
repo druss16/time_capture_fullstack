@@ -1730,19 +1730,28 @@ class AIClientSwitcher:
     # Helpers
     # =================================================================
 
+
     def _should_skip(self, title: str, exe_name: str) -> bool:
         title_lower = title.lower().strip()
         if any(title_lower == d or title_lower.startswith(d) for d in GENERIC_TAX_DIALOGS):
             return True
-
+     
         if exe_name and exe_name.lower() in self._skip_exes:
-            return True
-
+            # Explorer exception: the explorer_watcher dispatches full filesystem
+            # paths (e.g. "C:\Clients\Varacchi\2024 1040"). When the title looks
+            # like a path, treat it as legitimate signal — same as the Mac agent
+            # does via NSWorkspace. Random Explorer chrome ("Documents", "This PC",
+            # "Quick access") doesn't look like a path so it still gets skipped.
+            if exe_name.lower() == "explorer.exe" and self._looks_like_path(title):
+                pass  # don't skip — fall through to the rest of the checks
+            else:
+                return True
+     
         t = title.lower().strip()
         for pat in self._skip_patterns:
             if pat.search(t):
                 return True
-
+     
         if t in {
             "google chrome", "microsoft edge", "brave browser", "firefox",
             "microsoft outlook", "mail", "slack", "file explorer",
@@ -1750,7 +1759,22 @@ class AIClientSwitcher:
             "command prompt", "terminal", "task manager",
         }:
             return True
+     
+        return False
 
+
+    @staticmethod
+    def _looks_like_path(s: str) -> bool:
+        """Heuristic: does this string look like a Windows filesystem path?"""
+        if not s or len(s) < 2:
+            return False
+        s = s.strip()
+        # Drive letter (C:, D:, etc.)
+        if len(s) >= 2 and s[1] == ":":
+            return True
+        # UNC path (\\server\share)
+        if s.startswith("\\\\"):
+            return True
         return False
 
     def _clear_pending(self):

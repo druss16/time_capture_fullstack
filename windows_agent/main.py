@@ -2074,6 +2074,32 @@ def run_agent():
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
 
+
+    # === EXPLORER FOLDER WATCHER (Mac parity) ===
+    # When user opens a folder in Explorer, feed the path into the AI switcher
+    # so it can auto-switch the client — same behavior as Mac's NSWorkspace hook.
+    explorer_watcher = None
+    try:
+        from explorer_watcher import ExplorerFolderWatcher
+     
+        if ai_switcher:
+            explorer_watcher = ExplorerFolderWatcher(
+                ai_switcher=ai_switcher,
+                log_fn=log,
+                poll_seconds=2.0,
+                enabled=True,
+            )
+            explorer_watcher.start()
+        else:
+            log("[EXPLORER] AI switcher unavailable — folder watcher not started")
+    except ImportError:
+        log("[EXPLORER] explorer_watcher.py not found — folder watching disabled")
+    except Exception as e:
+        log(f"[EXPLORER] Failed to initialize: {e}")
+        import traceback
+        traceback.print_exc()
+
+
     # === MEETING DETECTOR ===
     meeting_detector = None
     if MEETING_DETECTOR_AVAILABLE:
@@ -2836,6 +2862,14 @@ def run_agent():
             log("[MEETING] Stopped")
         except Exception as e:
             log(f"[MEETING] Error stopping: {e}")
+
+    # Stop explorer watcher
+    if explorer_watcher:
+        try:
+            explorer_watcher.stop()
+            log("[EXPLORER] Stopped")
+        except Exception as e:
+            log(f"[EXPLORER] Error stopping: {e}")
     
     # Stop notification worker
     if notif_worker:

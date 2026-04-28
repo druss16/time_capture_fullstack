@@ -4251,10 +4251,12 @@ def today_time(request):
     ).select_related('client'))
 
     # Tuples for fast overlap checks: (start, end, block)
+    # Only ATTRIBUTED meetings shadow events — unattributed meetings leave
+    # foreground app time alone so users can manually attribute later.
     meeting_windows = [
         (mb.start, mb.end, mb)
         for mb in meeting_blocks
-        if mb.start and mb.end
+        if mb.start and mb.end and mb.client_id
     ]
     
     # =========================================================================

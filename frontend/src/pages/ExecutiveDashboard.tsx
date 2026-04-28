@@ -775,6 +775,7 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
           Margin: c.margin,
           "Margin %": c.margin_pct,
           "Worked Hrs": c.worked_hours,
+          "Billed Hrs": c.invoiced_hours,
           "Realization %": c.realization ?? "",
         }))}
         csvFilename={`invoice-profitability-${period}.csv`}
@@ -786,8 +787,8 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
             </p>
          ) : (
           <table style={s.table}>
-            <thead><tr>{["Client","Invoiced","Labor Cost","Margin","Margin %","Hours"].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
-            <tbody>
+              <thead><tr>{["Client","Invoiced","Labor Cost","Margin","Margin %","Worked Hrs","Billed Hrs","Realization"].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+              <tbody>
               {invClients.map((r) => (
                 <tr key={r.client_id}>
                   <td style={s.td}>{r.client_name}</td>
@@ -815,8 +816,12 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
                         {r.margin_pct.toFixed(1)}%
                       </span>
                     </div>
-                  </td>
+                    </td>
                   <td style={{ ...s.td, color: C.slate }}>{r.worked_hours.toFixed(1)}h</td>
+                  <td style={{ ...s.td, color: C.gold }}>{r.invoiced_hours.toFixed(1)}h</td>
+                  <td style={{ ...s.td, color: r.realization == null ? C.slate : r.realization >= 100 ? C.teal : r.realization >= 85 ? C.gold : C.rose, fontWeight: 500 }}>
+                    {r.realization == null ? "—" : `${r.realization.toFixed(1)}%`}
+                  </td>
                 </tr>
               ))}
               {invProfit.totals && (
@@ -832,6 +837,8 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
                     ${invProfit.totals.margin?.toLocaleString()}
                   </td>
                   <td style={{ ...s.td, color: C.gold }}>{invProfit.totals.margin_pct?.toFixed(1)}%</td>
+                  <td style={{ ...s.td, color: C.slate }}>{invProfit.totals.worked_hours?.toFixed(1)}h</td>
+                  <td style={s.td} />
                   <td style={s.td} />
                 </tr>
               )}

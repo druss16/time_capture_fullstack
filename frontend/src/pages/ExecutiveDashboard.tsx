@@ -55,7 +55,8 @@ const INFO: Record<string, string> = {
   "Revenue Trend": "Monthly invoiced revenue. Reflects actual billed amounts — only as accurate as your imported invoices.",
   "WIP Aging": "Approved, uninvoiced work bucketed by age. 61–90+ day buckets are at risk of write-off — prioritize invoicing these first.",
   "Timesheet Compliance Chart": "Month-by-month compliance trend. Dips often correlate with busy season, staff changes, or onboarding.",
-  "Realization Rate by Client": "Worked hours vs. billed hours per client. Where the gold bar is shorter than the gray bar, work happened that never made it onto an invoice — pure revenue leakage. Where the gold bar is longer, you're billing fixed-fee or premium rates above hours worked.",
+  "Realization Rate by Client": "Two views of the same gap. HOURS realization (chart): billed hours ÷ worked hours — catches scope creep and unbilled time. DOLLAR realization (table column): invoice $ ÷ standard-rate value of worked hours — also catches rate discounting. Industry benchmark: 95–110% on either measure.",
+  "Dollar Realization": "Industry-standard realization rate per AICPA: invoice dollars ÷ standard-rate value of worked hours. Below 90% means a combination of unbilled hours AND discounted rates. Above 100% means premium fixed-fee billing.",
   "Client Profitability": "Revenue (from billing_amount on time blocks) minus labor cost (hours × employee cost rate). All clients appear here even without imported invoices.",
   "Staff Utilization": "Hours per staff member: billable vs. non-billable. Low billable % may indicate admin overload or available capacity.",
   "Staff Detail": "Per-person breakdown of billable hours, total hours, and utilization rate. Useful for capacity planning and performance reviews.",
@@ -626,7 +627,10 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
       worked: c.worked_hours,
       billed: c.billed_hours,
       gap: c.worked_hours - c.billed_hours,
-      realization: c.realization,
+      realization: c.realization,                                  // hours-based
+      dollar_realization: (c as any).dollar_realization ?? null,   // dollar-based
+      worked_value: (c as any).worked_value ?? 0,
+      billed_amount: (c as any).billed_amount ?? 0,
       status: c.status,
     }))
     .sort((a, b) => b.gap - a.gap)
@@ -764,20 +768,29 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
          realizData.length === 0 ? <p style={{ color: C.slate, textAlign: "center", padding: 40 }}>No invoice data for this period. Import invoices via Settings → Invoices.</p> :
          <RealizChart data={realizData} />}
       </InfoCard>
-
+      
+      {/* Build a quick lookup of realization by client_id for table cells */}
+      {/* (placed inline so it's recomputed only when realizData changes) */}
       <SectionTitle infoKey="Invoice Profitability by Client">Client Profitability (Actual Invoices)</SectionTitle>
       <InfoCard
         infoKey="Invoice Profitability by Client"
-        csvData={invClients.map((c) => ({
-          Client: c.client_name,
-          "Invoiced $": c.invoiced_amount,
-          "Worked Cost $": c.worked_cost,
-          Margin: c.margin,
-          "Margin %": c.margin_pct,
-          "Worked Hrs": c.worked_hours,
-          "Billed Hrs": c.invoiced_hours,
-          "Realization %": c.realization ?? "",
-        }))}
+        csvData={invClients.map((c) => {
+          const realizMatch = (realiz.clients ?? []).find(
+            (rc: any) => rc.client_id === c.client_id
+          ) as any;
+          const hoursRealiz = c.worked_hours > 0 ? (c.invoiced_hours / c.worked_hours) * 100 : null;
+          return {
+            Client: c.client_name,
+            "Invoiced $": c.invoiced_amount,
+            "Worked Cost $": c.worked_cost,
+            Margin: c.margin,
+            "Margin %": c.margin_pct,
+            "Worked Hrs": c.worked_hours,
+            "Billed Hrs": c.invoiced_hours,
+            "Hours Realiz %": hoursRealiz != null ? hoursRealiz.toFixed(1) : "",
+            "Dollar Realiz %": realizMatch?.dollar_realization ?? "",
+          };
+        })}
         csvFilename={`invoice-profitability-${period}.csv`}
       >
         {loading ? <div style={{ height: 200, background: C.navyLt, borderRadius: 8 }} /> :
@@ -787,7 +800,7 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
             </p>
          ) : (
           <table style={s.table}>
-              <thead><tr>{["Client","Invoiced","Labor Cost","Margin","Margin %","Worked Hrs","Billed Hrs","Realization"].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+              <thead><tr>{["Client","Invoiced","Labor Cost","Margin","Margin %","Worked Hrs","Billed Hrs","Hours Realiz.","Dollar Realiz."].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
               <tbody>
               {invClients.map((r) => (
                 <tr key={r.client_id}>
@@ -819,9 +832,38 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
                     </td>
                   <td style={{ ...s.td, color: C.slate }}>{r.worked_hours.toFixed(1)}h</td>
                   <td style={{ ...s.td, color: C.gold }}>{r.invoiced_hours.toFixed(1)}h</td>
-                  <td style={{ ...s.td, color: r.realization == null ? C.slate : r.realization >= 100 ? C.teal : r.realization >= 85 ? C.gold : C.rose, fontWeight: 500 }}>
-                    {r.realization == null ? "—" : `${r.realization.toFixed(1)}%`}
-                  </td>
+                  {(() => {
+                    // Hours realization: invoiced hours / worked hours
+                    const hoursRealiz = r.worked_hours > 0
+                      ? (r.invoiced_hours / r.worked_hours) * 100
+                      : null;
+                    const hoursColor = hoursRealiz == null ? C.slate
+                      : hoursRealiz >= 100 ? C.teal
+                      : hoursRealiz >= 85  ? C.gold
+                      : C.rose;
+                    return (
+                      <td style={{ ...s.td, color: hoursColor, fontWeight: 500 }}>
+                        {hoursRealiz == null ? "—" : `${hoursRealiz.toFixed(1)}%`}
+                      </td>
+                    );
+                  })()}
+                  {(() => {
+                    // Dollar realization: invoiced amount / (worked hours × standard rate)
+                    // Use realiz.clients to find the dollar_realization field
+                    const realizMatch = (realiz.clients ?? []).find(
+                      (rc: any) => rc.client_id === r.client_id
+                    ) as any;
+                    const dollarRealiz = realizMatch?.dollar_realization ?? null;
+                    const dollarColor = dollarRealiz == null ? C.slate
+                      : dollarRealiz >= 100 ? C.teal
+                      : dollarRealiz >= 85  ? C.gold
+                      : C.rose;
+                    return (
+                      <td style={{ ...s.td, color: dollarColor, fontWeight: 500 }}>
+                        {dollarRealiz == null ? "—" : `${dollarRealiz.toFixed(1)}%`}
+                      </td>
+                    );
+                  })()}
                 </tr>
               ))}
               {invProfit.totals && (
@@ -839,7 +881,12 @@ export default function ExecutiveDashboard({ apiBase = "https://timetracker-api-
                   <td style={{ ...s.td, color: C.gold }}>{invProfit.totals.margin_pct?.toFixed(1)}%</td>
                   <td style={{ ...s.td, color: C.slate }}>{invProfit.totals.worked_hours?.toFixed(1)}h</td>
                   <td style={s.td} />
-                  <td style={s.td} />
+                  <td style={{ ...s.td, color: C.gold, fontWeight: 600 }}>
+                    {realiz.overall != null ? `${realiz.overall.toFixed(1)}%` : "—"}
+                  </td>
+                  <td style={{ ...s.td, color: C.gold, fontWeight: 600 }}>
+                    {(realiz as any).overall_dollar != null ? `${(realiz as any).overall_dollar.toFixed(1)}%` : "—"}
+                  </td>
                 </tr>
               )}
             </tbody>

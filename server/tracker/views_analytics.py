@@ -153,17 +153,23 @@ def _calc_realization(org, start_date: date, end_date: date) -> dict:
     }
 
     # --- Worked (billable) hours by client ---
+    # --- Worked (billable) hours + standard-rate value by client ---
     worked_qs = (
         Block.objects
         .filter(org=org, day__gte=start_date, day__lte=end_date,
                 is_billable=True, client__isnull=False)
         .values("client_id", "client__name")
-        .annotate(worked_minutes=Coalesce(Sum("minutes"), 0))
+        .annotate(
+            worked_minutes=Coalesce(Sum("minutes"), 0),
+            # Dollar value of worked hours at the rate that was on the block
+            worked_value=Coalesce(Sum("billing_amount"), Decimal("0")),
+        )
     )
     worked = {
         r["client_id"]: {
             "name": r["client__name"],
             "worked_hours": _safe_float(r["worked_minutes"]) / 60.0,
+            "worked_value": _safe_float(r["worked_value"]),
         }
         for r in worked_qs
     }
@@ -171,25 +177,41 @@ def _calc_realization(org, start_date: date, end_date: date) -> dict:
     all_ids = set(invoiced) | set(worked)
     clients, total_billed, total_worked = [], 0.0, 0.0
 
+    total_worked_value = 0.0
+    total_billed_amount = 0.0
+
     for cid in all_ids:
         inv = invoiced.get(cid, {})
         wrk = worked.get(cid, {})
         bh = inv.get("billed_hours", 0.0)
         wh = wrk.get("worked_hours", 0.0)
+        wv = wrk.get("worked_value", 0.0)
+        ba = inv.get("billed_amount", 0.0)
         name = inv.get("name") or wrk.get("name", "Unknown")
 
+        # Hours realization (what most demos show)
         if wh > 0 and bh > 0:
-            rate = bh / wh * 100
+            hours_rate = bh / wh * 100
         elif wh > 0:
-            rate = 0.0
+            hours_rate = 0.0
         else:
-            rate = 100.0  # invoiced with no tracked time
+            hours_rate = 100.0
 
-        if rate >= 125:
+        # Dollar realization (what AICPA / industry uses)
+        # Compares actual invoice $ to standard-rate value of worked hours
+        if wv > 0 and ba > 0:
+            dollar_rate = ba / wv * 100
+        elif wv > 0:
+            dollar_rate = 0.0
+        else:
+            dollar_rate = 100.0
+
+        # Status uses dollar realization since that's the industry standard
+        if dollar_rate >= 125:
             status = "excellent"
-        elif rate >= 100:
+        elif dollar_rate >= 100:
             status = "good"
-        elif rate >= 85:
+        elif dollar_rate >= 85:
             status = "warning"
         else:
             status = "critical"
@@ -199,20 +221,28 @@ def _calc_realization(org, start_date: date, end_date: date) -> dict:
             "client_name": name,
             "billed_hours": round(bh, 2),
             "worked_hours": round(wh, 2),
-            "billed_amount": round(inv.get("billed_amount", 0.0), 2),
-            "realization": round(rate, 1),
+            "billed_amount": round(ba, 2),
+            "worked_value": round(wv, 2),
+            "realization": round(hours_rate, 1),          # Hours-based
+            "dollar_realization": round(dollar_rate, 1),  # Dollar-based
             "status": status,
         })
         total_billed += bh
         total_worked += wh
+        total_billed_amount += ba
+        total_worked_value += wv
 
-    clients.sort(key=lambda x: x["realization"])
-    overall = (total_billed / total_worked * 100) if total_worked > 0 else 0.0
+    clients.sort(key=lambda x: x["dollar_realization"])
+    overall_hours = (total_billed / total_worked * 100) if total_worked > 0 else 0.0
+    overall_dollar = (total_billed_amount / total_worked_value * 100) if total_worked_value > 0 else 0.0
 
     return {
-        "overall": round(overall, 1),
+        "overall": round(overall_hours, 1),
+        "overall_dollar": round(overall_dollar, 1),
         "total_billed_hours": round(total_billed, 2),
         "total_worked_hours": round(total_worked, 2),
+        "total_billed_amount": round(total_billed_amount, 2),
+        "total_worked_value": round(total_worked_value, 2),
         "clients": clients,
     }
 

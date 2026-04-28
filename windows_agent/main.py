@@ -2288,15 +2288,28 @@ def run_agent():
 
     # Prompt client selection shortly after startup if no client set
     def _prompt_client_after_startup():
-        time.sleep(5)
         try:
-            api_key_val = config.get("api_key") or API_KEY
+            # ── Skip prompt on auto-update / restart ──
+            # Only show the startup picker on FIRST EVER launch (no config yet).
+            # On every subsequent start (including auto-update restarts), users
+            # already know about the app and don't need an interruption — the
+            # floating widget's red "no client" dot is enough of a passive hint.
+            config_path = os.path.expanduser("~/.timetracker/config.json")
+            widget_state_path = os.path.expanduser("~/.timetracker/widget_state.json")
+            if os.path.exists(config_path) or os.path.exists(widget_state_path):
+                log("[AGENT] Existing install detected - skipping startup picker prompt")
+                return
+
+            # First-ever launch: wait a moment for sync to finish, then prompt.
+            time.sleep(15)
+
+            api_key_val = config.get("api_key")
             if not api_key_val:
                 log("[AGENT] No API key yet - skipping startup client prompt")
                 return
             current = get_current_client_from_backend(API_BASE, api_key_val)
             if not current or not current.get("client_id"):
-                log("[AGENT] No client selected after startup - prompting picker")
+                log("[AGENT] No client selected after first launch - prompting picker")
                 if gui_menu_bar:
                     gui_menu_bar._show_client_picker()
         except Exception as e:

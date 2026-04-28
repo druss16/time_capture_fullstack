@@ -86,8 +86,14 @@ Filename: "{app}\tt_watchdog.exe"; Flags: nowait postinstall runhidden
 Filename: "{app}\TimeTrackerAgent.exe"; Description: "Start TimeTracker"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "--unregister-task"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "UnregisterTask"
-Filename: "{app}\TimeTrackerAgent.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopAgent"
+; v1.3.22: Use cmd.exe /c taskkill instead of the agent .exe.
+; The agent has a single-instance mutex check, so launching it with
+; --unregister-task would silently exit (the running instance holds
+; the mutex). This bypasses that entirely. Real cleanup happens in
+; CurUninstallStepChanged(usUninstall) below.
+Filename: "{cmd}"; Parameters: "/c taskkill /F /IM tt_watchdog.exe /T"; Flags: runhidden; RunOnceId: "KillWatchdog"
+Filename: "{cmd}"; Parameters: "/c taskkill /F /IM TimeTrackerAgent.exe /T"; Flags: runhidden; RunOnceId: "KillAgent"
+Filename: "{cmd}"; Parameters: "/c taskkill /F /IM TimeTracker.exe /T"; Flags: runhidden; RunOnceId: "KillGui"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -243,15 +249,35 @@ begin
   DeleteFile(ExpandConstant('{userstartup}\TimeTracker Agent.lnk'));
 end;
 
+// v1.3.22: Removes ALL scheduled tasks the agent might have created
+// (main, watchdog, startup) plus legacy startup shortcuts and registry keys.
 procedure RemoveScheduledTask;
 var
   ResultCode: Integer;
 begin
+  // Main scheduled task (created by installer)
   Exec('schtasks.exe', '/delete /tn "MavOps TimeTracker" /f',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Removed scheduled task: MavOps TimeTracker (code=' + IntToStr(ResultCode) + ')');
+
+  // Watchdog task (created by tt_watchdog.py at runtime)
   Exec('schtasks.exe', '/delete /tn "TimeTrackerWatchdog" /f',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Removed scheduled task: TimeTrackerWatchdog (code=' + IntToStr(ResultCode) + ')');
+
+  // Startup task (created by startup_task.py at runtime)
+  Exec('schtasks.exe', '/delete /tn "TimeTrackerStartup" /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Removed scheduled task: TimeTrackerStartup (code=' + IntToStr(ResultCode) + ')');
+
+  // Legacy startup shortcuts (in case created by older versions)
   DeleteFile(ExpandConstant('{userstartup}\TimeTracker Agent.lnk'));
+  DeleteFile(ExpandConstant('{userstartup}\TimeTracker.lnk'));
+
+  // Legacy HKCU Run keys (in case any old version registered them)
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'TimeTracker');
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'TimeTrackerAgent');
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'MavOpsTimeTracker');
 end;
 
 
@@ -406,12 +432,50 @@ begin
   end;
 end;
 
+// v1.3.22: KILL PROCESSES FIRST before files are removed.
+// Original bug: Inno tried to delete agent .exe while it was still running,
+// which silently failed. The agent kept running in memory, watchdog kept
+// relaunching it, scheduled tasks were never removed, and the tray icon
+// stayed visible. This now kills all three processes (in dependency order
+// so the watchdog can't relaunch the agent) before any other uninstall step.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
+  // ── usUninstall fires BEFORE files are removed ──
+  if CurUninstallStep = usUninstall then
+  begin
+    Log('Killing all TimeTracker processes before uninstall...');
+
+    // Kill in dependency order: watchdog FIRST so it can't relaunch agent,
+    // then agent, then GUI
+    Exec('taskkill', '/F /IM tt_watchdog.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('Killed tt_watchdog.exe (code=' + IntToStr(ResultCode) + ')');
+
+    Exec('taskkill', '/F /IM TimeTrackerAgent.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('Killed TimeTrackerAgent.exe (code=' + IntToStr(ResultCode) + ')');
+
+    Exec('taskkill', '/F /IM TimeTracker.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('Killed TimeTracker.exe (code=' + IntToStr(ResultCode) + ')');
+
+    // Wait for OS to fully release file handles before deletion proceeds
+    Sleep(2000);
+
+    // Remove scheduled tasks now (before files are gone)
+    RemoveScheduledTask;
+  end;
+
+  // ── usPostUninstall fires AFTER files are removed ──
   if CurUninstallStep = usPostUninstall then
   begin
-    RemoveScheduledTask;
+    // Restart Explorer to clear ghost system tray icons
+    // (Windows leaves the icon image in the tray even after the process
+    // dies; restarting Explorer is the only reliable way to remove it)
+    Exec('taskkill', '/F /IM explorer.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(500);
+    Exec('explorer.exe', '', '', SW_SHOW, ewNoWait, ResultCode);
 
+    // User data prompt
     if MsgBox('Do you want to remove all TimeTracker settings and data?', mbConfirmation, MB_YESNO) = IDYES then
       CleanupUserData();
   end;

@@ -1,18 +1,28 @@
 """
-Floating Client Widget - Always visible current client indicator
+Floating Client Widget — Minimal Dot Mode
 
-v1.3.22 fixes:
-  - Widget no longer grows during drag (locked size in every geometry call)
-  - Snap threshold reduced 24px -> 8px so you can place it anywhere without
-    it yanking to bottom/edge
+v1.3.25 redesign:
+  Default state is a tiny 18x18 dot in the bottom-right corner.
+  Hovering the dot expands it to the full pill widget.
+  Mouse leave collapses back to dot after a short delay.
+  When client switches, pill flashes to 100% opacity, holds at 98%
+  for 3 seconds, then collapses back to dot.
 
-Mac-style minimal pinned toolbar:
-- Frameless always-on-top pill, sits just above the Windows taskbar
-- Shows current client name only
-- Click anywhere on it -> opens the client picker
-- Drag to move; snaps to screen edges only if released within 8px
-- Auto-fades to 55% opacity when not hovered, 98% on hover
-- Hide via x -> reappears via "Show Client Widget" tray menu
+States:
+  - Dot (idle): 18x18 teal dot at 55% opacity, basically invisible
+  - Dot (no client): 18x18 red dot at 95% opacity, signals "set me!"
+  - Pill (hover): full 200x36 pill with client name, close button
+  - Pill (no client): red-bordered pill with "No Client" text
+  - Pill (just switched): briefly flashes to 100% opacity for visibility
+
+Interactions:
+  - Hover dot → expands to pill
+  - Mouse leaves pill → collapses back to dot after 600ms
+  - Click pill body → opens client picker
+  - Click × on pill → hides widget entirely (reopen via tray)
+  - Drag from anywhere → moves widget; snaps to edges within 8px
+  - Right-click → hides widget
+  - Client switch → pill flashes + holds for 3s + collapses
 """
 
 import os
@@ -39,34 +49,45 @@ COLORS = {
 
 WIDGET_STATE_FILE = os.path.expanduser("~/.timetracker/widget_state.json")
 
-# Geometry / behavior tunables
-WIDGET_WIDTH = 200
-WIDGET_HEIGHT = 36
-COLLAPSED_WIDTH = 45
-COLLAPSED_HEIGHT = 35
+# --- Dot mode (idle) ---
+DOT_SIZE = 18
+DOT_OPACITY_IDLE = 0.55
+DOT_OPACITY_NO_CLIENT = 0.95   # red dot stays bright so people notice
 
-# Snap only if released REALLY close to an edge — was 24, too aggressive
-EDGE_SNAP_THRESHOLD = 8
+# --- Pill mode (hover) ---
+PILL_WIDTH = 200
+PILL_HEIGHT = 36
+PILL_OPACITY = 0.98
+PILL_OPACITY_FLASH = 1.0       # brief flash on client switch
+
+# --- Behavior tunables ---
+COLLAPSE_DELAY_MS = 600        # delay after mouseleave before collapsing
+SWITCH_HOLD_MS = 3000          # how long the pill stays expanded after a client switch
+FLASH_DURATION_MS = 600        # how long the 100% flash lasts before settling to 98%
+
+EDGE_SNAP_THRESHOLD = 8        # snap only if released within 8px of edge
 TASKBAR_CLEARANCE = 56
 DEFAULT_MARGIN = 12
-
-OPACITY_IDLE = 0.55
-OPACITY_HOVER = 0.98
-FADE_DELAY_MS = 1500
 
 DRAG_THRESHOLD_PX = 4
 POLL_INTERVAL_S = 2.0
 
 
 class FloatingClientWidget:
-    """Mac-style minimal pinned client toolbar for Windows."""
+    """Minimal dot that expands to a full pill on hover."""
 
     def __init__(self, on_click_callback=None, get_client_callback=None):
         self.on_click = on_click_callback
         self.get_client = get_client_callback
 
         self.root = None
-        self.is_collapsed = False
+
+        # Mode tracking
+        self._mode = "dot"            # "dot" or "pill"
+        self._collapse_after_id = None
+        self._flash_after_id = None
+
+        # Visibility state (persisted across restarts)
         self.is_visible = True
 
         # Drag state
@@ -76,19 +97,16 @@ class FloatingClientWidget:
         self._drag_offset_y = 0
         self._drag_started = False
 
-        # Locked-in size — set once, used in every geometry() call to
-        # prevent the "grows when dragged" Tkinter bug on Windows
-        self._locked_width = WIDGET_WIDTH
-        self._locked_height = WIDGET_HEIGHT
-
-        self._fade_after_id = None
+        # Polling thread
         self._update_running = False
 
         self.current_client_name = "No Client"
         self.current_client_id = None
 
+        # Saved position
         self.saved_x = None
         self.saved_y = None
+
         self._load_state()
 
     # ------------------------------------------------------------------
@@ -101,7 +119,6 @@ class FloatingClientWidget:
                     state = json.load(f)
                     self.saved_x = state.get('x')
                     self.saved_y = state.get('y')
-                    self.is_collapsed = state.get('collapsed', False)
                     self.is_visible = state.get('visible', True)
             except Exception:
                 pass
@@ -109,12 +126,11 @@ class FloatingClientWidget:
     def _save_state(self):
         try:
             os.makedirs(os.path.dirname(WIDGET_STATE_FILE), exist_ok=True)
-            x = self.root.winfo_x() if (self.root and self._root_alive()) else self.saved_x
-            y = self.root.winfo_y() if (self.root and self._root_alive()) else self.saved_y
+            x = self.root.winfo_x() if self._root_alive() else self.saved_x
+            y = self.root.winfo_y() if self._root_alive() else self.saved_y
             state = {
                 'x': x,
                 'y': y,
-                'collapsed': self.is_collapsed,
                 'visible': self.is_visible,
             }
             with open(WIDGET_STATE_FILE, 'w') as f:
@@ -153,19 +169,13 @@ class FloatingClientWidget:
         except Exception:
             pass
 
-        # Lock in size based on current state
-        if self.is_collapsed:
-            self._locked_width = COLLAPSED_WIDTH
-            self._locked_height = COLLAPSED_HEIGHT
-        else:
-            self._locked_width = WIDGET_WIDTH
-            self._locked_height = WIDGET_HEIGHT
+        # Start in dot mode at saved position (or bottom-right by default)
+        x, y = self._compute_initial_position(DOT_SIZE, DOT_SIZE)
+        self.root.geometry(f"{DOT_SIZE}x{DOT_SIZE}+{x}+{y}")
+        self.root.configure(fg_color=COLORS["bg_dark"])
 
-        x, y = self._compute_initial_position(self._locked_width, self._locked_height)
-        self.root.geometry(f"{self._locked_width}x{self._locked_height}+{x}+{y}")
-
-        self._build_ui()
-        self._apply_opacity(OPACITY_IDLE)
+        self._build_dot_ui()
+        self._apply_idle_opacity()
         self._start_update_loop()
 
         return self.root
@@ -188,6 +198,7 @@ class FloatingClientWidget:
     # Positioning
     # ------------------------------------------------------------------
     def _compute_initial_position(self, w, h):
+        """Saved position if valid, else bottom-right above taskbar."""
         try:
             self.root.update_idletasks()
             screen_w = self.root.winfo_screenwidth()
@@ -206,40 +217,73 @@ class FloatingClientWidget:
         return x, y
 
     def _snap_to_edges(self, x, y, w, h):
-        """Snap to nearest screen edge ONLY if released within snap threshold."""
+        """Snap only if released within 8px of edge."""
         try:
             screen_w = self.root.winfo_screenwidth()
             screen_h = self.root.winfo_screenheight()
         except Exception:
             return x, y
 
-        # Horizontal snap — only if very close to an edge
         if x < EDGE_SNAP_THRESHOLD:
             x = DEFAULT_MARGIN
         elif x + w > screen_w - EDGE_SNAP_THRESHOLD:
             x = screen_w - w - DEFAULT_MARGIN
 
-        # Vertical snap — only if very close to an edge
         if y < EDGE_SNAP_THRESHOLD:
             y = DEFAULT_MARGIN
         elif y + h > screen_h - EDGE_SNAP_THRESHOLD:
             y = screen_h - h - TASKBAR_CLEARANCE
 
-        # Final clamp — never let widget end up off-screen
         x = max(0, min(x, screen_w - w))
         y = max(0, min(y, screen_h - h))
         return x, y
 
     # ------------------------------------------------------------------
-    # UI
+    # DOT UI (default minimal state)
     # ------------------------------------------------------------------
-    def _build_ui(self):
+    def _build_dot_ui(self):
+        """Tiny circular dot. Just one widget — hover expands to pill."""
+        for child in self.root.winfo_children():
+            child.destroy()
+
+        color = COLORS["no_client"] if not self.current_client_id else COLORS["primary"]
+
+        self.dot = ctk.CTkFrame(
+            self.root,
+            fg_color=color,
+            corner_radius=DOT_SIZE // 2,
+            width=DOT_SIZE,
+            height=DOT_SIZE,
+            cursor="hand2",
+        )
+        self.dot.pack(fill="both", expand=True)
+
+        for w in (self.root, self.dot):
+            w.bind("<Enter>", self._on_enter, add="+")
+            w.bind("<Leave>", self._on_leave, add="+")
+            w.bind("<ButtonPress-1>", self._on_press, add="+")
+            w.bind("<B1-Motion>", self._on_drag, add="+")
+            w.bind("<ButtonRelease-1>", self._on_release, add="+")
+            w.bind("<Button-3>", lambda e: self._hide(), add="+")
+
+    # ------------------------------------------------------------------
+    # PILL UI (hover-expanded state)
+    # ------------------------------------------------------------------
+    def _build_pill_ui(self):
+        """Full pill widget — same design as before, just rebuilt on demand."""
+        for child in self.root.winfo_children():
+            child.destroy()
+
+        border_color = COLORS["no_client"] if not self.current_client_id else COLORS["primary"]
+        accent_color = COLORS["no_client"] if not self.current_client_id else COLORS["primary"]
+        text_color = COLORS["no_client"] if not self.current_client_id else COLORS["text"]
+
         self.container = ctk.CTkFrame(
             self.root,
             fg_color=COLORS["bg_card"],
             corner_radius=10,
             border_width=1,
-            border_color=COLORS["primary"],
+            border_color=border_color,
         )
         self.container.pack(fill="both", expand=True, padx=2, pady=2)
 
@@ -250,7 +294,7 @@ class FloatingClientWidget:
             self.content,
             text="●",
             font=ctk.CTkFont(family="Segoe UI", size=14),
-            text_color=COLORS["primary"],
+            text_color=accent_color,
             width=14,
             cursor="hand2",
         )
@@ -260,12 +304,11 @@ class FloatingClientWidget:
             self.content,
             text=self._truncate(self.current_client_name),
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            text_color=COLORS["text"],
+            text_color=text_color,
             anchor="w",
             cursor="hand2",
         )
-        if not self.is_collapsed:
-            self.client_label.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.client_label.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.close_btn = ctk.CTkLabel(
             self.content,
@@ -275,28 +318,127 @@ class FloatingClientWidget:
             width=18,
             cursor="hand2",
         )
-        if not self.is_collapsed:
-            self.close_btn.pack(side="right", padx=(0, 6))
+        self.close_btn.pack(side="right", padx=(0, 6))
         self.close_btn.bind("<Enter>",
                             lambda e: self.close_btn.configure(text_color=COLORS["no_client"]))
         self.close_btn.bind("<Leave>",
                             lambda e: self.close_btn.configure(text_color=COLORS["text_muted"]))
         self.close_btn.bind("<Button-1>", lambda e: self._hide())
 
-        for widget in (self.container, self.content, self.icon_label, self.client_label):
-            widget.bind("<ButtonPress-1>", self._on_press)
-            widget.bind("<B1-Motion>", self._on_drag)
-            widget.bind("<ButtonRelease-1>", self._on_release)
+        for w in (self.container, self.content, self.icon_label, self.client_label):
+            w.bind("<ButtonPress-1>", self._on_press)
+            w.bind("<B1-Motion>", self._on_drag)
+            w.bind("<ButtonRelease-1>", self._on_release)
+            w.bind("<Button-3>", lambda e: self._hide())
 
-        for widget in (self.root, self.container, self.content,
-                       self.icon_label, self.client_label, self.close_btn):
-            widget.bind("<Enter>", self._on_enter, add="+")
-            widget.bind("<Leave>", self._on_leave, add="+")
+        for w in (self.root, self.container, self.content,
+                  self.icon_label, self.client_label, self.close_btn):
+            w.bind("<Enter>", self._on_enter, add="+")
+            w.bind("<Leave>", self._on_leave, add="+")
 
-        for widget in (self.container, self.content, self.icon_label, self.client_label):
-            widget.bind("<Button-3>", lambda e: self._hide())
+    # ------------------------------------------------------------------
+    # Mode transitions: dot ↔ pill
+    # ------------------------------------------------------------------
+    def _expand_to_pill(self):
+        if self._mode == "pill" or not self._root_alive():
+            return
 
-        self._update_appearance()
+        try:
+            current_x = self.root.winfo_x()
+            current_y = self.root.winfo_y()
+            screen_w = self.root.winfo_screenwidth()
+
+            # Anchor pill's right edge to where dot's right edge was —
+            # prevents pill from "shooting out left" on right-side dots
+            dot_right = current_x + DOT_SIZE
+            if dot_right > screen_w - 100:
+                new_x = dot_right - PILL_WIDTH
+            else:
+                new_x = current_x
+
+            new_x = max(0, min(new_x, screen_w - PILL_WIDTH))
+        except Exception:
+            new_x = current_x
+
+        self._mode = "pill"
+        self.root.geometry(f"{PILL_WIDTH}x{PILL_HEIGHT}+{new_x}+{current_y}")
+        self._build_pill_ui()
+        self._apply_opacity(PILL_OPACITY)
+
+    def _collapse_to_dot(self):
+        if self._mode == "dot" or not self._root_alive():
+            return
+
+        try:
+            current_x = self.root.winfo_x()
+            current_y = self.root.winfo_y()
+            screen_w = self.root.winfo_screenwidth()
+
+            pill_right = current_x + PILL_WIDTH
+            if pill_right > screen_w - 100:
+                new_x = pill_right - DOT_SIZE
+            else:
+                new_x = current_x
+
+            new_x = max(0, min(new_x, screen_w - DOT_SIZE))
+        except Exception:
+            new_x = current_x
+
+        self._mode = "dot"
+        self.root.geometry(f"{DOT_SIZE}x{DOT_SIZE}+{new_x}+{current_y}")
+        self._build_dot_ui()
+        self._apply_idle_opacity()
+
+    # ------------------------------------------------------------------
+    # Hover handlers
+    # ------------------------------------------------------------------
+    def _on_enter(self, _event=None):
+        self._cancel_collapse()
+        if self._mode == "dot":
+            self._expand_to_pill()
+
+    def _on_leave(self, _event=None):
+        # Leave fires when pointer crosses to a child widget too — guard
+        # against spurious collapses by checking if pointer is actually outside
+        if not self._root_alive():
+            return
+        try:
+            x, y = self.root.winfo_pointerxy()
+            wx, wy = self.root.winfo_x(), self.root.winfo_y()
+            ww, wh = self.root.winfo_width(), self.root.winfo_height()
+            if wx <= x < wx + ww and wy <= y < wy + wh:
+                return  # pointer still inside
+        except Exception:
+            pass
+
+        self._schedule_collapse()
+
+    def _schedule_collapse(self, delay_ms=None):
+        self._cancel_collapse()
+        if self._root_alive():
+            delay = delay_ms if delay_ms is not None else COLLAPSE_DELAY_MS
+            self._collapse_after_id = self.root.after(delay, self._collapse_to_dot)
+
+    def _cancel_collapse(self):
+        if self._collapse_after_id and self._root_alive():
+            try:
+                self.root.after_cancel(self._collapse_after_id)
+            except Exception:
+                pass
+        self._collapse_after_id = None
+
+    def _apply_opacity(self, alpha):
+        if not self._root_alive():
+            return
+        try:
+            self.root.attributes('-alpha', alpha)
+        except Exception:
+            pass
+
+    def _apply_idle_opacity(self):
+        """Dot opacity depends on whether a client is set."""
+        opacity = DOT_OPACITY_NO_CLIENT if not self.current_client_id else DOT_OPACITY_IDLE
+        self._apply_opacity(opacity)
 
     # ------------------------------------------------------------------
     # Drag + click
@@ -316,24 +458,21 @@ class FloatingClientWidget:
                 self._drag_started = True
 
         if self._drag_started:
+            w = PILL_WIDTH if self._mode == "pill" else DOT_SIZE
+            h = PILL_HEIGHT if self._mode == "pill" else DOT_SIZE
             new_x = event.x_root - self._drag_offset_x
             new_y = event.y_root - self._drag_offset_y
-            # CRITICAL FIX: include locked width+height in every geometry call.
-            # Using "+x+y" alone causes Tkinter to re-measure the window each
-            # time and grow it by a few pixels per drag event on Windows.
-            self.root.geometry(
-                f"{self._locked_width}x{self._locked_height}+{new_x}+{new_y}"
-            )
+            self.root.geometry(f"{w}x{h}+{new_x}+{new_y}")
 
     def _on_release(self, event):
         if self._drag_started:
             try:
+                w = PILL_WIDTH if self._mode == "pill" else DOT_SIZE
+                h = PILL_HEIGHT if self._mode == "pill" else DOT_SIZE
                 x = self.root.winfo_x()
                 y = self.root.winfo_y()
-                x, y = self._snap_to_edges(x, y, self._locked_width, self._locked_height)
-                self.root.geometry(
-                    f"{self._locked_width}x{self._locked_height}+{x}+{y}"
-                )
+                x, y = self._snap_to_edges(x, y, w, h)
+                self.root.geometry(f"{w}x{h}+{x}+{y}")
             except Exception:
                 pass
             self._save_state()
@@ -341,8 +480,8 @@ class FloatingClientWidget:
             return
 
         # No drag — treat as click
-        if self.is_collapsed:
-            self._toggle_collapse()
+        if self._mode == "dot":
+            self._expand_to_pill()
         elif self.on_click:
             try:
                 self.on_click()
@@ -350,76 +489,17 @@ class FloatingClientWidget:
                 print(f"[WIDGET] on_click error: {e}")
 
     # ------------------------------------------------------------------
-    # Hover / fade
-    # ------------------------------------------------------------------
-    def _on_enter(self, _event=None):
-        self._cancel_fade()
-        self._apply_opacity(OPACITY_HOVER)
-
-    def _on_leave(self, _event=None):
-        self._schedule_fade()
-
-    def _schedule_fade(self):
-        self._cancel_fade()
-        if self._root_alive():
-            self._fade_after_id = self.root.after(
-                FADE_DELAY_MS, lambda: self._apply_opacity(OPACITY_IDLE)
-            )
-
-    def _cancel_fade(self):
-        if self._fade_after_id and self._root_alive():
-            try:
-                self.root.after_cancel(self._fade_after_id)
-            except Exception:
-                pass
-        self._fade_after_id = None
-
-    def _apply_opacity(self, alpha):
-        if not self._root_alive():
-            return
-        try:
-            self.root.attributes('-alpha', alpha)
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------
-    # Collapse / expand
-    # ------------------------------------------------------------------
-    def _toggle_collapse(self):
-        self.is_collapsed = not self.is_collapsed
-
-        if self.is_collapsed:
-            self.client_label.pack_forget()
-            self.close_btn.pack_forget()
-            self._locked_width = COLLAPSED_WIDTH
-            self._locked_height = COLLAPSED_HEIGHT
-        else:
-            self.client_label.pack(side="left", fill="x", expand=True, padx=(0, 6))
-            self.close_btn.pack(side="right", padx=(0, 6))
-            self._locked_width = WIDGET_WIDTH
-            self._locked_height = WIDGET_HEIGHT
-
-        try:
-            x = self.root.winfo_x()
-            y = self.root.winfo_y()
-            self.root.geometry(
-                f"{self._locked_width}x{self._locked_height}+{x}+{y}"
-            )
-        except Exception:
-            self.root.geometry(f"{self._locked_width}x{self._locked_height}")
-
-        self._save_state()
-
-    # ------------------------------------------------------------------
     # Show / hide
     # ------------------------------------------------------------------
     def _hide(self):
+        """Hide the widget entirely (persisted — reopen via tray menu)."""
         self.is_visible = False
         self._save_state()
         if self.root:
             self.root.withdraw()
 
     def show(self):
+        """Show the widget if hidden."""
         self.is_visible = True
         self._save_state()
         if self.root:
@@ -427,8 +507,6 @@ class FloatingClientWidget:
                 self.root.deiconify()
                 self.root.attributes('-topmost', True)
                 self.root.lift()
-                self._apply_opacity(OPACITY_HOVER)
-                self._schedule_fade()
             except Exception:
                 pass
         else:
@@ -437,37 +515,58 @@ class FloatingClientWidget:
                 self.root.mainloop()
 
     # ------------------------------------------------------------------
-    # Client display
+    # Client display — pulse-on-switch behavior
     # ------------------------------------------------------------------
     def update_client(self, client_id, client_name):
+        """
+        Called by the tray controller on every client switch.
+
+        Visual sequence:
+          1. Expand dot → pill (instant)
+          2. Flash to 100% opacity for 600ms (catches the eye)
+          3. Settle to normal 98% opacity
+          4. Hold expanded for 3 seconds total
+          5. Collapse back to dot
+        """
         self.current_client_id = client_id
         self.current_client_name = client_name or "No Client"
-        if self._root_alive():
-            try:
-                self.root.after(0, self._update_appearance)
-                self.root.after(0, lambda: self._apply_opacity(OPACITY_HOVER))
-                self.root.after(0, self._schedule_fade)
-            except Exception:
-                pass
 
-    def _update_appearance(self):
         if not self._root_alive():
             return
+
         try:
-            self.client_label.configure(text=self._truncate(self.current_client_name))
-            if self.current_client_id:
-                self.container.configure(border_color=COLORS["primary"])
-                self.icon_label.configure(text_color=COLORS["primary"])
-                self.client_label.configure(text_color=COLORS["text"])
-            else:
-                self.container.configure(border_color=COLORS["no_client"])
-                self.icon_label.configure(text_color=COLORS["no_client"])
-                self.client_label.configure(text_color=COLORS["no_client"])
-        except Exception:
-            pass
+            # Cancel any pending collapse / flash from a previous switch
+            self._cancel_collapse()
+            self._cancel_flash()
+
+            # 1. Expand to pill immediately
+            self.root.after(0, self._expand_to_pill)
+
+            # 2. Flash to 100% opacity to catch the eye
+            self.root.after(0, lambda: self._apply_opacity(PILL_OPACITY_FLASH))
+
+            # 3. Settle to normal pill opacity after the flash
+            self._flash_after_id = self.root.after(
+                FLASH_DURATION_MS,
+                lambda: self._apply_opacity(PILL_OPACITY)
+            )
+
+            # 4. Schedule collapse after the hold period — but the existing
+            #    _on_leave guard will keep the pill open if the user is hovering
+            self._schedule_collapse(delay_ms=SWITCH_HOLD_MS)
+        except Exception as e:
+            print(f"[WIDGET] update_client error: {e}")
+
+    def _cancel_flash(self):
+        if self._flash_after_id and self._root_alive():
+            try:
+                self.root.after_cancel(self._flash_after_id)
+            except Exception:
+                pass
+        self._flash_after_id = None
 
     # ------------------------------------------------------------------
-    # Background poller
+    # Background poller — keeps widget in sync if update_client is missed
     # ------------------------------------------------------------------
     def _start_update_loop(self):
         self._update_running = True
@@ -486,7 +585,7 @@ class FloatingClientWidget:
                                 self.current_client_name = new_name
                                 if self._root_alive():
                                     try:
-                                        self.root.after(0, self._update_appearance)
+                                        self.root.after(0, self._refresh_current_view)
                                     except Exception:
                                         pass
                 except Exception as e:
@@ -494,6 +593,16 @@ class FloatingClientWidget:
                 _time.sleep(POLL_INTERVAL_S)
 
         threading.Thread(target=update_loop, daemon=True).start()
+
+    def _refresh_current_view(self):
+        """Rebuild whichever view (dot or pill) is currently showing."""
+        if not self._root_alive():
+            return
+        if self._mode == "dot":
+            self._build_dot_ui()
+            self._apply_idle_opacity()
+        else:
+            self._build_pill_ui()
 
     @staticmethod
     def _truncate(text, max_len=22):
@@ -505,7 +614,7 @@ class FloatingClientWidget:
 
 
 # ============================================================
-# Integration helper
+# Integration helper for TimeTrackerSystemTray
 # ============================================================
 def create_floating_widget(tray_controller):
     if not WIDGET_AVAILABLE:
@@ -538,7 +647,7 @@ if __name__ == "__main__":
     test_client = {"id": 1, "name": "Test Client Inc"}
 
     def on_click():
-        print("Widget clicked")
+        print("Picker would open now")
 
     def get_client():
         return {"client_id": test_client["id"], "client_name": test_client["name"]}
@@ -549,5 +658,7 @@ if __name__ == "__main__":
     )
     widget.create()
 
+    # Simulate a client switch after 3 seconds to test the pulse-flash
     if widget.root:
+        widget.root.after(3000, lambda: widget.update_client(2, "Varacchi 1040"))
         widget.run()

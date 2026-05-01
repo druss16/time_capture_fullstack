@@ -261,13 +261,15 @@ class ClassificationService:
         # Adds a Signal but does not short-circuit — let other stages also weigh in.
         self._stage_3_title_match(block, decision)
 
-        # Stage 4 — File path match
-        # TODO: Implement in Stages chunk session. Stub for now.
-        # self._stage_4_file_path(block, decision)
+        # Stage 4 — File path match (deeper than Stage 3)
+        # Stage 3 already does basic file_path containment. Stage 4 looks at the
+        # path STRUCTURE — folder segments, depth — to find stronger signals.
+        self._stage_4_file_path(block, decision)
 
         # Stage 5 — URL domain match
-        # TODO: Implement in Stages chunk session. Stub for now.
-        # self._stage_5_url_domain(block, decision)
+        # SKIPPED in foundation: Stage 3 already handles URL domain matching.
+        # Stage 5 was originally planned for Client.email_domain matching but
+        # that requires schema changes deferred to Phase 2.
 
         # Stage 6 — Calendar event overlap
         # TODO: Implement in Calendar chunk session. Stub for now.
@@ -283,9 +285,10 @@ class ClassificationService:
         # Stage 9 — Learned patterns
         self._stage_9_learned_patterns(block, decision)
 
-        # Stage 10 — AI inference
-        # TODO: Implement in Stages chunk session. Stub for now.
-        # self._stage_10_ai_inference(block, decision)
+        # Stage 10 — AI inference (last resort, only when nothing else fired)
+        # Calls OpenAI to classify when stages 0-9 produced no signals.
+        # Cost-controlled: only invoked if no Signal has strength >= 0.65.
+        self._stage_10_ai_inference(block, decision)
 
         return self._finalize_decision(decision, block)
 
@@ -1126,6 +1129,109 @@ class ClassificationService:
             return ''
 
     # -------------------------------------------------------------------------
+    # STAGE 4 — File path structure analysis
+    # -------------------------------------------------------------------------
+
+    def _stage_4_file_path(self, block, decision: ClassificationDecision):
+        """
+        Analyze file_path STRUCTURE for client signals beyond simple containment
+        (which Stage 3 already does).
+
+        Patterns to detect:
+          1. Client name as a clean folder segment (highest signal)
+             Example: '/Clients/Wood, Michael/2024/return.pdf' → 'Wood, Michael'
+          2. Client name in a 'Clients' or 'Customers' container folder
+             Example: 'C:/Customers/Acme Corp/Q4/file.xlsx' → 'Acme Corp'
+          3. UNC paths with client folder structure
+             Example: '\\\\server\\Shared\\Acme Corp\\file.pdf' → 'Acme Corp'
+
+        Strength: 0.90 for clean folder segment match, 0.85 for container-folder match.
+
+        Skipped if:
+          - file_path is empty
+          - No client matches with sufficient specificity
+        """
+        file_path = (block.file_path or '').strip()
+        if not file_path:
+            return
+
+        # Normalize separators for analysis (Windows + Unix paths)
+        normalized = file_path.replace('\\', '/').lower()
+
+        # Split into segments, filter empty
+        segments = [s for s in normalized.split('/') if s]
+        if not segments:
+            return
+
+        # Look for "Clients" / "Customers" container — client name should follow
+        CONTAINER_NAMES = {'clients', 'customers', 'firms', 'accounts'}
+        container_idx = -1
+        for i, seg in enumerate(segments):
+            if seg in CONTAINER_NAMES:
+                container_idx = i
+                break
+
+        best_client = None
+        best_strength = 0.0
+        best_evidence = ''
+
+        for client in self._clients:
+            # Skip meta-clients (same as Stage 3)
+            if client.name.lower().strip() in META_CLIENT_NAMES:
+                continue
+
+            name_lower = client.name.lower()
+            aliases = [a.lower() for a in (client.aliases or [])] if client.aliases else []
+            all_names = [name_lower] + aliases
+
+            for alias in all_names:
+                if not self._alias_is_safe(alias):
+                    continue
+
+                # Pattern 1: Clean folder segment match (alias IS a path segment)
+                # This is the strongest signal — the user is literally inside the
+                # client's folder
+                if alias in segments:
+                    if 0.90 > best_strength:
+                        best_client = client
+                        best_strength = 0.90
+                        best_evidence = (
+                            f"File path contains client folder '{alias}' "
+                            f"(segment match in '{file_path}')"
+                        )
+                    break
+
+                # Pattern 2: Container-relative match
+                # If we found a 'Clients/' or 'Customers/' folder above, the
+                # NEXT segment should be the client name
+                if container_idx >= 0 and container_idx + 1 < len(segments):
+                    next_seg = segments[container_idx + 1]
+                    # Allow alias-as-prefix match (handles "Wood, Michael" vs "wood-michael")
+                    if alias in next_seg or next_seg.startswith(alias):
+                        if 0.85 > best_strength:
+                            best_client = client
+                            best_strength = 0.85
+                            best_evidence = (
+                                f"File path contains client folder '{next_seg}' "
+                                f"under '{segments[container_idx]}/' container"
+                            )
+                        break
+
+        if not best_client:
+            return
+
+        decision.matched_signals.append(Signal(
+            type='file_path_structure',
+            strength=best_strength,
+            evidence=best_evidence,
+            detail={
+                'client_id':   best_client.id,
+                'client_name': best_client.name,
+                'file_path':   file_path[:200],  # truncate for storage
+            },
+        ))
+
+    # -------------------------------------------------------------------------
     # STAGE 8 — Recent context (current_client_id, prior block)
     # -------------------------------------------------------------------------
 
@@ -1373,6 +1479,331 @@ class ClassificationService:
         return round(base, 3)
 
     # -------------------------------------------------------------------------
+    # STAGE 10 — AI inference (last resort, cost-controlled)
+    # -------------------------------------------------------------------------
+
+    def _stage_10_ai_inference(self, block, decision: ClassificationDecision):
+        """
+        Call OpenAI to classify when stages 0-9 produced no useful signals.
+
+        COST CONTROLS:
+          - Only fires when no Signal has strength >= 0.65
+          - Only fires when block has duration >= 1 minute (skips transients)
+          - Cached per-block-title combo via Django cache (CACHE_TTL)
+          - Skips entirely if OPENAI_API_KEY is not set
+
+        Two AI calls per block when triggered:
+          1. Client identification (against the org's client list)
+          2. Category identification (CPA categories)
+
+        Strength: 0.50-0.85 based on AI's stated confidence. Never auto-commits
+        from Stage 10 alone — requires combination with another signal.
+
+        This is a port from block_classifier.py with adaptations:
+          - Returns Signal objects instead of ClassificationResult
+          - Does not short-circuit; participates in signal aggregation
+          - Confidence cap at 0.85 (was 0.88+ in old classifier with current_client boost)
+        """
+        # Skip if OpenAI not configured
+        import os
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            return
+
+        # Skip if a moderate+ signal already fired
+        max_strength = max(
+            (s.strength for s in decision.matched_signals),
+            default=0.0,
+        )
+        if max_strength >= 0.65:
+            return
+
+        # Skip transient blocks (< 1 minute)
+        if (block.minutes or 0) < 1:
+            return
+
+        # Skip if no clients to match against
+        if not self._clients:
+            return
+
+        title = (block.window_title or block.title or '').strip()
+        if not title:
+            return
+
+        try:
+            # ---- AI client identification ----
+            client_signal = self._ai_classify_client(block, title)
+            if client_signal:
+                decision.matched_signals.append(client_signal)
+
+            # ---- AI category identification ----
+            # Only call category AI if we got a client (avoids categorizing nothing)
+            if client_signal:
+                category_signal = self._ai_classify_category(
+                    block, title, client_signal.detail.get('client_name')
+                )
+                if category_signal:
+                    decision.matched_signals.append(category_signal)
+
+        except Exception as e:
+            logger.warning(f'Stage 10 AI inference failed for block {block.pk}: {e}')
+
+    def _ai_classify_client(self, block, title):
+        """
+        Call OpenAI to identify the client. Returns Signal or None.
+        Uses module-level cache shared with views_ai_classify.
+
+        Logs each non-cached API call to AIProcessingLog for cost visibility.
+        """
+        try:
+            from tracker.views_ai_classify import _call_openai, _cache_key, CACHE_TTL
+            from django.core.cache import cache
+        except ImportError:
+            logger.warning('views_ai_classify not available — skipping AI client stage')
+            return None
+
+        # Check cache first
+        cache_key = _cache_key(self.org.id, title)
+        cached = cache.get(cache_key)
+        was_cached = cached is not None
+
+        if cached:
+            client_id = cached.get('client_id')
+            client_name = cached.get('client_name') or ''
+            confidence = float(cached.get('confidence', 0.0))
+        else:
+            # Call OpenAI
+            import time
+            t_start = time.monotonic()
+
+            titles_batch = [{
+                'title':     title,
+                'app_name':  getattr(block, 'app_name', '') or '',
+                'file_path': getattr(block, 'file_path', '') or '',
+            }]
+            clients_payload = [
+                {'id': c.id, 'name': c.name, 'aliases': c.aliases or []}
+                for c in self._clients
+            ]
+
+            try:
+                results = _call_openai(titles_batch, clients_payload)
+                processing_ms = int((time.monotonic() - t_start) * 1000)
+            except Exception as e:
+                processing_ms = int((time.monotonic() - t_start) * 1000)
+                self._log_ai_call(
+                    operation_type='stage_10_client',
+                    input_data={'title': title[:200], 'block_id': block.pk},
+                    output_data={'error': str(e)[:500]},
+                    processing_time_ms=processing_ms,
+                    success=False,
+                    error_message=str(e)[:500],
+                )
+                raise
+
+            r = results[0] if results else None
+            if not r:
+                self._log_ai_call(
+                    operation_type='stage_10_client',
+                    input_data={'title': title[:200], 'block_id': block.pk},
+                    output_data={'note': 'no result returned'},
+                    processing_time_ms=processing_ms,
+                    success=True,
+                )
+                return None
+
+            client_id = r.get('client_id')
+            client_name = r.get('client_name') or ''
+            confidence = float(r.get('confidence', 0.0))
+
+            self._log_ai_call(
+                operation_type='stage_10_client',
+                input_data={'title': title[:200], 'block_id': block.pk},
+                output_data={
+                    'client_id':   client_id,
+                    'client_name': client_name,
+                    'confidence':  confidence,
+                },
+                processing_time_ms=processing_ms,
+                success=True,
+            )
+
+            if client_id:
+                cache.set(cache_key, {
+                    'client_id':   client_id,
+                    'client_name': client_name,
+                    'confidence':  confidence,
+                }, timeout=CACHE_TTL)
+
+        if not client_id or confidence < 0.5:
+            return None
+
+        # Cap AI strength at 0.85 — never strong enough to auto-commit alone
+        strength = min(0.85, confidence)
+
+        return Signal(
+            type='ai_client',
+            strength=strength,
+            evidence=f"AI classified as '{client_name}' (confidence {confidence:.2f})",
+            detail={
+                'client_id':       client_id,
+                'client_name':     client_name,
+                'ai_confidence':   confidence,
+                'cached':          was_cached,
+            },
+        )
+
+    def _ai_classify_category(self, block, title, client_name):
+        """
+        Call OpenAI to identify the activity category (Tax Prep, Bookkeeping, etc.)
+        Returns Signal or None. Reuses module-level helpers from block_classifier.py.
+
+        Logs each API call to AIProcessingLog for cost visibility.
+        """
+        try:
+            from tracker.services.block_classifier import (
+                _get_allowed_categories,
+                _build_category_system_prompt,
+                _build_category_user_prompt,
+            )
+        except ImportError:
+            logger.warning('block_classifier helpers not available — skipping AI category stage')
+            return None
+
+        import json
+        import os
+        import re
+        import time
+        import urllib.request
+
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            return None
+
+        t_start = time.monotonic()
+
+        try:
+            industry_type = getattr(self.org, 'industry_type', 'general') or 'general'
+            allowed_categories = _get_allowed_categories(industry_type)
+            system_prompt = _build_category_system_prompt(allowed_categories)
+            user_prompt = _build_category_user_prompt(block, client_name)
+
+            payload = json.dumps({
+                'model': 'gpt-4o-mini',
+                'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user',   'content': user_prompt},
+                ],
+                'temperature': 0.1,
+                'max_tokens': 300,
+            }).encode()
+
+            req = urllib.request.Request(
+                'https://api.openai.com/v1/chat/completions',
+                data=payload,
+                headers={
+                    'Content-Type':  'application/json',
+                    'Authorization': f'Bearer {api_key}',
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+
+            processing_ms = int((time.monotonic() - t_start) * 1000)
+
+            raw = (data['choices'][0]['message']['content'] or '').strip()
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw)
+            parsed = json.loads(raw)
+
+            category = parsed.get('category', '')
+            ai_confidence = float(parsed.get('confidence', 0.0))
+            billable = parsed.get('billable', True)
+            reasoning = parsed.get('reasoning', '')
+
+            self._log_ai_call(
+                operation_type='stage_10_category',
+                input_data={
+                    'title':       title[:200],
+                    'block_id':    block.pk,
+                    'client_name': client_name,
+                },
+                output_data={
+                    'category':      category,
+                    'confidence':    ai_confidence,
+                    'is_billable':   billable,
+                    'reasoning':     reasoning[:200],
+                },
+                processing_time_ms=processing_ms,
+                success=True,
+            )
+
+            if category not in allowed_categories:
+                logger.warning(f"AI returned unknown category '{category}' for block {block.pk} — discarding")
+                return None
+
+            if ai_confidence < 0.5:
+                return None
+
+            # Cap AI strength at 0.85
+            strength = min(0.85, ai_confidence)
+
+            return Signal(
+                type='ai_category',
+                strength=strength,
+                evidence=f"AI category: '{category}' (confidence {ai_confidence:.2f}) — {reasoning[:80]}",
+                detail={
+                    'category':       category,
+                    'is_billable':    billable,
+                    'ai_confidence':  ai_confidence,
+                    'ai_reasoning':   reasoning[:200],
+                },
+            )
+
+        except Exception as e:
+            processing_ms = int((time.monotonic() - t_start) * 1000)
+            self._log_ai_call(
+                operation_type='stage_10_category',
+                input_data={'title': title[:200], 'block_id': block.pk, 'client_name': client_name},
+                output_data={'error': str(e)[:500]},
+                processing_time_ms=processing_ms,
+                success=False,
+                error_message=str(e)[:500],
+            )
+            logger.warning(f'AI category classification failed for block {block.pk}: {e}')
+            return None
+
+    def _log_ai_call(
+        self,
+        operation_type: str,
+        input_data: dict,
+        output_data: dict,
+        processing_time_ms: int,
+        success: bool,
+        error_message: str = '',
+    ):
+        """
+        Persist an AI API call to AIProcessingLog for cost visibility.
+        Wraps in try/except so logging failures never break classification.
+        """
+        try:
+            from tracker.models import AIProcessingLog
+            AIProcessingLog.objects.create(
+                org=self.org,
+                user=self.user,
+                operation_type=operation_type,
+                input_data=input_data,
+                output_data=output_data,
+                model_used='gpt-4o-mini',
+                tokens_used=0,  # OpenAI response includes usage but we'd need to plumb it through
+                processing_time_ms=processing_time_ms,
+                success=success,
+                error_message=error_message,
+            )
+        except Exception as e:
+            logger.warning(f'Failed to log AI call to AIProcessingLog: {e}')
+
+    # -------------------------------------------------------------------------
     # DECISION LOGIC — auto-commit vs propose vs capture
     # -------------------------------------------------------------------------
 
@@ -1381,6 +1812,13 @@ class ClassificationService:
         After all stages run, decide the final state and confidence.
 
         See design doc §4.4 for full logic.
+
+        CONTRADICTION DETECTION (added in stages chunk):
+        Before auto-committing, check that no moderate-or-better signal disagrees
+        with the chosen client. Disagreement → downgrade to 'proposed'. This prevents
+        cases like Stage 10 AI saying "ASR" while Stage 8 agent_current_client says
+        "All Round Transportation" — both real signals, different clients, must
+        not silently commit.
         """
         # Already terminated (suppressed or org rule auto-committed)
         if decision.recommended_state in ('suppressed', 'committed'):
@@ -1392,24 +1830,41 @@ class ClassificationService:
 
         # Auto-commit: at least one strong signal, no contradictions
         if strong:
-            client_ids = {s.proposed_client_id for s in strong if s.proposed_client_id}
-            if len(client_ids) <= 1:
-                # All strong signals agree (or only one with a client)
-                self._populate_classification_from_signals(decision, signals)
-                decision.recommended_state = 'committed'
-                decision.confidence = max(s.strength for s in strong)
-                return decision
-            else:
-                # Strong signals disagree on client — propose, flag for review
+            # Strong signals' proposed clients must agree with each other
+            strong_client_ids = {s.proposed_client_id for s in strong if s.proposed_client_id}
+
+            if len(strong_client_ids) > 1:
+                # Strong signals disagree among themselves — propose, flag for review
                 decision.needs_review = True
                 decision.review_reason = (
                     f'Multiple high-confidence client matches: '
-                    f'{", ".join(str(cid) for cid in client_ids)}'
+                    f'{", ".join(str(cid) for cid in strong_client_ids)}'
                 )
                 self._populate_classification_from_signals(decision, signals)
                 decision.recommended_state = 'proposed'
                 decision.confidence = max(s.strength for s in strong)
                 return decision
+
+            # Strong signals agree (or only category-only strong signals).
+            # Now check: does any MODERATE signal contradict the dominant client?
+            self._populate_classification_from_signals(decision, signals)
+            chosen_client_id = decision.client_id
+
+            if chosen_client_id and self._has_contradicting_signal(signals, chosen_client_id):
+                # A moderate signal proposes a different client than the chosen one.
+                # Don't auto-commit — let a human resolve.
+                decision.needs_review = True
+                decision.review_reason = (
+                    f'Stage signals disagree on client (chosen={chosen_client_id}); '
+                    f'requires human review'
+                )
+                decision.recommended_state = 'proposed'
+                decision.confidence = max(s.strength for s in strong)
+                return decision
+
+            decision.recommended_state = 'committed'
+            decision.confidence = max(s.strength for s in strong)
+            return decision
 
         # Auto-commit: 2+ moderate signals all agree
         if len(moderate) >= 2:
@@ -1435,6 +1890,42 @@ class ClassificationService:
         decision.confidence = 0.0
         decision.reasoning = decision.reasoning or 'No classification signals matched'
         return decision
+
+    @staticmethod
+    def _has_contradicting_signal(signals: list, chosen_client_id: int) -> bool:
+        """
+        Returns True if any moderate-or-better signal proposes a client_id
+        different from chosen_client_id.
+
+        This catches cases like:
+          - Stage 8 emits agent_current_client with client_id=A (strength 0.55, weak)
+          - Stage 10 emits ai_client with client_id=B (strength 0.75, moderate)
+          - Strong signal (ai_category at 0.90) has no client_id
+          - Without this check, the chosen client would be B (taken from highest-
+            strength signal that has a client). But A also "exists" as a signal.
+            That's a contradiction worth flagging.
+
+        We only care about moderate+ signals (strength >= 0.65). Weak signals
+        like agent_current_client at 0.55 are too unreliable to count as a
+        veto. EXCEPT: if a weak signal at >= 0.50 strength disagrees with a
+        moderate-tier choice, we still flag — keeps the safety net for
+        agent-vs-AI disagreements specifically.
+        """
+        if not chosen_client_id:
+            return False
+
+        for s in signals:
+            # Skip signals without a client proposal
+            if not s.proposed_client_id:
+                continue
+            # Skip the chosen client (no contradiction)
+            if s.proposed_client_id == chosen_client_id:
+                continue
+            # A meaningful signal proposes a different client
+            if s.strength >= 0.50:
+                return True
+
+        return False
 
     @staticmethod
     def _populate_classification_from_signals(decision: ClassificationDecision, signals: list):

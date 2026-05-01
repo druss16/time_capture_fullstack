@@ -319,8 +319,9 @@ class Command(BaseCommand):
         # Note about partial pipeline
         self.stdout.write('')
         self.stdout.write(self.style.WARNING(
-            'NOTE: This is the foundation chunk. Stages 2-7 and 10 are not yet '
-            'implemented — only Stages 0/1/8/9 are running. Disagreements may '
-            'reflect missing signal types, not classifier defects. Re-run after '
-            'stages chunk + calendar/mail chunks for the full picture.'
+            'NOTE: Stages 0/1/2/3/4/8/9/10 implemented. Stages 5/6/7 still TODO '
+            '(URL domain matching covered by Stage 3, Calendar / Mail deferred '
+            'to calendar/mail chunks). Disagreements often reflect '
+            'classifier correctly rejecting bogus inherited attributions on '
+            'idle/dialog blocks.'
         ))

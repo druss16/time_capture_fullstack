@@ -37,6 +37,8 @@ class Organization(models.Model):
         default='general',
         help_text='Industry type determines available categories'
     )
+
+
     
     # Subscription/billing
     plan = models.CharField(max_length=20, choices=[
@@ -77,6 +79,15 @@ class Organization(models.Model):
     auto_submit_timesheets = models.BooleanField(
         default=False,
         help_text="Auto-submit draft timesheets on Tuesday 9am"
+    )
+
+    use_classification_service = models.BooleanField(
+        default=False,
+        help_text=(
+            'When True, this org uses the new ClassificationService pipeline '
+            '(state machine, contradiction detection, audit trail). '
+            'When False (default), uses the legacy BlockClassifier path.'
+        ),
     )
 
     ai_sensitivity = models.PositiveSmallIntegerField(

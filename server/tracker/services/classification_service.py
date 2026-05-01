@@ -229,24 +229,37 @@ class ClassificationService:
         #   - Sets decision.is_suppressed / is_meeting / is_individual_return
         #   - Returns early (Stage 0 suppress, Stage 2 individual return)
 
-        # Stage 0 — Suppress
+        # Stage 0 — Suppress / internal-work shortcut
+        # Stage 0 sets decision.source to 'suppress' or 'internal_work' if it
+        # short-circuits. Don't overwrite recommended_state — Stage 0 set it.
         if self._stage_0_suppress(block, decision):
-            decision.recommended_state = 'suppressed'
-            decision.is_suppressed = True
-            return decision
+            if decision.source == 'suppress':
+                decision.recommended_state = 'suppressed'
+                decision.is_suppressed = True
+                return decision
+            # Internal work — Stage 0 already set recommended_state='committed',
+            # category, category_hours, etc. Run finalize to populate proposed_*.
+            return self._finalize_decision(decision, block)
+
+        # Stage 2 — Tax software extraction (RUNS BEFORE Stage 1)
+        # If a tax software window has an open return, the specific taxpayer
+        # extraction is more valuable than any org-level "default tax software
+        # routing" rule. Specificity wins. Stage 1 still runs as fallback when
+        # no return was detected (e.g. UltraTax open with just a dialog).
+        if self._stage_2_tax_software(block, decision):
+            return self._finalize_decision(decision, block)
 
         # Stage 1 — Org routing rules (classifier-stage)
+        # Runs AFTER Stage 2 so that specific taxpayer extraction takes priority
+        # over generic "exe_family=ultratax → route to Internal-Tax" rules.
+        # When Stage 2 didn't detect a return, Stage 1 provides the firm-default.
         if self._stage_1_org_rules(block, decision):
             # Stage 1 may return early if a 'route_to_client' or 'assign_category' rule fires
             return self._finalize_decision(decision, block)
 
-        # Stage 2 — Tax software extraction
-        # TODO: Implement in Stages chunk session. Stub for now.
-        # self._stage_2_tax_software(block, decision)
-
-        # Stage 3 — Deterministic title match
-        # TODO: Implement in Stages chunk session. Stub for now.
-        # self._stage_3_title_match(block, decision)
+        # Stage 3 — Deterministic title match (alias / domain / file path)
+        # Adds a Signal but does not short-circuit — let other stages also weigh in.
+        self._stage_3_title_match(block, decision)
 
         # Stage 4 — File path match
         # TODO: Implement in Stages chunk session. Stub for now.
@@ -498,15 +511,19 @@ class ClassificationService:
 
     def _stage_0_suppress(self, block, decision: ClassificationDecision) -> bool:
         """
-        Drop blocks that aren't real activities.
+        Drop blocks that aren't real activities, or shortcut to internal-firm-work.
 
-        Returns True if the block is suppressed and the pipeline should stop.
+        Returns True if the block is suppressed/handled and the pipeline should stop.
 
         Suppress conditions:
           - Bare tax software splash with no return open ("UltraTax CS")
           - Generic OS dialogs (Save As, Print, Open, etc.)
+          - Generic tax software dialogs (CFlYoutFrame, Statements from B&D, etc.)
           - Empty title with very short duration (likely transient)
           - Any title matching SUPPRESS_PATTERNS below
+
+        Shortcut conditions (also stop pipeline):
+          - Internal firm work (timesheet, payroll) → assign Billing/Admin category
         """
         title = (block.window_title or block.title or '').strip()
         title_lower = title.lower()
@@ -550,6 +567,45 @@ class ClassificationService:
                 decision.reasoning = f"Suppressed: bare tax software splash '{title}' (no return open)"
                 decision.source = 'suppress'
                 return True
+
+        # Generic tax software dialogs (Save As, Statements from B&D, Online Status, etc.)
+        # Lives in tracker/utils/tax_software.py with the SSN extraction logic
+        try:
+            from tracker.utils.tax_software import is_generic_tax_dialog, is_internal_firm_work
+        except ImportError:
+            # Module not available — skip these checks
+            return False
+
+        if is_generic_tax_dialog(title):
+            decision.matched_signals.append(Signal(
+                type='suppress',
+                strength=1.0,
+                evidence=f"Generic tax software dialog: '{title[:60]}'",
+                detail={'reason': 'generic_tax_dialog'},
+            ))
+            decision.reasoning = f"Suppressed: generic tax software dialog '{title[:60]}'"
+            decision.source = 'suppress'
+            return True
+
+        # Internal firm work — timesheet, payroll, etc. Not suppressed; categorized.
+        # Assign Billing/Admin category, no client. Stop pipeline.
+        internal_cat = is_internal_firm_work(title)
+        if internal_cat:
+            hours = round((block.minutes or 0) / 60.0, 2) if block.minutes else 0.0
+            decision.category = internal_cat
+            decision.category_hours = {internal_cat: hours}
+            decision.is_billable = False  # Internal work is non-billable by default
+            decision.confidence = 0.90
+            decision.source = 'internal_work'
+            decision.reasoning = f"Internal firm work: {internal_cat}"
+            decision.recommended_state = 'committed'  # Internal work is unambiguous
+            decision.matched_signals.append(Signal(
+                type='internal_work',
+                strength=0.90,
+                evidence=f"Internal firm work pattern matched in title: '{title[:60]}'",
+                detail={'category': internal_cat, 'is_billable': False},
+            ))
+            return True
 
         return False
 
@@ -754,6 +810,320 @@ class ClassificationService:
             )
         except Exception as e:
             logger.warning(f'Failed to record rule fire for rule {rule_obj.id}: {e}')
+
+    # -------------------------------------------------------------------------
+    # STAGE 2 — Tax software extraction (UltraTax, TaxWise, Lacerte, ProSeries)
+    # -------------------------------------------------------------------------
+
+    def _stage_2_tax_software(self, block, decision: ClassificationDecision) -> bool:
+        """
+        Detect when the user has a return open in tax software and extract the
+        taxpayer / return type. Strong signal — auto-commits to committed state.
+
+        Behavior:
+          - Individual returns (1040, 1041, etc.): no client, but populate taxpayer
+            bucket fields (name, hash, type) for dashboard analytics.
+          - Business returns (1065, 1120, 1120S, 990): try to match entity name
+            against org clients. If matched, attribute to client. If unmatched,
+            treat as individual-return (taxpayer bucket).
+
+        Returns True if Stage 2 fired a strong signal and pipeline should stop.
+        """
+        try:
+            from tracker.utils.tax_software import extract_tax_context
+        except ImportError:
+            return False
+
+        title = (block.window_title or block.title or '').strip()
+        if not title:
+            return False
+
+        tax_ctx = extract_tax_context(title)
+        if not tax_ctx:
+            return False
+
+        category = tax_ctx.category  # always "Tax Preparation"
+        hours = round((block.minutes or 0) / 60.0, 2) if block.minutes else 0.0
+        category_hours = {category: hours}
+
+        # Business return — try to match entity name to a client record
+        if tax_ctx.is_business_return:
+            client = self._match_taxpayer_to_client(tax_ctx.taxpayer_name)
+            if client:
+                decision.client_id = client.id
+                decision.category = category
+                decision.category_hours = category_hours
+                decision.confidence = 0.92  # Strong but not absolute (name match heuristic)
+                decision.source = 'tax_software'
+                decision.reasoning = (
+                    f"{tax_ctx.software} {tax_ctx.return_type} return open: "
+                    f"'{tax_ctx.taxpayer_name}' matched client '{client.name}'"
+                )
+                decision.matched_signals.append(Signal(
+                    type='tax_software',
+                    strength=0.92,
+                    evidence=decision.reasoning,
+                    detail={
+                        'software':         tax_ctx.software,
+                        'return_type':      tax_ctx.return_type,
+                        'taxpayer':         tax_ctx.taxpayer_name,
+                        'taxpayer_id_hash': tax_ctx.taxpayer_id_hash,
+                        'client_id':        client.id,
+                        'client_name':      client.name,
+                        'category':         category,
+                    },
+                ))
+                decision.recommended_state = 'committed'
+                return True
+            # Business return but no client match — fall through to individual bucket
+
+        # Individual return — populate taxpayer bucket fields, no client
+        decision.client_id = None
+        decision.category = category
+        decision.category_hours = category_hours
+        decision.confidence = 0.95  # Very strong — tax software + open return = certain
+        decision.source = 'tax_software'
+        decision.reasoning = (
+            f"{tax_ctx.software} {tax_ctx.return_type} return open: "
+            f"individual return for '{tax_ctx.taxpayer_name}'"
+        )
+        decision.is_individual_return = True
+        decision.taxpayer_name = tax_ctx.taxpayer_name
+        decision.taxpayer_id_hash = tax_ctx.taxpayer_id_hash
+        decision.tax_return_type = tax_ctx.return_type
+        decision.matched_signals.append(Signal(
+            type='tax_software',
+            strength=0.95,
+            evidence=decision.reasoning,
+            detail={
+                'software':         tax_ctx.software,
+                'return_type':      tax_ctx.return_type,
+                'taxpayer':         tax_ctx.taxpayer_name,
+                'taxpayer_id_hash': tax_ctx.taxpayer_id_hash,
+                'category':         category,
+            },
+        ))
+        decision.recommended_state = 'committed'
+        return True
+
+    def _match_taxpayer_to_client(self, taxpayer_name: str):
+        """
+        Try to match a taxpayer/entity name from tax software against org clients.
+        Used for business returns (1065, 1120, 1120S, 990) only.
+
+        GUARDRAILS:
+          - Skips meta-clients (Internal, Internal - Tax, etc.)
+          - Skips short aliases on the stoplist (Tax, Office, Internal, etc.)
+          - Requires first_token >= 5 chars OR an exact word match in client name
+
+        Returns Client object or None.
+        """
+        if not taxpayer_name:
+            return None
+
+        # Normalize: take the first significant word
+        # "Everson Corp, LLC" → "everson"
+        # "Smith, John" → "smith"
+        name_lower = taxpayer_name.lower()
+        first_part = name_lower.split(',')[0].strip()
+        first_token = first_part.split()[0] if first_part else ''
+
+        if len(first_token) < 4:
+            return None
+
+        # Don't match against generic words
+        if first_token in SHORT_ALIAS_STOPLIST:
+            return None
+        if first_token in ('the', 'and', 'inc', 'llc', 'corp', 'ltd'):
+            return None
+
+        for client in self._clients:
+            # Skip meta-clients
+            if client.name.lower().strip() in META_CLIENT_NAMES:
+                continue
+
+            client_name_lower = client.name.lower()
+            client_aliases = [a.lower() for a in (client.aliases or [])] if client.aliases else []
+            all_names = [client_name_lower] + client_aliases
+
+            for name in all_names:
+                # Match if first_token appears as a complete word in client name
+                if first_token in name.split():
+                    return client
+                # Substring match only allowed for tokens >= 5 chars
+                if len(first_token) >= 5 and first_token in name:
+                    return client
+
+        return None
+
+    # -------------------------------------------------------------------------
+    # STAGE 3 — Deterministic title / domain / path match
+    # -------------------------------------------------------------------------
+
+    def _stage_3_title_match(self, block, decision: ClassificationDecision):
+        """
+        Score each org client against the block's window title, URL, and file path.
+        Emits a Signal for the best match; multiple clients matching at low strength
+        produces no signal.
+
+        Three match types in priority order:
+          1. URL domain matches client name/alias  → strength 0.92 (strong)
+          2. File path contains client name/alias  → strength 0.90 (strong)
+          3. Title contains client alias           → strength 0.82 (moderate-high)
+
+        GUARDRAILS to prevent false-matches:
+          - Skip aliases that match SHORT_ALIAS_STOPLIST (generic words like
+            "Internal", "Tax", "Office") — these match too broadly.
+          - For aliases shorter than 8 chars AND containing only one word,
+            require word-boundary match (\\bWORD\\b), not substring match.
+            This stops "Internal" from matching "Internal Revenue Service".
+          - Skip clients whose normalized name is a known meta-client
+            (META_CLIENT_NAMES) — these represent firm overhead, not real clients.
+        """
+        if not self._clients:
+            return
+
+        haystack = self._build_haystack(block)
+        if not haystack:
+            return
+
+        url = (block.url or '').strip().lower()
+        file_path = (block.file_path or '').strip().lower()
+
+        best_client = None
+        best_strength = 0.0
+        best_match_type = ''
+
+        for client in self._clients:
+            # Skip meta-clients — these represent internal firm work, not real clients
+            if client.name.lower().strip() in META_CLIENT_NAMES:
+                continue
+
+            name_lower = client.name.lower()
+            aliases = [a.lower() for a in (client.aliases or [])] if client.aliases else []
+            all_names = [name_lower] + aliases
+
+            # Match 1: URL domain (strongest)
+            if url:
+                domain = self._extract_domain(url)
+                if domain:
+                    for alias in all_names:
+                        if not self._alias_is_safe(alias):
+                            continue
+                        # Compare alphanumeric-only versions
+                        alias_clean = ''.join(c for c in alias if c.isalnum())
+                        domain_clean = ''.join(c for c in domain if c.isalnum())
+                        if len(alias_clean) >= 4 and alias_clean in domain_clean:
+                            if 0.92 > best_strength:
+                                best_client = client
+                                best_strength = 0.92
+                                best_match_type = 'domain'
+                            break
+
+            # Match 2: File path (strong)
+            if file_path:
+                for alias in all_names:
+                    if not self._alias_is_safe(alias):
+                        continue
+                    if self._alias_matches_safely(alias, file_path):
+                        if 0.90 > best_strength:
+                            best_client = client
+                            best_strength = 0.90
+                            best_match_type = 'file_path'
+                        break
+
+            # Match 3: Title alias (moderate-high)
+            for alias in all_names:
+                if not self._alias_is_safe(alias):
+                    continue
+                if self._alias_matches_safely(alias, haystack):
+                    if 0.82 > best_strength:
+                        best_client = client
+                        best_strength = 0.82
+                        best_match_type = 'title_alias'
+                    break
+
+        if not best_client or best_strength < 0.65:
+            return
+
+        decision.matched_signals.append(Signal(
+            type=f'title_match_{best_match_type}',
+            strength=best_strength,
+            evidence=f"Client '{best_client.name}' matched via {best_match_type}",
+            detail={
+                'client_id':   best_client.id,
+                'client_name': best_client.name,
+                'match_type':  best_match_type,
+            },
+        ))
+
+    @staticmethod
+    def _alias_is_safe(alias: str) -> bool:
+        """
+        Returns False if the alias is on the stoplist of generic words known
+        to produce false matches. Filters out 'Internal', 'Tax', 'Office', etc.
+        """
+        a = alias.strip().lower()
+        if not a or len(a) < 4:
+            return False
+        if a in SHORT_ALIAS_STOPLIST:
+            return False
+        return True
+
+    @staticmethod
+    def _alias_matches_safely(alias: str, haystack: str) -> bool:
+        """
+        Match an alias against text safely:
+          - Multi-word aliases ("st. theresa catholic church"): substring match OK
+          - Single-word aliases >= 8 chars: substring match OK
+          - Single-word aliases < 8 chars: require word-boundary match
+
+        This stops "Internal" matching "Internal Revenue Service" while
+        allowing "Pinnacle Sealing & Plowing" to match by substring.
+        """
+        import re
+
+        a = alias.strip().lower()
+        words = a.split()
+
+        # Multi-word alias OR long single word — substring match is safe
+        if len(words) >= 2 or len(a) >= 8:
+            return a in haystack
+
+        # Short single-word alias — require word boundary
+        # Use \W (any non-word char) on both sides instead of \b which is locale-sensitive
+        pattern = r'(?:^|\W)' + re.escape(a) + r'(?:\W|$)'
+        return bool(re.search(pattern, haystack))
+
+    @staticmethod
+    def _build_haystack(block) -> str:
+        """Combine searchable text fields into one lowercase string."""
+        parts = [
+            (block.window_title or block.title or ''),
+            (block.url or ''),
+            (block.file_path or ''),
+        ]
+        return ' '.join(p for p in parts if p).lower()
+
+    @staticmethod
+    def _extract_domain(url: str) -> str:
+        """
+        Extract the registered domain from a URL.
+        'https://app.smithco.com/dashboard' → 'smithco.com'
+        Returns empty string on parse failure.
+        """
+        if not url:
+            return ''
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url if '://' in url else f'http://{url}')
+            host = parsed.hostname or ''
+            # Strip 'www.' prefix
+            if host.startswith('www.'):
+                host = host[4:]
+            return host.lower()
+        except Exception:
+            return ''
 
     # -------------------------------------------------------------------------
     # STAGE 8 — Recent context (current_client_id, prior block)
@@ -1218,4 +1588,63 @@ STOP_WORDS = {
     'the', 'and', 'for', 'with', 'this', 'that', 'from', 'have',
     'inbox', 'outlook', 'email', 'mail', 'word', 'excel', 'powerpoint',
     'document', 'file', 'folder', 'window', 'tab',
+}
+
+
+# Short single-word aliases that produce too many false matches.
+# Stage 3 skips these entirely. Stage 2 _match_taxpayer_to_client also skips.
+# All entries should be lowercase.
+SHORT_ALIAS_STOPLIST = {
+    'internal',     # "Internal Revenue Service"
+    'tax',          # appears in too many titles
+    'office',       # "Office 365", "office hours"
+    'admin',        # "administrator login"
+    'home',         # "home page"
+    'main',         # "main menu"
+    'login',        # "login.gov"
+    'work',         # "Microsoft Edge - Work"
+    'auth',         # "auth.example.com"
+    'support',      # "support ticket"
+    'service',      # "Internal Revenue Service"
+    'client',       # "client tracking file"
+    'user',         # "user profile"
+    'data',         # "data analysis"
+    'team',         # "Microsoft Teams"
+    'view',         # too generic
+    'page',         # "1 more page"
+    'list',         # "client list"
+    'group',        # "group settings"
+    'account',      # "account management"
+    'system',       # "system settings"
+    'general',      # too generic
+    'web',          # "web browser"
+    'site',         # "site settings"
+    'app',          # too short anyway
+    'apps',
+    'all',
+    'new',
+    'edit',
+    'open',
+    'save',
+    'help',
+}
+
+
+# Client names that represent internal firm overhead, not real clients.
+# Stage 2 (taxpayer matching) and Stage 3 (alias matching) skip these.
+# All entries should be lowercase, normalized (whitespace stripped).
+META_CLIENT_NAMES = {
+    'internal',
+    'internal - tax',
+    'internal tax',
+    'internal-tax',
+    'admin',
+    'administration',
+    'office',
+    'firm',
+    'firm work',
+    'overhead',
+    'general',
+    'misc',
+    'miscellaneous',
 }

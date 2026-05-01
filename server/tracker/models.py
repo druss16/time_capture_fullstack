@@ -87,6 +87,15 @@ class Organization(models.Model):
             "Admin-only setting."
         ),
     )
+
+    disable_mail_integration = models.BooleanField(
+        default=False,
+        help_text=(
+            'When True, mail integration is hidden from all users in this org and '
+            'any existing connections are silently ignored. For firms with policies '
+            'forbidding mail integration entirely.'
+        ),
+    )
     
     mouse_idle_pause_seconds = models.IntegerField(default=600)
 
@@ -930,6 +939,9 @@ class Integration(models.Model):
     class Meta:
         unique_together = ['organization', 'provider']
 
+
+
+
 class Project(models.Model):
     org = models.ForeignKey(Organization, on_delete=models.CASCADE)
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="projects")
@@ -1065,6 +1077,51 @@ class Block(models.Model):
     
     # Legacy lock (keep for backwards compatibility)
     locked = models.BooleanField(default=False)
+
+    # ===============================
+    # NEW: Classification state machine (Phase 1 rebuild)
+    # ===============================
+    classification_state = models.CharField(
+        max_length=20,
+        choices=[
+            ('captured',   'Captured — no classification yet'),
+            ('proposed',   'Proposed — classifier guessed, awaiting confirmation'),
+            ('committed',  'Committed — confirmed, billable'),
+            ('suppressed', 'Suppressed — not a real activity'),
+        ],
+        default='captured',
+        db_index=True,
+        help_text='Explicit state machine replacing the binary is_categorized flag.',
+    )
+    state_changed_at = models.DateTimeField(null=True, blank=True)
+    state_changed_by = models.CharField(
+        max_length=30,
+        choices=[
+            ('classifier',      'Auto-classified by ClassificationService'),
+            ('user',            'User confirmed via UI'),
+            ('user_edit',       'User edited and committed'),
+            ('admin_bulk',      'Admin bulk operation'),
+            ('auto_commit_eod', 'End-of-day auto-commit'),
+            ('rule',            'Org routing rule'),
+            ('correction',      'User corrected after commit'),
+        ],
+        null=True, blank=True,
+    )
+
+    # ===============================
+    # NEW: Proposed classification (audit trail of classifier output)
+    # ===============================
+    proposed_client = models.ForeignKey(
+        'Client',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='+',
+    )
+    proposed_category = models.CharField(max_length=100, blank=True, default='')
+    proposed_confidence = models.FloatField(default=0.0)
+    proposed_at = models.DateTimeField(null=True, blank=True)
+    proposed_signals = models.JSONField(default=list, blank=True)
+    proposed_reasoning = models.TextField(blank=True, default='')
 
     # ===============================
     # Mobile review flags
@@ -1311,6 +1368,9 @@ class Block(models.Model):
         return False
     
     def save(self, *args, **kwargs):
+        # Pull out our new flag before passing kwargs to super
+        force_classifier = kwargs.pop('force_classifier', False)
+
         # ===============================
         # 1. Auto-set day and minutes from start/end
         # ===============================
@@ -1323,11 +1383,23 @@ class Block(models.Model):
         # ===============================
         # 2. Auto-set immutability flags when categories assigned
         # ===============================
+        # NOTE: This auto-lock behavior is what causes the inheritance bug.
+        # In Phase 4, this block is REMOVED. ClassificationService becomes
+        # the only path that flips is_categorized=True. For now we keep it
+        # for backwards compat with the existing classification path, but
+        # also sync the new classification_state for forward compat.
         if self.category_hours and not self.is_categorized:
             self.is_categorized = True
             self.categorized_at = timezone.now()
             if not self.categorized_by:
                 self.categorized_by = 'ai'
+            # Phase 1: also sync the new state machine
+            if self.classification_state == 'captured':
+                self.classification_state = 'committed'
+                if not self.state_changed_at:
+                    self.state_changed_at = timezone.now()
+                if not self.state_changed_by:
+                    self.state_changed_by = 'classifier'
         
         # ===============================
         # 3. Compute and store hash for change detection
@@ -1350,7 +1422,10 @@ class Block(models.Model):
         if self.pk:  # Only check on updates, not creates
             try:
                 old = Block.all_objects.get(pk=self.pk)
-                if old.is_protected() and not kwargs.pop('force_update', False):
+                # NEW: ClassificationService can update Captured/Proposed blocks freely
+                if force_classifier and old.classification_state in ('captured', 'proposed'):
+                    pass  # Skip protection check
+                elif old.is_protected() and not kwargs.pop('force_update', False):
                     protected_fields = {
                         'category_hours', 'client', 'project', 'task',
                         'start', 'end', 'minutes'
@@ -1394,6 +1469,10 @@ class Block(models.Model):
             models.Index(fields=['is_billable', 'org', 'client']),
             models.Index(fields=['timesheet', 'user']),
             models.Index(fields=['invoiced', 'approved', 'client']),
+
+            # NEW: classification state machine (Phase 1 rebuild)
+            models.Index(fields=['classification_state', 'user', 'day']),
+            models.Index(fields=['org', 'classification_state']),
         ]
         
         ordering = ['-start']
@@ -1681,6 +1760,10 @@ class OrgRoutingRule(models.Model):
         ('title_contains', 'Title Contains (case-insensitive)'),
         ('title_regex', 'Title Matches Regex'),
         ('file_path_contains', 'File Path Contains'),
+        # NEW (Phase 1 rebuild) — matcher.py already supports these
+        ('duration_gt', 'Block Duration Greater Than (minutes)'),
+        ('inside_meeting', 'Block Is Inside a Meeting'),
+        ('idle_gt', 'Idle Duration Greater Than (minutes)'),
     ]
     match_type = models.CharField(
         max_length=32,
@@ -1705,6 +1788,8 @@ class OrgRoutingRule(models.Model):
         ('mark_non_billable', 'Mark Non-Billable'),
         ('cap_duration_at',   'Cap Duration At'),
         ('flag_for_review',   'Flag For Review'),
+        # NEW (Phase 1 rebuild) — provides signal but does not auto-commit
+        ('propose_only', 'Propose Only (always require review)'),
     ]
     action = models.CharField(
         max_length=32,
@@ -3029,3 +3114,250 @@ class TaxpayerBucket(models.Model):
 
     def __str__(self):
         return f"{self.display_name} ({self.org})"
+
+
+# ============================================================================
+# Phase 1 rebuild — Calendar/Mail integration models
+# ============================================================================
+
+class CalendarEvent(models.Model):
+    """
+    Calendar event from Google Calendar or Microsoft Graph.
+    Used as Stage 6 classification signal. Per-user opt-in via UserIntegration.
+    """
+    PROVIDER_CHOICES = [
+        ('google',    'Google Calendar'),
+        ('microsoft', 'Microsoft Graph (Outlook)'),
+    ]
+
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='calendar_events',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='calendar_events',
+    )
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
+    external_id = models.CharField(max_length=255, db_index=True)
+
+    # Event content
+    title = models.TextField()
+    description = models.TextField(blank=True, default='')
+    location = models.CharField(max_length=255, blank=True, default='')
+    meeting_url = models.TextField(
+        blank=True, default='',
+        help_text='Zoom/Teams/Meet URL extracted from event description or location.',
+    )
+
+    # Time window
+    start = models.DateTimeField(db_index=True)
+    end = models.DateTimeField(db_index=True)
+
+    # Attendees as list of {email, domain, response_status}
+    attendees = models.JSONField(default=list, blank=True)
+
+    # Pre-computed classification hints
+    extracted_client = models.ForeignKey(
+        'Client',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='calendar_events',
+    )
+    extraction_confidence = models.FloatField(default=0.0)
+
+    # Sync tracking
+    fetched_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['user', 'provider', 'external_id']]
+        indexes = [
+            models.Index(fields=['user', 'start', 'end']),
+            models.Index(fields=['org', 'start']),
+        ]
+        ordering = ['-start']
+
+    def __str__(self):
+        return f"{self.user.username} | {self.title[:50]} | {self.start}"
+
+    def overlap_minutes_with(self, other_start, other_end):
+        """
+        Compute the number of minutes this event overlaps with the given window.
+        Returns 0 if no overlap.
+        """
+        latest_start = max(self.start, other_start)
+        earliest_end = min(self.end, other_end)
+        if latest_start >= earliest_end:
+            return 0
+        return int((earliest_end - latest_start).total_seconds() / 60)
+
+
+class MailSignal(models.Model):
+    """
+    Lightweight metadata about email activity. Used as Stage 7 classification signal.
+
+    PRIVACY GUARANTEES (CRITICAL — DO NOT relax):
+      - NEVER stores message body
+      - NEVER stores attachment contents or names
+      - NEVER stores email addresses (only domain extracted)
+      - Subject ONLY stored if cleanly matches a known client (extraction_confidence >= 0.85)
+    """
+    PROVIDER_CHOICES = [
+        ('google',    'Gmail'),
+        ('microsoft', 'Microsoft Graph'),
+    ]
+    DIRECTION_CHOICES = [
+        ('in',  'Received'),
+        ('out', 'Sent'),
+    ]
+
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='mail_signals',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='mail_signals',
+    )
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
+    external_id = models.CharField(
+        max_length=255,
+        db_index=True,
+        help_text='Provider message ID, used for dedup and idempotent sync.',
+    )
+
+    occurred_at = models.DateTimeField(db_index=True)
+    direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES)
+
+    other_party_domain = models.CharField(
+        max_length=120,
+        db_index=True,
+        help_text="Domain of the OTHER party. Inbound: sender's. Outbound: dominant recipient's.",
+    )
+
+    subject_extract = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text='Subject text, ONLY stored if a client was successfully extracted from it.',
+    )
+
+    is_inbox = models.BooleanField(default=False)
+    has_attachment = models.BooleanField(default=False)
+
+    extracted_client = models.ForeignKey(
+        'Client',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='mail_signals',
+    )
+
+    class Meta:
+        unique_together = [['user', 'provider', 'external_id']]
+        indexes = [
+            models.Index(fields=['user', 'occurred_at']),
+            models.Index(fields=['user', 'other_party_domain']),
+            models.Index(fields=['org', 'occurred_at']),
+        ]
+        ordering = ['-occurred_at']
+
+    def __str__(self):
+        return f"{self.user.username} | {self.direction} | {self.other_party_domain} | {self.occurred_at}"
+
+
+class UserIntegration(models.Model):
+    """
+    Per-user OAuth connections for calendar and mail providers.
+    Distinct from the existing org-level Integration model.
+    """
+    PROVIDER_CHOICES = [
+        ('google_calendar',    'Google Calendar'),
+        ('microsoft_calendar', 'Microsoft Calendar (Graph)'),
+        ('gmail',              'Gmail (metadata only)'),
+        ('microsoft_mail',     'Microsoft Mail (metadata only)'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='user_integrations',
+    )
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='user_integrations',
+    )
+    provider = models.CharField(max_length=30, choices=PROVIDER_CHOICES)
+
+    is_connected = models.BooleanField(default=False)
+    access_token = models.TextField(blank=True)
+    refresh_token = models.TextField(blank=True)
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+
+    scopes = models.JSONField(default=list, blank=True)
+
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    last_sync_error = models.TextField(blank=True, default='')
+    sync_failure_count = models.IntegerField(
+        default=0,
+        help_text='Consecutive failed syncs. After 5, sync is paused until user re-auths.',
+    )
+
+    oauth_state = models.CharField(max_length=128, blank=True, default='')
+    provider_account_id = models.CharField(max_length=255, blank=True, default='')
+    provider_email = models.EmailField(blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['user', 'provider']]
+        indexes = [
+            models.Index(fields=['user', 'is_connected']),
+            models.Index(fields=['org', 'provider']),
+        ]
+
+    def __str__(self):
+        connected = '✓' if self.is_connected else '✗'
+        return f"{connected} {self.user.username} → {self.get_provider_display()}"
+
+    @property
+    def is_calendar(self) -> bool:
+        return self.provider in ('google_calendar', 'microsoft_calendar')
+
+    @property
+    def is_mail(self) -> bool:
+        return self.provider in ('gmail', 'microsoft_mail')
+
+    @property
+    def is_token_expired(self) -> bool:
+        if not self.token_expires_at:
+            return False
+        return timezone.now() >= self.token_expires_at
+
+    def disconnect(self):
+        """
+        Disconnect this integration. Clears tokens, marks not connected,
+        and triggers cleanup of all derived data (CalendarEvent / MailSignal).
+        """
+        if self.is_calendar:
+            CalendarEvent.objects.filter(
+                user=self.user,
+                provider='google' if self.provider == 'google_calendar' else 'microsoft',
+            ).delete()
+        elif self.is_mail:
+            MailSignal.objects.filter(
+                user=self.user,
+                provider='google' if self.provider == 'gmail' else 'microsoft',
+            ).delete()
+
+        self.is_connected = False
+        self.access_token = ''
+        self.refresh_token = ''
+        self.token_expires_at = None
+        self.scopes = []
+        self.last_sync_error = ''
+        self.sync_failure_count = 0
+        self.save()

@@ -1661,7 +1661,7 @@ class ClassificationService:
         Logs each API call to AIProcessingLog for cost visibility.
         """
         try:
-            from tracker.services.block_classifier import (
+            from tracker.industry_categories import (
                 _get_allowed_categories,
                 _build_category_system_prompt,
                 _build_category_user_prompt,

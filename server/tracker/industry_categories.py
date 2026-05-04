@@ -1387,3 +1387,77 @@ def ensure_internal_client(org):
         logger.info(f"[INTERNAL] Created 'Internal' client for org: {org.name}")
 
     return client
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers for Stage 10 AI category classification.
+# Moved from tracker/services/block_classifier.py during Step 5b cleanup.
+#
+# NOTE: _get_allowed_categories currently ignores its industry_type parameter
+# and returns a hardcoded CPA list. This is a pre-existing bug carried over
+# verbatim. Fixing it is out of scope for Step 5b. Future work.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from typing import Optional
+
+
+def _get_allowed_categories(industry_type: str) -> list[str]:
+    cpa_categories = [
+        "Tax Preparation",
+        "Tax Review",
+        "Tax Research",
+        "Bookkeeping",
+        "Reconciliation",
+        "Audit Fieldwork",
+        "Audit Review",
+        "Client Email / Communication",
+        "Client Meeting",
+        "Internal Meeting",
+        "Billing / Admin",
+        "Practice Development",
+        "Training",
+        "IT / Setup",
+        "Uncategorized",
+    ]
+    return cpa_categories
+
+
+def _build_category_system_prompt(allowed_categories: list[str]) -> str:
+    cat_list = "\n".join(f"  - {c}" for c in allowed_categories)
+    return f"""You are a CPA firm time-entry categorization engine.
+
+TASK: Given a window title, app, file path, and client context, return the single best category.
+
+ALLOWED CATEGORIES (use ONLY these exact strings):
+{cat_list}
+
+RULES:
+1. Return ONLY a JSON object — no markdown, no preamble.
+2. Pick the single most accurate category from the list above.
+3. If the activity is clearly billable client work, billable = true.
+4. Confidence: 0.90+ = very clear signal, 0.75–0.89 = reasonable match, <0.75 = ambiguous.
+5. Never invent a category not in the list.
+
+Response format:
+{{"category": "Tax Preparation", "confidence": 0.91, "billable": true, "reasoning": "1040 PDF"}}"""
+
+
+def _build_category_user_prompt(block, client_name: Optional[str]) -> str:
+    title     = getattr(block, 'window_title', '') or getattr(block, 'title', '') or ''
+    app       = getattr(block, 'app_name', '') or ''
+    file_path = getattr(block, 'file_path', '') or ''
+    url       = getattr(block, 'url', '') or ''
+    minutes   = 0
+    try:
+        if block.end and block.start:
+            minutes = int((block.end - block.start).total_seconds() / 60)
+    except Exception:
+        pass
+
+    parts = [f"Client: {client_name or 'Unknown'}"]
+    if title:     parts.append(f"Window: {title[:160]}")
+    if app:       parts.append(f"App: {app[:80]}")
+    if file_path: parts.append(f"File path: {file_path[:140]}")
+    if url:       parts.append(f"URL: {url[:140]}")
+    if minutes:   parts.append(f"Duration: {minutes} min")
+
+    return "\n".join(parts)

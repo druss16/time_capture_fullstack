@@ -1687,7 +1687,6 @@ def ai_suggestions_today(request):
     ✅ Suppressed blocks silently dropped (no frontend entry)
     """
     from tracker.utils.display_names import format_block_for_display, format_duration
-    from tracker.services.block_classifier import BlockClassifier
 
     # ── Query params ──────────────────────────────────────────────────────────
     username      = request.GET.get("user") or None

@@ -212,11 +212,18 @@ class ClassificationService:
     # PUBLIC API
     # -------------------------------------------------------------------------
 
-    def classify(self, block) -> ClassificationDecision:
+    def classify(self, block, skip_ai: bool = False) -> ClassificationDecision:
         """
         Classify a single block. Pure function — does NOT write to the block.
 
         Returns a ClassificationDecision the caller can choose to apply.
+
+        Args:
+            block: Block instance to classify
+            skip_ai: When True, skips Stage 10 (AI inference). Used by compaction
+                     for low-latency synchronous classification. The signal
+                     handler will later enqueue Stage 10 via Celery for any
+                     block that ends in 'captured' state.
 
         This is THE one method that runs the full 10-stage pipeline.
         """
@@ -288,7 +295,9 @@ class ClassificationService:
         # Stage 10 — AI inference (last resort, only when nothing else fired)
         # Calls OpenAI to classify when stages 0-9 produced no signals.
         # Cost-controlled: only invoked if no Signal has strength >= 0.65.
-        self._stage_10_ai_inference(block, decision)
+        # Skipped when caller passes skip_ai=True (e.g., compaction hot path).
+        if not skip_ai:
+            self._stage_10_ai_inference(block, decision)
 
         return self._finalize_decision(decision, block)
 

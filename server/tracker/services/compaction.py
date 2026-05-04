@@ -242,17 +242,26 @@ def _create_meeting_block(
                     .get('confidence'),
             },
             client=client,
-            category_hours={"Client Meeting": hours},
-            is_categorized=True,   # locked — no AI classification needed
-            categorized_at=timezone.now(),
-            categorized_by="meeting_detector",
-            ai_category="Client Meeting",
-            ai_confidence=0.95,
             approved=False,
             is_billable=True,
             billing_rate=billing_rate,
             billing_amount=billing_amount,
         )
+
+        # Classify immediately so the API returns a fully-classified block.
+        # Stage 0-9 are deterministic and run inline. Stage 10 (AI) is skipped
+        # here; if needed, the post_save signal will queue it for Celery.
+        try:
+            from tracker.services.classification_service import ClassificationService
+            service = ClassificationService(org=org, user=user)
+            decision = service.classify(new_block, skip_ai=True)
+            service.apply(new_block, decision)
+        except Exception as e:
+            logger.error(
+                f"[COMPACT-MEETING] Classification failed for block {new_block.id}: {e}",
+                exc_info=True,
+            )
+            # Block stays in 'captured' state. Signal handler will retry async.
 
         logger.info(
             f"[COMPACT-MEETING] Created {meeting_app} block {new_block.id}: "
@@ -387,77 +396,56 @@ def _filter_foreground_inside_meetings(user, day: date_type) -> int:
 # =============================================================================
 def auto_categorize_block(block: Block) -> bool:
     """
-    Auto-categorize using industry-specific pattern matching.
-    Returns True if categorized.
+    Auto-categorize a block using ClassificationService deterministic stages.
+
+    Returns True if a strong signal fired (block now committed/proposed/suppressed).
+    Returns False if no strong signal hit (block still in captured state — signal
+    handler will queue it for AI classification).
+
+    This used to do its own pattern matching. Now it delegates to
+    ClassificationService so all classification goes through the state machine.
     """
     if block.is_categorized:
         return False
-    
-    # ✅ NEW: Get industry-specific patterns instead of hardcoded generic ones
+
+    # Skip if block is already in a non-captured classification state
+    state = getattr(block, 'classification_state', None)
+    if state and state != 'captured':
+        return False
+
     org = getattr(block, 'org', None)
-    industry_type = 'general'
-    if org:
-        industry_type = getattr(org, 'industry_type', 'general') or 'general'
-    
-    from tracker.industry_categories import get_combined_tool_detection
-    TOOL_PATTERNS = get_combined_tool_detection(industry_type)
-    
-    # Extract block context
-    title = (block.window_title or block.title or "").lower()
-    url = (block.url or "").lower()
-    app_name = (block.app_name or "").lower()
-    file_path = (block.file_path or "").lower()
-    bundle_id = (block.bundle_id or "").lower()
-    combined = f"{title} {url} {app_name} {file_path} {bundle_id}"
-    
-    hours = round((block.minutes or 0) / 60.0, 2)
-    if hours <= 0:
-        hours = 0.01
-    
-    best_match = None
-    best_confidence = 0.0
-    
-    # ✅ NEW: Use industry-specific tool detection patterns
-    for tool_name, patterns in TOOL_PATTERNS.items():
-        confidence = 0.0
-        
-        # Check keywords
-        for keyword in patterns.get('keywords', []):
-            if keyword.lower() in combined:
-                confidence = max(confidence, patterns.get('confidence', 0.85))
-                break
-        
-        # Check domains
-        for domain in patterns.get('domains', []):
-            if domain.lower() in url:
-                confidence = max(confidence, patterns.get('confidence', 0.85))
-                break
-        
-        if confidence > best_confidence:
-            best_confidence = confidence
-            best_match = {
-                'category': patterns.get('category', 'Uncategorized'),
-                'confidence': confidence
-            }
-    
-    if best_match and best_match['confidence'] >= AUTO_CATEGORIZE_THRESHOLD:
-        try:
-            block.category_hours = {best_match['category']: hours}
-            block.is_categorized = True
-            block.categorized_at = timezone.now()
-            block.categorized_by = 'pattern'
-            block.ai_confidence = best_match['confidence']
-            block.ai_category = best_match['category']
-            block.save(update_fields=[
-                'category_hours', 'is_categorized', 'categorized_at',
-                'categorized_by', 'ai_confidence', 'ai_category'
-            ])
-            logger.info(f"[AUTO-CAT] Block {block.id} ({block.app_name}) → {best_match['category']}")
+    user = getattr(block, 'user', None)
+
+    if not org:
+        logger.warning(f"[AUTO-CAT] Block {block.id} has no org — skipping")
+        return False
+
+    try:
+        from tracker.services.classification_service import ClassificationService
+        service = ClassificationService(org=org, user=user)
+        decision = service.classify(block, skip_ai=True)
+        service.apply(block, decision)
+
+        # Refresh to see the final state after apply()
+        block.refresh_from_db()
+        final_state = block.classification_state
+
+        if final_state in ('committed', 'proposed', 'suppressed'):
+            logger.info(
+                f"[AUTO-CAT] Block {block.id} ({block.app_name}) → "
+                f"state={final_state}"
+            )
             return True
-        except Exception as e:
-            logger.error(f"[AUTO-CAT] Failed: {e}")
-    
-    return False
+        else:
+            # Stayed in captured. Signal handler will queue for AI later.
+            return False
+
+    except Exception as e:
+        logger.error(
+            f"[AUTO-CAT] Classification failed for block {block.id}: {e}",
+            exc_info=True,
+        )
+        return False
 
 
 # =============================================================================

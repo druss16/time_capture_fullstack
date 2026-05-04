@@ -911,30 +911,6 @@ def ai_classify_uncategorized_blocks(self, limit=80):
 # HELPER FUNCTIONS
 # ============================================================================
 
-def _apply_pattern_result(block, client_name, category, confidence):
-    """Apply a pattern-match result to a block."""
-    from tracker.models import Client
-
-    if client_name and not block.client:
-        org = getattr(block, 'org', None)
-        if org:
-            try:
-                client_obj = Client.objects.get(
-                    org=org, name__iexact=client_name, is_active=True
-                )
-                block.client = client_obj
-            except (Client.DoesNotExist, Client.MultipleObjectsReturned):
-                pass
-
-    if category:
-        hours = round((block.minutes or 1) / 60.0, 2)
-        block.category_hours = {category: hours}
-        block.is_categorized = True
-        block.categorized_at = timezone.now()
-        block.categorized_by = 'pattern'
-        block.ai_confidence = confidence
-        block.save()
-
 
 def _shorten(s, n=180):
     s = (s or "").strip()

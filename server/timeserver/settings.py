@@ -24,6 +24,8 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "timetracker-api-k375.onrender.com",
     "time-capture-fullstack-frontend.onrender.com",
+    "timetracker-api-rebuild.onrender.com",   # NEW — for rebuild work
+
     # Add your custom domain here when ready
 ]
 

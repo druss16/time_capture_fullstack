@@ -1472,65 +1472,6 @@ def label_block(request):
     })
 
 
-# -------------------------------------------------------------------
-# UPDATED: AI-Enhanced Suggestions (context-aware)
-# Prioritizes Development/Consulting patterns over CPA patterns
-# -------------------------------------------------------------------
-def pre_classify_obvious_categories(block, industry_type='general') -> dict:
-    """
-    Pre-classify obvious patterns before AI runs.
-    NOW USES INDUSTRY-SPECIFIC TOOL DETECTION!
-    """
-    from tracker.industry_categories import get_combined_tool_detection
-    
-    title = (getattr(block, "window_title", "") or getattr(block, "title", "") or "").lower()
-    url = (block.url or "").lower()
-    app_name = (getattr(block, "app_name", "") or "").lower()
-    file_path = (block.file_path or "").lower()
-    
-    # Calculate block duration in hours
-    if block.end and block.start:
-        hours = round((block.end - block.start).total_seconds() / 3600, 2)
-    elif hasattr(block, 'minutes') and block.minutes:
-        hours = round(block.minutes / 60.0, 2)
-    else:
-        hours = 0.1
-    
-    combined_text = f"{title} {url} {app_name} {file_path}"
-    
-    # MEETINGS (universal - all industries)
-    meeting_apps = ['zoom', 'teams', 'meet', 'slack', 'webex', 'discord', 'skype']
-    meeting_domains = ['zoom.us', 'meet.google.com', 'teams.microsoft.com']
-    
-    if any(app in app_name for app in meeting_apps):
-        return {'categories': {'Meetings': hours}, 'confidence': 0.90, 'reasoning': f'Meeting app: {app_name}'}
-    
-    if any(domain in url for domain in meeting_domains):
-        return {'categories': {'Meetings': hours}, 'confidence': 0.85, 'reasoning': 'Meeting URL detected'}
-    
-    # INDUSTRY-SPECIFIC TOOL DETECTION
-    tool_detection = get_combined_tool_detection(industry_type)
-    
-    for tool_key, tool_config in tool_detection.items():
-        keywords = tool_config.get('keywords', [])
-        domains = tool_config.get('domains', [])
-        category = tool_config.get('category', 'Administration')
-        confidence = tool_config.get('confidence', 0.80)
-        
-        if any(keyword in combined_text for keyword in keywords):
-            return {'categories': {category: hours}, 'confidence': confidence, 'reasoning': f'{category} via {tool_key}'}
-        
-        if any(domain in url for domain in domains):
-            return {'categories': {category: hours}, 'confidence': confidence, 'reasoning': f'{category} from URL'}
-    
-    # EMAIL (universal)
-    email_indicators = ["mail.google.com", "outlook.office.com", "inbox", "compose"]
-    if any(indicator in combined_text for indicator in email_indicators):
-        return {'categories': {'Email/Communication': hours}, 'confidence': 0.90, 'reasoning': 'Email activity'}
-    
-    return {}
-
-
 def _ai_suggestions_via_classification_service(
     request,
     org,

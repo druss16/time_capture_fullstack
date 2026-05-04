@@ -78,18 +78,33 @@ def _needs_classification(b: Block, created: bool) -> bool:
 @receiver(post_save, sender=Block, dispatch_uid="tracker.block.auto_classify")
 def _auto_classify_block(sender, instance: Block, created: bool, **kwargs):
     """
-    Auto-classify new blocks using simple pattern matching.
-    Runs synchronously on save (fast, no LLM).
+    Auto-classify new blocks on creation via ClassificationService.
+ 
+    Immutability guarantee: this signal only enqueues classification for
+    blocks in 'captured' state (or NULL/legacy). Once a block enters any
+    other state (committed/proposed/suppressed), automated re-classification
+    never touches it again. Only user manual edits can change it.
     """
     if _running_management_command():
         return
     if _guarded():
         return
-    
-    # Only classify new, uncategorized blocks
-    if not created or instance.is_categorized:
+ 
+    # Only classify new blocks
+    if not created:
         return
-    
+ 
+    # Skip if legacy is_categorized flag is set (already classified by some path)
+    if instance.is_categorized:
+        return
+ 
+    # Immutability check: skip blocks already in a non-captured state.
+    # This protects against re-classification of blocks that have been
+    # explicitly handled by ClassificationService.
+    state = getattr(instance, 'classification_state', None)
+    if state and state != 'captured':
+        return
+ 
     def _do():
         try:
             blk = Block.objects.get(pk=instance.pk)
@@ -97,10 +112,10 @@ def _auto_classify_block(sender, instance: Block, created: bool, **kwargs):
             classify_block_task.delay(blk.pk)
         except Block.DoesNotExist:
             return
-        except Exception as e:
+        except Exception:
             # Don't let Redis/Celery errors break block creation
             pass
-    
+ 
     transaction.on_commit(_do)
 
 

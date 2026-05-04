@@ -1531,7 +1531,186 @@ def pre_classify_obvious_categories(block, industry_type='general') -> dict:
     return {}
 
 
-from tracker.services.pattern_learning import PatternLearningService
+def _ai_suggestions_via_classification_service(
+    request,
+    org,
+    all_blocks,
+    blocks_needing_ai,
+    already_categorized,
+):
+    """
+    New ClassificationService-based path for ai_suggestions_today.
+ 
+    Called when org.use_classification_service=True. Bypasses the legacy
+    BlockClassifier and OpenAI batch entirely. Uses ClassificationService
+    which has its own state machine (captured/proposed/committed/suppressed),
+    contradiction detection, and Stage 10 AI inference baked in.
+ 
+    Behavior differences from old path:
+      - Suppressed blocks are filtered out of the response (Q1)
+      - Proposed blocks are NOT auto-saved with is_categorized=True;
+        they're returned with state='proposed' so the user can review (Q2)
+      - No OpenAI batch fallback — Stage 10 inside the service is sufficient (Q3)
+ 
+    Returns a Response with the same shape as the old path, so frontend
+    code doesn't need to change.
+    """
+    from rest_framework.response import Response
+    from tracker.services.classification_service import ClassificationService
+    from tracker.utils.display_names import format_block_for_display
+ 
+    user = request.user if request.user.is_authenticated else None
+    if hasattr(request, 'GET') and request.GET.get('user'):
+        try:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            user = User.objects.get(username=request.GET['user'])
+        except User.DoesNotExist:
+            pass
+ 
+    # Build same locked-block formatter as old path (for already-categorized blocks)
+    def _format_locked(b):
+        cat_name    = list((b.category_hours or {}).keys())[0] if b.category_hours else None
+        client_name = getattr(b.client, "name", None)
+        formatted   = format_block_for_display({
+            'app_name':     getattr(b, 'app_name', '') or '',
+            'window_title': getattr(b, 'window_title', '') or '',
+            'url':          getattr(b, 'url', '') or '',
+            'minutes':      b.minutes or 0,
+            'category':     cat_name,
+        }, client_name=client_name)
+        return {
+            "block_id": b.id,
+            "start":    b.start,
+            "end":      b.end,
+            "title":    b.title,
+            "ai_suggestion": {
+                "client":          client_name,
+                "project":         getattr(b.project, "name", None),
+                "categories":      b.category_hours or {},
+                "confidence":      1.0,
+                "needs_review":    False,
+                "reasoning":       "Already categorized (locked)",
+                "source":          "existing",
+                "auto_saved":      False,
+                "taxpayer_name":   getattr(b, 'taxpayer_name', None),
+                "tax_return_type": getattr(b, 'tax_return_type', None),
+            },
+            "display": {
+                "title":         formatted['title'],
+                "app":           formatted['app'],
+                "duration":      formatted['duration'],
+                "category_icon": formatted['category_icon'],
+            },
+            "current_client":  client_name,
+            "current_project": getattr(b.project, "name", None),
+        }
+ 
+    service = ClassificationService(org=org, user=user)
+    pipeline_out = []
+ 
+    for b in blocks_needing_ai:
+        # Skip blocks already in a non-captured state — they were already
+        # processed by ClassificationService on a previous request (idempotent)
+        # If state is captured (or null/unset), classify and apply.
+        current_state = getattr(b, 'classification_state', None)
+        needs_classify = current_state in (None, '', 'captured')
+ 
+        if needs_classify:
+            try:
+                decision = service.classify(b)
+                service.apply(b, decision)
+                # Refresh from DB so we read the freshly-applied state
+                b.refresh_from_db()
+            except Exception as e:
+                logger.error(f"[CLASSIFY-V2] Failed on block {b.id}: {e}", exc_info=True)
+                # Continue — don't break the whole endpoint over one block
+                continue
+ 
+        # Q1: Filter out suppressed blocks entirely
+        if b.classification_state == 'suppressed':
+            continue
+ 
+        # Build response entry matching old shape
+        # For 'committed' blocks: client_id is set on block, category in category_hours
+        # For 'proposed' blocks: read from proposed_client_id / proposed_category
+        # For 'captured' blocks (rare — classify failed): no attribution
+        if b.classification_state == 'committed':
+            client_obj  = getattr(b, 'client', None)
+            client_name = client_obj.name if client_obj else None
+            categories  = b.category_hours or {}
+            confidence  = float(getattr(b, 'ai_confidence', 0.0) or 0.0)
+            needs_review = False
+            reasoning   = "Auto-classified (committed)"
+            auto_saved  = True
+        elif b.classification_state == 'proposed':
+            from tracker.models import Client
+            proposed_id   = getattr(b, 'proposed_client_id', None)
+            client_name   = None
+            if proposed_id:
+                try:
+                    client_name = Client.objects.get(id=proposed_id).name
+                except Client.DoesNotExist:
+                    pass
+            proposed_cat  = getattr(b, 'proposed_category', '') or ''
+            categories    = {proposed_cat: round((b.minutes or 0) / 60.0, 2)} if proposed_cat else {}
+            confidence    = float(getattr(b, 'proposed_confidence', 0.0) or 0.0)
+            needs_review  = True
+            reasoning     = getattr(b, 'proposed_reasoning', '') or 'Proposed — needs review'
+            auto_saved    = False
+        else:
+            # captured or unset (classify failed or nothing matched)
+            client_name  = getattr(getattr(b, 'client', None), 'name', None)
+            categories   = {}
+            confidence   = 0.0
+            needs_review = True
+            reasoning    = "No classification signals matched"
+            auto_saved   = False
+ 
+        formatted = format_block_for_display({
+            'app_name':     getattr(b, 'app_name', '') or '',
+            'window_title': getattr(b, 'window_title', '') or '',
+            'url':          getattr(b, 'url', '') or '',
+            'minutes':      b.minutes or 0,
+            'category':     list(categories.keys())[0] if categories else None,
+        }, client_name=client_name)
+ 
+        pipeline_out.append({
+            "block_id": b.id,
+            "start":    b.start,
+            "end":      b.end,
+            "title":    b.title,
+            "ai_suggestion": {
+                "client":          client_name,
+                "project":         None,
+                "categories":      categories,
+                "confidence":      confidence,
+                "needs_review":    needs_review,
+                "reasoning":       reasoning,
+                "source":          "classification_service",
+                "auto_saved":      auto_saved,
+                "taxpayer_name":   getattr(b, 'taxpayer_name', None),
+                "tax_return_type": getattr(b, 'tax_return_type', None),
+            },
+            "display": {
+                "title":         formatted['title'],
+                "app":           formatted['app'],
+                "duration":      formatted['duration'],
+                "category_icon": formatted['category_icon'],
+            },
+            "current_client":  getattr(getattr(b, 'client', None), 'name', None),
+            "current_project": getattr(getattr(b, 'project', None), 'name', None),
+        })
+ 
+    # Q3: Skip OpenAI batch entirely. Stage 10 in ClassificationService is sufficient.
+ 
+    # Merge pipeline output with already-categorized blocks
+    out = pipeline_out + [_format_locked(b) for b in already_categorized]
+    log(f"[CLASSIFY-V2] org={org.id} returned {len(pipeline_out)} pipeline + "
+        f"{len(already_categorized)} locked = {len(out)} total blocks")
+ 
+    return Response(out)
+ 
 
 # tracker/views.py - COMPLETE ai_suggestions_today function
 # ============================================================
@@ -1616,6 +1795,13 @@ def ai_suggestions_today(request):
             blocks_needing_ai.append(b)
 
     log(f"[AI] {len(already_categorized)} categorized (LOCKED), {len(blocks_needing_ai)} need classification")
+
+
+    # All orgs use the ClassificationService pipeline.
+    return _ai_suggestions_via_classification_service(
+        request, org, all_blocks, blocks_needing_ai, already_categorized
+    )
+
 
     # ── Helper: format an already-categorized block for the response ──────────
     def _format_locked(b):

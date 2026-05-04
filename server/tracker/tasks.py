@@ -671,116 +671,86 @@ def notify_managers_pending_approvals():
 @shared_task(name='tracker.classify_block', bind=True, max_retries=3)
 def classify_block_task(self, block_id: int):
     """
-    Classify a single block using patterns and AI.
-    Called automatically by signal when block is created.
-
-    This is the fast path - uses pattern matching first,
-    only falls back to AI if patterns don't give high confidence.
-
+    Classify a single block using ClassificationService (new pipeline).
+ 
+    Called by the post_save signal whenever a Block is created. Also called
+    directly from management commands for batch reclassification.
+ 
+    Immutability guarantee: blocks already in committed/proposed/suppressed
+    state are NOT re-classified. Only blocks in captured/None state get
+    processed. Once the state machine sets a final state, only user manual
+    edits can change it.
+ 
     Args:
         block_id: ID of block to classify
-
     Returns:
-        dict with classification result
+        dict with classification result for monitoring/logging
     """
     try:
-        from tracker.models import Block, Client
-        from tracker.views import pre_classify_obvious_categories
-        from tracker.services.pattern_learning import PatternLearningService
-
+        from tracker.models import Block
+        from tracker.services.classification_service import ClassificationService
+ 
         # Get block
         try:
             block = Block.objects.select_related('client', 'user', 'org').get(id=block_id)
         except Block.DoesNotExist:
             logger.warning(f"[CLASSIFY] Block {block_id} not found")
             return {"status": "not_found", "block_id": block_id}
-
-        # Skip if already categorized
+ 
+        # Skip if legacy is_categorized flag is set
         if block.is_categorized:
             return {"status": "already_categorized", "block_id": block_id}
-
-        # ✅ FIX: Get org and industry_type upfront
+ 
+        # Immutability check: only process captured/legacy blocks
+        current_state = getattr(block, 'classification_state', None)
+        if current_state and current_state != 'captured':
+            return {
+                "status": "already_classified",
+                "block_id": block_id,
+                "state": current_state,
+            }
+ 
+        # Run ClassificationService
         org = getattr(block, 'org', None)
-        industry_type = getattr(org, 'industry_type', 'general') or 'general'
-
-        # Step 1: Try obvious patterns (CPA tools, meetings, email)
-        pre_class = pre_classify_obvious_categories(block, industry_type=industry_type)
-
-        if pre_class and pre_class.get('confidence', 0) >= 0.75:
-            categories = pre_class.get('categories', {})
-            if categories:
-                block.category_hours = categories
-                block.is_categorized = True
-                block.categorized_at = timezone.now()
-                block.categorized_by = 'pattern'
-                block.ai_confidence = pre_class.get('confidence', 0.0)
-                block.save()
-
-                logger.info(
-                    f"[CLASSIFY] ✅ Block {block_id} auto-categorized: "
-                    f"{list(categories.keys())} ({pre_class.get('confidence'):.2f})"
-                )
-
-                return {
-                    "status": "classified",
-                    "block_id": block_id,
-                    "categories": categories,
-                    "confidence": pre_class.get('confidence'),
-                    "source": "pattern"
-                }
-
-        # Step 2: Try learned patterns
-        if block.user:
-            learned = PatternLearningService.get_patterns_for_block(block, block.user)
-
-            if learned:
-                client_name, category, confidence = learned[0]
-
-                if confidence >= 0.75 and (client_name or category):
-                    # ✅ FIX: Client LOOKUP only — never create phantom clients
-                    if client_name and not block.client and org:
-                        try:
-                            client = Client.objects.get(
-                                org=org,
-                                name__iexact=client_name,
-                                is_active=True,
-                            )
-                            block.client = client
-                        except (Client.DoesNotExist, Client.MultipleObjectsReturned):
-                            pass  # Don't create phantom clients
-
-                    if category:
-                        hours = round(block.minutes / 60.0, 2) if block.minutes else 0.1
-                        block.category_hours = {category: hours}
-                        block.is_categorized = True
-                        block.categorized_at = timezone.now()
-                        block.categorized_by = 'learned'
-                        block.ai_confidence = confidence
-                        block.save()
-
-                        logger.info(
-                            f"[CLASSIFY] ✅ Block {block_id} learned pattern: "
-                            f"{client_name or 'none'} / {category} ({confidence:.2f})"
-                        )
-
-                        return {
-                            "status": "classified",
-                            "block_id": block_id,
-                            "client": client_name,
-                            "category": category,
-                            "confidence": confidence,
-                            "source": "learned"
-                        }
-
-        # Step 3: Not confident - leave for manual review
-        logger.debug(f"[CLASSIFY] Block {block_id} needs manual review")
-
+        user = getattr(block, 'user', None)
+ 
+        if not org:
+            logger.warning(f"[CLASSIFY] Block {block_id} has no org — skipping")
+            return {"status": "skipped", "block_id": block_id, "reason": "no org"}
+ 
+        service = ClassificationService(org=org, user=user)
+        decision = service.classify(block)
+        service.apply(block, decision)
+ 
+        # Refresh from DB to get the final state after apply()
+        block.refresh_from_db()
+        final_state = block.classification_state
+ 
+        # Map state to legacy status string for monitoring compatibility
+        if final_state == 'committed':
+            status = 'classified'
+        elif final_state == 'proposed':
+            status = 'needs_review'
+        elif final_state == 'suppressed':
+            status = 'suppressed'
+        else:
+            status = 'captured'
+ 
+        logger.info(
+            f"[CLASSIFY] Block {block_id} → state={final_state} "
+            f"(client={block.client_id}, conf={block.ai_confidence})"
+        )
+ 
         return {
-            "status": "needs_review",
+            "status": status,
             "block_id": block_id,
-            "reason": "Low confidence"
+            "state": final_state,
+            "client_id": block.client_id,
+            "category": list((block.category_hours or {}).keys())[0] if block.category_hours else None,
+            "confidence": float(block.ai_confidence or 0.0),
+            "source": "classification_service",
         }
-
+ 
     except Exception as exc:
         logger.error(f"[CLASSIFY] Error on block {block_id}: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=60)
@@ -833,287 +803,107 @@ SCHEDULE: Every 5 minutes via Celery beat (already configured)
 @shared_task(name='tracker.ai_classify_uncategorized_blocks', bind=True, max_retries=2)
 def ai_classify_uncategorized_blocks(self, limit=80):
     """
-    Run AI classification on uncategorized blocks.
-    Runs every 5 minutes via Celery beat.
-
-    Pipeline:
-      1. Pattern matching (free, fast) — handles ~60-70% of blocks
-      2. OpenAI batch classification — handles the rest
-      3. Learn patterns from AI results for future runs
+    5-minute safety-net task: catches blocks the real-time path missed.
+ 
+    Real-time path (post_save → classify_block_task) handles new blocks
+    immediately. This task picks up any block that ended up in 'captured'
+    state — usually because the real-time path errored or the AI step
+    timed out.
+ 
+    Immutability guarantee: only processes blocks in 'captured' state.
+    Once committed/proposed/suppressed, blocks are immutable to automated
+    re-processing. No double-AI-call risk.
+ 
+    Args:
+        limit: Max blocks to process per run (default 80)
     """
-    import os
-    import re
-    import json
-    from collections import defaultdict
     from datetime import timedelta
-
-    from django.db import transaction
-
-    logger = logging.getLogger(__name__)
-
+    from django.utils import timezone
+ 
     try:
-        from tracker.models import Block, Client, OrganizationMembership
-        from tracker.services.pattern_learning import PatternLearningService
-        from tracker.industry_categories import (
-            build_ai_prompt_for_industry,
-            build_classification_user_prompt,
-            validate_and_fix_ai_response,
-        )
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-
-        api_key = os.getenv('OPENAI_API_KEY')
-        if not api_key:
-            logger.warning("[AI-TASK] Skipping — OPENAI_API_KEY not set")
-            return {'skipped': 'no_api_key'}
-
-        # ==================================================================
-        # STEP 1: Gather uncategorized blocks (last 24h)
-        # ==================================================================
+        from tracker.models import Block
+        from tracker.services.classification_service import ClassificationService
+ 
         cutoff = timezone.now() - timedelta(hours=24)
-
-        blocks = list(
+ 
+        # Only blocks still in 'captured' state — i.e., the real-time path
+        # didn't successfully resolve them.
+        captured_blocks = list(
             Block.objects.filter(
-                is_categorized=False,
+                classification_state='captured',
                 start__gte=cutoff,
                 deleted_at__isnull=True,
+                is_categorized=False,
             )
             .select_related('user', 'client', 'org')
             .order_by('-start')[:limit]
         )
-
-        if not blocks:
-            return {'blocks_found': 0, 'message': 'Nothing to classify'}
-
-        logger.info(f"[AI-TASK] Found {len(blocks)} uncategorized blocks")
-
+ 
+        if not captured_blocks:
+            return {'blocks_found': 0, 'message': 'No captured blocks to retry'}
+ 
+        logger.info(f"[AI-SAFETY-NET] Found {len(captured_blocks)} captured blocks to retry")
+ 
         stats = {
-            'blocks_found': len(blocks),
-            'pattern_classified': 0,
-            'ai_classified': 0,
-            'ai_failed': 0,
+            'blocks_found': len(captured_blocks),
+            'committed': 0,
+            'proposed': 0,
+            'suppressed': 0,
+            'still_captured': 0,
             'errors': 0,
         }
-
-        # ==================================================================
-        # STEP 2: Fast path — pattern matching (free)
-        # ==================================================================
-        still_need_ai = []
-
-        for block in blocks:
-            try:
-                if block.user:
-                    learned = PatternLearningService.get_patterns_for_block(block, block.user)
-                    if learned:
-                        client_name, category, confidence = learned[0]
-                        if confidence >= 0.75 and category:
-                            _apply_pattern_result(block, client_name, category, confidence)
-                            stats['pattern_classified'] += 1
-                            continue
-
-                from tracker.services.compaction import auto_categorize_block
-                if auto_categorize_block(block):
-                    stats['pattern_classified'] += 1
-                    continue
-
-                still_need_ai.append(block)
-
-            except Exception as e:
-                logger.warning(f"[AI-TASK] Pattern check error on block {block.id}: {e}")
-                still_need_ai.append(block)
-
-        logger.info(
-            f"[AI-TASK] Pattern pass: {stats['pattern_classified']} classified, "
-            f"{len(still_need_ai)} still need AI"
-        )
-
-        if not still_need_ai:
-            return stats
-
-        # ==================================================================
-        # STEP 3: Batch by org for AI classification
-        # ==================================================================
+ 
+        # Group by org so we can reuse ClassificationService instances
+        # (it caches client list and rules per-org)
+        from collections import defaultdict
         by_org = defaultdict(list)
-        for block in still_need_ai:
-            org_id = block.org_id or 0
-            by_org[org_id].append(block)
-
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key, timeout=30.0)
-
+        for b in captured_blocks:
+            if b.org_id:
+                by_org[b.org_id].append(b)
+ 
         for org_id, org_blocks in by_org.items():
-            try:
-                org = org_blocks[0].org if org_blocks[0].org else None
-                industry_type = getattr(org, 'industry_type', 'general') or 'general'
-
-                system_msg = build_ai_prompt_for_industry(industry_type)
-
-                if org:
-                    from tracker.views import build_ai_context
-                    org_context = build_ai_context(org) or ""
-                    if org_context:
-                        system_msg += "\n\n=== ORGANIZATION CONTEXT ===\n" + org_context
-                else:
-                    org_context = ""
-
-                trimmed = []
-                for b in org_blocks[:50]:  # Cap at 50 per org per run
-                    minutes = b.minutes or 0
-                    trimmed.append({
-                        "id": str(b.id),
-                        "title": _shorten(b.title, 160),
-                        "window_title": _shorten(getattr(b, 'window_title', ''), 160),
-                        "url": _shorten(b.url, 140),
-                        "file_path": _shorten(b.file_path, 140),
-                        "app_name": _shorten(getattr(b, 'app_name', ''), 80),
-                        "bundle_id": _shorten(getattr(b, 'bundle_id', ''), 100),
-                        "minutes": minutes,
-                        "hints": getattr(b, 'hints', {}) or {},
-                        "assigned_client": getattr(b.client, "name", None),
-                    })
-
-                user_prompt = build_classification_user_prompt(trimmed, org_context)
-
-                # Choose model/tokens based on batch size
-                max_tokens = 1000 if len(trimmed) <= 3 else 4000
-
-                # ==============================================================
-                # THE ACTUAL OPENAI CALL
-                # ==============================================================
-                logger.info(
-                    f"[AI-TASK] Calling OpenAI for org {org_id}: "
-                    f"{len(trimmed)} blocks, industry={industry_type}"
-                )
-
-                resp = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=0.2,
-                    max_tokens=max_tokens,
-                )
-
-                raw_text = (resp.choices[0].message.content or "").strip()
-                raw_json = _extract_json(raw_text)
-                ai_results = _json_loads_loose(raw_json)
-
-                if not isinstance(ai_results, list):
-                    raise ValueError("OpenAI did not return a JSON array")
-
-                ai_results = validate_and_fix_ai_response(ai_results, industry_type)
-
-                logger.info(
-                    f"[AI-TASK] OpenAI returned {len(ai_results)} results "
-                    f"for {len(trimmed)} blocks"
-                )
-
-                # ==============================================================
-                # STEP 4: Save results
-                # ==============================================================
-                n = min(len(org_blocks), len(ai_results))
-
-                with transaction.atomic():
-                    for i in range(n):
-                        block = org_blocks[i]
-                        sug = ai_results[i] if isinstance(ai_results[i], dict) else {}
-
-                        confidence = float(sug.get("confidence", 0.0))
-                        categories = sug.get("categories", {})
-
-                        if confidence < 0.70 or not categories:
-                            continue  # Leave for manual review
-
-                        try:
-                            fresh = Block.objects.select_for_update().get(id=block.id)
-                            if fresh.is_categorized:
-                                continue  # Race condition — already done
-
-                            # Client correction (lookup only, never create)
-                            suggested_client = (sug.get("client") or "").strip()
-                            if suggested_client and not fresh.client and org:
-                                try:
-                                    correct_client = Client.objects.get(
-                                        org=org,
-                                        name__iexact=suggested_client,
-                                        is_active=True,
-                                    )
-                                    fresh.client = correct_client
-                                except (Client.DoesNotExist, Client.MultipleObjectsReturned):
-                                    pass
-
-                            # Save categories
-                            clean_cats = {}
-                            for k, v in categories.items():
-                                try:
-                                    clean_cats[str(k)] = float(v)
-                                except (ValueError, TypeError):
-                                    pass
-
-                            if not clean_cats:
-                                continue
-
-                            # ✅ Normalize category_hours to actual block duration
-                            actual_hours = round((fresh.minutes or 0) / 60.0, 2)
-                            cat_total = sum(clean_cats.values())
-                            if cat_total > 0 and actual_hours > 0:
-                                ratio = actual_hours / cat_total
-                                clean_cats = {k: round(v * ratio, 2) for k, v in clean_cats.items()}
-                            elif actual_hours > 0 and len(clean_cats) > 0:
-                                per_cat = round(actual_hours / len(clean_cats), 2)
-                                clean_cats = {k: per_cat for k in clean_cats}
-
-                            fresh.category_hours = clean_cats
-                            fresh.ai_category = list(clean_cats.keys())[0]
-                            fresh.is_categorized = True
-                            fresh.categorized_at = timezone.now()
-                            fresh.categorized_by = 'ai'
-                            fresh.ai_processed_at = timezone.now()
-                            fresh.ai_confidence = confidence
-                            fresh.save()
-
-                            stats['ai_classified'] += 1
-
-                            logger.debug(
-                                f"[AI-TASK] ✅ Block {block.id} → "
-                                f"{suggested_client or 'no client'} / "
-                                f"{list(clean_cats.keys())} ({confidence:.2f})"
-                            )
-
-                            # Learn from this classification
-                            if fresh.user:
-                                try:
-                                    PatternLearningService.learn_from_block(fresh, fresh.user)
-                                except Exception:
-                                    pass
-
-                        except Block.DoesNotExist:
-                            pass
-                        except Exception as e:
-                            logger.error(f"[AI-TASK] Save error block {block.id}: {e}")
-                            stats['errors'] += 1
-
-            except Exception as e:
-                logger.error(
-                    f"[AI-TASK] OpenAI batch failed for org {org_id}: {e}",
-                    exc_info=True
-                )
-                stats['ai_failed'] += len(org_blocks)
-
+            org = org_blocks[0].org
+            user = None  # service per-block has user context
+ 
+            for block in org_blocks:
+                try:
+                    user = block.user
+                    service = ClassificationService(org=org, user=user)
+                    decision = service.classify(block)
+                    service.apply(block, decision)
+ 
+                    block.refresh_from_db()
+                    final = block.classification_state
+ 
+                    if final == 'committed':
+                        stats['committed'] += 1
+                    elif final == 'proposed':
+                        stats['proposed'] += 1
+                    elif final == 'suppressed':
+                        stats['suppressed'] += 1
+                    else:
+                        stats['still_captured'] += 1
+ 
+                except Exception as e:
+                    logger.error(
+                        f"[AI-SAFETY-NET] Failed on block {block.id}: {e}",
+                        exc_info=True,
+                    )
+                    stats['errors'] += 1
+ 
         logger.info(
-            f"[AI-TASK] Complete: "
-            f"pattern={stats['pattern_classified']}, "
-            f"ai={stats['ai_classified']}, "
-            f"failed={stats['ai_failed']}, "
+            f"[AI-SAFETY-NET] Done: "
+            f"committed={stats['committed']}, "
+            f"proposed={stats['proposed']}, "
+            f"suppressed={stats['suppressed']}, "
+            f"still_captured={stats['still_captured']}, "
             f"errors={stats['errors']}"
         )
-
+ 
         return stats
-
+ 
     except Exception as exc:
-        logger.error(f"[AI-TASK] Task failed: {exc}", exc_info=True)
+        logger.error(f"[AI-SAFETY-NET] Task failed: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=120)
 
 

@@ -81,15 +81,6 @@ class Organization(models.Model):
         help_text="Auto-submit draft timesheets on Tuesday 9am"
     )
 
-    use_classification_service = models.BooleanField(
-        default=False,
-        help_text=(
-            'When True, this org uses the new ClassificationService pipeline '
-            '(state machine, contradiction detection, audit trail). '
-            'When False (default), uses the legacy BlockClassifier path.'
-        ),
-    )
-
     ai_sensitivity = models.PositiveSmallIntegerField(
         default=50,
         help_text=(

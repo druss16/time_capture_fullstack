@@ -354,12 +354,18 @@ class ClassificationService:
         block.state_changed_at = timezone.now()
         block.state_changed_by = source
 
-        # If committed: also write the live fields (what gets billed)
-        if new_state == 'committed':
+        # If committed OR proposed: write the live fields so the block shows up
+        # in dashboards. classification_state distinguishes whether it's been
+        # confirmed or is awaiting user review.
+        if new_state in ('committed', 'proposed'):
             if decision.client_id:
                 block.client_id = decision.client_id
             if decision.category_hours:
                 block.category_hours = decision.category_hours
+            elif decision.category:
+                # For proposed blocks where category_hours wasn't built, build it
+                hours = round((block.minutes or 0) / 60.0, 2) if block.minutes else 0.01
+                block.category_hours = {decision.category: hours}
             block.is_billable = decision.is_billable
             # Backwards compat with existing is_categorized field
             block.is_categorized = True
@@ -367,8 +373,9 @@ class ClassificationService:
                 block.categorized_at = timezone.now()
             block.categorized_by = self._map_state_to_categorized_by(source)
 
-        # If proposed: leave live fields alone (still no client, no billing)
-        # The proposal lives in proposed_* fields; commit converts them to live.
+        # The 'proposed' state is preserved in classification_state, even though
+        # is_categorized=True. Frontend uses classification_state OR the
+        # needs_review flag from suggestions endpoint to render differently.
 
         # Save with force_classifier=True to bypass the legacy protection check
         block.save(force_classifier=True)

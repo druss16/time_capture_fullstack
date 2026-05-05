@@ -2347,6 +2347,11 @@ def save_block_classification(request, block_id: int):
                 b.categorized_by = 'manual'  # First-time manual entry
                 log(f"[CLASSIFY] User manually classified block {b.id}")
             # else: keep existing categorized_by (already 'manual' or 'correction')
+            # State machine: explicitly set classification_state for user actions.
+            # Maps state_changed_by to match the categorized_by we just set above.
+            b.classification_state = 'committed'
+            b.state_changed_at = timezone.now()
+            b.state_changed_by = 'correction' if b.categorized_by == 'correction' else 'user'
     
     # Optional task
     task_name = (payload.get("task") or "").strip() or None
@@ -4613,6 +4618,11 @@ def save_categorization(request):
             block.categorized_at = timezone.now()
             block.categorized_by = 'manual'
             
+            # State machine
+            block.classification_state = 'committed'
+            block.state_changed_at = timezone.now()
+            block.state_changed_by = 'user'
+            
             if notes:
                 block.notes = notes
             
@@ -4742,8 +4752,11 @@ def bulk_categorize(request):
             block.is_categorized = True
             block.categorized_at = timezone.now()
             block.categorized_by = 'manual'
+            block.classification_state = 'committed'
+            block.state_changed_at = timezone.now()
+            block.state_changed_by = 'user'
             block.save()
-            
+
             results['success_count'] += 1
             
         except Block.DoesNotExist:
@@ -4991,8 +5004,16 @@ class BlockCategorizationViewSet(viewsets.ViewSet):
             block.is_categorized = True
             block.categorized_by = 'manual'
             block.categorized_at = timezone.now()
+            # State machine
+            block.classification_state = 'committed'
+            block.state_changed_at = timezone.now()
+            block.state_changed_by = 'user'
         else:
             block.categorized_by = 'correction'
+            # State machine — user is correcting an existing classification
+            block.classification_state = 'committed'
+            block.state_changed_at = timezone.now()
+            block.state_changed_by = 'correction'
         
         block.save(force_update=True)
         
@@ -5589,6 +5610,9 @@ def create_manual_time_entry(request):
         is_categorized=True,
         categorized_at=timezone.now(),
         categorized_by='manual',
+        classification_state='committed',
+        state_changed_at=timezone.now(),
+        state_changed_by='user',
         notes=notes,
         app_name='manual_entry',
     )

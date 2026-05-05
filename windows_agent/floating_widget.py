@@ -380,6 +380,11 @@ class FloatingClientWidget:
         if self._mode == "dot" or not self._root_alive():
             return
 
+        # The widget should pulse with full info visible until the user
+        # confirms or changes the client.
+        if self.current_state in ("proposed", "captured"):
+            return
+
         try:
             current_x = self.root.winfo_x()
             current_y = self.root.winfo_y()
@@ -621,8 +626,18 @@ class FloatingClientWidget:
         threading.Thread(target=update_loop, daemon=True).start()
 
     def _refresh_current_view(self):
-        """Rebuild whichever view (dot or pill) is currently showing."""
+        """Rebuild whichever view (dot or pill) is currently showing.
+        
+        If state needs user attention (proposed/captured), force the pill
+        mode regardless of current view — the user needs to see the prompt.
+        """
         if not self._root_alive():
+            return
+        # If state changed to a user-attention state, force expand to pill
+        if self.current_state in ("proposed", "captured") and self._mode == "dot":
+            self._cancel_collapse()
+            self._mode = "pill"
+            self._build_pill_ui()
             return
         if self._mode == "dot":
             self._build_dot_ui()

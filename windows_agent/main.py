@@ -37,6 +37,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Tuple, List
 from urllib.parse import urlparse
 
+from widget_state_tracker import get_widget_state_tracker
+
 from tracking_health import (
     progress_tick,
     record_window_change,
@@ -110,6 +112,7 @@ if sys.platform == 'win32':
 
 register_hotkey = None
 ai_switcher = None  # Will be initialized after GUI setup
+widget_tracker = get_widget_state_tracker()  # Drives the floating widget's color/state
 # Single instance lock — named mutex held for entire process lifetime
 _lock_mutex = None
 
@@ -154,38 +157,6 @@ def show_subscription_inactive_notification():
     except Exception as e:
         log(f"[SUB] Could not show dialog: {e}")
 
-
-def get_widget_state_from_backend(api_base: str, api_key: str) -> dict:
-    """
-    Fetch the floating widget's classification state from /api/agent/widget-state/.
-    
-    Returns dict with:
-      - state:       "committed" | "proposed" | "captured" | "no_client"
-      - client_id:   int | None
-      - client_name: str | None
-      - block_id:    int | None
-    
-    Falls back to neutral "no_client" state on network error so the widget
-    doesn't crash if the backend is briefly unreachable.
-    """
-    if not api_base or not api_key:
-        return {"state": "no_client", "client_id": None, "client_name": None, "block_id": None}
-    
-    url = f"{api_base}/agent/widget-state/"
-    req = urllib.request.Request(url, method="GET")
-    req.add_header("Authorization", f"DeviceKey {api_key}")
-    req.add_header("Content-Type", "application/json")
-    
-    try:
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read())
-            return data
-    except urllib.error.HTTPError as e:
-        log(f"[WIDGET-STATE] HTTP error: {e.code}")
-        return {"state": "no_client", "client_id": None, "client_name": None, "block_id": None}
-    except Exception as e:
-        log(f"[WIDGET-STATE] Failed to fetch: {e}")
-        return {"state": "no_client", "client_id": None, "client_name": None, "block_id": None}
 
 # ---------------- Config ----------------
 CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
@@ -417,11 +388,25 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
         # Update state directly — do NOT call _switch_client (creates callback loop)
         if hasattr(gui_menu_bar, 'state'):
             gui_menu_bar.state.set_client(client_id, client_name)
-        # Update floating widget
-        # Update floating widget. Manual client switches by the user are always
-        # 'committed' state — the user explicitly chose this client.
+        # Update widget state tracker — user explicitly picked, start in confirmed
+        if widget_tracker:
+            widget_tracker.on_user_set_client()
+            if hasattr(gui_menu_bar, 'state'):
+                gui_menu_bar.state.current_widget_state = widget_tracker.state
+        # Update floating widget. The state will be 'confirmed' (green) since
+        # the user explicitly chose this client.
+        # Update widget state tracker — user explicitly picked, start as committed (green)
+        if widget_tracker:
+            widget_tracker.on_user_set_client()
+            if hasattr(gui_menu_bar, 'state'):
+                gui_menu_bar.state.current_widget_state = widget_tracker.state
+        # Update floating widget. State is 'committed' (green) since user
+        # explicitly chose — the timer will demote it later if title stops matching.
         if hasattr(gui_menu_bar, 'floating_widget') and gui_menu_bar.floating_widget:
-            gui_menu_bar.floating_widget.update_client(client_id, client_name, state="committed")
+            gui_menu_bar.floating_widget.update_client(
+                client_id, client_name,
+                state=widget_tracker.state if widget_tracker else "committed"
+            )
         # Update tray tooltip
         if hasattr(gui_menu_bar, 'icon') and gui_menu_bar.icon:
             tooltip = f"TimeTracker - {client_name}"
@@ -2337,34 +2322,6 @@ def run_agent():
 
     threading.Thread(target=_prompt_client_after_startup, daemon=True).start()
 
-    # Widget state polling — refresh classification state every 15s so the
-    # floating widget can show committed (green) / proposed (yellow) /
-    # captured (gray) based on the backend's current classifier output.
-    def _widget_state_poll():
-        time.sleep(5)  # initial delay to let other startup tasks finish
-        while True:
-            try:
-                api_key_val = config.get("api_key") or API_KEY
-                if api_key_val and API_BASE and gui_menu_bar:
-                    state_data = get_widget_state_from_backend(API_BASE, api_key_val)
-                    if state_data and hasattr(gui_menu_bar, 'state'):
-                        new_state = state_data.get("state") or "no_client"
-                        new_id = state_data.get("client_id")
-                        new_name = state_data.get("client_name") or "No Client"
-                        # Only log on actual change to avoid spam
-                        if new_state != getattr(gui_menu_bar.state, 'current_widget_state', None):
-                            log(f"[WIDGET-STATE] {new_state} client={new_name}")
-                        gui_menu_bar.state.current_widget_state = new_state
-                        # Don't overwrite current_client_id/name from this poll —
-                        # those are managed by _apply_client_switch when the user
-                        # changes their pinned client. The widget itself reads
-                        # both id/name AND state from the controller.
-            except Exception as e:
-                log(f"[WIDGET-STATE] poll error: {e}")
-            time.sleep(15)
-
-    threading.Thread(target=_widget_state_poll, daemon=True).start()
-
     
     # === SLEEP/WAKE RECOVERY ===
     register_power_notifications(os_user, hostname, device_id)
@@ -2660,9 +2617,26 @@ def run_agent():
                                 record_window_change()
                                 if ai_switcher:
                                     ai_switcher.on_window_change(app_name, exe_name, window_title, url, fpath)
+                                # Update widget state tracker with the same signal.
+                                # State stored on gui_menu_bar.state.current_widget_state;
+                                # the floating widget polls it every 2s.
+                                if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                                    cur_id, cur_name = _get_cached_client()
+                                    new_state = widget_tracker.on_window_change(
+                                        window_title, fpath, url, cur_name, []
+                                    )
+                                    if new_state != getattr(gui_menu_bar.state, 'current_widget_state', None):
+                                        log(f"[WIDGET-STATE] {new_state} client={cur_name}")
+                                    gui_menu_bar.state.current_widget_state = new_state
 
                             if ai_switcher:
                                 ai_switcher.on_dwell_tick()
+                            # Periodic time-based demotion for the widget
+                            if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                                new_state = widget_tracker.tick()
+                                if new_state != getattr(gui_menu_bar.state, 'current_widget_state', None):
+                                    log(f"[WIDGET-STATE] {new_state} (timer demotion)")
+                                gui_menu_bar.state.current_widget_state = new_state
 
                         time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
@@ -2819,12 +2793,28 @@ def run_agent():
                             record_window_change()
                             
                             # >>> ADD THIS: Feed focus change to AI switcher
+                            # >>> ADD THIS: Feed focus change to AI switcher
                             if ai_switcher:
                                 ai_switcher.on_window_change(app_name, exe_name, window_title, url, fpath)
+                            # Update widget state tracker with the same signal
+                            if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                                cur_id, cur_name = _get_cached_client()
+                                new_state = widget_tracker.on_window_change(
+                                    window_title, fpath, url, cur_name, []
+                                )
+                                if new_state != getattr(gui_menu_bar.state, 'current_widget_state', None):
+                                    log(f"[WIDGET-STATE] {new_state} client={cur_name}")
+                                gui_menu_bar.state.current_widget_state = new_state
 
                         # >>> ADD THIS: Check pending dwell switches every tick
                         if ai_switcher:
                             ai_switcher.on_dwell_tick()
+                        # Periodic time-based demotion for the widget
+                        if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, 'state'):
+                            new_state = widget_tracker.tick()
+                            if new_state != getattr(gui_menu_bar.state, 'current_widget_state', None):
+                                log(f"[WIDGET-STATE] {new_state} (timer demotion)")
+                            gui_menu_bar.state.current_widget_state = new_state
 
                         time.sleep(POLL_SECONDS)
                         consecutive_errors = 0

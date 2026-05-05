@@ -36,7 +36,6 @@ urlpatterns = [
     # -------------------------------
     path("client/set-current/", csrf_exempt(views.set_current_client), name="set_current_client"),
     path("client/current/", csrf_exempt(views.get_current_client), name="get_current_client"),
-    path("agent/widget-state/", views.widget_state, name="widget_state"),
     path("clients/list/", views.list_clients, name="list_clients"),
     path("context/guess/", views.context_guess, name="context_guess"),
     path("context/confirm/", views.context_confirm, name="context_confirm"),

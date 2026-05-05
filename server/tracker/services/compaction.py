@@ -254,7 +254,7 @@ def _create_meeting_block(
         try:
             from tracker.services.classification_service import ClassificationService
             service = ClassificationService(org=org, user=user)
-            decision = service.classify(new_block, skip_ai=True)
+            decision = service.classify(new_block, skip_ai=False)
             service.apply(new_block, decision)
         except Exception as e:
             logger.error(
@@ -423,7 +423,7 @@ def auto_categorize_block(block: Block) -> bool:
     try:
         from tracker.services.classification_service import ClassificationService
         service = ClassificationService(org=org, user=user)
-        decision = service.classify(block, skip_ai=True)
+        decision = service.classify(block, skip_ai=False)
         service.apply(block, decision)
 
         # Refresh to see the final state after apply()

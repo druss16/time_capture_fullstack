@@ -393,13 +393,6 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
             widget_tracker.on_user_set_client()
             if hasattr(gui_menu_bar, 'state'):
                 gui_menu_bar.state.current_widget_state = widget_tracker.state
-        # Update floating widget. The state will be 'confirmed' (green) since
-        # the user explicitly chose this client.
-        # Update widget state tracker — user explicitly picked, start as committed (green)
-        if widget_tracker:
-            widget_tracker.on_user_set_client()
-            if hasattr(gui_menu_bar, 'state'):
-                gui_menu_bar.state.current_widget_state = widget_tracker.state
         # Update floating widget. State is 'committed' (green) since user
         # explicitly chose — the timer will demote it later if title stops matching.
         if hasattr(gui_menu_bar, 'floating_widget') and gui_menu_bar.floating_widget:

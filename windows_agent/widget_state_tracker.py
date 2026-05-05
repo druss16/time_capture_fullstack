@@ -20,8 +20,8 @@ from typing import Optional, List
 
 
 # Time thresholds — how long without a match before downgrading state.
-COMMITTED_TO_PROPOSED_SECONDS = 5 * 60      # 5 min: brief tab-switches OK
-PROPOSED_TO_CAPTURED_SECONDS = 10 * 60  # 10 more min (15 total before gray)
+COMMITTED_TO_PROPOSED_SECONDS = 30      # 5 min: brief tab-switches OK
+PROPOSED_TO_CAPTURED_SECONDS = 30 # 10 more min (15 total before gray)
 
 
 class WidgetStateTracker:

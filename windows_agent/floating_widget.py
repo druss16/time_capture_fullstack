@@ -379,11 +379,11 @@ class FloatingClientWidget:
     def _collapse_to_dot(self):
         if self._mode == "dot" or not self._root_alive():
             return
-
-        # The widget should pulse with full info visible until the user
-        # confirms or changes the client.
+        print(f"[WIDGET] collapse check: state={self.current_state}, client={self.current_client_name}")
         if self.current_state in ("proposed", "captured"):
+            print(f"[WIDGET] collapse BLOCKED (state={self.current_state})")
             return
+        print(f"[WIDGET] collapsing to dot")
 
         try:
             current_x = self.root.winfo_x()

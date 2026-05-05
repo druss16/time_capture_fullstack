@@ -3098,6 +3098,114 @@ def get_current_client(request):
         })
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def widget_state(request):
+    """
+    Get the current widget state for the agent's floating widget.
+    
+    Maps the user's most-recent-block classification_state to a widget state
+    that the floating widget renders as a colored dot:
+    
+    - "committed"  → confident classification (green dot)
+    - "proposed"   → tentative classification, append "?" to client name (yellow dot)
+    - "captured"   → block exists but no signals matched yet (gray dot)
+    - "no_client"  → no recent activity AND no current_client set (red dot)
+    
+    Falls back to CurrentClient when no block has activity in the last 10 minutes,
+    so the widget keeps showing the user's pinned client during breaks.
+    
+    Returns: {
+        "state":       "committed" | "proposed" | "captured" | "no_client",
+        "client_id":   int | null,
+        "client_name": str | null,
+        "block_id":    int | null
+    }
+    """
+    from datetime import timedelta
+    
+    user = request.user
+    
+    # Find user's most recent non-deleted block within the last 10 minutes.
+    # Use `end` because in-progress blocks have end=now() updated as events flow in.
+    cutoff = timezone.now() - timedelta(minutes=10)
+    
+    recent = Block.objects.filter(
+        user=user,
+        deleted_at__isnull=True,
+        end__gte=cutoff,
+    ).select_related('client').order_by('-end').first()
+    
+    if not recent:
+        # No recent activity. Fall back to CurrentClient so widget keeps
+        # showing the user's pinned client (in gray) during quiet periods.
+        device = getattr(request, "agent_device", None)
+        try:
+            current = CurrentClient.objects.select_related('client').get(
+                user=user,
+                device_id=device.id if device else 0,
+            )
+            return Response({
+                "state":       "captured" if current.client else "no_client",
+                "client_id":   current.client_id,
+                "client_name": current.client.name if current.client else None,
+                "block_id":    None,
+            })
+        except CurrentClient.DoesNotExist:
+            return Response({
+                "state":       "no_client",
+                "client_id":   None,
+                "client_name": None,
+                "block_id":    None,
+            })
+    
+    # Map classification_state → widget state
+    cs = getattr(recent, 'classification_state', None) or 'captured'
+    state_map = {
+        'committed':  'committed',
+        'proposed':   'proposed',
+        'captured':   'captured',
+        'suppressed': 'no_client',  # suppressed = no real work, treat as nothing
+    }
+    widget_state_name = state_map.get(cs, 'captured')
+    
+    # For proposed blocks, prefer proposed_* fields (the classifier's guess).
+    # For committed/captured, use the live client field.
+    if cs == 'proposed':
+        client_id = recent.proposed_client_id
+        client_name = None
+        if client_id:
+            try:
+                client_name = Client.objects.get(id=client_id).name
+            except Client.DoesNotExist:
+                pass
+    else:
+        client_id = recent.client_id
+        client_name = recent.client.name if recent.client else None
+    
+    # If state implies no client (e.g., captured with no signals), check if
+    # CurrentClient has a pinned client to display in gray instead of "no_client"
+    if widget_state_name in ('captured', 'no_client') and not client_id:
+        device = getattr(request, "agent_device", None)
+        try:
+            current = CurrentClient.objects.select_related('client').get(
+                user=user,
+                device_id=device.id if device else 0,
+            )
+            if current.client:
+                client_id = current.client_id
+                client_name = current.client.name
+                widget_state_name = "captured"
+        except CurrentClient.DoesNotExist:
+            pass
+    
+    return Response({
+        "state":       widget_state_name,
+        "client_id":   client_id,
+        "client_name": client_name,
+        "block_id":    recent.id,
+    })
+
 # views.py - Replace the existing list_clients function
 
 from django.db.models import Q, Exists, OuterRef

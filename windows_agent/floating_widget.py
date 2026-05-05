@@ -633,11 +633,11 @@ class FloatingClientWidget:
         """
         if not self._root_alive():
             return
-        # If state changed to a user-attention state, force expand to pill
+        # If state needs attention and we're in dot mode, fully expand to pill
+        # (this updates geometry, builds UI, and sets opacity)
         if self.current_state in ("proposed", "captured") and self._mode == "dot":
             self._cancel_collapse()
-            self._mode = "pill"
-            self._build_pill_ui()
+            self._expand_to_pill()
             return
         if self._mode == "dot":
             self._build_dot_ui()

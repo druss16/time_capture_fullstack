@@ -1385,23 +1385,19 @@ class Block(models.Model):
         # ===============================
         # 2. Auto-set immutability flags when categories assigned
         # ===============================
-        # NOTE: This auto-lock behavior is what causes the inheritance bug.
-        # In Phase 4, this block is REMOVED. ClassificationService becomes
-        # the only path that flips is_categorized=True. For now we keep it
-        # for backwards compat with the existing classification path, but
-        # also sync the new classification_state for forward compat.
+        # NOTE: This sets is_categorized=True as a backwards-compat safety net
+        # for legacy code paths that set category_hours and save without going
+        # through ClassificationService. The classification_state field is NOT
+        # auto-synced — that was the silent-promotion bug source. Code that
+        # wants to update classification_state must call ClassificationService.apply().
         if self.category_hours and not self.is_categorized:
             self.is_categorized = True
             self.categorized_at = timezone.now()
             if not self.categorized_by:
                 self.categorized_by = 'ai'
-            # Phase 1: also sync the new state machine
-            if self.classification_state == 'captured':
-                self.classification_state = 'committed'
-                if not self.state_changed_at:
-                    self.state_changed_at = timezone.now()
-                if not self.state_changed_by:
-                    self.state_changed_by = 'classifier'
+            # NOTE: classification_state sync removed (was the silent-promotion bug
+            # source). Code that wants classification_state='committed' must go
+            # through ClassificationService, which has contradiction detection.
         
         # ===============================
         # 3. Compute and store hash for change detection

@@ -45,7 +45,7 @@ except ImportError:
 COLORS = {
     "primary": "#14B8A6",         # teal — state="committed" (confirmed classification)
     "primary_dark": "#0D9488",
-    "uncertain": "#F59E0B",       # amber — state="proposed" (tentative, append "?")
+    "uncertain": "#FCD34D",       # yellow — state="proposed" (tentative, append "?")
     "uncategorized": "#6B7280",   # gray — state="captured" (no signals matched)
     "bg_dark": "#1A1A1A",
     "bg_card": "#252525",

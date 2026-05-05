@@ -360,12 +360,29 @@ class ClassificationService:
         if new_state in ('committed', 'proposed'):
             if decision.client_id:
                 block.client_id = decision.client_id
+            
+            # Ensure category_hours is populated with a real category. The
+            # dashboard's today_time filters out 'Idle' and 'Uncategorized'
+            # (they EXCLUDE_FROM_TOTALS), so blocks with those category names
+            # become invisible. For proposed/committed blocks WITH a client,
+            # fall back to 'General' if the classifier produced no usable category.
+            hours = round((block.minutes or 0) / 60.0, 2) if block.minutes else 0.01
+            EXCLUDE_CATEGORIES = {'idle', 'uncategorized'}
+            
             if decision.category_hours:
-                block.category_hours = decision.category_hours
-            elif decision.category:
-                # For proposed blocks where category_hours wasn't built, build it
-                hours = round((block.minutes or 0) / 60.0, 2) if block.minutes else 0.01
+                cleaned = {k: v for k, v in decision.category_hours.items()
+                           if k.lower() not in EXCLUDE_CATEGORIES}
+                if cleaned:
+                    block.category_hours = cleaned
+                else:
+                    block.category_hours = {'General': hours}
+            elif decision.category and decision.category.lower() not in EXCLUDE_CATEGORIES:
                 block.category_hours = {decision.category: hours}
+            else:
+                # Classifier had a client but no usable category. Use 'General'
+                # so the block appears in dashboards instead of being filtered out.
+                block.category_hours = {'General': hours}
+            
             block.is_billable = decision.is_billable
             # Backwards compat with existing is_categorized field
             block.is_categorized = True

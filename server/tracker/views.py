@@ -3126,18 +3126,21 @@ def widget_state(request):
     
     user = request.user
     
-    # Find user's most recent non-deleted block within the last 10 minutes.
-    # Use `end` because in-progress blocks have end=now() updated as events flow in.
+    # Find user's most recent non-deleted, non-suppressed block within the last 10 min.
+    # Suppressed blocks (lock screen, system shell) shouldn't drive the widget
+    # — they're noise, not classification signals about user work.
     cutoff = timezone.now() - timedelta(minutes=10)
     
     recent = Block.objects.filter(
         user=user,
         deleted_at__isnull=True,
         end__gte=cutoff,
+    ).exclude(
+        classification_state='suppressed',
     ).select_related('client').order_by('-end').first()
     
     if not recent:
-        # No recent activity. Fall back to CurrentClient so widget keeps
+        # No real recent activity. Fall back to CurrentClient so widget keeps
         # showing the user's pinned client (in gray) during quiet periods.
         device = getattr(request, "agent_device", None)
         try:
@@ -3159,18 +3162,16 @@ def widget_state(request):
                 "block_id":    None,
             })
     
-    # Map classification_state → widget state
+    # Map classification_state → widget state. Note suppressed is excluded above.
     cs = getattr(recent, 'classification_state', None) or 'captured'
     state_map = {
-        'committed':  'committed',
-        'proposed':   'proposed',
-        'captured':   'captured',
-        'suppressed': 'no_client',  # suppressed = no real work, treat as nothing
+        'committed': 'committed',
+        'proposed':  'proposed',
+        'captured':  'captured',
     }
     widget_state_name = state_map.get(cs, 'captured')
     
     # For proposed blocks, prefer proposed_* fields (the classifier's guess).
-    # For committed/captured, use the live client field.
     if cs == 'proposed':
         client_id = recent.proposed_client_id
         client_name = None
@@ -3183,9 +3184,9 @@ def widget_state(request):
         client_id = recent.client_id
         client_name = recent.client.name if recent.client else None
     
-    # If state implies no client (e.g., captured with no signals), check if
-    # CurrentClient has a pinned client to display in gray instead of "no_client"
-    if widget_state_name in ('captured', 'no_client') and not client_id:
+    # If state is captured but block has no client, fall back to CurrentClient
+    # so widget shows the pinned client in gray instead of confusing user with nothing.
+    if widget_state_name == 'captured' and not client_id:
         device = getattr(request, "agent_device", None)
         try:
             current = CurrentClient.objects.select_related('client').get(
@@ -3195,7 +3196,6 @@ def widget_state(request):
             if current.client:
                 client_id = current.client_id
                 client_name = current.client.name
-                widget_state_name = "captured"
         except CurrentClient.DoesNotExist:
             pass
     

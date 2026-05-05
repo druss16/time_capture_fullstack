@@ -264,6 +264,10 @@ class GUIState:
     def __init__(self):
         self.current_client_id: Optional[int] = None
         self.current_client_name: str = "No Client"
+        # Classification state from /api/agent/widget-state/, polled by main.py.
+        # Drives the floating widget's color: committed=green, proposed=yellow,
+        # captured=gray, no_client=red.
+        self.current_widget_state: str = "no_client"
         self.load()
     
     def load(self):

@@ -8,11 +8,16 @@ v1.3.25 redesign:
   When client switches, pill flashes to 100% opacity, holds at 98%
   for 3 seconds, then collapses back to dot.
 
-States:
-  - Dot (idle): 18x18 teal dot at 55% opacity, basically invisible
-  - Dot (no client): 18x18 red dot at 95% opacity, signals "set me!"
+Classification states (drives dot/pill color and label):
+  - "committed" → teal (green)  — system confident, shows client name
+  - "proposed"  → amber (yellow) — system tentative, shows "ClientName?"
+  - "captured"  → gray           — block exists but no signal matched
+  - "no_client" → red            — no recent activity, prompts user to set client
+
+Visual states:
+  - Dot (idle): 18x18 dot at 55% opacity, basically invisible
+  - Dot (no client / proposed): 95% opacity to grab attention
   - Pill (hover): full 200x36 pill with client name, close button
-  - Pill (no client): red-bordered pill with "No Client" text
   - Pill (just switched): briefly flashes to 100% opacity for visibility
 
 Interactions:
@@ -38,13 +43,15 @@ except ImportError:
 
 
 COLORS = {
-    "primary": "#14B8A6",
+    "primary": "#14B8A6",         # teal — state="committed" (confirmed classification)
     "primary_dark": "#0D9488",
+    "uncertain": "#F59E0B",       # amber — state="proposed" (tentative, append "?")
+    "uncategorized": "#6B7280",   # gray — state="captured" (no signals matched)
     "bg_dark": "#1A1A1A",
     "bg_card": "#252525",
     "text": "#FFFFFF",
     "text_muted": "#888888",
-    "no_client": "#EF4444",
+    "no_client": "#EF4444",       # red — state="no_client" (no activity, no pinned client)
 }
 
 WIDGET_STATE_FILE = os.path.expanduser("~/.timetracker/widget_state.json")
@@ -102,6 +109,8 @@ class FloatingClientWidget:
 
         self.current_client_name = "No Client"
         self.current_client_id = None
+        # Classification state from backend: "committed" | "proposed" | "captured" | "no_client"
+        self.current_state = "no_client"
 
         # Saved position
         self.saved_x = None
@@ -246,7 +255,7 @@ class FloatingClientWidget:
         for child in self.root.winfo_children():
             child.destroy()
 
-        color = COLORS["no_client"] if not self.current_client_id else COLORS["primary"]
+        color = self._state_color()
 
         self.dot = ctk.CTkFrame(
             self.root,
@@ -274,9 +283,11 @@ class FloatingClientWidget:
         for child in self.root.winfo_children():
             child.destroy()
 
-        border_color = COLORS["no_client"] if not self.current_client_id else COLORS["primary"]
-        accent_color = COLORS["no_client"] if not self.current_client_id else COLORS["primary"]
-        text_color = COLORS["no_client"] if not self.current_client_id else COLORS["text"]
+        border_color = self._state_color()
+        accent_color = self._state_color()
+        # Use the state color for text on red/yellow/gray states for emphasis,
+        # white for committed (green) where the bg is dark teal vs dark gray
+        text_color = COLORS["text"] if self.current_state == "committed" else self._state_color()
 
         self.container = ctk.CTkFrame(
             self.root,
@@ -302,7 +313,7 @@ class FloatingClientWidget:
 
         self.client_label = ctk.CTkLabel(
             self.content,
-            text=self._truncate(self.current_client_name),
+            text=self._display_name(),
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color=text_color,
             anchor="w",
@@ -436,9 +447,8 @@ class FloatingClientWidget:
             pass
 
     def _apply_idle_opacity(self):
-        """Dot opacity depends on whether a client is set."""
-        opacity = DOT_OPACITY_NO_CLIENT if not self.current_client_id else DOT_OPACITY_IDLE
-        self._apply_opacity(opacity)
+        """Dot opacity depends on classification state."""
+        self._apply_opacity(self._idle_opacity())
 
     # ------------------------------------------------------------------
     # Drag + click
@@ -517,9 +527,15 @@ class FloatingClientWidget:
     # ------------------------------------------------------------------
     # Client display — pulse-on-switch behavior
     # ------------------------------------------------------------------
-    def update_client(self, client_id, client_name):
+    def update_client(self, client_id, client_name, state=None):
         """
-        Called by the tray controller on every client switch.
+        Called by the tray controller on every client switch or state change.
+
+        Args:
+            client_id: int or None
+            client_name: str or None
+            state: "committed" | "proposed" | "captured" | "no_client" or None.
+                   If None, infers from client_id (legacy callers).
 
         Visual sequence:
           1. Expand dot → pill (instant)
@@ -530,6 +546,11 @@ class FloatingClientWidget:
         """
         self.current_client_id = client_id
         self.current_client_name = client_name or "No Client"
+        # If state not provided, infer from client_id for backwards compat
+        if state is not None:
+            self.current_state = state
+        else:
+            self.current_state = "committed" if client_id else "no_client"
 
         if not self._root_alive():
             return
@@ -579,10 +600,15 @@ class FloatingClientWidget:
                         if info:
                             new_id = info.get("client_id")
                             new_name = info.get("client_name") or "No Client"
+                            new_state = info.get("state") or (
+                                "committed" if new_id else "no_client"
+                            )
                             if (new_id != self.current_client_id
-                                    or new_name != self.current_client_name):
+                                    or new_name != self.current_client_name
+                                    or new_state != self.current_state):
                                 self.current_client_id = new_id
                                 self.current_client_name = new_name
+                                self.current_state = new_state
                                 if self._root_alive():
                                     try:
                                         self.root.after(0, self._refresh_current_view)
@@ -612,6 +638,35 @@ class FloatingClientWidget:
             return text
         return text[: max_len - 1] + "…"
 
+    # ------------------------------------------------------------------
+    # State-based color and label helpers
+    # ------------------------------------------------------------------
+    def _state_color(self):
+        """Color for the current classification state."""
+        return {
+            "committed":  COLORS["primary"],
+            "proposed":   COLORS["uncertain"],
+            "captured":   COLORS["uncategorized"],
+            "no_client":  COLORS["no_client"],
+        }.get(self.current_state, COLORS["no_client"])
+
+    def _display_name(self):
+        """Label text for the current state. Appends '?' for proposed."""
+        if self.current_state == "no_client" or not self.current_client_id:
+            if self.current_state == "captured":
+                return "Uncategorized"
+            return "No Client"
+        name = self._truncate(self.current_client_name or "No Client")
+        if self.current_state == "proposed":
+            return f"{name}?"
+        return name
+
+    def _idle_opacity(self):
+        """Dot opacity. Brighter when something needs user attention."""
+        if self.current_state in ("no_client", "proposed"):
+            return DOT_OPACITY_NO_CLIENT  # 0.95 — grab attention
+        return DOT_OPACITY_IDLE           # 0.55 — basically invisible
+
 
 # ============================================================
 # Integration helper for TimeTrackerSystemTray
@@ -630,11 +685,14 @@ def create_floating_widget(tray_controller):
 
     def get_client():
         if hasattr(tray_controller, 'state'):
+            # tray_controller.state.current_widget_state is set by main.py's poll loop
+            # from the /api/agent/widget-state/ endpoint
             return {
-                "client_id": tray_controller.state.current_client_id,
+                "client_id":   tray_controller.state.current_client_id,
                 "client_name": tray_controller.state.current_client_name,
+                "state":       getattr(tray_controller.state, 'current_widget_state', None),
             }
-        return {"client_id": None, "client_name": "No Client"}
+        return {"client_id": None, "client_name": "No Client", "state": "no_client"}
 
     widget = FloatingClientWidget(
         on_click_callback=on_click,

@@ -390,7 +390,7 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
             gui_menu_bar.state.set_client(client_id, client_name)
         # Update widget state tracker — user explicitly picked, start in confirmed
         if widget_tracker:
-            widget_tracker.on_user_set_client()
+            widget_tracker.on_user_set_client(client_name=client_name)
             if hasattr(gui_menu_bar, 'state'):
                 gui_menu_bar.state.current_widget_state = widget_tracker.state
         # Update floating widget. State is 'committed' (green) since user

@@ -59,10 +59,17 @@ class WidgetStateTracker:
     def state(self) -> str:
         return self._state
 
-    def on_user_set_client(self):
+    def on_user_set_client(self, client_name: Optional[str] = None):
+        """User explicitly picked a client — start fresh in committed state.
+        
+        Updates the tracker's cached client name so subsequent tick() calls
+        check against the NEW client (not the stale one from before the pick).
+        """
         self._state = "committed"
         self._last_match_time = time.time()
         self._last_state_change = time.time()
+        if client_name is not None:
+            self._last_client_name = client_name
 
     def on_window_change(self, window_title, file_path, url,
                          current_client_name, current_client_aliases=None):

@@ -13,7 +13,10 @@ logger = logging.getLogger(__name__)
 
 def log(msg: str):
     """Print with timestamp for visibility"""
-    print(msg, flush=True)
+    try:
+        print(msg, flush=True)
+    except (ValueError, OSError):
+        pass
 
 
 class AgentSync:

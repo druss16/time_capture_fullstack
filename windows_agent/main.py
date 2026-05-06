@@ -477,6 +477,51 @@ def setup_logging():
 
 _logger = setup_logging()
 
+# Make stdout/stderr survive parent-process detach (pythonw.exe, console close, etc).
+# Without this, any stray print() from a third-party lib will throw ValueError
+# and poison the Tkinter event loop — clicks, drags, polls all silently fail.
+class _LogStream:
+    """File-like object that forwards writes to the rotating log + swallows errors."""
+    def __init__(self, level="info"):
+        self._level = level
+        self._buf = ""
+
+    def write(self, msg):
+        try:
+            if not msg:
+                return
+            self._buf += msg
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                if line.strip() and _logger:
+                    if self._level == "error":
+                        _logger.error(line.rstrip())
+                    else:
+                        _logger.info(line.rstrip())
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            if self._buf.strip() and _logger:
+                _logger.info(self._buf.rstrip())
+            self._buf = ""
+        except Exception:
+            pass
+
+    def isatty(self):
+        return False
+
+# Probe stdout/stderr; if either is broken or gets closed later, redirect to log
+try:
+    sys.stdout.write("")
+except (ValueError, OSError, AttributeError):
+    sys.stdout = _LogStream("info")
+
+try:
+    sys.stderr.write("")
+except (ValueError, OSError, AttributeError):
+    sys.stderr = _LogStream("error")
 # Browser app name suffixes that leak into window titles via win32 fallback
 _BROWSER_TITLE_SUFFIXES = [
     " \u2013 Microsoft Edge",   # em dash (most common)

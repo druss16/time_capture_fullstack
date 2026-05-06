@@ -19,6 +19,7 @@ Visual states:
   - Dot (no client / proposed): 95% opacity to grab attention
   - Pill (hover): full 200x36 pill with client name, close button
   - Pill (just switched): briefly flashes to 100% opacity for visibility
+    def _refresh_current_view(self):
 
 Interactions:
   - Hover dot → expands to pill
@@ -34,6 +35,7 @@ import os
 import json
 import threading
 import time as _time
+from typing import Optional
 
 try:
     import customtkinter as ctk
@@ -111,6 +113,10 @@ class FloatingClientWidget:
         self.current_client_id = None
         # Classification state from backend: "committed" | "proposed" | "captured" | "no_client"
         self.current_state = "no_client"
+        # Last state we actually rendered — used by _refresh_current_view to
+        # detect transitions vs steady-state polls. Without this, the 2s poll
+        # would re-arm the collapse timer every cycle and the pill never closes.
+        self._rendered_state: Optional[str] = None
 
         # Saved position
         self.saved_x = None
@@ -577,9 +583,15 @@ class FloatingClientWidget:
                 lambda: self._apply_opacity(PILL_OPACITY)
             )
 
-            # 4. Schedule collapse after the hold period — but the existing
-            #    _on_leave guard will keep the pill open if the user is hovering
-            self._schedule_collapse(delay_ms=SWITCH_HOLD_MS)
+            # 4. Schedule collapse only for committed state. Yellow/gray
+            #    pills stay open by design — scheduling a collapse here
+            #    would just bump _rendered_state churn and waste a timer.
+            if self.current_state == "committed":
+                self._schedule_collapse(delay_ms=SWITCH_HOLD_MS)
+
+            # 5. Mark this state as "rendered" so the poller's transition
+            #    detector doesn't re-fire flash+collapse on the next tick.
+            self._rendered_state = self.current_state
         except Exception as e:
             print(f"[WIDGET] update_client error: {e}")
 
@@ -627,18 +639,53 @@ class FloatingClientWidget:
 
     def _refresh_current_view(self):
         """Rebuild whichever view (dot or pill) is currently showing.
-        
-        If state needs user attention (proposed/captured), force the pill
-        mode regardless of current view — the user needs to see the prompt.
+
+        Only schedules collapses or expansions on REAL state transitions —
+        otherwise the 2-second poll would re-arm the collapse timer every
+        cycle and a green pill would never actually close.
         """
         if not self._root_alive():
             return
-        # If state needs attention and we're in dot mode, fully expand to pill
-        # (this updates geometry, builds UI, and sets opacity)
-        if self.current_state in ("proposed", "captured") and self._mode == "dot":
+
+        prev_state = self._rendered_state
+        new_state = self.current_state
+        is_transition = prev_state != new_state
+        self._rendered_state = new_state
+
+        # Yellow / gray want attention — force pill open if we're a dot.
+        # Always re-evaluate (even on steady-state polls) since a stuck dot
+        # in proposed/captured state is a UX bug.
+        if new_state in ("proposed", "captured") and self._mode == "dot":
             self._cancel_collapse()
             self._expand_to_pill()
             return
+
+        # Green TRANSITION while pill is open — flash + schedule collapse.
+        # Steady-state green polls (prev == new == committed) must NOT
+        # re-arm the timer; otherwise the pill stays open forever.
+        if (
+            new_state == "committed"
+            and self._mode == "pill"
+            and is_transition
+            and prev_state in ("proposed", "captured")
+        ):
+            # Yellow/gray → green transition. Make sure the user sees the
+            # new client name with a clear flash before we collapse.
+            self._build_pill_ui()
+            self._cancel_flash()
+            # Start at full opacity so the new green name pops
+            self._apply_opacity(PILL_OPACITY_FLASH)
+            # Settle to normal pill opacity after the flash
+            self._flash_after_id = self.root.after(
+                FLASH_DURATION_MS,
+                lambda: self._apply_opacity(PILL_OPACITY),
+            )
+            # Hold longer than a manual switch so the user clearly reads
+            # the new client name before it collapses to a dot
+            self._schedule_collapse(delay_ms=SWITCH_HOLD_MS)
+            return
+
+        # No transition — just rebuild current view in place
         if self._mode == "dot":
             self._build_dot_ui()
             self._apply_idle_opacity()

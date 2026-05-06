@@ -23,6 +23,13 @@ import ctypes
 from datetime import datetime
 from typing import Optional, List, Dict, Callable
 
+def _safe_print(*args, **kwargs):
+    """Print that survives a closed stdout."""
+    try:
+        print(*args, **kwargs)
+    except (ValueError, OSError):
+        pass
+
 # Modern UI
 try:
     import customtkinter as ctk
@@ -117,7 +124,7 @@ def force_window_to_foreground(hwnd):
         
         foreground_hwnd = user32.GetForegroundWindow()
         foreground_thread = user32.GetWindowThreadProcessId(foreground_hwnd, None)
-        current_thread = user32.GetCurrentThreadId()
+        current_thread = ctypes.windll.kernel32.GetCurrentThreadId()
         
         if foreground_thread != current_thread:
             user32.AttachThreadInput(foreground_thread, current_thread, True)

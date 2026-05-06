@@ -1306,7 +1306,11 @@ class AIClientSwitcher:
             )
             return
 
-        if self._should_skip(title, exe_name):
+        # Skip the title-based filter when we have a real file_path. The
+        # explorer_watcher dispatches folder paths even when the window title
+        # is just a folder name (e.g. "Dauphin & Fantacone"), and we want
+        # those to flow through to regex matching against the client list.
+        if not file_path and self._should_skip(title, exe_name):
             logger.info(f"[AI-SWITCH] on_window_change: skipped by _should_skip")
             self._clear_pending()
             self._cancel_stability_timer()

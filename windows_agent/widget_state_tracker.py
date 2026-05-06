@@ -177,11 +177,14 @@ class WidgetStateTracker:
              stop word) so "Lola's Pet Shop" matches "Lolas_AR_Aging.xlsx"
              via the "lolas" token.
         """
-        # Build raw + apostrophe-stripped haystacks
+        # Build raw + apostrophe-stripped haystacks.
+        # URL-decode each input — browser URL bars show paths like
+        # 'Dauphin%20&%20Fantacone' which would otherwise break boundary matching.
+        from urllib.parse import unquote
         raw_hay = " ".join(filter(None, [
-            (window_title or "").lower(),
-            (file_path or "").lower(),
-            (url or "").lower(),
+            unquote(window_title or "").lower(),
+            unquote(file_path or "").lower(),
+            unquote(url or "").lower(),
         ]))
         if not raw_hay:
             return False

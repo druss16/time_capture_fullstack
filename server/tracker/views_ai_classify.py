@@ -96,11 +96,24 @@ KNOWN CLIENTS:
 
 RULES:
 1. CPA firms name files like: "ClientName_FormType_Year", "ClientName - 1040 - 2024"
-2. Look for client names, abbreviations, nicknames, or aliases in the title.
+2. Look for client names, abbreviations, nicknames, or aliases in title, file_path, AND url.
 3. Common abbreviations: first letters of multi-word names (e.g., "D&F" = "Dauphin & Fantacone")
-4. Clear match → confidence 0.85-0.95. Partial/ambiguous → 0.50-0.75.
-5. If NO client can be identified → return null. NEVER guess randomly.
-6. Generic windows (browser home, desktop, system apps with no client info) → null.
+4. file_path is your STRONGEST signal — if the path contains a client folder, that's almost
+   certainly the answer. Use the deepest folder name first.
+5. The "current_client" field shows who the user is CURRENTLY tracked as. If the new title
+   has weak or no client signal (generic apps like "Outlook", "TimeTracker", "Chrome",
+   PowerShell, source code files), prefer returning the current_client at moderate confidence
+   (0.50-0.65) — they're still working on the same thing, just switched windows briefly.
+6. NEVER return a client just because it matches the current_client — there must be SOME
+   signal in title/path/url, OR the title must be generic enough to be a "brief detour"
+   (alt-tabbing to a calculator, terminal, or browser with no relevant content).
+7. Source code files (.py, .js, .tsx, etc.) and IDE windows (Sublime, VS Code, PyCharm)
+   are developer tools — almost never a real client signal. Return null unless path
+   contains a client folder name.
+8. Email titles ("Inbox - user@firm.com - Outlook") with no client name → null.
+9. Confidence: clear match 0.85-0.95. Partial/ambiguous 0.50-0.75. Generic-but-staying-on-
+   current 0.50-0.65. NO match → null with confidence 0.0.
+10. Generic windows with no client signal AND no current_client → null.
 
 Return ONLY a JSON array, one object per input:
 [{{"idx":<int>,"client_id":<int|null>,"client_name":"<str|null>","confidence":<float>,"reasoning":"<brief>"}}]"""
@@ -112,6 +125,10 @@ Return ONLY a JSON array, one object per input:
             item["file_path"] = t["file_path"]
         if t.get("app_name"):
             item["app"] = t["app_name"]
+        if t.get("url"):
+            item["url"] = t["url"]
+        if t.get("current_client_name"):
+            item["current_client"] = t["current_client_name"]
         items.append(item)
 
     user = f"Identify the client for each:\n{json.dumps(items, indent=1)}"
@@ -285,6 +302,8 @@ def ai_classify_window(request):
             "title": title,
             "app_name": body.get("app_name", ""),
             "file_path": body.get("file_path", ""),
+            "url": body.get("url", ""),
+            "current_client_name": body.get("current_client_name", ""),
         }]
         results = _call_openai(titles_batch, clients)
         result = results[0] if results else None

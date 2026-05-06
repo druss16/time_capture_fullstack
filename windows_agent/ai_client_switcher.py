@@ -1121,9 +1121,11 @@ def _call_backend_classify(titles: list, api_base: str, api_key: str,
     payload = {
         "titles": [
             {
-                "title":     t.get("title", ""),
-                "app_name":  t.get("app", ""),
-                "file_path": t.get("file_path", ""),
+                "title":               t.get("title", ""),
+                "app_name":            t.get("app", ""),
+                "file_path":           t.get("file_path", ""),
+                "url":                 t.get("url", ""),
+                "current_client_name": t.get("current_client_name", ""),
             }
             for t in titles
         ]
@@ -1668,6 +1670,23 @@ class AIClientSwitcher:
                         self._queue_switch(match)
                         return
 
+            # Tier 1b: LLM classification (gpt-4o-mini via backend)
+            # Fire-and-forget: enqueue NOW so the async batch can resolve
+            # while heuristic tiers run as immediate safety net. When the
+            # LLM verdict arrives in _fire_ai_batch, it either confirms
+            # what a heuristic did (no-op via cooldown) or corrects it.
+            # Sends the FULL context: title, file_path, app, url, AND
+            # current_client_name. The LLM uses current_client_name as
+            # an anchor — generic titles like "TimeTracker" return the
+            # current client at moderate confidence rather than null
+            # or a wrong switch. This is what kills the
+            # "TimeTracker → MAVOPS" class of bug.
+            llm_enqueued = False
+            if self._backend_ai_available and self.config["enabled"]:
+                cur_name = self._current_client_name or ""
+                self._enqueue_for_ai(title, file_path, app_name, url, cur_name)
+                llm_enqueued = True
+
             # Tier 1c: Learned rules
             learned_hit = self._learned.match(search, cur_id)
             if learned_hit and learned_hit.confidence >= 0.65:
@@ -1717,17 +1736,11 @@ class AIClientSwitcher:
                         )
                         return
 
-            # Tier 2: Backend AI
-            if self._backend_ai_available and self.config["enabled"]:
-                if (regex_hit and regex_hit.confidence >= self.config["suggest_threshold"]) or not regex_hit:
-                    self._enqueue_for_ai(title, file_path, app_name)
-                    return
-
+            # All tiers exhausted. If we enqueued the LLM, its async
+            # verdict will arrive shortly via _fire_ai_batch. Otherwise
+            # this title produced no classification — let it ride.
             with self._lock:
                 self._pending_switch = None
-
-        except Exception as e:
-            logger.error(f"[AI-SWITCH] detect error: {e}")
 
 
     def _queue_switch(self, match: ClientMatch):
@@ -1751,7 +1764,8 @@ class AIClientSwitcher:
     # Backend AI Batch Queue
     # =================================================================
 
-    def _enqueue_for_ai(self, title: str, file_path: str, app_name: str):
+    def _enqueue_for_ai(self, title: str, file_path: str, app_name: str,
+                       url: str = "", current_client_name: str = ""):
         if not self._backend_ai_available:
             return
         now = time.time()
@@ -1761,10 +1775,12 @@ class AIClientSwitcher:
         if self._ai_call_count >= self.config["max_ai_calls_per_hour"]:
             return
         item = {
-            "id":        hashlib.md5(f"{title}:{now}".encode()).hexdigest()[:12],
-            "title":     title,
-            "file_path": file_path,
-            "app":       app_name,
+            "id":                  hashlib.md5(f"{title}:{now}".encode()).hexdigest()[:12],
+            "title":               title,
+            "file_path":           file_path,
+            "app":                 app_name,
+            "url":                 url,
+            "current_client_name": current_client_name,
         }
         with self._ai_lock:
             self._ai_queue.append(item)

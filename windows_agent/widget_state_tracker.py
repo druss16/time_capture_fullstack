@@ -79,6 +79,23 @@ class WidgetStateTracker:
         self._last_url = url
         self._last_client_name = current_client_name
         self._last_aliases = current_client_aliases or []
+        
+        # DEBUG: print what we got + match result
+        try:
+            matched = self._title_matches_client(
+                window_title, file_path, url,
+                current_client_name, self._last_aliases
+            ) if current_client_name else False
+            _safe_print(
+                f"[WIDGET-DBG] on_window_change "
+                f"client={current_client_name!r} "
+                f"matched={matched} "
+                f"title={(window_title or '')[:60]!r} "
+                f"path={(file_path or '')[:60]!r} "
+                f"url={(url or '')[:60]!r}"
+            )
+        except Exception:
+            pass
 
         if not current_client_name:
             self._state = "captured"

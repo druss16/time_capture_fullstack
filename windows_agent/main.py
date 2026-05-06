@@ -2660,8 +2660,14 @@ def run_agent():
                                 # the floating widget polls it every 2s.
                                 if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, 'state'):
                                     cur_id, cur_name = _get_cached_client()
+                                    # Get aliases for current client from AI switcher's loaded list
+                                    cur_aliases = []
+                                    if ai_switcher and cur_id and hasattr(ai_switcher, '_client_map'):
+                                        client_data = ai_switcher._client_map.get(cur_id)
+                                        if client_data:
+                                            cur_aliases = client_data.get('aliases') or []
                                     new_state = widget_tracker.on_window_change(
-                                        window_title, fpath, url, cur_name, []
+                                        window_title, fpath, url, cur_name, cur_aliases
                                     )
                                     if new_state != getattr(gui_menu_bar.state, 'current_widget_state', None):
                                         log(f"[WIDGET-STATE] {new_state} client={cur_name}")

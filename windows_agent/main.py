@@ -920,19 +920,84 @@ def get_foreground_window_info() -> Optional[Tuple[str, str, int, Optional[str]]
             log(f"[WARN] get_foreground_window_info error: {e}")
         return None
 
+# UIA cache — keyed by HWND, expires after a few seconds
+_uia_cache = {}
+_UIA_CACHE_TTL = 3.0  # seconds
+
+def _get_explorer_folder_path() -> Optional[str]:
+    """Get current folder path of the active Explorer window via Shell COM."""
+    try:
+        import win32com.client
+        shell = win32com.client.Dispatch("Shell.Application")
+        hwnd = win32gui.GetForegroundWindow()
+        for window in shell.Windows():
+            try:
+                if window.HWND == hwnd:
+                    folder = window.Document.Folder
+                    if folder:
+                        return folder.Self.Path
+            except Exception:
+                continue
+    except Exception:
+        return None
+    return None
+
+
+def _get_browser_address_bar(exe_name: str) -> Optional[str]:
+    """Get URL/path from browser address bar via UI Automation. Cached per HWND."""
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        now = _time.time()
+        
+        # Check cache
+        cached = _uia_cache.get(hwnd)
+        if cached and now - cached[0] < _UIA_CACHE_TTL:
+            return cached[1]
+        
+        # Lazy import — uiautomation is slow to load
+        try:
+            import uiautomation as auto
+        except ImportError:
+            return None
+        
+        # Get the foreground window control
+        control = auto.ControlFromHandle(hwnd)
+        if not control:
+            return None
+        
+        # Search for the address bar — Edge/Chrome use EditControl with role
+        # like "Address and search bar"
+        addr_bar = control.EditControl(searchDepth=12)
+        url = None
+        if addr_bar.Exists(maxSearchSeconds=0.3):
+            url = addr_bar.GetValuePattern().Value
+        
+        _uia_cache[hwnd] = (now, url)
+        return url
+    except Exception:
+        return None
+
+
 def try_get_url_or_path(exe_name: str, window_title: str) -> Dict[str, Optional[str]]:
     exe_lower = exe_name.lower()
     
     if exe_lower in ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"):
+        # First try title-based (fast, works for normal pages with full URL in title)
         url = extract_url_from_browser_title(window_title, exe_lower)
+        if not url:
+            # Fall back to UI Automation address bar (slower but works for PDFs, file:// etc.)
+            url = _get_browser_address_bar(exe_lower)
         return {"url": url, "file_path": None}
     
     if exe_lower in ("excel.exe", "winword.exe", "powerpnt.exe"):
-        file_path = get_office_file_path(exe_lower, window_title)  # ← pass title
+        file_path = get_office_file_path(exe_lower, window_title)
         return {"url": None, "file_path": file_path}
     
+    if exe_lower == "explorer.exe":
+        path = _get_explorer_folder_path()
+        return {"url": None, "file_path": path}
+    
     return {"url": None, "file_path": None}
-
 def extract_url_from_browser_title(title: str, exe: str) -> Optional[str]:
     """Parse URL from browser window title."""
     if not title:

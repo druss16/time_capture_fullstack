@@ -241,6 +241,25 @@ class WidgetStateTracker:
                 )
                 if tok_pattern.search(stripped_hay):
                     return True
+            
+            # Mode 4: acronym match (e.g. "DF" matches "Dauphin & Fantacone").
+            # Build acronym from first letter of each non-stopword token >=2 chars.
+            # Acronym must be at least 2 letters and appear as its own token in the haystack.
+            sig_tokens = [
+                t for t in tokens
+                if len(t) >= 2 and t not in WidgetStateTracker._STOP_WORDS
+            ]
+            if len(sig_tokens) >= 2:
+                acronym = "".join(t[0] for t in sig_tokens).lower()
+                if len(acronym) >= 2:
+                    # Match acronym as a standalone token (separator on both sides
+                    # OR followed by underscore/digit which is common in filenames)
+                    acro_pattern = re.compile(
+                        r'(?:^|[\s\-_/\\.,()&])' + re.escape(acronym) + r'(?:[\s\-_/\\.,()&]|$|[0-9])',
+                        re.IGNORECASE,
+                    )
+                    if acro_pattern.search(stripped_hay):
+                        return True
 
         return False
 

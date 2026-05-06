@@ -571,8 +571,16 @@ class FloatingClientWidget:
             self._cancel_collapse()
             self._cancel_flash()
 
-            # 1. Expand to pill immediately
-            self.root.after(0, self._expand_to_pill)
+            # 1. Expand to pill immediately. If pill is already open (e.g. user
+            #    is correcting a yellow proposed state by manually picking the
+            #    right client), force a rebuild so the new green color and
+            #    client name show BEFORE the flash + collapse sequence runs.
+            def _expand_or_repaint():
+                if self._mode == "pill":
+                    self._build_pill_ui()  # in-place repaint with new state
+                else:
+                    self._expand_to_pill()
+            self.root.after(0, _expand_or_repaint)
 
             # 2. Flash to 100% opacity to catch the eye
             self.root.after(0, lambda: self._apply_opacity(PILL_OPACITY_FLASH))
@@ -685,12 +693,40 @@ class FloatingClientWidget:
             self._schedule_collapse(delay_ms=SWITCH_HOLD_MS)
             return
 
-        # No transition — just rebuild current view in place
+        # No transition — only rebuild if something visible actually changed.
+        # Steady-state polls would otherwise destroy + recreate child widgets
+        # every 2s, which fires synthetic Enter/Leave events on the new
+        # widgets and silently cancels any scheduled collapse timer (since
+        # _on_enter cancels collapses). That's why a green pill that should
+        # collapse after 3s never closed — the 2s poll kept wiping the timer.
         if self._mode == "dot":
-            self._build_dot_ui()
-            self._apply_idle_opacity()
+            # Cheap recolor — no rebuild
+            try:
+                self.dot.configure(fg_color=self._state_color())
+                self._apply_idle_opacity()
+            except Exception:
+                # Fallback if dot widget got destroyed
+                self._build_dot_ui()
+                self._apply_idle_opacity()
         else:
-            self._build_pill_ui()
+            # Pill — only rebuild if the visible label actually changed.
+            # Otherwise leave it alone so collapse timers keep ticking.
+            try:
+                desired_text = self._display_name()
+                current_text = self.client_label.cget("text")
+                if desired_text != current_text:
+                    # State changed (proposed → captured, etc). Recolor
+                    # ALL three painted elements: icon dot, label text,
+                    # and container border. Without recoloring the label,
+                    # the new text inherits the old state's color (e.g.
+                    # gray "Uncategorized" rendered in yellow).
+                    accent = self._state_color()
+                    label_color = COLORS["text"] if self.current_state == "committed" else accent
+                    self.client_label.configure(text=desired_text, text_color=label_color)
+                    self.icon_label.configure(text_color=accent)
+                    self.container.configure(border_color=accent)
+            except Exception:
+                self._build_pill_ui()
 
     @staticmethod
     def _truncate(text, max_len=22):
@@ -713,11 +749,19 @@ class FloatingClientWidget:
         }.get(self.current_state, COLORS["no_client"])
 
     def _display_name(self):
-        """Label text for the current state. Appends '?' for proposed."""
+        """Label text for the current state.
+
+        State → display:
+          no_client    → "No Client"
+          captured     → "Uncategorized" (will land as Uncategorized
+                         unless user corrects, regardless of active client)
+          proposed     → "ClientName?"
+          committed    → "ClientName"
+        """
         if self.current_state == "no_client" or not self.current_client_id:
-            if self.current_state == "captured":
-                return "Uncategorized"
             return "No Client"
+        if self.current_state == "captured":
+            return "Uncategorized"
         name = self._truncate(self.current_client_name or "No Client")
         if self.current_state == "proposed":
             return f"{name}?"

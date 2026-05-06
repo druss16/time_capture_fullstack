@@ -37,8 +37,8 @@ except ImportError:
     WIDGET_AVAILABLE = False
 
 # Time thresholds — how long without a match before downgrading state.
-COMMITTED_TO_PROPOSED_SECONDS = 30      # 5 min: brief tab-switches OK
-PROPOSED_TO_CAPTURED_SECONDS = 30 # 10 more min (15 total before gray)
+COMMITTED_TO_PROPOSED_SECONDS = 300      # 5 min: brief tab-switches OK
+PROPOSED_TO_CAPTURED_SECONDS = 600 # 10 more min (15 total before gray)
 
 
 class WidgetStateTracker:
@@ -59,17 +59,24 @@ class WidgetStateTracker:
     def state(self) -> str:
         return self._state
 
-    def on_user_set_client(self, client_name: Optional[str] = None):
+    def on_user_set_client(self, client_name: Optional[str] = None,
+                           aliases: Optional[List[str]] = None):
         """User explicitly picked a client — start fresh in committed state.
-        
-        Updates the tracker's cached client name so subsequent tick() calls
-        check against the NEW client (not the stale one from before the pick).
+
+        Updates the tracker's cached client name AND aliases so subsequent
+        tick() calls check against the NEW client (not the stale one from
+        before the pick). Without this, tick() would re-evaluate against
+        the previously-active client's name and immediately demote to
+        proposed/captured, making the widget appear stuck in yellow even
+        right after a manual pick.
         """
         self._state = "committed"
         self._last_match_time = time.time()
         self._last_state_change = time.time()
         if client_name is not None:
             self._last_client_name = client_name
+        if aliases is not None:
+            self._last_aliases = aliases
 
     def on_window_change(self, window_title, file_path, url,
                          current_client_name, current_client_aliases=None):

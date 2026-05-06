@@ -42,6 +42,17 @@ from tax_software_constants import (
     GENERIC_TAX_DIALOGS,
 )
 
+def _version_lt(a: str, b: str) -> bool:
+    """Numeric semver compare. Returns True if a < b. Returns False
+    for non-numeric strings (dev, unknown, custom) — caller must
+    handle those explicitly."""
+    try:
+        a_parts = [int(x) for x in a.split(".")]
+        b_parts = [int(x) for x in b.split(".")]
+        return a_parts < b_parts
+    except (ValueError, AttributeError):
+        return False
+
 # =====================================================================
 # Three-Layer Guard Against False Switches From Noise Titles
 # =====================================================================
@@ -99,6 +110,26 @@ def _is_chrome_only_title(title: str) -> bool:
             return True
     return False
 
+_ACRONYM_BLOCKLIST = {
+    # English stopwords / prepositions
+    "of", "in", "on", "at", "to", "by", "or", "an", "as", "is", "it", "no",
+    "so", "if", "do", "go", "us", "we", "be", "he", "my", "up", "am",
+    # File-extension-ish / tech
+    "pdf", "doc", "txt", "csv", "xls", "ppt",  # caught by len>=2 rule but fine
+    "df", "tc", "id", "ip", "os", "pc", "ui", "ux", "qa", "qc",
+    "db", "io", "ai", "ml", "vm",
+    # Common biz fragments
+    "co", "hr", "pr", "it", "rd", "qb",  # qb = QuickBooks
+    "tx", "fl", "ny", "ca",  # state codes (will collide w/ TX clients etc)
+}
+
+# 2-letter acronyms are blocked by default because they collide with common
+# fragments ("tc", "df", "co", "in"). Add an entry here when a firm has a
+# 2-word client whose initials are unambiguous in their domain. Long-term
+# this should move to a per-org sync field; for now it's hardcoded.
+_ACRONYM_2CHAR_ALLOWLIST = {
+    "df",  # TL Wall — Dauphin & Fantacone
+}
 
 # Layer 2: Signal-strength check --------------------------------------
 _CHROME_TOKENS = {
@@ -121,7 +152,8 @@ _CHROME_TOKENS = {
 }
 
 _MIN_SIGNAL_CHARS = 3
-
+_ACRONYM_LENGTH_BLOCKLIST = 2  # block acronyms shorter than this+1 unless allowlisted
+_ACRONYM_GLOBAL_ALLOWLIST = set()
 
 def _has_client_signal(title: str, file_path: str = None) -> bool:
     """Layer 2: title has real content beyond app branding?"""
@@ -552,6 +584,7 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
                 )
                 patterns.append((pat, word, True))
 
+
         # Acronym match: build "DF" from "Dauphin & Fantacone" so filenames
         # like DF_Client_Invoice.pdf auto-switch without manual aliases.
         # Acronym must be 2+ letters; built from significant words only.
@@ -564,16 +597,30 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
         if len(sig_words) >= 2:
             acronym = "".join(w[0] for w in sig_words).lower()
             if len(acronym) >= 2:
-                # Don't add if acronym is already a needle (some clients DO use
-                # their initials as the official name — avoid double pattern)
-                already_covered = any(acronym == n.lower() for n in needles_raw)
-                if not already_covered:
-                    escaped = re.escape(acronym)
-                    pat = re.compile(
-                        r'(?:^|' + _BOUNDARY + r')' + escaped + r'(?:$|' + _BOUNDARY + r'|[0-9])',
-                        re.IGNORECASE,
+                # 2-letter acronyms are collision-prone (e.g. "tc" matches
+                # TimeCard, TaxCalc, etc.) and only enabled via the per-org
+                # allowlist. 3+ letter acronyms ("lnp", "df_co" wouldn't,
+                # but "lnp" for Little Nero's Pizza) are safe by default.
+                allowed = (
+                    len(acronym) >= 3
+                    or acronym in _ACRONYM_2CHAR_ALLOWLIST
+                )
+                if not allowed:
+                    logger.info(
+                        f"[AI-SWITCH] Skipping 2-letter acronym {acronym!r} "
+                        f"for {name!r} (not in allowlist — high collision risk)"
                     )
-                    patterns.append((pat, acronym, True))
+                else:
+                    # Don't add if acronym is already a needle (some clients DO use
+                    # their initials as the official name — avoid double pattern)
+                    already_covered = any(acronym == n.lower() for n in needles_raw)
+                    if not already_covered:
+                        escaped = re.escape(acronym)
+                        pat = re.compile(
+                            r'(?:^|' + _BOUNDARY + r')' + escaped + r'(?:$|' + _BOUNDARY + r'|[0-9])',
+                            re.IGNORECASE,
+                        )
+                        patterns.append((pat, acronym, "acronym"))
 
         if patterns:
             matchers.append({
@@ -664,19 +711,26 @@ def _regex_match(title: str, file_path: str, matchers: list,
 
     best = None
     for m in matchers:
-        for i, (pattern, needle, is_partial) in enumerate(m["patterns"]):
+        for i, (pattern, needle, kind) in enumerate(m["patterns"]):
             hit = pattern.search(search_text)
             if not hit:
                 continue
 
             needle_len = len(needle)
 
-            if is_partial:
+            # kind is False (exact/alias), True (partial_word), or "acronym"
+            if kind == "acronym":
+                # Acronyms are deterministic — built from the client's
+                # actual significant words, not fuzzy. A 2-char acronym
+                # from a 2-word client name is a strong signal.
+                conf = 0.85
+                method = "acronym"
+            elif kind is True:  # partial_word
                 if needle.lower() in _GENERIC_WORD_BLOCKLIST:
                     continue
-                conf   = _partial_word_confidence(needle_len, sensitivity)
+                conf = _partial_word_confidence(needle_len, sensitivity)
                 method = "partial_word"
-            else:
+            else:  # exact / alias
                 if needle_len >= 8:   conf = 0.95
                 elif needle_len >= 5: conf = 0.88
                 elif needle_len >= 3: conf = 0.70
@@ -689,31 +743,28 @@ def _regex_match(title: str, file_path: str, matchers: list,
             # Existing flat boost for any path mention
             if file_path and needle.lower() in (file_path or "").lower():
                 conf = min(1.0, conf + 0.05)
- 
-            # NEW: depth-aware boost. Filename matches and last-folder matches
-            # win over earlier-in-path matches (which are usually user folders,
-            # sync folders, desktop, etc.)
+
+            # Depth-aware boost
             depth_delta = _path_depth_boost(needle, file_path)
             conf = max(0.0, min(1.0, conf + depth_delta))
- 
+
             this_depth = 0
             if file_path:
                 segs = [s for s in file_path.replace("\\", "/").lower().split("/") if s]
                 for seg_idx, seg in enumerate(segs):
                     if needle.lower() in seg:
                         this_depth = seg_idx
- 
+
             is_better = False
             if best is None:
                 is_better = True
             elif conf > best.confidence:
                 is_better = True
             elif conf == best.confidence:
-                # Tiebreaker: prefer deeper match
                 best_depth = getattr(best, "_path_depth", -1)
                 if this_depth > best_depth:
                     is_better = True
- 
+
             if is_better:
                 best = ClientMatch(
                     client_id=m["client_id"],
@@ -722,13 +773,13 @@ def _regex_match(title: str, file_path: str, matchers: list,
                     match_method=method,
                     matched_token=hit.group(0).strip(),
                     reasoning=(
-                        f"Partial word '{needle}' matched in title"
-                        if is_partial
+                        f"Acronym '{needle}' matched in title"
+                        if kind == "acronym"
+                        else f"Partial word '{needle}' matched in title"
+                        if kind is True
                         else f"Found '{needle}' in window title/path"
                     ),
                 )
-                # Stash the depth for tiebreaker comparison on the next iteration
-                # (ClientMatch is a dataclass so we just attach an extra attribute)
                 best._path_depth = this_depth
 
     return best
@@ -878,6 +929,31 @@ class LearnedRules:
         ]
         is_email = any(m in title_low for m in email_markers)
 
+        # v1.2.97: Don't learn from IDE/editor source-file titles. They're
+        # almost always a developer's environment, not a client signal.
+        # Example: "main.py (windows_agent) - Sublime Text" gets learned as
+        # whatever client the developer was on, then auto-switches them
+        # every time they open the file again.
+        ide_markers = [
+            '- sublime text', '- visual studio code', 'visual studio code -',
+            '- pycharm', '- intellij', '- webstorm', '- vim', '- neovim',
+            '- notepad++', '- atom', '- emacs',
+        ]
+        source_extensions = ['.py', '.js', '.ts', '.tsx', '.jsx', '.go', '.rs',
+                             '.java', '.cpp', '.c', '.h', '.rb', '.php', '.html',
+                             '.css', '.json', '.yaml', '.yml', '.md', '.sql']
+        is_ide_source = (
+            any(m in title_low for m in ide_markers)
+            or any(ext in title_low for ext in source_extensions)
+        )
+
+        if is_ide_source:
+            logger.debug(
+                f"[AI-SWITCH] Not learning from IDE/source title: "
+                f"{title[:60]!r} → {client_name!r}"
+            )
+            return
+
         if is_email:
             if not self._title_contains_client(title, client_name):
                 logger.debug(
@@ -954,10 +1030,17 @@ class LearnedRules:
                     continue
 
                 if key in rk or rk in key:
-                    # v1.2.96: Tighten penalty 0.85x → 0.70x. This drops weak
-                    # learned_partial confidence below the 0.70 default switch
-                    # threshold so spurious matches can't fire on their own —
-                    # they require corroboration from regex/cache tiers.
+                    # v1.2.97: A short title key matching as substring of a much
+                    # longer rule key is almost always a false positive. Example:
+                    # window title "timetracker" matches stored rule
+                    # "timetracker by mavops — ai time intelligence for cpa firms"
+                    # but the title is just an app name, not the actual brand.
+                    shorter, longer = (key, rk) if len(key) <= len(rk) else (rk, key)
+                    if len(longer) > len(shorter) * 2.5 and len(shorter) < 25:
+                        # Title is ≥2.5x shorter than rule and under 25 chars —
+                        # too generic to trust as a fuzzy match.
+                        continue
+
                     adj = rule["confidence"] * 0.70
                     if adj > best_conf:
                         best = ClientMatch(
@@ -1167,7 +1250,9 @@ class AIClientSwitcher:
                 needs_wipe = (
                     cached_version == "" or
                     cached_version == "unknown" or
-                    cached_version < "1.2.96"
+                    cached_version == "dev" or
+                    APP_VERSION == "dev" or
+                    _version_lt(cached_version, "1.2.96")
                 )
                 if needs_wipe:
                     learned_path = self._learned.path
@@ -1221,8 +1306,8 @@ class AIClientSwitcher:
 
         self.stats = {
             "regex": 0, "cache": 0, "learned": 0, "file_conv": 0,
-            "backend_ai": 0, "partial_word": 0, "switches": 0, "suppressed": 0,
-            "org_rule": 0,
+            "backend_ai": 0, "partial_word": 0, "acronym": 0,  # ← add this
+            "switches": 0, "suppressed": 0, "org_rule": 0,
         }
 
         self._backend_ai_available = bool(api_base and api_key)
@@ -1556,7 +1641,12 @@ class AIClientSwitcher:
             logger.info(f"[AI-SWITCH] _detect: regex_hit={regex_hit} cur_id={cur_id}")
             if regex_hit and regex_hit.client_id != cur_id:
                 if regex_hit.confidence >= self.config["local_confidence_threshold"]:
-                    stat_key = "partial_word" if regex_hit.match_method == "partial_word" else "regex"
+                    if regex_hit.match_method == "acronym":
+                        stat_key = "acronym"
+                    elif regex_hit.match_method == "partial_word":
+                        stat_key = "partial_word"
+                    else:
+                        stat_key = "regex"
                     self.stats[stat_key] += 1
                     self._queue_switch(regex_hit)
                     return

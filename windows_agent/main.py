@@ -388,9 +388,19 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
         # Update state directly — do NOT call _switch_client (creates callback loop)
         if hasattr(gui_menu_bar, 'state'):
             gui_menu_bar.state.set_client(client_id, client_name)
-        # Update widget state tracker — user explicitly picked, start in confirmed
+        # Update widget state tracker — user explicitly picked, start in confirmed.
+        # CRITICAL: pass the new client_name + aliases so tick() re-evaluates
+        # against the current client, not the previously-active one.
         if widget_tracker:
-            widget_tracker.on_user_set_client(client_name=client_name)
+            # Pull aliases from sync if available
+            aliases = []
+            if sync and getattr(sync, 'clients', None):
+                client_obj = next(
+                    (c for c in sync.clients if c.get("id") == client_id), None
+                )
+                if client_obj:
+                    aliases = client_obj.get("aliases") or []
+            widget_tracker.on_user_set_client(client_name, aliases)
             if hasattr(gui_menu_bar, 'state'):
                 gui_menu_bar.state.current_widget_state = widget_tracker.state
         # Update floating widget. State is 'committed' (green) since user
@@ -477,19 +487,29 @@ def setup_logging():
 
 _logger = setup_logging()
 
-# Make stdout/stderr survive parent-process detach (pythonw.exe, console close, etc).
-# Without this, any stray print() from a third-party lib will throw ValueError
-# and poison the Tkinter event loop — clicks, drags, polls all silently fail.
-class _LogStream:
-    """File-like object that forwards writes to the rotating log + swallows errors."""
-    def __init__(self, level="info"):
+# Always wrap stdout/stderr to survive parent-process detach. The wrappers
+# pass through to the original handle when it's healthy, and silently log
+# to the rotating log file when the underlying handle dies mid-run.
+class _SafeStream:
+    """Pass-through wrapper that survives stdout being closed mid-run."""
+    def __init__(self, original, level="info"):
+        self._original = original
         self._level = level
         self._buf = ""
+        self._dead = False
 
     def write(self, msg):
-        try:
-            if not msg:
+        if not msg:
+            return
+        # Try the original handle first
+        if not self._dead:
+            try:
+                self._original.write(msg)
                 return
+            except (ValueError, OSError, AttributeError):
+                self._dead = True  # original is gone, log from now on
+        # Fall back to rotating log
+        try:
             self._buf += msg
             while "\n" in self._buf:
                 line, self._buf = self._buf.split("\n", 1)
@@ -502,6 +522,12 @@ class _LogStream:
             pass
 
     def flush(self):
+        if not self._dead:
+            try:
+                self._original.flush()
+                return
+            except Exception:
+                self._dead = True
         try:
             if self._buf.strip() and _logger:
                 _logger.info(self._buf.rstrip())
@@ -510,18 +536,19 @@ class _LogStream:
             pass
 
     def isatty(self):
-        return False
+        try:
+            return (not self._dead) and self._original.isatty()
+        except Exception:
+            return False
 
-# Probe stdout/stderr; if either is broken or gets closed later, redirect to log
-try:
-    sys.stdout.write("")
-except (ValueError, OSError, AttributeError):
-    sys.stdout = _LogStream("info")
+    def __getattr__(self, name):
+        # Forward any other attribute access to the underlying stream
+        return getattr(self._original, name)
 
-try:
-    sys.stderr.write("")
-except (ValueError, OSError, AttributeError):
-    sys.stderr = _LogStream("error")
+# Wrap unconditionally so a mid-run close still routes prints to the log
+sys.stdout = _SafeStream(sys.stdout, "info")
+sys.stderr = _SafeStream(sys.stderr, "error")
+
 # Browser app name suffixes that leak into window titles via win32 fallback
 _BROWSER_TITLE_SUFFIXES = [
     " \u2013 Microsoft Edge",   # em dash (most common)
@@ -920,84 +947,19 @@ def get_foreground_window_info() -> Optional[Tuple[str, str, int, Optional[str]]
             log(f"[WARN] get_foreground_window_info error: {e}")
         return None
 
-# UIA cache — keyed by HWND, expires after a few seconds
-_uia_cache = {}
-_UIA_CACHE_TTL = 3.0  # seconds
-
-def _get_explorer_folder_path() -> Optional[str]:
-    """Get current folder path of the active Explorer window via Shell COM."""
-    try:
-        import win32com.client
-        shell = win32com.client.Dispatch("Shell.Application")
-        hwnd = win32gui.GetForegroundWindow()
-        for window in shell.Windows():
-            try:
-                if window.HWND == hwnd:
-                    folder = window.Document.Folder
-                    if folder:
-                        return folder.Self.Path
-            except Exception:
-                continue
-    except Exception:
-        return None
-    return None
-
-
-def _get_browser_address_bar(exe_name: str) -> Optional[str]:
-    """Get URL/path from browser address bar via UI Automation. Cached per HWND."""
-    try:
-        hwnd = win32gui.GetForegroundWindow()
-        now = _time.time()
-        
-        # Check cache
-        cached = _uia_cache.get(hwnd)
-        if cached and now - cached[0] < _UIA_CACHE_TTL:
-            return cached[1]
-        
-        # Lazy import — uiautomation is slow to load
-        try:
-            import uiautomation as auto
-        except ImportError:
-            return None
-        
-        # Get the foreground window control
-        control = auto.ControlFromHandle(hwnd)
-        if not control:
-            return None
-        
-        # Search for the address bar — Edge/Chrome use EditControl with role
-        # like "Address and search bar"
-        addr_bar = control.EditControl(searchDepth=12)
-        url = None
-        if addr_bar.Exists(maxSearchSeconds=0.3):
-            url = addr_bar.GetValuePattern().Value
-        
-        _uia_cache[hwnd] = (now, url)
-        return url
-    except Exception:
-        return None
-
-
 def try_get_url_or_path(exe_name: str, window_title: str) -> Dict[str, Optional[str]]:
     exe_lower = exe_name.lower()
     
     if exe_lower in ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"):
-        # First try title-based (fast, works for normal pages with full URL in title)
         url = extract_url_from_browser_title(window_title, exe_lower)
-        if not url:
-            # Fall back to UI Automation address bar (slower but works for PDFs, file:// etc.)
-            url = _get_browser_address_bar(exe_lower)
         return {"url": url, "file_path": None}
     
     if exe_lower in ("excel.exe", "winword.exe", "powerpnt.exe"):
-        file_path = get_office_file_path(exe_lower, window_title)
+        file_path = get_office_file_path(exe_lower, window_title)  # ← pass title
         return {"url": None, "file_path": file_path}
     
-    if exe_lower == "explorer.exe":
-        path = _get_explorer_folder_path()
-        return {"url": None, "file_path": path}
-    
     return {"url": None, "file_path": None}
+
 def extract_url_from_browser_title(title: str, exe: str) -> Optional[str]:
     """Parse URL from browser window title."""
     if not title:
@@ -2725,14 +2687,8 @@ def run_agent():
                                 # the floating widget polls it every 2s.
                                 if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, 'state'):
                                     cur_id, cur_name = _get_cached_client()
-                                    # Get aliases for current client from AI switcher's loaded list
-                                    cur_aliases = []
-                                    if ai_switcher and cur_id and hasattr(ai_switcher, '_client_map'):
-                                        client_data = ai_switcher._client_map.get(cur_id)
-                                        if client_data:
-                                            cur_aliases = client_data.get('aliases') or []
                                     new_state = widget_tracker.on_window_change(
-                                        window_title, fpath, url, cur_name, cur_aliases
+                                        window_title, fpath, url, cur_name, []
                                     )
                                     if new_state != getattr(gui_menu_bar.state, 'current_widget_state', None):
                                         log(f"[WIDGET-STATE] {new_state} client={cur_name}")

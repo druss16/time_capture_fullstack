@@ -1255,14 +1255,18 @@ class TimeTrackerSystemTray:
                     on_select,
                     current_id=self.state.current_client_id,
                     parent_root=parent
-                )
+                )                
                 picker.show()
-                
                 if selected_id is not None or selected_name == "No Client":
                     self._switch_client(selected_id or 0, selected_name)
+            except Exception as e:
+                print(f"[GUI] Picker error: {e}")
+                import traceback
+                traceback.print_exc()
             finally:
                 with self._picker_lock:
                     self._picker_open = False
+                    print("[GUI] Picker lock released")
         
         if self.floating_widget and self.floating_widget.root:
             try:
@@ -1275,11 +1279,50 @@ class TimeTrackerSystemTray:
         threading.Thread(target=run_picker, daemon=True).start()
     
     def _switch_client(self, client_id: int, client_name: str):
-        """Handle client switch"""
-        # Already on this client — skip
-        if client_id and client_id == self.state.current_client_id:
+        """Handle client switch.
+
+        A manual pick of the SAME client is treated as a re-confirmation —
+        the user is telling us "yes I'm still working on this" while the
+        widget had drifted to proposed/captured because no window signals
+        matched. We don't re-hit the backend (no actual switch) but we DO
+        refresh widget state to committed and reset its match timer.
+        """
+        is_reconfirmation = (
+            client_id and client_id == self.state.current_client_id
+        )
+        if is_reconfirmation:
+            print(f"[GUI] Re-confirming current client: {client_name}")
+            # Refresh widget state to committed without going through the
+            # full backend round-trip
+            if self.floating_widget:
+                try:
+                    self.floating_widget.update_client(
+                        client_id, client_name, state="committed"
+                    )
+                except Exception as e:
+                    print(f"[GUI] Widget reconfirm error: {e}")
+            # Also reset the widget tracker so tick() doesn't immediately
+            # re-demote on the next 5s poll. Reach through main.py's globals.
+            try:
+                import main as _main
+                if getattr(_main, 'widget_tracker', None):
+                    # Pull aliases from sync if available
+                    aliases = []
+                    if getattr(_main, 'sync', None) and _main.sync.clients:
+                        client_obj = next(
+                            (c for c in _main.sync.clients if c.get("id") == client_id),
+                            None
+                        )
+                        if client_obj:
+                            aliases = client_obj.get("aliases") or []
+                    _main.widget_tracker.on_user_set_client(client_name, aliases)
+                    # Push the new state up to the tray controller's state too
+                    if hasattr(self, 'state'):
+                        self.state.current_widget_state = _main.widget_tracker.state
+            except Exception as e:
+                print(f"[GUI] Widget tracker reconfirm error: {e}")
             return
-        """Handle client switch"""
+
         track_client_selection(client_id)
         
         if client_id == 0:

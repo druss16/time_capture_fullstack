@@ -552,6 +552,29 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
                 )
                 patterns.append((pat, word, True))
 
+        # Acronym match: build "DF" from "Dauphin & Fantacone" so filenames
+        # like DF_Client_Invoice.pdf auto-switch without manual aliases.
+        # Acronym must be 2+ letters; built from significant words only.
+        words_for_acronym = re.split(r'[\s&,./\\]+', name)
+        sig_words = [
+            w.strip(" .,&") for w in words_for_acronym
+            if w.strip(" .,&") and w.strip(" .,&").lower() not in _STOP_WORDS
+            and len(w.strip(" .,&")) >= 2
+        ]
+        if len(sig_words) >= 2:
+            acronym = "".join(w[0] for w in sig_words).lower()
+            if len(acronym) >= 2:
+                # Don't add if acronym is already a needle (some clients DO use
+                # their initials as the official name — avoid double pattern)
+                already_covered = any(acronym == n.lower() for n in needles_raw)
+                if not already_covered:
+                    escaped = re.escape(acronym)
+                    pat = re.compile(
+                        r'(?:^|' + _BOUNDARY + r')' + escaped + r'(?:$|' + _BOUNDARY + r'|[0-9])',
+                        re.IGNORECASE,
+                    )
+                    patterns.append((pat, acronym, True))
+
         if patterns:
             matchers.append({
                 "client_id": c["id"],

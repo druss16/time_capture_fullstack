@@ -1670,22 +1670,15 @@ class AIClientSwitcher:
                         self._queue_switch(match)
                         return
 
-            # Tier 1b: LLM classification (gpt-4o-mini via backend)
-            # Fire-and-forget: enqueue NOW so the async batch can resolve
-            # while heuristic tiers run as immediate safety net. When the
-            # LLM verdict arrives in _fire_ai_batch, it either confirms
-            # what a heuristic did (no-op via cooldown) or corrects it.
-            # Sends the FULL context: title, file_path, app, url, AND
-            # current_client_name. The LLM uses current_client_name as
-            # an anchor — generic titles like "TimeTracker" return the
-            # current client at moderate confidence rather than null
-            # or a wrong switch. This is what kills the
-            # "TimeTracker → MAVOPS" class of bug.
-            llm_enqueued = False
-            if self._backend_ai_available and self.config["enabled"]:
-                cur_name = self._current_client_name or ""
-                self._enqueue_for_ai(title, file_path, app_name, url, cur_name)
-                llm_enqueued = True
+            # NOTE: LLM-based real-time client classification was removed
+            # in v1.2.98 (architecture decision: client classification is
+            # deterministic-only; LLM runs at backend compaction with full
+            # block context, not on individual window-change events).
+            # See compaction.py for the LLM-driven client/category logic.
+            #
+            # Heuristic tiers below remain as the agent's deterministic
+            # ladder. If nothing fires, the block stays Uncategorized
+            # and compaction's LLM gets a second look.
 
             # Tier 1c: Learned rules
             learned_hit = self._learned.match(search, cur_id)
@@ -1736,9 +1729,12 @@ class AIClientSwitcher:
                         )
                         return
 
-            # All tiers exhausted. If we enqueued the LLM, its async
-            # verdict will arrive shortly via _fire_ai_batch. Otherwise
-            # this title produced no classification — let it ride.
+            # All deterministic tiers exhausted with no confident match.
+            # Block accumulates as Uncategorized — backend compaction's
+            # LLM will re-evaluate with full block context (5+ minutes
+            # of titles/paths/URLs) and either assign a client at high
+            # confidence (>=0.90) or leave Uncategorized for the user
+            # to fix at timesheet review time.
             with self._lock:
                 self._pending_switch = None
 
@@ -1817,8 +1813,27 @@ class AIClientSwitcher:
                 )
                 cur_id = self._current_client_id
                 for item, match in zip(batch, results):
-                    if not match or match.client_id not in self._client_map:
+                    if not match:
+                        logger.info(f"[AI-SWITCH] LLM: no match for {item['title'][:60]!r}")
                         continue
+                    if match.client_id not in self._client_map:
+                        logger.warning(
+                            f"[AI-SWITCH] LLM returned unknown client_id={match.client_id} "
+                            f"for {item['title'][:60]!r} — ignoring"
+                        )
+                        continue
+                    # Log the verdict regardless of whether we switch
+                    if match.client_id == cur_id:
+                        logger.info(
+                            f"[AI-SWITCH] LLM confirmed current client "
+                            f"{match.client_name!r} (conf={match.confidence:.2f}) "
+                            f"for {item['title'][:60]!r}"
+                        )
+                    else:
+                        logger.info(
+                            f"[AI-SWITCH] LLM verdict: {match.client_name!r} "
+                            f"(conf={match.confidence:.2f}) for {item['title'][:60]!r}"
+                        )
                     self._cache.put(item["title"], match.client_id, match.client_name, match.confidence)
                     if self.config["learn_from_confirms"]:
                         self._learned.learn(

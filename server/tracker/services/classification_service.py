@@ -1517,38 +1517,43 @@ class ClassificationService:
 
     def _stage_10_ai_inference(self, block, decision: ClassificationDecision):
         """
-        Call OpenAI to classify when stages 0-9 produced no useful signals.
+        Call OpenAI to classify with full block context (titles, paths, URLs,
+        duration). Two distinct flows depending on whether the agent already
+        assigned a client:
+
+        FLOW A — Block has NO agent client (block.client_id is None):
+          Call AI for client identification. AI client signal can be:
+            - Strong (>=0.85)  → strong signal, may auto-commit via _finalize
+            - Moderate (0.65-0.84) → propose for user review
+            - Weak (<0.65) → ignored
+          Then call AI for category if we got a client.
+
+        FLOW B — Block HAS agent-assigned client (block.client_id is set):
+          Skip AI client classification UNLESS we want to validate. We DO want
+          to validate, because the agent's deterministic ladder can be wrong
+          (regex matched on a coincidental substring). So:
+            - Call AI client and compare to agent's
+            - If AI agrees → no signal added (block stays as agent set it)
+            - If AI disagrees with confidence >= 0.85 → log to AIProcessingLog
+              for review, set block.ai_disagrees_with_agent=True, block stays
+              as agent set it. User sees flag in web app daily review.
+            - If AI disagrees with confidence < 0.85 → ignored (too uncertain)
+          Then call AI for category regardless.
+
+        ALWAYS for either flow:
+          AI category signal capped at 0.85 strength so it can auto-commit
+          when combined with the client signal (agent or AI).
 
         COST CONTROLS:
-          - Only fires when no Signal has strength >= 0.65
+          - Only fires when no Signal has strength >= 0.65 OR block has client
           - Only fires when block has duration >= 1 minute (skips transients)
-          - Cached per-block-title combo via Django cache (CACHE_TTL)
+          - Cached per-block-title via Django cache (CACHE_TTL)
           - Skips entirely if OPENAI_API_KEY is not set
-
-        Two AI calls per block when triggered:
-          1. Client identification (against the org's client list)
-          2. Category identification (CPA categories)
-
-        Strength: 0.50-0.85 based on AI's stated confidence. Never auto-commits
-        from Stage 10 alone — requires combination with another signal.
-
-        This is a port from block_classifier.py with adaptations:
-          - Returns Signal objects instead of ClassificationResult
-          - Does not short-circuit; participates in signal aggregation
-          - Confidence cap at 0.85 (was 0.88+ in old classifier with current_client boost)
         """
         # Skip if OpenAI not configured
         import os
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
-            return
-
-        # Skip if a moderate+ signal already fired
-        max_strength = max(
-            (s.strength for s in decision.matched_signals),
-            default=0.0,
-        )
-        if max_strength >= 0.65:
             return
 
         # Skip transient blocks (< 1 minute)
@@ -1563,23 +1568,152 @@ class ClassificationService:
         if not title:
             return
 
+        # Cost gate: skip if a strong-enough signal already exists AND there's no
+        # agent client to validate. If agent set a client, we always run Stage 10
+        # to validate it — that's the disagreement-detection feature.
+        max_strength = max(
+            (s.strength for s in decision.matched_signals),
+            default=0.0,
+        )
+        has_agent_client = bool(block.client_id)
+
+        if not has_agent_client and max_strength >= 0.65:
+            # No agent client to validate, and we already have a strong signal.
+            # Stage 10 wouldn't add value. Skip to save tokens.
+            return
+
         try:
             # ---- AI client identification ----
             client_signal = self._ai_classify_client(block, title)
-            if client_signal:
-                decision.matched_signals.append(client_signal)
+
+            if has_agent_client:
+                # Validation flow — compare AI to agent
+                self._handle_ai_agent_comparison(block, client_signal, decision)
+                # In validation flow we ALWAYS use the agent's client for
+                # category context — never the AI's, because the agent's
+                # client is what's actually attached to the block.
+                client_name_for_category = (
+                    block.client.name if block.client else ''
+                )
+            else:
+                # Free-form classification flow
+                if client_signal:
+                    decision.matched_signals.append(client_signal)
+                client_name_for_category = (
+                    client_signal.detail.get('client_name')
+                    if client_signal else ''
+                )
 
             # ---- AI category identification ----
-            # Only call category AI if we got a client (avoids categorizing nothing)
-            if client_signal:
+            # Always classify category if we have any client context
+            if client_name_for_category:
                 category_signal = self._ai_classify_category(
-                    block, title, client_signal.detail.get('client_name')
+                    block, title, client_name_for_category
                 )
                 if category_signal:
                     decision.matched_signals.append(category_signal)
 
         except Exception as e:
             logger.warning(f'Stage 10 AI inference failed for block {block.pk}: {e}')
+
+    def _handle_ai_agent_comparison(self, block, ai_signal, decision):
+        """
+        When the agent already assigned a client and Stage 10 ran AI to
+        validate, compare the two and either:
+          - Agree → no-op (block stays as agent set it, no new signal)
+          - Disagree at >= 0.85 confidence → log disagreement, mark block,
+            but do NOT change the block's client. User reviews in web app.
+          - Disagree at < 0.85 → ignore (AI not confident enough to flag)
+        """
+        if not ai_signal:
+            return
+
+        ai_client_id = ai_signal.detail.get('client_id')
+        ai_client_name = ai_signal.detail.get('client_name', '')
+        ai_confidence = ai_signal.detail.get('ai_confidence', 0.0)
+        agent_client_id = block.client_id
+
+        if not ai_client_id:
+            return
+
+        if ai_client_id == agent_client_id:
+            # AI confirms agent's choice. Nice, but no signal needed —
+            # the agent's deterministic decision already stands. Save the
+            # confirmation to AIProcessingLog for analytics if desired.
+            self._log_ai_call(
+                operation_type='stage_10_validation_agree',
+                input_data={
+                    'block_id': block.pk,
+                    'client_id': agent_client_id,
+                    'title': (block.window_title or '')[:200],
+                },
+                output_data={
+                    'ai_client_id': ai_client_id,
+                    'ai_confidence': ai_confidence,
+                    'verdict': 'agree',
+                },
+                processing_time_ms=0,
+                success=True,
+            )
+            return
+
+        # AI disagrees. Only flag if AI is confident.
+        if ai_confidence < 0.85:
+            # AI's disagreement is too uncertain to surface. Log it
+            # silently for analytics but don't bug the user.
+            self._log_ai_call(
+                operation_type='stage_10_validation_uncertain',
+                input_data={
+                    'block_id': block.pk,
+                    'agent_client_id': agent_client_id,
+                    'title': (block.window_title or '')[:200],
+                },
+                output_data={
+                    'ai_client_id': ai_client_id,
+                    'ai_client_name': ai_client_name,
+                    'ai_confidence': ai_confidence,
+                    'verdict': 'low_confidence_disagreement',
+                },
+                processing_time_ms=0,
+                success=True,
+            )
+            return
+
+        # AI confidently disagrees. Surface in web app.
+        self._log_ai_call(
+            operation_type='stage_10_validation_disagree',
+            input_data={
+                'block_id': block.pk,
+                'agent_client_id': agent_client_id,
+                'agent_client_name': block.client.name if block.client else '',
+                'title': (block.window_title or '')[:200],
+            },
+            output_data={
+                'ai_client_id': ai_client_id,
+                'ai_client_name': ai_client_name,
+                'ai_confidence': ai_confidence,
+                'verdict': 'confident_disagreement',
+            },
+            processing_time_ms=0,
+            success=True,
+        )
+
+        # Mark the block so the web app daily review can surface it.
+        # Note: we use update() to avoid triggering the post_save signal
+        # which would re-classify and create infinite loop.
+        from tracker.models import Block
+        Block.objects.filter(pk=block.pk).update(
+            ai_disagrees_with_agent=True,
+            ai_proposed_client_id=ai_client_id,
+            ai_proposed_confidence=ai_confidence,
+            ai_disagreement_reasoning=ai_signal.evidence[:500],
+        )
+
+        logger.info(
+            f"[STAGE-10-DISAGREE] Block {block.pk}: agent={block.client_id}"
+            f"({block.client.name if block.client else '?'}) vs "
+            f"AI={ai_client_id}({ai_client_name}) at {ai_confidence:.2f}"
+        )
 
     def _ai_classify_client(self, block, title):
         """
@@ -1671,8 +1805,15 @@ class ClassificationService:
         if not client_id or confidence < 0.5:
             return None
 
-        # Cap AI strength at 0.85 — never strong enough to auto-commit alone
-        strength = min(0.85, confidence)
+        # Strength is the raw AI confidence, capped at 0.95 to leave room
+        # for category signal combination via noisy-OR. AI client at 0.95
+        # paired with AI category at 0.85 gives combined ~0.99, plenty
+        # to auto-commit via _finalize_decision's strong-signal path.
+        # 
+        # When this block has an agent-assigned client, this strength is
+        # never added to decision.matched_signals — _handle_ai_agent_comparison
+        # uses the raw confidence for disagreement logic instead.
+        strength = min(0.95, confidence)
 
         return Signal(
             type='ai_client',

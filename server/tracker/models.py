@@ -1126,6 +1126,34 @@ class Block(models.Model):
     proposed_reasoning = models.TextField(blank=True, default='')
 
     # ===============================
+    # AI vs Agent disagreement tracking (Stage 10 validation)
+    # ===============================
+    # When Stage 10 runs to validate the agent's deterministic client choice
+    # and disagrees with high confidence (>=0.85), these fields capture it
+    # for surfacing in the web app's daily review. The block's actual client
+    # field stays as the agent set it — these fields are advisory only.
+    ai_disagrees_with_agent = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Stage 10 AI proposes a different client than the agent assigned',
+    )
+    ai_proposed_client = models.ForeignKey(
+        'Client',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='+',
+        help_text='Client AI proposed when disagreeing with agent',
+    )
+    ai_proposed_confidence = models.FloatField(
+        default=0.0,
+        help_text='AI confidence in its proposed client (0.85-1.0)',
+    )
+    ai_disagreement_reasoning = models.TextField(
+        blank=True, default='',
+        help_text='AI evidence for the disagreement, shown in daily review tooltip',
+    )
+
+    # ===============================
     # Mobile review flags
     # ===============================
     needs_review = models.BooleanField(
@@ -1462,6 +1490,9 @@ class Block(models.Model):
             # NEW: classification state machine (Phase 1 rebuild)
             models.Index(fields=['classification_state', 'user', 'day']),
             models.Index(fields=['org', 'classification_state']),
+
+            # Stage 10 disagreements — used by daily review to surface flagged blocks
+            models.Index(fields=['user', 'day', 'ai_disagrees_with_agent']),
         ]
         
         ordering = ['-start']

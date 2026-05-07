@@ -437,4 +437,7 @@ urlpatterns = [
     path('disagreements/stats/', views_disagreements.disagreement_stats, name='disagreement_stats'),
     path('disagreements/<int:block_id>/resolve/', views_disagreements.resolve_disagreement, name='resolve_disagreement'),
 
+    path('blocks/<int:block_id>/resolve-disagreement/', views.resolve_ai_disagreement, name='resolve_ai_disagreement'),
+
+
 ]

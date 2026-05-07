@@ -4136,6 +4136,40 @@ def today_time(request):
         billable_minutes += b_minutes
         total_minutes    += b_minutes
 
+    # =========================================================================
+    # STEP 6: Add AI disagreement blocks to flagged_blocks
+    # 
+    # Stage 10 in ClassificationService flags blocks where AI confidently
+    # disagrees with the agent's client assignment. We surface these in the
+    # daily review so the user can decide: accept AI's suggestion, keep the
+    # agent's pick, or pick a different client entirely.
+    # =========================================================================
+    ai_disagreement_blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        ai_disagrees_with_agent=True,
+        ai_disagreement_resolved_at__isnull=True,
+        deleted_at__isnull=True,
+    ).select_related('client', 'ai_proposed_client')
+
+    for block in ai_disagreement_blocks:
+        flagged_blocks.append({
+            'block_id':                block.id,
+            'client_name':             block.client.name if block.client else 'Uncategorized',
+            'review_reason':           f"AI suggests {block.ai_proposed_client.name if block.ai_proposed_client else 'a different client'}",
+            'minutes':                 block.minutes or 0,
+            'start':                   block.start.isoformat() if block.start else '',
+            'type':                    'ai_disagreement',
+            'ai_proposed_client_id':   block.ai_proposed_client_id,
+            'ai_proposed_client_name': block.ai_proposed_client.name if block.ai_proposed_client else None,
+            'ai_confidence':           block.ai_proposed_confidence or 0.0,
+            'ai_reasoning':            block.ai_disagreement_reasoning or '',
+        })
+
+    # Tag mobile-review-flagged blocks with their type for the frontend
+    for fb in flagged_blocks:
+        if 'type' not in fb:
+            fb['type'] = 'mobile_review'
 
     return Response({
         'clients':            result,
@@ -4165,6 +4199,79 @@ def dismiss_block_review(request, block_id):
     block.save(update_fields=['needs_review', 'review_reason'])
  
     return Response({'ok': True, 'block_id': block_id})
+
+# Add somewhere in views.py near the other dismiss-review code
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+from django.utils import timezone
+import json
+
+@csrf_exempt
+@require_POST
+def resolve_ai_disagreement(request, block_id):
+    """
+    POST /api/blocks/<block_id>/resolve-disagreement/
+    Body: {"action": "accept" | "dismiss" | "change", "client_id": <int|null>}
+    
+    accept  — switch block to AI's proposed client
+    dismiss — keep agent's client, just mark resolved
+    change  — switch to a third client (specified via client_id in body)
+    """
+    user = get_request_user_override(request)
+    if not user or not user.is_authenticated:
+        return JsonResponse({'error': 'unauthorized'}, status=401)
+    
+    try:
+        body = json.loads(request.body or b'{}')
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({'error': 'invalid_json'}, status=400)
+    
+    action = body.get('action')
+    if action not in ('accept', 'dismiss', 'change'):
+        return JsonResponse({'error': 'invalid_action'}, status=400)
+    
+    from tracker.models import Block, Client
+    
+    try:
+        block = Block.objects.select_related('client', 'ai_proposed_client', 'org').get(
+            id=block_id, user=user, ai_disagrees_with_agent=True,
+        )
+    except Block.DoesNotExist:
+        return JsonResponse({'error': 'block_not_found_or_not_flagged'}, status=404)
+    
+    if block.ai_disagreement_resolved_at:
+        return JsonResponse({'error': 'already_resolved'}, status=409)
+    
+    old_client_id = block.client_id
+    
+    if action == 'accept':
+        if not block.ai_proposed_client_id:
+            return JsonResponse({'error': 'no_ai_proposal'}, status=400)
+        block.client_id = block.ai_proposed_client_id
+        resolution = 'accepted'
+    elif action == 'change':
+        new_client_id = body.get('client_id')
+        if not new_client_id:
+            return JsonResponse({'error': 'client_id_required'}, status=400)
+        try:
+            new_client = Client.objects.get(id=new_client_id, org=block.org)
+        except Client.DoesNotExist:
+            return JsonResponse({'error': 'client_not_found'}, status=404)
+        block.client_id = new_client.id
+        resolution = 'changed_to_other'
+    else:  # dismiss
+        resolution = 'dismissed'
+    
+    block.ai_disagreement_resolved_at = timezone.now()
+    block.ai_disagreement_resolution = resolution
+    block.save(force_classifier=True)
+    
+    return JsonResponse({
+        'block_id': block.id,
+        'resolution': resolution,
+        'final_client_id': block.client_id,
+        'final_client_name': block.client.name if block.client else None,
+    })
 
 
 def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):

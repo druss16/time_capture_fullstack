@@ -47,6 +47,12 @@ export type FlaggedBlock = {
   review_reason: string;
   minutes: number;
   start: string;
+  // AI disagreement fields (only set when type='ai_disagreement')
+  type?: 'mobile_review' | 'ai_disagreement';
+  ai_proposed_client_id?: number | null;
+  ai_proposed_client_name?: string | null;
+  ai_confidence?: number;
+  ai_reasoning?: string;
 };
 
 type ParsedActivity = { blockId: number | null; title: string };
@@ -859,36 +865,109 @@ function CategorySection({
 
 // ─── Flagged Banner ───────────────────────────────────────────────────────────
 
-function FlaggedBanner({ flagged, onDismiss }: { flagged: FlaggedBlock[]; onDismiss: (id: number) => void }) {
+function FlaggedBanner({ 
+  flagged, 
+  onDismiss,
+  onResolveDisagreement,
+}: { 
+  flagged: FlaggedBlock[]; 
+  onDismiss: (id: number) => void;
+  onResolveDisagreement?: (id: number, action: 'accept' | 'dismiss') => void;
+}) {
   if (!flagged.length) return null;
+  
+  // Split flagged blocks by type
+  const mobileFlags = flagged.filter(f => f.type !== 'ai_disagreement');
+  const aiDisagreements = flagged.filter(f => f.type === 'ai_disagreement');
+  
   return (
-    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 overflow-hidden">
-      <div className="px-4 py-2 bg-amber-100/70 border-b border-amber-200 flex items-center gap-2">
-        <Smartphone className="w-3.5 h-3.5 text-amber-600" />
-        <span className="text-amber-800 font-semibold text-sm">
-          {flagged.length} mobile {flagged.length === 1 ? "entry needs" : "entries need"} review
-        </span>
-      </div>
-      <div className="divide-y divide-amber-100">
-        {flagged.map((f) => (
-          <div key={f.block_id} className="px-4 py-3 flex items-start justify-between gap-4">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-amber-900">{f.client_name} — {fmt(f.minutes / 60)}</p>
-                <p className="text-xs text-amber-600 mt-0.5">{f.review_reason}</p>
-              </div>
-            </div>
-            <button
-              onClick={() => onDismiss(f.block_id)}
-              className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-amber-200 hover:bg-amber-300 text-amber-900 rounded-lg transition-all"
-            >
-              Looks correct
-            </button>
+    <>
+      {/* Mobile review flags — existing UI unchanged */}
+      {mobileFlags.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 overflow-hidden">
+          <div className="px-4 py-2 bg-amber-100/70 border-b border-amber-200 flex items-center gap-2">
+            <Smartphone className="w-3.5 h-3.5 text-amber-600" />
+            <span className="text-amber-800 font-semibold text-sm">
+              {mobileFlags.length} mobile {mobileFlags.length === 1 ? "entry needs" : "entries need"} review
+            </span>
           </div>
-        ))}
-      </div>
-    </div>
+          <div className="divide-y divide-amber-100">
+            {mobileFlags.map((f) => (
+              <div key={f.block_id} className="px-4 py-3 flex items-start justify-between gap-4">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-amber-900">{f.client_name} — {fmt(f.minutes / 60)}</p>
+                    <p className="text-xs text-amber-600 mt-0.5">{f.review_reason}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onDismiss(f.block_id)}
+                  className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-amber-200 hover:bg-amber-300 text-amber-900 rounded-lg transition-all"
+                >
+                  Looks correct
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
+      {/* AI disagreement flags — new UI */}
+      {aiDisagreements.length > 0 && (
+        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 overflow-hidden">
+          <div className="px-4 py-2 bg-blue-100/70 border-b border-blue-200 flex items-center gap-2">
+            <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+            <span className="text-blue-800 font-semibold text-sm">
+              AI suggests {aiDisagreements.length} {aiDisagreements.length === 1 ? "change" : "changes"} for review
+            </span>
+          </div>
+          <div className="divide-y divide-blue-100">
+            {aiDisagreements.map((f) => (
+              <div key={f.block_id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-4 mb-2">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <AlertCircle className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-blue-900">
+                        Currently: {f.client_name} — {fmt(f.minutes / 60)}
+                      </p>
+                      <p className="text-sm font-semibold text-blue-900 mt-1">
+                        AI suggests: {f.ai_proposed_client_name}
+                        {f.ai_confidence && (
+                          <span className="text-blue-600 font-normal ml-1.5">
+                            ({Math.round(f.ai_confidence * 100)}% confident)
+                          </span>
+                        )}
+                      </p>
+                      {f.ai_reasoning && (
+                        <p className="text-xs text-blue-600 mt-1.5 italic line-clamp-2">
+                          {f.ai_reasoning}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-2 ml-5">
+                  <button
+                    onClick={() => onResolveDisagreement?.(f.block_id, 'accept')}
+                    className="px-3 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all"
+                  >
+                    Switch to {f.ai_proposed_client_name}
+                  </button>
+                  <button
+                    onClick={() => onResolveDisagreement?.(f.block_id, 'dismiss')}
+                    className="px-3 py-1.5 text-xs font-semibold bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-lg transition-all"
+                  >
+                    Keep {f.client_name}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -945,6 +1024,7 @@ export default function CategorySummary({
   flaggedBlocks,
   busy,
   onDismissReview,
+  onResolveDisagreement,
   onRefresh,
   showToast,
 }: {
@@ -954,6 +1034,7 @@ export default function CategorySummary({
   flaggedBlocks: FlaggedBlock[];
   busy: boolean;
   onDismissReview: (id: number) => void;
+  onResolveDisagreement?: (id: number, action: 'accept' | 'dismiss') => void;
   onRefresh: () => void;
   showToast: (msg: string, type: "success" | "error") => void;
 }) {
@@ -1079,7 +1160,11 @@ export default function CategorySummary({
 
   return (
     <div>
-      <FlaggedBanner flagged={flaggedBlocks} onDismiss={onDismissReview} />
+      <FlaggedBanner 
+        flagged={flaggedBlocks} 
+        onDismiss={onDismissReview}
+        onResolveDisagreement={onResolveDisagreement}
+      />
       <OnboardingHint />
 
       {timeSummary.length > 1 && (

@@ -58,6 +58,11 @@ type FlaggedBlock = {
   review_reason: string;
   minutes: number;
   start: string;
+  type?: 'mobile_review' | 'ai_disagreement';
+  ai_proposed_client_id?: number | null;
+  ai_proposed_client_name?: string | null;
+  ai_confidence?: number;
+  ai_reasoning?: string;
 };
 type TodayTimeResponse = {
   clients: ClientTime[];
@@ -210,6 +215,24 @@ export default function DailyReview() {
       showToast("Entry confirmed", "success");
     } catch {
       showToast("Failed to dismiss", "error");
+    }
+  };
+
+  const handleResolveDisagreement = async (blockId: number, action: 'accept' | 'dismiss') => {
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${blockId}/resolve-disagreement/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
+      showToast(
+        action === 'accept' ? "Switched to AI's suggestion" : "Kept original client",
+        "success"
+      );
+      loadTimeSummary();
+    } catch (err: any) {
+      showToast(err?.message || "Failed to resolve", "error");
     }
   };
 
@@ -449,6 +472,7 @@ export default function DailyReview() {
               flaggedBlocks={flaggedBlocks}
               busy={busy}
               onDismissReview={handleDismissReview}
+              onResolveDisagreement={handleResolveDisagreement}
               onRefresh={handleRefresh}
               showToast={showToast}
               aiSuggestions={aiSuggestions}

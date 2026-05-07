@@ -288,14 +288,14 @@ jobs:
             --hidden-import=update_checker `
             --hidden-import=tax_software_constants `
             --hidden-import=explorer_watcher `
-            --hidden-import=ai_client_switcher
+            --hidden-import=ai_client_switcher `
             --add-data "timetracker_gui.py;." `
             --add-data "mdm_deploy.py;." `
             --add-data "version.py;." `
             --add-data "update_checker.py;." `
             --add-data "tax_software_constants.py;." `
             --add-data "explorer_watcher.py;." `
-            --add-data "ai_client_switcher.py;."
+            --add-data "ai_client_switcher.py;." `
             --add-data "timetracker.ico;." `
             main.py
 

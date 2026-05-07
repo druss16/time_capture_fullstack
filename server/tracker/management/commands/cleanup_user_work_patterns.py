@@ -72,11 +72,20 @@ def is_contaminated(pattern_key: str, pattern_type: str = '') -> tuple:
         return True, 'generic_chrome'
 
     # IDE source files
+    # IDE source files
     for marker in IDE_MARKERS:
         if marker in key_low:
             return True, 'ide_marker'
+
+    # Source-code extensions — must appear at end of a "filename-ish" token,
+    # not as a substring of a domain like ".gov" or ".com"
+    # Match: "main.py" "app.tsx" "config.json - Sublime Text"
+    # Don't match: "ny.gov" ".com/personal"
     for ext in SOURCE_EXTENSIONS:
-        if ext in key_low:
+        # Pattern: alphanumeric/underscore, then the extension, then either
+        # end-of-string, whitespace, or punctuation that's NOT a path separator
+        pat = r'\b\w+' + re.escape(ext) + r'(?:$|[\s\-,)\]"\'])'
+        if re.search(pat, key_low):
             return True, 'source_extension'
 
     # Pure stop-words / tokens too short
@@ -117,7 +126,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--min-hits',
             type=int,
-            default=3,
+            default=0,
             help='Also delete patterns with total_predictions < N (default: 3)',
         )
 

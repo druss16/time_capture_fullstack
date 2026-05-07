@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -431,5 +431,10 @@ urlpatterns = [
     path('mavops/blocks/<int:block_id>/explain/',
          views_rule_templates.explain_block,
          name='mavops-explain-block'),
+
+    # AI vs Agent disagreement flagging (Stage 10 validation)
+    path('disagreements/', list_disagreements, name='list_disagreements'),
+    path('disagreements/stats/', disagreement_stats, name='disagreement_stats'),
+    path('disagreements/<int:block_id>/resolve/', resolve_disagreement, name='resolve_disagreement'),
 
 ]

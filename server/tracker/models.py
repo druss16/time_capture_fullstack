@@ -1152,6 +1152,20 @@ class Block(models.Model):
         blank=True, default='',
         help_text='AI evidence for the disagreement, shown in daily review tooltip',
     )
+    ai_disagreement_resolved_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the user reviewed and dismissed/accepted the AI suggestion',
+    )
+    ai_disagreement_resolution = models.CharField(
+        max_length=20,
+        choices=[
+            ('accepted', 'User accepted AI suggestion'),
+            ('dismissed', 'User kept agent client'),
+            ('changed_to_other', 'User picked a different client entirely'),
+        ],
+        null=True, blank=True,
+        help_text='How the user resolved the disagreement',
+    )
 
     # ===============================
     # Mobile review flags
@@ -1213,6 +1227,7 @@ class Block(models.Model):
         db_index=True,
         help_text="Source of the categorization"
     )
+
     
     # ===============================
     # Approval Workflow
@@ -1493,6 +1508,7 @@ class Block(models.Model):
 
             # Stage 10 disagreements — used by daily review to surface flagged blocks
             models.Index(fields=['user', 'day', 'ai_disagrees_with_agent']),
+            models.Index(fields=['ai_disagrees_with_agent', 'ai_disagreement_resolved_at']),
         ]
         
         ordering = ['-start']

@@ -433,8 +433,8 @@ urlpatterns = [
          name='mavops-explain-block'),
 
     # AI vs Agent disagreement flagging (Stage 10 validation)
-    path('disagreements/', list_disagreements, name='list_disagreements'),
-    path('disagreements/stats/', disagreement_stats, name='disagreement_stats'),
-    path('disagreements/<int:block_id>/resolve/', resolve_disagreement, name='resolve_disagreement'),
+    path('disagreements/', views_disagreements.list_disagreements, name='list_disagreements'),
+    path('disagreements/stats/', views_disagreements.disagreement_stats, name='disagreement_stats'),
+    path('disagreements/<int:block_id>/resolve/', views_disagreements.resolve_disagreement, name='resolve_disagreement'),
 
 ]

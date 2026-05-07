@@ -1698,9 +1698,14 @@ class ClassificationService:
             success=True,
         )
 
-        # Mark the block so the web app daily review can surface it.
-        # Note: we use update() to avoid triggering the post_save signal
-        # which would re-classify and create infinite loop.
+        # Mark block. We update the in-memory instance AND the DB row.
+        # 
+        # Why both:
+        # - DB update (.update()) skips post_save signal so we don't infinite-loop
+        # - In-memory update prevents apply()'s subsequent block.save() from
+        #   overwriting ai_disagrees_with_agent=False (the field default) on top
+        #   of our True. This was a real bug pre-fix: log entry written but flag
+        #   never persisted because save() clobbered the update.
         from tracker.models import Block
         Block.objects.filter(pk=block.pk).update(
             ai_disagrees_with_agent=True,
@@ -1708,6 +1713,11 @@ class ClassificationService:
             ai_proposed_confidence=ai_confidence,
             ai_disagreement_reasoning=ai_signal.evidence[:500],
         )
+        # Also set on in-memory instance so apply()'s save() preserves these
+        block.ai_disagrees_with_agent = True
+        block.ai_proposed_client_id = ai_client_id
+        block.ai_proposed_confidence = ai_confidence
+        block.ai_disagreement_reasoning = ai_signal.evidence[:500]
 
         logger.info(
             f"[STAGE-10-DISAGREE] Block {block.pk}: agent={block.client_id}"

@@ -10,6 +10,8 @@ import {
   GripVertical,
   AlertTriangle,
   Smartphone,
+  Sparkles,
+  AlertCircle,
   FileQuestion,
   CheckSquare,
   Square,

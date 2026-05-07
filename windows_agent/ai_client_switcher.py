@@ -1738,6 +1738,9 @@ class AIClientSwitcher:
             with self._lock:
                 self._pending_switch = None
 
+        except Exception as e:
+            logger.exception(f"[AI-SWITCH] _detect crashed: {e}")
+
 
     def _queue_switch(self, match: ClientMatch):
         with self._lock:

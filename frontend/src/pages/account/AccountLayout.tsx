@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { User, CreditCard, KeyRound, Download, Bell, ChevronRight } from 'lucide-react';
+import { User, CreditCard, KeyRound, Download, Bell, ChevronRight, Link2 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
 interface AccountLayoutProps {
@@ -24,14 +24,15 @@ export default function AccountLayout({ role, mdmManaged }: AccountLayoutProps) 
   const location = useLocation();
 
   const navItems: NavItem[] = [
-    { path: '/account',               label: 'Profile',               description: 'Name, email, personal info',    icon: User,      exact: true },
-    { path: '/account/notifications', label: 'Notifications',         description: 'Email and desktop alerts',      icon: Bell               },
-    { path: '/account/password',      label: 'Password',              description: 'Change your password',          icon: KeyRound           },
-    { path: '/account/download',      label: 'Desktop Agent',         description: 'Download and pair your device', icon: Download           },
-    ...(role === 'owner' ? [{
-      path: '/account/billing',       label: 'Subscription & Billing', description: 'Plan, seats, and payments',    icon: CreditCard,
-    }] : []),
-  ].filter(item => !(item.path === '/account/download' && mdmManaged));
+      { path: '/account',               label: 'Profile',               description: 'Name, email, personal info',    icon: User,      exact: true },
+      { path: '/account/notifications', label: 'Notifications',         description: 'Email and desktop alerts',      icon: Bell               },
+      { path: '/account/connections',   label: 'Connections',           description: 'Calendar and apps',             icon: Link2              },
+      { path: '/account/password',      label: 'Password',              description: 'Change your password',          icon: KeyRound           },
+      { path: '/account/download',      label: 'Desktop Agent',         description: 'Download and pair your device', icon: Download           },
+      ...(role === 'owner' ? [{
+        path: '/account/billing',       label: 'Subscription & Billing', description: 'Plan, seats, and payments',    icon: CreditCard,
+      }] : []),
+    ].filter(item => !(item.path === '/account/download' && mdmManaged));
 
   return (
     // Fills the content area provided by the app shell — no extra page wrapper

@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -439,5 +439,10 @@ urlpatterns = [
 
     path('blocks/<int:block_id>/resolve-disagreement/', views.resolve_ai_disagreement, name='resolve_ai_disagreement'),
 
+    # In urlpatterns, add these:
+    path('calendar/auth/microsoft/start/', views_calendar.microsoft_auth_start, name='calendar_auth_microsoft_start'),
+    path('calendar/auth/callback/', views_calendar.microsoft_auth_callback, name='calendar_auth_callback'),
+    path('calendar/microsoft/status/', views_calendar.microsoft_calendar_status, name='calendar_microsoft_status'),
+    path('calendar/microsoft/disconnect/', views_calendar.microsoft_calendar_disconnect, name='calendar_microsoft_disconnect'),
 
 ]

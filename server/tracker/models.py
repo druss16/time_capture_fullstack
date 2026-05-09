@@ -3397,3 +3397,4 @@ class UserIntegration(models.Model):
         self.last_sync_error = ''
         self.sync_failure_count = 0
         self.save()
+

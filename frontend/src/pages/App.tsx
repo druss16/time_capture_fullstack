@@ -26,6 +26,7 @@ import BillingSettingsPage from '@/pages/account/BillingSettingsPage';
 import DownloadPage from '@/pages/account/DownloadPage';
 import TimesheetReminderBanner from '@/components/TimesheetReminderBanner';
 import NotificationsPage from '@/pages/account/NotificationsPage';
+import ConnectionsPage from '@/pages/account/ConnectionsPage';
 import TaxReturnsTab from "./TaxReturnsTab";
 
 // --------- Lazy pages (code-splitting) ---------
@@ -218,6 +219,7 @@ export default function App() {
                 <Route path="/account" element={<MaybeProtected><AppLayout><AccountLayoutWrapper /></AppLayout></MaybeProtected>}>
                   <Route index element={<ProfilePage />} />
                   <Route path="notifications" element={<NotificationsPage />} />
+                  <Route path="connections" element={<ConnectionsPage />} />
                   <Route path="download" element={<DownloadPage />} />
                   <Route path="password" element={<PasswordPage />} />
                   <Route path="billing" element={<OwnerRoute><BillingSettingsPage /></OwnerRoute>} />

@@ -1577,3 +1577,7 @@ def log_queue_health():
         logger.info(f"log_queue_health: queue healthy ({pending} tasks pending)")
 
     return pending
+
+
+# Calendar sync tasks
+from tracker.tasks_calendar import sync_all_calendars, sync_user_calendar  # noqa: F401

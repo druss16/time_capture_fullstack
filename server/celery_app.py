@@ -198,6 +198,16 @@ app.conf.beat_schedule = {
         "task": "tracker.tasks.log_queue_health",
         "schedule": crontab(minute="*/15"),  # every 15 minutes
     },
+    
+    # =========================================================================
+    # CALENDAR SYNC (Per-user)
+    # =========================================================================
+
+    'sync-microsoft-calendars': {
+        'task': 'tracker.sync_all_calendars',
+        'schedule': crontab(minute='*/15'),  # every 15 minutes
+        'options': {'expires': 600},  # don't run if 10 min old
+    },
 
 }
 
@@ -282,4 +292,8 @@ def setup_periodic_tasks(sender, **kwargs):
     └── 6:00 AM   📈 Generate daily summaries
     """)
     print("=" * 80)
+
+
+
+
 

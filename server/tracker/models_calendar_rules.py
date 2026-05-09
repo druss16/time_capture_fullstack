@@ -19,7 +19,7 @@ class OrgCalendarRule(models.Model):
     ]
     
     org = models.ForeignKey(
-        'tracker.Org',
+        'tracker.Organization',
         on_delete=models.CASCADE,
         related_name='calendar_rules',
     )

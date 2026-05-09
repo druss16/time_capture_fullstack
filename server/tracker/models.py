@@ -98,7 +98,12 @@ class Organization(models.Model):
             'forbidding mail integration entirely.'
         ),
     )
-    
+
+    calendar_classification_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable Stage 6 (calendar event overlap) in classifier",
+    )
+        
     mouse_idle_pause_seconds = models.IntegerField(default=600)
 
     trial_ends_at = models.DateTimeField(null=True, blank=True)
@@ -3398,3 +3403,7 @@ class UserIntegration(models.Model):
         self.sync_failure_count = 0
         self.save()
 
+
+
+# Calendar matching rules
+from tracker.models_calendar_rules import OrgCalendarRule  # noqa: F401, E402

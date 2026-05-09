@@ -279,8 +279,9 @@ class ClassificationService:
         # that requires schema changes deferred to Phase 2.
 
         # Stage 6 — Calendar event overlap
-        # TODO: Implement in Calendar chunk session. Stub for now.
-        # self._stage_6_calendar(block, decision)
+        # Reads CalendarEvent records pre-matched during sync.
+        # Behind feature flag (org.calendar_classification_enabled).
+        self._stage_6_calendar(block, decision)
 
         # Stage 7 — Mail metadata match
         # TODO: Implement in Mail chunk session. Stub for now.
@@ -1261,6 +1262,133 @@ class ClassificationService:
                 'client_id':   best_client.id,
                 'client_name': best_client.name,
                 'file_path':   file_path[:200],  # truncate for storage
+            },
+        ))
+
+    # -------------------------------------------------------------------------
+    # STAGE 6 — CALENDAR EVENT OVERLAP
+    # -------------------------------------------------------------------------
+
+    def _stage_6_calendar(self, block, decision: ClassificationDecision):
+        """
+        Use overlapping CalendarEvent records as a classification signal.
+
+        Calendar events are pre-matched to clients during sync (see
+        tracker.calendar_matching.find_best_match). This stage just looks up
+        which calendar events overlap the block's time window and emits a
+        Signal for the best match.
+
+        Behavior:
+          - Find CalendarEvents for self.user that overlap [block.start, block.end]
+          - Filter to events with extracted_client and extraction_confidence >= 0.70
+          - Pick the event with greatest overlap with the block
+          - Emit Signal proportional to overlap percentage and match confidence
+
+        Signal strength is downgraded from match confidence:
+          - direct rule match (0.95) → signal 0.80 (strong-but-not-auto)
+          - fuzzy title match (0.80) → signal 0.65 (moderate)
+          - fuzzy alias (0.75)       → signal 0.55 (weak)
+
+        Reasoning: even strong calendar evidence shouldn't auto-commit because
+        users sometimes have meetings on calendar but actually work on something
+        else during that time. Combined with agent_current_client or learned
+        patterns, calendar becomes a powerful corroborator.
+        """
+        from tracker.models import CalendarEvent
+
+        # Feature flag — only enabled when org explicitly opts in
+        # For tonight: only mavops org has this on.
+        if not getattr(self.org, 'calendar_classification_enabled', False):
+            return
+
+        if not block.start or not block.end:
+            return
+
+        # Block duration in seconds (avoid div-by-zero)
+        block_seconds = (block.end - block.start).total_seconds()
+        if block_seconds <= 0:
+            return
+
+        # Find overlapping events with a matched client
+        # Cache on classifier instance per (user, date) to avoid repeated queries
+        cache_key = f"{self.user.id}:{block.start.date().isoformat()}"
+        if cache_key not in self._calendar_events_cache:
+            day_start = block.start.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            self._calendar_events_cache[cache_key] = list(
+                CalendarEvent.objects.filter(
+                    user=self.user,
+                    extracted_client__isnull=False,
+                    extraction_confidence__gte=0.70,
+                    start__lt=day_end,
+                    end__gt=day_start,
+                ).select_related('extracted_client').order_by('start')
+            )
+
+        candidates = self._calendar_events_cache[cache_key]
+        if not candidates:
+            return
+
+        # Find best overlapping event
+        best_event = None
+        best_overlap_seconds = 0.0
+
+        for evt in candidates:
+            overlap_start = max(evt.start, block.start)
+            overlap_end = min(evt.end, block.end)
+            overlap = (overlap_end - overlap_start).total_seconds()
+            if overlap <= 0:
+                continue
+            if overlap > best_overlap_seconds:
+                best_event = evt
+                best_overlap_seconds = overlap
+
+        if not best_event or best_overlap_seconds <= 0:
+            return
+
+        # Calculate overlap percentage of the block
+        overlap_pct = best_overlap_seconds / block_seconds
+
+        # Require meaningful overlap — at least 30% of the block coincides with the event
+        if overlap_pct < 0.30:
+            return
+
+        # Map raw match confidence to signal strength
+        # extraction_confidence is what calendar_matching returned
+        match_conf = best_event.extraction_confidence or 0.0
+        if match_conf >= 0.95:
+            base_strength = 0.80  # direct rule
+        elif match_conf >= 0.80:
+            base_strength = 0.65  # fuzzy title
+        elif match_conf >= 0.70:
+            base_strength = 0.55  # fuzzy alias
+        else:
+            return
+
+        # Modulate by overlap percentage (more overlap = stronger evidence)
+        # 30% overlap → 0.85x of base, 100% overlap → 1.0x
+        overlap_modifier = 0.85 + (0.15 * overlap_pct)
+        strength = round(base_strength * overlap_modifier, 2)
+        strength = min(strength, 0.85)  # cap at strong-but-not-auto
+
+        client = best_event.extracted_client
+        evidence = (
+            f"Calendar: '{best_event.title[:60]}' "
+            f"({int(overlap_pct * 100)}% overlap)"
+        )
+
+        decision.matched_signals.append(Signal(
+            type='calendar',
+            strength=strength,
+            evidence=evidence,
+            detail={
+                'client_id':       client.id,
+                'client_name':     client.name,
+                'event_id':        best_event.id,
+                'event_title':     best_event.title,
+                'overlap_pct':     round(overlap_pct, 2),
+                'match_method':    'calendar_overlap',
+                'match_confidence': match_conf,
             },
         ))
 

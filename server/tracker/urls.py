@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -444,5 +444,11 @@ urlpatterns = [
     path('calendar/auth/callback/', views_calendar.microsoft_auth_callback, name='calendar_auth_callback'),
     path('calendar/microsoft/status/', views_calendar.microsoft_calendar_status, name='calendar_microsoft_status'),
     path('calendar/microsoft/disconnect/', views_calendar.microsoft_calendar_disconnect, name='calendar_microsoft_disconnect'),
+
+    path('mail/auth/start/',     views_mail.microsoft_mail_auth_start,    name='mail_auth_start'),
+    path('mail/auth/callback/',  views_mail.microsoft_mail_auth_callback, name='mail_auth_callback'),
+    path('mail/status/',         views_mail.microsoft_mail_status,        name='mail_status'),
+    path('mail/disconnect/',     views_mail.microsoft_mail_disconnect,    name='mail_disconnect'),
+    path('mail/webhook/',        views_mail.microsoft_mail_webhook,       name='mail_webhook'),
 
 ]

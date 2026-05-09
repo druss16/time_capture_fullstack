@@ -1,15 +1,20 @@
 /**
- * CalendarConnectionTab.tsx
+ * MailConnectionTab.tsx
  *
- * Per-user component for managing Microsoft Calendar connection.
+ * Per-user component for managing Microsoft Mail connection.
  * Renders inside ConnectionsPage. Handles OAuth flow start, status
  * display, and disconnect.
+ *
+ * Privacy guarantees (mirrored from MailSignal model):
+ *   - Mail.ReadBasic scope blocks message body access at the API level
+ *   - Sender/recipient email addresses are never stored — only the domain
+ *   - Subject lines stored only when extraction confidence ≥ 0.85
  */
 
 import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Calendar,
+  Mail,
   CheckCircle2,
   AlertCircle,
   Loader2,
@@ -21,15 +26,16 @@ import { safeFetchJson } from '@/lib/api';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
-interface CalendarStatus {
+interface MailStatus {
   connected: boolean;
+  org_disabled?: boolean;
   email?: string;
   last_synced_at?: string | null;
   last_sync_error?: string;
 }
 
-export default function CalendarConnectionTab() {
-  const [status, setStatus] = useState<CalendarStatus | null>(null);
+export default function MailConnectionTab() {
+  const [status, setStatus] = useState<MailStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -42,12 +48,12 @@ export default function CalendarConnectionTab() {
   const loadStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await safeFetchJson<CalendarStatus>(
-        `${API_BASE}/calendar/microsoft/status/`
+      const data = await safeFetchJson<MailStatus>(
+        `${API_BASE}/mail/status/`
       );
       setStatus(data);
     } catch (err: any) {
-      console.error('[Calendar] status fetch failed:', err);
+      console.error('[Mail] status fetch failed:', err);
       setStatus({ connected: false });
     } finally {
       setLoading(false);
@@ -59,15 +65,18 @@ export default function CalendarConnectionTab() {
   }, [loadStatus]);
 
   useEffect(() => {
-    const callbackResult = searchParams.get('calendar');
+    const callbackResult = searchParams.get('mail');
     if (!callbackResult) return;
 
     if (callbackResult === 'connected') {
       setToast({
         type: 'success',
-        message: 'Microsoft Calendar connected successfully',
+        message: 'Microsoft Mail connected successfully',
       });
       loadStatus();
+      // Backend kicks off an immediate sync; refresh again after a few seconds
+      // so last_synced_at populates.
+      setTimeout(loadStatus, 3000);
     } else if (callbackResult === 'error') {
       const reason = searchParams.get('reason') || 'unknown';
       setToast({
@@ -76,7 +85,7 @@ export default function CalendarConnectionTab() {
       });
     }
 
-    searchParams.delete('calendar');
+    searchParams.delete('mail');
     searchParams.delete('reason');
     setSearchParams(searchParams, { replace: true });
 
@@ -88,11 +97,11 @@ export default function CalendarConnectionTab() {
     setConnecting(true);
     try {
       const data = await safeFetchJson<{ auth_url: string }>(
-        `${API_BASE}/calendar/auth/microsoft/start/`
+        `${API_BASE}/mail/auth/start/`
       );
       window.location.href = data.auth_url;
     } catch (err: any) {
-      console.error('[Calendar] connect failed:', err);
+      console.error('[Mail] connect failed:', err);
       setToast({
         type: 'error',
         message: err?.message || 'Failed to start connection',
@@ -102,15 +111,15 @@ export default function CalendarConnectionTab() {
   };
 
   const handleDisconnect = async () => {
-    if (!confirm('Disconnect Microsoft Calendar? This will remove all calendar event data.')) {
+    if (!confirm('Disconnect Microsoft Mail? This will remove all stored mail signals.')) {
       return;
     }
     setDisconnecting(true);
     try {
-      await safeFetchJson(`${API_BASE}/calendar/microsoft/disconnect/`, {
+      await safeFetchJson(`${API_BASE}/mail/disconnect/`, {
         method: 'POST',
       });
-      setToast({ type: 'success', message: 'Calendar disconnected' });
+      setToast({ type: 'success', message: 'Mail disconnected' });
       loadStatus();
     } catch (err: any) {
       setToast({
@@ -126,6 +135,25 @@ export default function CalendarConnectionTab() {
     return (
       <div className="flex items-center justify-center py-8">
         <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+      </div>
+    );
+  }
+
+  // Org-level kill switch — admin disabled mail integration for the whole org
+  if (status?.org_disabled) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center shrink-0">
+            <Mail className="w-5 h-5 text-slate-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-base font-bold text-slate-900">Microsoft Mail</h3>
+            <p className="text-sm text-slate-500 mt-0.5">
+              Mail integration has been disabled by your administrator.
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -146,12 +174,12 @@ export default function CalendarConnectionTab() {
       {/* Header */}
       <div className="flex items-start gap-3">
         <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center shrink-0">
-          <Calendar className="w-5 h-5 text-primary" />
+          <Mail className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-base font-bold text-slate-900">Microsoft Calendar</h3>
+          <h3 className="text-base font-bold text-slate-900">Microsoft Mail</h3>
           <p className="text-sm text-slate-500 mt-0.5">
-            Connect Outlook to attribute meeting time to clients automatically.
+            Connect Outlook so TimeTracker can match email activity to clients automatically.
           </p>
         </div>
       </div>
@@ -193,7 +221,7 @@ export default function CalendarConnectionTab() {
             <div className="flex-1">
               <p className="text-sm font-semibold text-slate-900">Not connected</p>
               <p className="text-sm text-slate-500 mt-0.5">
-                Calendar events help TimeTracker understand which client you're meeting with.
+                Email metadata helps TimeTracker understand which client you're working with at any given time.
               </p>
             </div>
           </div>
@@ -201,15 +229,19 @@ export default function CalendarConnectionTab() {
           <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs text-slate-700 space-y-1.5">
             <p className="flex items-start gap-1.5">
               <Sparkles className="w-3 h-3 text-primary mt-0.5 shrink-0" />
-              <span><strong>Read-only:</strong> we only read events, never modify your calendar</span>
+              <span><strong>Metadata only:</strong> message bodies are blocked at the API level — we never see them</span>
             </p>
             <p className="flex items-start gap-1.5">
               <Sparkles className="w-3 h-3 text-primary mt-0.5 shrink-0" />
-              <span><strong>Privacy:</strong> event titles are used for matching, never displayed to others</span>
+              <span><strong>Domains, not addresses:</strong> we extract the sender's domain (e.g. <code>varacchi.com</code>) — never full email addresses</span>
             </p>
             <p className="flex items-start gap-1.5">
               <Sparkles className="w-3 h-3 text-primary mt-0.5 shrink-0" />
-              <span><strong>Disconnect anytime:</strong> all calendar data removed immediately</span>
+              <span><strong>Read-only:</strong> we never send, modify, or move messages</span>
+            </p>
+            <p className="flex items-start gap-1.5">
+              <Sparkles className="w-3 h-3 text-primary mt-0.5 shrink-0" />
+              <span><strong>Disconnect anytime:</strong> all stored mail signals removed immediately</span>
             </p>
           </div>
 
@@ -218,8 +250,8 @@ export default function CalendarConnectionTab() {
             disabled={connecting}
             className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-primary text-white rounded-lg hover:opacity-90 disabled:opacity-50 transition-all"
           >
-            {connecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
-            Connect Microsoft Calendar
+            {connecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+            Connect Microsoft Mail
           </button>
         </div>
       )}

@@ -103,6 +103,19 @@ class Organization(models.Model):
         default=False,
         help_text="Enable Stage 6 (calendar event overlap) in classifier",
     )
+
+    disable_mail_integration = models.BooleanField(
+        default=False,
+        help_text='Master switch — disables mail OAuth/sync/classifier for the whole org.',
+    )
+    mail_signal_retention_days = models.IntegerField(
+        default=30,
+        help_text='How long to retain MailSignal rows. Pruned nightly.',
+    )
+    mail_sync_interval_minutes = models.IntegerField(
+        default=5,
+        help_text='Per-org override for mail sync cadence. Default 5 min.',
+    )
         
     mouse_idle_pause_seconds = models.IntegerField(default=600)
 
@@ -3301,6 +3314,7 @@ class MailSignal(models.Model):
             models.Index(fields=['user', 'occurred_at']),
             models.Index(fields=['user', 'other_party_domain']),
             models.Index(fields=['org', 'occurred_at']),
+            models.Index(fields=['org', 'occurred_at', 'direction'], name='mailsig_org_time_dir_idx'),
         ]
         ordering = ['-occurred_at']
 
@@ -3349,6 +3363,16 @@ class UserIntegration(models.Model):
     oauth_state = models.CharField(max_length=128, blank=True, default='')
     provider_account_id = models.CharField(max_length=255, blank=True, default='')
     provider_email = models.EmailField(blank=True, default='')
+
+    mail_delta_link = models.TextField(
+        blank=True,
+        default='',
+        help_text=(
+            'Microsoft Graph delta link for /messages/delta. '
+            'Empty = next sync is initial (last 30 days). '
+            'Populated = next sync is incremental from this token.'
+        ),
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

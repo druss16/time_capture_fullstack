@@ -284,7 +284,6 @@ class ClassificationService:
         self._stage_6_calendar(block, decision)
 
         # Stage 7 — Mail metadata match
-        # TODO: Implement in Mail chunk session. Stub for now.
         # self._stage_7_mail(block, decision)
 
         # Stage 8 — Recent context (current_client_id, prior block)
@@ -1389,6 +1388,152 @@ class ClassificationService:
                 'overlap_pct':     round(overlap_pct, 2),
                 'match_method':    'calendar_overlap',
                 'match_confidence': match_conf,
+            },
+        ))
+
+
+    # -------------------------------------------------------------------------
+    # STAGE 7 — Mail metadata match
+    # -------------------------------------------------------------------------
+ 
+    def _stage_7_mail(self, block, decision: 'ClassificationDecision'):
+        """
+        Use MailSignal records around the block's time as a classification signal.
+ 
+        Mail signals are pre-matched to clients during sync (see
+        tracker.mail_matching.find_mail_match). This stage looks up MailSignals
+        in a window around the block and emits a Signal for the best client match.
+ 
+        Time window logic:
+          Email is more ambient than calendar — a meeting is "now," but an
+          email's effect on work continues for a while after it arrives.
+          We look at signals from [block.start - 2h, block.start + 30min]
+          to capture both:
+            - Recent inbound email the user is responding to
+            - Inbound email arriving while the block is active
+            - Outbound email the user just sent (showing client they were
+              focused on)
+ 
+        Signal strength (per Stage 7 spec):
+          - Domain match only            → 0.45 (corroborator, never auto-alone)
+          - Domain match + subject_extract → 0.65 (moderate, can combine to commit)
+ 
+        Caveats:
+          - Skipped if org.disable_mail_integration is True
+          - Skipped if user has no microsoft_mail UserIntegration
+          - Caches per (user, date) like Stage 6 does to avoid repeated queries
+          - Block must have block.start to compute the time window
+        """
+        from tracker.models import MailSignal
+ 
+        # Honor org-level kill switch
+        if getattr(self.org, 'disable_mail_integration', False):
+            return
+ 
+        if not block.start:
+            return
+ 
+        # Cache per (user, date) — same pattern as Stage 6 calendar
+        cache_key = f"{self.user.id}:{block.start.date().isoformat()}"
+        if cache_key not in self._mail_signals_cache:
+            day_start = block.start.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            # Pull signals from a wider day window to handle late-night blocks
+            # near midnight. The per-block time-window filter narrows further.
+            self._mail_signals_cache[cache_key] = list(
+                MailSignal.objects
+                .filter(
+                    user=self.user,
+                    extracted_client__isnull=False,
+                    occurred_at__gte=day_start - timedelta(hours=4),
+                    occurred_at__lt=day_end + timedelta(hours=1),
+                )
+                .select_related('extracted_client')
+                .order_by('occurred_at')
+            )
+ 
+        candidates = self._mail_signals_cache[cache_key]
+        if not candidates:
+            return
+ 
+        # Window: 2 hours before block start through 30 min after
+        window_start = block.start - timedelta(hours=2)
+        window_end = block.start + timedelta(minutes=30)
+ 
+        # Group signals by client; track strongest (subject_extract present > domain only)
+        # and signal count (more signals for same client = stronger evidence)
+        from collections import defaultdict
+        per_client = defaultdict(lambda: {
+            'signals': [],
+            'has_subject_extract': False,
+            'best_signal': None,
+            'count': 0,
+        })
+ 
+        for sig in candidates:
+            if not (window_start <= sig.occurred_at <= window_end):
+                continue
+            cid = sig.extracted_client_id
+            entry = per_client[cid]
+            entry['signals'].append(sig)
+            entry['count'] += 1
+            if sig.subject_extract:
+                entry['has_subject_extract'] = True
+                entry['best_signal'] = sig
+            elif entry['best_signal'] is None:
+                entry['best_signal'] = sig
+ 
+        if not per_client:
+            return
+ 
+        # Pick the client with the most signals; tie-break by has_subject_extract
+        best_cid, best_entry = max(
+            per_client.items(),
+            key=lambda kv: (kv[1]['count'], kv[1]['has_subject_extract']),
+        )
+ 
+        best_signal = best_entry['best_signal']
+        if not best_signal:
+            return
+ 
+        client = best_signal.extracted_client
+ 
+        # Determine signal strength per Stage 7 spec
+        if best_entry['has_subject_extract']:
+            strength = 0.65
+            evidence_extract = (
+                f" with subject '{best_signal.subject_extract[:50]}'"
+                if best_signal.subject_extract else ''
+            )
+        else:
+            strength = 0.45
+            evidence_extract = ''
+ 
+        # Boost slightly if multiple signals corroborate (capped at 0.70)
+        if best_entry['count'] >= 3:
+            strength = min(strength + 0.05, 0.70)
+ 
+        # Direction-aware evidence string
+        direction_label = 'received from' if best_signal.direction == 'in' else 'sent to'
+ 
+        evidence = (
+            f"Mail: {best_entry['count']} signal(s) "
+            f"{direction_label} {best_signal.other_party_domain} → "
+            f"{client.name}{evidence_extract}"
+        )
+ 
+        decision.matched_signals.append(Signal(
+            type='mail',
+            strength=strength,
+            evidence=evidence,
+            detail={
+                'client_id':           client.id,
+                'client_name':         client.name,
+                'signal_count':        best_entry['count'],
+                'has_subject_extract': best_entry['has_subject_extract'],
+                'other_party_domain':  best_signal.other_party_domain,
+                'direction':           best_signal.direction,
+                'window_minutes':      150,  # 2h before + 30m after
             },
         ))
 

@@ -198,7 +198,7 @@ app.conf.beat_schedule = {
         "task": "tracker.tasks.log_queue_health",
         "schedule": crontab(minute="*/15"),  # every 15 minutes
     },
-    
+
     # =========================================================================
     # CALENDAR SYNC (Per-user)
     # =========================================================================
@@ -207,6 +207,23 @@ app.conf.beat_schedule = {
         'task': 'tracker.sync_all_calendars',
         'schedule': crontab(minute='*/15'),  # every 15 minutes
         'options': {'expires': 600},  # don't run if 10 min old
+    },
+
+
+    # =========================================================================
+    # MAIL SYNC (Per-user)
+    # =========================================================================
+
+    'sync-all-mail-every-5-min': {
+        'task':     'tracker.sync_all_mail',
+        'schedule': 300.0,  # 5 minutes
+    },
+    'prune-mail-signals-nightly': {
+        'task':     'tracker.prune_mail_signals',
+        'schedule': 86400.0,  # 24 hours
+        # If you use crontab() in your beat schedule, prefer:
+        # from celery.schedules import crontab
+        # 'schedule': crontab(hour=3, minute=0),  # 3 AM daily
     },
 
 }

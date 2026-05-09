@@ -58,11 +58,16 @@ type FlaggedBlock = {
   review_reason: string;
   minutes: number;
   start: string;
-  type?: 'mobile_review' | 'ai_disagreement';
+  type?: 'mobile_review' | 'ai_disagreement' | 'mail_disagreement';  // ← add 'mail_disagreement'
   ai_proposed_client_id?: number | null;
   ai_proposed_client_name?: string | null;
   ai_confidence?: number;
   ai_reasoning?: string;
+  // ↓ NEW: Stage 7 v2 disagreement fields
+  mail_proposed_client_id?: number | null;
+  mail_proposed_client_name?: string | null;
+  mail_confidence?: number;
+  mail_reasoning?: string;
 };
 type TodayTimeResponse = {
   clients: ClientTime[];

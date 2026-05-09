@@ -284,7 +284,7 @@ class ClassificationService:
         self._stage_6_calendar(block, decision)
 
         # Stage 7 — Mail metadata match
-        # self._stage_7_mail(block, decision)
+        self._stage_7_mail(block, decision)
 
         # Stage 8 — Recent context (current_client_id, prior block)
         self._stage_8_recent_context(block, decision)
@@ -406,6 +406,55 @@ class ClassificationService:
             category_after=self._extract_dominant_category(block),
             source=source,
         )
+
+        # Mail vs. attribution disagreement (Fix B from Stage 7 v2).
+        # Stage 7 stashes the mail-proposed client on decision.detail; if the
+        # final attribution differs, flag it so Daily Review surfaces a
+        # confirmation prompt to the user.
+        mail_detail = (getattr(decision, 'detail', {}) or {})
+        mail_proposed_id = mail_detail.get('mail_proposed_client_id')
+        if mail_proposed_id:
+            final_client_id = block.client_id
+            if final_client_id and final_client_id != mail_proposed_id:
+                # Disagreement — flag it. We update via .update() to skip the
+                # post_save signal, then mirror to the in-memory instance.
+                from tracker.models import Block
+                reasoning = (
+                    f"Email metadata suggests '{mail_detail.get('mail_proposed_client_name', '?')}' "
+                    f"but block was attributed to a different client. "
+                    f"Mail evidence: {mail_detail.get('mail_proposed_evidence', '')[:300]}"
+                )
+                Block.objects.filter(pk=block.pk).update(
+                    mail_disagrees_with_agent=True,
+                    mail_proposed_client_id=mail_proposed_id,
+                    mail_proposed_confidence=mail_detail.get('mail_proposed_confidence', 0.0),
+                    mail_disagreement_reasoning=reasoning[:500],
+                )
+                block.mail_disagrees_with_agent = True
+                block.mail_proposed_client_id = mail_proposed_id
+                block.mail_proposed_confidence = mail_detail.get('mail_proposed_confidence', 0.0)
+                block.mail_disagreement_reasoning = reasoning[:500]
+ 
+                logger.info(
+                    f"[STAGE-7-DISAGREE] Block {block.pk}: attributed={final_client_id} "
+                    f"vs mail-proposed={mail_proposed_id} "
+                    f"(conf {mail_detail.get('mail_proposed_confidence', 0.0):.2f})"
+                )
+            else:
+                # Agreement (or final has no client) — clear any stale flag
+                # from a prior classification run.
+                if getattr(block, 'mail_disagrees_with_agent', False):
+                    from tracker.models import Block
+                    Block.objects.filter(pk=block.pk).update(
+                        mail_disagrees_with_agent=False,
+                        mail_proposed_client=None,
+                        mail_proposed_confidence=None,
+                        mail_disagreement_reasoning='',
+                    )
+                    block.mail_disagrees_with_agent = False
+                    block.mail_proposed_client = None
+                    block.mail_proposed_confidence = None
+                    block.mail_disagreement_reasoning = ''
 
         return block
 
@@ -1393,53 +1442,53 @@ class ClassificationService:
 
 
     # -------------------------------------------------------------------------
-    # STAGE 7 — Mail metadata match
+    # STAGE 7 — Mail metadata match (v2 — with Outlook boost + disagreement)
     # -------------------------------------------------------------------------
- 
+    #
+    # Replaces the v1 _stage_7_mail. Two new behaviors:
+    #
+    # FIX A — Outlook strength boost:
+    #   When the block's app is Outlook (or window title looks email-like),
+    #   the user is *in their email client*, so MailSignal evidence is
+    #   authoritative — not corroborating. Strength is boosted so Stage 7
+    #   outranks Stage 8 (agent_current_client at 0.55) and breaks the
+    #   inheritance bug where Outlook activity gets bucketed into whatever
+    #   client the agent had selected before alt-tabbing.
+    #
+    #     Outlook block + domain match only      → strength 0.70 (was 0.45)
+    #     Outlook block + subject_extract present → strength 0.85 (was 0.65)
+    #     Non-Outlook block (any other app)      → unchanged from v1
+    #
+    # FIX B — Mail-vs-attribution disagreement detection:
+    #   Even when Stage 7 doesn't dominate the decision, if mail signals
+    #   point to a different client than the block ends up attributed to,
+    #   we set block.mail_disagrees_with_agent = True and surface in Daily
+    #   Review. Mirrors the existing ai_disagrees_with_agent pattern.
+    #
+    #   We don't OVERWRITE the attribution — we just flag for review. The
+    #   user decides. If we silently overwrote, we'd just trade one
+    #   inheritance bug for another.
+
     def _stage_7_mail(self, block, decision: 'ClassificationDecision'):
         """
         Use MailSignal records around the block's time as a classification signal.
- 
-        Mail signals are pre-matched to clients during sync (see
-        tracker.mail_matching.find_mail_match). This stage looks up MailSignals
-        in a window around the block and emits a Signal for the best client match.
- 
-        Time window logic:
-          Email is more ambient than calendar — a meeting is "now," but an
-          email's effect on work continues for a while after it arrives.
-          We look at signals from [block.start - 2h, block.start + 30min]
-          to capture both:
-            - Recent inbound email the user is responding to
-            - Inbound email arriving while the block is active
-            - Outbound email the user just sent (showing client they were
-              focused on)
- 
-        Signal strength (per Stage 7 spec):
-          - Domain match only            → 0.45 (corroborator, never auto-alone)
-          - Domain match + subject_extract → 0.65 (moderate, can combine to commit)
- 
-        Caveats:
-          - Skipped if org.disable_mail_integration is True
-          - Skipped if user has no microsoft_mail UserIntegration
-          - Caches per (user, date) like Stage 6 does to avoid repeated queries
-          - Block must have block.start to compute the time window
+
+        See module-level docstring above for behavior changes vs. v1.
         """
         from tracker.models import MailSignal
- 
+
         # Honor org-level kill switch
         if getattr(self.org, 'disable_mail_integration', False):
             return
- 
+
         if not block.start:
             return
- 
+
         # Cache per (user, date) — same pattern as Stage 6 calendar
         cache_key = f"{self.user.id}:{block.start.date().isoformat()}"
         if cache_key not in self._mail_signals_cache:
             day_start = block.start.replace(hour=0, minute=0, second=0, microsecond=0)
             day_end = day_start + timedelta(days=1)
-            # Pull signals from a wider day window to handle late-night blocks
-            # near midnight. The per-block time-window filter narrows further.
             self._mail_signals_cache[cache_key] = list(
                 MailSignal.objects
                 .filter(
@@ -1451,17 +1500,16 @@ class ClassificationService:
                 .select_related('extracted_client')
                 .order_by('occurred_at')
             )
- 
+
         candidates = self._mail_signals_cache[cache_key]
         if not candidates:
             return
- 
+
         # Window: 2 hours before block start through 30 min after
         window_start = block.start - timedelta(hours=2)
         window_end = block.start + timedelta(minutes=30)
- 
-        # Group signals by client; track strongest (subject_extract present > domain only)
-        # and signal count (more signals for same client = stronger evidence)
+
+        # Group signals by client, track best one (subject_extract > domain only)
         from collections import defaultdict
         per_client = defaultdict(lambda: {
             'signals': [],
@@ -1469,7 +1517,7 @@ class ClassificationService:
             'best_signal': None,
             'count': 0,
         })
- 
+
         for sig in candidates:
             if not (window_start <= sig.occurred_at <= window_end):
                 continue
@@ -1482,46 +1530,49 @@ class ClassificationService:
                 entry['best_signal'] = sig
             elif entry['best_signal'] is None:
                 entry['best_signal'] = sig
- 
+
         if not per_client:
             return
- 
+
         # Pick the client with the most signals; tie-break by has_subject_extract
         best_cid, best_entry = max(
             per_client.items(),
             key=lambda kv: (kv[1]['count'], kv[1]['has_subject_extract']),
         )
- 
+
         best_signal = best_entry['best_signal']
         if not best_signal:
             return
- 
+
         client = best_signal.extracted_client
- 
-        # Determine signal strength per Stage 7 spec
+
+        # ─── FIX A: Outlook boost ─────────────────────────────────────────────
+        is_outlook_block = self._is_outlook_or_email_block(block)
+
         if best_entry['has_subject_extract']:
-            strength = 0.65
-            evidence_extract = (
-                f" with subject '{best_signal.subject_extract[:50]}'"
-                if best_signal.subject_extract else ''
-            )
+            strength = 0.85 if is_outlook_block else 0.65
         else:
-            strength = 0.45
-            evidence_extract = ''
- 
-        # Boost slightly if multiple signals corroborate (capped at 0.70)
+            strength = 0.70 if is_outlook_block else 0.45
+
+        # Multi-signal corroboration (3+ signals from same client = stronger)
+        # Cap higher in Outlook context to make it dominant.
         if best_entry['count'] >= 3:
-            strength = min(strength + 0.05, 0.70)
- 
+            cap = 0.90 if is_outlook_block else 0.70
+            strength = min(strength + 0.05, cap)
+
         # Direction-aware evidence string
         direction_label = 'received from' if best_signal.direction == 'in' else 'sent to'
- 
+
+        outlook_marker = ' [Outlook block — authoritative]' if is_outlook_block else ''
         evidence = (
             f"Mail: {best_entry['count']} signal(s) "
             f"{direction_label} {best_signal.other_party_domain} → "
-            f"{client.name}{evidence_extract}"
+            f"{client.name}"
+            f"{outlook_marker}"
         )
- 
+        if best_signal.subject_extract:
+            evidence += f" — subject: '{best_signal.subject_extract[:50]}'"
+
         decision.matched_signals.append(Signal(
             type='mail',
             strength=strength,
@@ -1533,9 +1584,50 @@ class ClassificationService:
                 'has_subject_extract': best_entry['has_subject_extract'],
                 'other_party_domain':  best_signal.other_party_domain,
                 'direction':           best_signal.direction,
-                'window_minutes':      150,  # 2h before + 30m after
+                'window_minutes':      150,
+                'is_outlook_block':    is_outlook_block,
+                'subject_extract':     best_signal.subject_extract or '',
             },
         ))
+
+        # ─── FIX B: Mail-vs-attribution disagreement detection ─────────────────
+        # Stash the mail-proposed client/conf on the decision so apply()
+        # can write it to the Block AFTER the final attribution is settled.
+        # We don't know yet whether mail will end up agreeing or disagreeing;
+        # _finalize_decision determines that based on the full signal set.
+        decision.detail = getattr(decision, 'detail', {}) or {}
+        decision.detail['mail_proposed_client_id'] = client.id
+        decision.detail['mail_proposed_client_name'] = client.name
+        decision.detail['mail_proposed_confidence'] = strength
+        decision.detail['mail_proposed_evidence'] = evidence
+
+    @staticmethod
+    def _is_outlook_or_email_block(block) -> bool:
+        """
+        Returns True when the block represents the user actively in their
+        email client. Used by Stage 7 to boost mail signal strength.
+
+        Detection order (most reliable first):
+          1. app_name contains 'outlook'
+          2. window_title contains email-client markers
+        """
+        app = (getattr(block, 'app_name', '') or '').lower()
+        if 'outlook' in app:
+            return True
+
+        # Fallback: title-based detection for cases where app_name is
+        # something else (e.g. browser tabs in webmail)
+        title = (getattr(block, 'window_title', '') or getattr(block, 'title', '') or '').lower()
+        EMAIL_TITLE_MARKERS = (
+            'outlook.exe',
+            ' - inbox',
+            'message (html)',
+            'message (plain text)',
+            'mail.google.com',  # Gmail in browser
+            'outlook.office.com',  # OWA
+            'outlook.live.com',
+        )
+        return any(marker in title for marker in EMAIL_TITLE_MARKERS)
 
     # -------------------------------------------------------------------------
     # STAGE 8 — Recent context (current_client_id, prior block)

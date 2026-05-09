@@ -1185,6 +1185,50 @@ class Block(models.Model):
         help_text='How the user resolved the disagreement',
     )
 
+    # Mail signal disagreement — set by Stage 7 classifier when MailSignals
+    # in the block's time window point to a different client than the one
+    # the agent / classifier ultimately attributed to. Surfaced in daily
+    # review for user confirmation, but does NOT auto-overwrite the client.
+    mail_disagrees_with_agent = models.BooleanField(
+        default=False,
+        help_text='True when Stage 7 mail signal points to a different client than the block was attributed to.',
+    )
+    mail_proposed_client = models.ForeignKey(
+        'Client',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='mail_proposed_blocks',
+        help_text='Client that mail signals suggest, if different from block.client.',
+    )
+    mail_proposed_confidence = models.FloatField(
+        null=True, blank=True,
+        help_text='Stage 7 signal confidence for the mail-proposed client (0.0-1.0).',
+    )
+    mail_disagreement_reasoning = models.CharField(
+        max_length=500,
+        blank=True,
+        default='',
+        help_text='Human-readable explanation of why mail signal disagrees, shown in Daily Review.',
+    )
+
+    # Mirrors ai_disagreement_resolved_at — set when user actions the mail
+    # disagreement (accept / dismiss / change). today_time filters by this
+    # being null to know what's still "open" for the user to review.
+    mail_disagreement_resolved_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the user resolved the mail disagreement; null = still pending review.',
+    )
+ 
+    # Mirrors ai_disagreement_resolution. Stores the user's action so we
+    # can compute mail-signal accuracy stats later.
+    mail_disagreement_resolution = models.CharField(
+        max_length=32,
+        blank=True,
+        default='',
+        help_text='How the user resolved the mail disagreement: accepted / dismissed / changed_to_other.',
+    )
+ 
+
     # ===============================
     # Mobile review flags
     # ===============================

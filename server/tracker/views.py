@@ -4166,6 +4166,44 @@ def today_time(request):
             'ai_reasoning':            block.ai_disagreement_reasoning or '',
         })
 
+    # =========================================================================
+    # STEP 6.5: Add MAIL disagreement blocks to flagged_blocks
+    #
+    # Stage 7 in ClassificationService flags blocks where Email metadata
+    # confidently disagrees with the block's final attribution (most
+    # commonly: agent's current_client_id was inherited from prior work
+    # but the email being read is from a different client).
+    #
+    # Same accept/dismiss/change pattern as AI disagreements; rendered
+    # in an amber-themed banner separate from the AI's blue banner so
+    # users can see at a glance which type of evidence is disagreeing.
+    # =========================================================================
+    mail_disagreement_blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        mail_disagrees_with_agent=True,
+        mail_disagreement_resolved_at__isnull=True,
+        deleted_at__isnull=True,
+    ).select_related('client', 'mail_proposed_client')
+ 
+    for block in mail_disagreement_blocks:
+        proposed_name = (
+            block.mail_proposed_client.name
+            if block.mail_proposed_client else 'a different client'
+        )
+        flagged_blocks.append({
+            'block_id':                  block.id,
+            'client_name':               block.client.name if block.client else 'Uncategorized',
+            'review_reason':             f"Email metadata suggests {proposed_name}",
+            'minutes':                   block.minutes or 0,
+            'start':                     block.start.isoformat() if block.start else '',
+            'type':                      'mail_disagreement',
+            'mail_proposed_client_id':   block.mail_proposed_client_id,
+            'mail_proposed_client_name': block.mail_proposed_client.name if block.mail_proposed_client else None,
+            'mail_confidence':           block.mail_proposed_confidence or 0.0,
+            'mail_reasoning':            block.mail_disagreement_reasoning or '',
+        })
+
     # Tag mobile-review-flagged blocks with their type for the frontend
     for fb in flagged_blocks:
         if 'type' not in fb:
@@ -4179,6 +4217,7 @@ def today_time(request):
         'date':               target_date.isoformat(),
         'flagged_blocks':     flagged_blocks,
     })
+
 
 # ── Add this new view to views.py ─────────────────────────────────────────────
  
@@ -4212,42 +4251,67 @@ def resolve_ai_disagreement(request, block_id):
     """
     POST /api/blocks/<block_id>/resolve-disagreement/
     Body: {"action": "accept" | "dismiss" | "change", "client_id": <int|null>}
-    
-    accept  — switch block to AI's proposed client
-    dismiss — keep agent's client, just mark resolved
+ 
+    Despite the legacy "ai" in the name, this endpoint resolves BOTH AI
+    disagreements (Stage 10) AND mail disagreements (Stage 7). It dispatches
+    based on which flag is set on the block:
+ 
+      - block.ai_disagrees_with_agent  → AI disagreement flow
+      - block.mail_disagrees_with_agent → mail disagreement flow
+ 
+    accept  — switch block to the proposed client (AI's or mail's, depending)
+    dismiss — keep current client, mark resolved
     change  — switch to a third client (specified via client_id in body)
     """
     user = get_request_user_override(request)
     if not user or not user.is_authenticated:
         return JsonResponse({'error': 'unauthorized'}, status=401)
-    
+ 
     try:
         body = json.loads(request.body or b'{}')
     except (json.JSONDecodeError, ValueError):
         return JsonResponse({'error': 'invalid_json'}, status=400)
-    
+ 
     action = body.get('action')
     if action not in ('accept', 'dismiss', 'change'):
         return JsonResponse({'error': 'invalid_action'}, status=400)
-    
+ 
     from tracker.models import Block, Client
-    
+ 
+    # Look up by either flag — frontend doesn't tell us which type
     try:
-        block = Block.objects.select_related('client', 'ai_proposed_client', 'org').get(
-            id=block_id, user=user, ai_disagrees_with_agent=True,
-        )
+        block = Block.objects.select_related(
+            'client', 'ai_proposed_client', 'mail_proposed_client', 'org',
+        ).get(id=block_id, user=user)
     except Block.DoesNotExist:
-        return JsonResponse({'error': 'block_not_found_or_not_flagged'}, status=404)
-    
-    if block.ai_disagreement_resolved_at:
-        return JsonResponse({'error': 'already_resolved'}, status=409)
-    
+        return JsonResponse({'error': 'block_not_found'}, status=404)
+ 
+    is_ai = bool(getattr(block, 'ai_disagrees_with_agent', False))
+    is_mail = bool(getattr(block, 'mail_disagrees_with_agent', False))
+ 
+    if not (is_ai or is_mail):
+        return JsonResponse({'error': 'block_not_flagged'}, status=404)
+ 
+    # Pick which flow we're in. AI takes precedence if both somehow set.
+    flow = 'ai' if is_ai else 'mail'
+ 
+    if flow == 'ai':
+        if block.ai_disagreement_resolved_at:
+            return JsonResponse({'error': 'already_resolved'}, status=409)
+        proposed_client_id = block.ai_proposed_client_id
+        no_proposal_error = 'no_ai_proposal'
+    else:  # mail
+        if block.mail_disagreement_resolved_at:
+            return JsonResponse({'error': 'already_resolved'}, status=409)
+        proposed_client_id = block.mail_proposed_client_id
+        no_proposal_error = 'no_mail_proposal'
+ 
     old_client_id = block.client_id
-    
+ 
     if action == 'accept':
-        if not block.ai_proposed_client_id:
-            return JsonResponse({'error': 'no_ai_proposal'}, status=400)
-        block.client_id = block.ai_proposed_client_id
+        if not proposed_client_id:
+            return JsonResponse({'error': no_proposal_error}, status=400)
+        block.client_id = proposed_client_id
         resolution = 'accepted'
     elif action == 'change':
         new_client_id = body.get('client_id')
@@ -4261,17 +4325,26 @@ def resolve_ai_disagreement(request, block_id):
         resolution = 'changed_to_other'
     else:  # dismiss
         resolution = 'dismissed'
-    
-    block.ai_disagreement_resolved_at = timezone.now()
-    block.ai_disagreement_resolution = resolution
+ 
+    # Stamp resolution on the appropriate set of fields
+    now = timezone.now()
+    if flow == 'ai':
+        block.ai_disagreement_resolved_at = now
+        block.ai_disagreement_resolution = resolution
+    else:
+        block.mail_disagreement_resolved_at = now
+        block.mail_disagreement_resolution = resolution
+ 
     block.save(force_classifier=True)
-    
+ 
     return JsonResponse({
         'block_id': block.id,
+        'flow': flow,
         'resolution': resolution,
         'final_client_id': block.client_id,
         'final_client_name': block.client.name if block.client else None,
     })
+ 
 
 
 def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):

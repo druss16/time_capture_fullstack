@@ -18,6 +18,7 @@ import {
   X,
   ArrowRightLeft,
   MousePointerClick,
+  Mail,
 } from "lucide-react";
 import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -49,12 +50,18 @@ export type FlaggedBlock = {
   review_reason: string;
   minutes: number;
   start: string;
+  // Discriminator — which kind of flag this is
+  type?: 'mobile_review' | 'ai_disagreement' | 'mail_disagreement';
   // AI disagreement fields (only set when type='ai_disagreement')
-  type?: 'mobile_review' | 'ai_disagreement';
   ai_proposed_client_id?: number | null;
   ai_proposed_client_name?: string | null;
   ai_confidence?: number;
   ai_reasoning?: string;
+  // Mail disagreement fields (only set when type='mail_disagreement')
+  mail_proposed_client_id?: number | null;
+  mail_proposed_client_name?: string | null;
+  mail_confidence?: number;
+  mail_reasoning?: string;
 };
 
 type ParsedActivity = { blockId: number | null; title: string };
@@ -867,21 +874,22 @@ function CategorySection({
 
 // ─── Flagged Banner ───────────────────────────────────────────────────────────
 
-function FlaggedBanner({ 
-  flagged, 
+function FlaggedBanner({
+  flagged,
   onDismiss,
   onResolveDisagreement,
-}: { 
-  flagged: FlaggedBlock[]; 
+}: {
+  flagged: FlaggedBlock[];
   onDismiss: (id: number) => void;
   onResolveDisagreement?: (id: number, action: 'accept' | 'dismiss') => void;
 }) {
   if (!flagged.length) return null;
-  
+ 
   // Split flagged blocks by type
-  const mobileFlags = flagged.filter(f => f.type !== 'ai_disagreement');
+  const mobileFlags = flagged.filter(f => f.type === 'mobile_review' || (!f.type));
   const aiDisagreements = flagged.filter(f => f.type === 'ai_disagreement');
-  
+  const mailDisagreements = flagged.filter(f => f.type === 'mail_disagreement');
+ 
   return (
     <>
       {/* Mobile review flags — existing UI unchanged */}
@@ -914,8 +922,8 @@ function FlaggedBanner({
           </div>
         </div>
       )}
-      
-      {/* AI disagreement flags — new UI */}
+ 
+      {/* AI disagreement flags — blue */}
       {aiDisagreements.length > 0 && (
         <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 overflow-hidden">
           <div className="px-4 py-2 bg-blue-100/70 border-b border-blue-200 flex items-center gap-2">
@@ -969,9 +977,65 @@ function FlaggedBanner({
           </div>
         </div>
       )}
+ 
+      {/* Mail disagreement flags — purple, distinct from AI's blue */}
+      {mailDisagreements.length > 0 && (
+        <div className="mb-4 rounded-xl border border-violet-200 bg-violet-50 overflow-hidden">
+          <div className="px-4 py-2 bg-violet-100/70 border-b border-violet-200 flex items-center gap-2">
+            <Mail className="w-3.5 h-3.5 text-violet-600" />
+            <span className="text-violet-800 font-semibold text-sm">
+              Email suggests {mailDisagreements.length} {mailDisagreements.length === 1 ? "change" : "changes"} for review
+            </span>
+          </div>
+          <div className="divide-y divide-violet-100">
+            {mailDisagreements.map((f) => (
+              <div key={f.block_id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-4 mb-2">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <AlertCircle className="w-3.5 h-3.5 text-violet-500 mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-violet-900">
+                        Currently: {f.client_name} — {fmt(f.minutes / 60)}
+                      </p>
+                      <p className="text-sm font-semibold text-violet-900 mt-1">
+                        Email suggests: {f.mail_proposed_client_name}
+                        {f.mail_confidence && (
+                          <span className="text-violet-600 font-normal ml-1.5">
+                            ({Math.round(f.mail_confidence * 100)}% confident)
+                          </span>
+                        )}
+                      </p>
+                      {f.mail_reasoning && (
+                        <p className="text-xs text-violet-600 mt-1.5 italic line-clamp-2">
+                          {f.mail_reasoning}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-2 ml-5">
+                  <button
+                    onClick={() => onResolveDisagreement?.(f.block_id, 'accept')}
+                    className="px-3 py-1.5 text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white rounded-lg transition-all"
+                  >
+                    Switch to {f.mail_proposed_client_name}
+                  </button>
+                  <button
+                    onClick={() => onResolveDisagreement?.(f.block_id, 'dismiss')}
+                    className="px-3 py-1.5 text-xs font-semibold bg-violet-100 hover:bg-violet-200 text-violet-900 rounded-lg transition-all"
+                  >
+                    Keep {f.client_name}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   );
 }
+
 
 // ─── Onboarding Hint ──────────────────────────────────────────────────────────
 

@@ -1,11 +1,9 @@
 # tracker/services/compaction.py
 """
-Event-centric compaction - FIXED VERSION
+Event-centric compaction.
 
-FIXES:
-1. Added auto_compact_all_active_users() - was missing, Celery task was failing
-2. Use .update() instead of .save() to bypass Block protection when merging
-3. 3-minute idle cap to match agent's MOUSE_IDLE_PAUSE_S
+Key invariant: IDLE_CAP must match the agent's MOUSE_IDLE_PAUSE_S.
+If you change one, change the other — they encode the same concept.
 """
 
 from __future__ import annotations
@@ -26,7 +24,7 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # Configuration
-IDLE_CAP = timedelta(minutes=3)  # ✅ FIXED: Was 30, now 3 to match agent
+IDLE_CAP = timedelta(minutes=10)  # MUST match agent's MOUSE_IDLE_PAUSE_S (10 min)
 MIN_BLOCK_MINUTES = 0.5
 SESSION_GAP = timedelta(minutes=30)
 AUTO_CATEGORIZE_THRESHOLD = 0.70
@@ -62,9 +60,9 @@ def _calculate_minutes_from_events(events_qs) -> int:
     for i, event in enumerate(events):
         if i + 1 < len(events):
             duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
-            duration = min(duration, IDLE_CAP.total_seconds())  # 3 min cap
+            duration = min(duration, IDLE_CAP.total_seconds())  # 10 min cap
         else:
-            duration = AGENT_POLL_SECONDS  # 3 min for last event (was 300)
+            duration = AGENT_POLL_SECONDS  # 5 sec for last event
         total_seconds += duration
     
     return int(total_seconds / 60)

@@ -71,13 +71,13 @@ def microsoft_auth_callback(request):
     error = request.GET.get('error')
     
     frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or settings.MS_GRAPH_REDIRECT_URI.rsplit('/api/', 1)[0]
-    success_url = f"{frontend_base}/settings?calendar=connected"
-    error_url = f"{frontend_base}/settings?calendar=error"
+    success_url = f"{frontend_base}/account/connections?calendar=connected"
+    error_url = f"{frontend_base}/account/connections?calendar=error"
     
     if error:
         logger.warning(f"[CAL-OAUTH] User cancelled or denied: {error}")
         params = urlencode({'calendar': 'error', 'reason': error})
-        return HttpResponseRedirect(f"{frontend_base}/settings?{params}")
+        return HttpResponseRedirect(f"{frontend_base}/account/connections?{params}")
     
     if not code or not state:
         logger.warning("[CAL-OAUTH] Missing code or state in callback")

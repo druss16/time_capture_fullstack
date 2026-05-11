@@ -62,7 +62,7 @@ def microsoft_mail_auth_start(request):
 
     auth_url = msgraph.build_auth_url_mail(
         state=state,
-        redirect_uri=settings.MS_GRAPH_MAIL_REDIRECT_URI,
+        redirect_uri=settings.MS_GRAPH_REDIRECT_URI,
     )
 
     return Response({'auth_url': auth_url})
@@ -90,13 +90,13 @@ def microsoft_mail_auth_callback(request):
     error = request.GET.get('error')
 
     frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or settings.MS_GRAPH_REDIRECT_URI.rsplit('/api/', 1)[0]
-    success_url = f"{frontend_base}/settings?mail=connected"
-    error_base = f"{frontend_base}/settings?mail=error"
-
+    success_url = f"{frontend_base}/account/connections?mail=connected"
+    error_base = f"{frontend_base}/account/connections?mail=error"
+    
     if error:
         logger.warning(f"[MAIL-OAUTH] User cancelled or denied: {error}")
         params = urlencode({'mail': 'error', 'reason': error})
-        return HttpResponseRedirect(f"{frontend_base}/settings?{params}")
+        return HttpResponseRedirect(f"{frontend_base}/account/connections?{params}")
 
     if not code or not state:
         logger.warning("[MAIL-OAUTH] Missing code or state in callback")
@@ -118,8 +118,8 @@ def microsoft_mail_auth_callback(request):
 
     try:
         result = msgraph.exchange_code_for_tokens_mail(
-            code,
-            redirect_uri=settings.MS_GRAPH_MAIL_REDIRECT_URI,
+            code=code,
+            redirect_uri=settings.MS_GRAPH_REDIRECT_URI,
         )
     except msgraph.MSGraphAuthError as e:
         logger.error(f"[MAIL-OAUTH] Token exchange failed: {e}")

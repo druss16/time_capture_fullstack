@@ -723,7 +723,12 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 gap_to_existing = (new_start - existing.end).total_seconds() if existing.end else float('inf')
                 gap_from_existing = (existing.start - new_end).total_seconds() if existing.start else float('inf')
                 
-                if gap_to_existing < SESSION_GAP.total_seconds() or gap_from_existing < SESSION_GAP.total_seconds():
+                # Merge only when gap is small AND non-negative. Negative gaps
+                # would silently merge across huge time spans — e.g. new event
+                # at 19:44 vs existing block ending at 18:56 yields
+                # gap_from_existing = -2940s, which is "less than" SESSION_GAP
+                # but represents a 49-minute gap. See block 10594 bug.
+                if 0 <= gap_to_existing < SESSION_GAP.total_seconds() or 0 <= gap_from_existing < SESSION_GAP.total_seconds():
                     merge_target = existing
                     break
                 

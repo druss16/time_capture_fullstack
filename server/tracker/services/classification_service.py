@@ -1729,31 +1729,35 @@ class ClassificationService:
 
     @staticmethod
     def _is_outlook_or_email_block(block) -> bool:
-        """
-        Returns True when the block represents the user actively in their
-        email client. Used by Stage 7 to boost mail signal strength.
+            """
+            Returns True when the block represents the user actively in their
+            email client. Used by Stage 7 to boost mail signal strength.
 
-        Detection order (most reliable first):
-          1. app_name contains 'outlook'
-          2. window_title contains email-client markers
-        """
-        app = (getattr(block, 'app_name', '') or '').lower()
-        if 'outlook' in app:
-            return True
+            Detection order (most reliable first):
+              1. app_name contains 'outlook' (Mac/full process names)
+              2. app_name is 'olk' (Windows agent abbreviates to 'Olk')
+              3. window_title contains email-client markers — handles webmail
+                 AND the abbreviated case where app_name is 'Olk' but the
+                 window title still ends in 'Outlook'
+            """
+            app = (getattr(block, 'app_name', '') or '').lower()
+            if 'outlook' in app or app == 'olk':
+                return True
 
-        # Fallback: title-based detection for cases where app_name is
-        # something else (e.g. browser tabs in webmail)
-        title = (getattr(block, 'window_title', '') or getattr(block, 'title', '') or '').lower()
-        EMAIL_TITLE_MARKERS = (
-            'outlook.exe',
-            ' - inbox',
-            'message (html)',
-            'message (plain text)',
-            'mail.google.com',  # Gmail in browser
-            'outlook.office.com',  # OWA
-            'outlook.live.com',
-        )
-        return any(marker in title for marker in EMAIL_TITLE_MARKERS)
+            # Title-based detection — catches abbreviated app names AND
+            # webmail in browser tabs
+            title = (getattr(block, 'window_title', '') or getattr(block, 'title', '') or '').lower()
+            EMAIL_TITLE_MARKERS = (
+                ' - outlook',           # NEW: Windows window titles end in "- Outlook"
+                'outlook.exe',
+                ' - inbox',
+                'message (html)',
+                'message (plain text)',
+                'mail.google.com',      # Gmail in browser
+                'outlook.office.com',   # OWA
+                'outlook.live.com',
+            )
+            return any(marker in title for marker in EMAIL_TITLE_MARKERS)
 
     # -------------------------------------------------------------------------
     # STAGE 8 — Recent context (current_client_id, prior block)

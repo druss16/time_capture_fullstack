@@ -242,8 +242,12 @@ def get_valid_token_mail(integration):
 
 def fetch_mail_delta(integration, initial_window_days=30):
     """
-    Fetch mail messages via /me/messages/delta.
-
+    Fetch mail messages via /me/mailFolders/inbox/messages/delta.
+    Delta tracking on Graph only works at folder level, not on the message
+    collection. Inbox-only is a deliberate v1 scoping decision — we can add
+    sent-items or per-folder sync later if Wayne/Terri tell us they're
+    missing signal from filed emails.
+    
     Two modes:
       1. Initial sync (no integration.mail_delta_link): fetches last 30 days
          using $filter on receivedDateTime, paginates via @odata.nextLink,
@@ -285,7 +289,7 @@ def fetch_mail_delta(integration, initial_window_days=30):
         # in the initial request. We use /messages with $filter for the first
         # pass, capture all message IDs, then transition to delta on next sync.
         # Microsoft's recommended pattern.
-        url = f"{GRAPH_API_BASE}/me/messages/delta"
+        url = f"{GRAPH_API_BASE}/me/mailFolders/inbox/messages/delta"
         params = {
             '$select': select_fields,
             '$top': 100,

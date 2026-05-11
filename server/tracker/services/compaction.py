@@ -583,6 +583,20 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         )
     ]
     if not events:
+        # Even with no foreground events, run the safety nets — pre-existing
+        # foreground blocks from a prior compaction batch may now fall inside
+        # a meeting window we just created in _extract_and_persist_meeting_blocks.
+        # Without this, those blocks remain billable on top of the meeting block,
+        # causing double-billing for the meeting hour.
+        idle_cleaned = 0
+        foreground_suppressed = 0
+        if meeting_block_count:
+            idle_cleaned = _filter_idle_inside_meetings(user, day)
+            foreground_suppressed = _filter_foreground_inside_meetings(user, day)
+            logger.info(
+                f"[COMPACT] Meeting-only batch: created {meeting_block_count} meetings, "
+                f"idle-cleaned {idle_cleaned}, fg-suppressed {foreground_suppressed}"
+            )
         return meeting_block_count
 
     # Calculate durations (for remaining non-meeting events)

@@ -455,8 +455,109 @@ class ClassificationService:
                     block.mail_proposed_client = None
                     block.mail_proposed_confidence = None
                     block.mail_disagreement_reasoning = ''
+            # ─────────────────────────────────────────────────────────────────
+            # FIX C (v1.2.97): Mail-derived client propagation
+            # ─────────────────────────────────────────────────────────────────
+            # When Stage 7 commits a block with a mail-derived client at high
+            # confidence, propagate that to the user's CurrentClient record so
+            # subsequent blocks (Excel, browser, etc.) inherit the new client
+            # instead of the stale agent selection.
+            #
+            # Without this, the inheritance bug just shifts one block forward:
+            #   QuickBooks (Client A) → Outlook (correctly attributed to B via mail)
+            #   → Excel (still wrongly attributed to A because agent never updated)
+            #
+            # Conditions to propagate:
+            #   1. This block was mail-driven (mail_proposed_id present)
+            #   2. The block actually committed to the mail-proposed client (no
+            #      disagreement, no override)
+            #   3. The decision came from Stage 7 with confidence >= 0.85 (strong)
+            #   4. The user's CurrentClient hasn't been manually updated very
+            #      recently (don't clobber a user who just switched)
+            self._propagate_mail_client_if_applicable(block, decision)
 
         return block
+
+    def _propagate_mail_client_if_applicable(self, block, decision: ClassificationDecision):
+        """
+        See FIX C above. Updates CurrentClient if and only if:
+          - Block committed (not proposed)
+          - Stage 7 mail signal at strength >= 0.85 was the dominant signal
+          - User hasn't manually switched in the last 5 minutes
+          - The mail-proposed client matches the block's final client
+
+        Logged extensively because this is a billing-affecting silent change.
+        """
+        # Guard 1: must be committed
+        if decision.recommended_state != 'committed':
+            return
+
+        # Guard 2: dominant signal must be mail at strong threshold
+        mail_signals = [
+            s for s in decision.matched_signals
+            if s.type == 'mail' and s.strength >= 0.85
+        ]
+        if not mail_signals:
+            return
+
+        # The mail signal must propose the SAME client the block was committed to
+        mail_client_id = mail_signals[0].proposed_client_id
+        if not mail_client_id or mail_client_id != block.client_id:
+            return
+
+        # Guard 3: don't clobber recent manual user activity. We use 5min as the
+        # window — long enough that we won't fight the user, short enough that
+        # mail-driven inheritance still wins for legitimate context switches.
+        from tracker.models import CurrentClient
+        from datetime import timedelta
+
+        try:
+            cc = CurrentClient.objects.filter(user=self.user).first()
+
+            if cc:
+                # If the current selection is already this client, nothing to do
+                if cc.client_id == mail_client_id:
+                    return
+
+                # If the user updated CurrentClient very recently, respect that
+                now = timezone.now()
+                if cc.updated_at and (now - cc.updated_at) < timedelta(minutes=5):
+                    logger.info(
+                        f"[STAGE-7-PROPAGATE] Skipping propagation — user updated "
+                        f"CurrentClient {(now - cc.updated_at).total_seconds():.0f}s ago "
+                        f"(too recent to override)"
+                    )
+                    return
+
+                old_id = cc.client_id
+                cc.client_id = mail_client_id
+                cc.started_at = timezone.now()
+                cc.save(update_fields=['client_id', 'started_at', 'updated_at'])
+
+                logger.info(
+                    f"[STAGE-7-PROPAGATE] ✅ Updated CurrentClient for user "
+                    f"{self.user.id}: {old_id} → {mail_client_id} "
+                    f"(mail-driven, block {block.pk}, conf {mail_signals[0].strength:.2f})"
+                )
+            else:
+                # First-ever CurrentClient row for this user
+                CurrentClient.objects.create(
+                    user=self.user,
+                    device_id=block.device_id or 0,
+                    client_id=mail_client_id,
+                    started_at=timezone.now(),
+                )
+                logger.info(
+                    f"[STAGE-7-PROPAGATE] ✅ Created CurrentClient for user "
+                    f"{self.user.id}: client {mail_client_id} (mail-driven)"
+                )
+
+        except Exception as e:
+            # Never let propagation failure break classification
+            logger.warning(
+                f"[STAGE-7-PROPAGATE] Failed for block {block.pk}: {e}",
+                exc_info=True
+            )
 
     @transaction.atomic
     def commit(self, block, user, override: Optional[dict] = None):
@@ -2359,21 +2460,27 @@ class ClassificationService:
     def _finalize_decision(self, decision: ClassificationDecision, block) -> ClassificationDecision:
         """
         After all stages run, decide the final state and confidence.
+        ...
 
-        See design doc §4.4 for full logic.
+        DEDUPLICATION:
+        Before computing the strong/moderate split, we collapse multiple
+        learned-pattern signals proposing the SAME client into a single signal.
+        Reason: learned patterns are derived from the same UserWorkPattern table,
+        so 3 patterns matching the same block (title prefix + domain + file path)
+        are correlated, not independent. The noisy-OR formula assumes independence,
+        so 3 correlated weak signals would falsely combine to a strong one.
 
-        CONTRADICTION DETECTION (added in stages chunk):
-        Before auto-committing, check that no moderate-or-better signal disagrees
-        with the chosen client. Disagreement → downgrade to 'proposed'. This prevents
-        cases like Stage 10 AI saying "ASR" while Stage 8 agent_current_client says
-        "All Round Transportation" — both real signals, different clients, must
-        not silently commit.
+        We keep the highest-strength learned signal per client_id and discard
+        the rest. Other signal types (org_rule, mail, etc.) are not deduplicated —
+        each represents independent evidence.
         """
         # Already terminated (suppressed or org rule auto-committed)
         if decision.recommended_state in ('suppressed', 'committed'):
             return decision
 
-        signals = decision.matched_signals
+        signals = self._dedupe_correlated_signals(decision.matched_signals)
+        decision.matched_signals = signals  # update so downstream sees deduped list
+
         strong = [s for s in signals if s.is_strong]
         moderate = [s for s in signals if s.is_moderate]
 
@@ -2443,22 +2550,23 @@ class ClassificationService:
     @staticmethod
     def _has_contradicting_signal(signals: list, chosen_client_id: int) -> bool:
         """
-        Returns True if any moderate-or-better signal proposes a client_id
-        different from chosen_client_id.
+        Returns True if any MODERATE-or-better signal proposes a different client.
+
+        Threshold = 0.65 (the moderate floor). Weak signals (e.g. agent_current_client
+        at 0.55) cannot veto a strong-signal auto-commit. They surface as proposed
+        state only when no strong signal exists.
 
         This catches cases like:
-          - Stage 8 emits agent_current_client with client_id=A (strength 0.55, weak)
-          - Stage 10 emits ai_client with client_id=B (strength 0.75, moderate)
-          - Strong signal (ai_category at 0.90) has no client_id
-          - Without this check, the chosen client would be B (taken from highest-
-            strength signal that has a client). But A also "exists" as a signal.
-            That's a contradiction worth flagging.
+          - Stage 7 emits mail at 0.85 for Client B (strong)
+          - Stage 8 emits agent_current_client at 0.55 for Client A (weak)
+          - Pre-fix: Client A vetoed Client B → block went to 'proposed'
+          - Post-fix: Client A is below threshold → mail commits to Client B
 
-        We only care about moderate+ signals (strength >= 0.65). Weak signals
-        like agent_current_client at 0.55 are too unreliable to count as a
-        veto. EXCEPT: if a weak signal at >= 0.50 strength disagrees with a
-        moderate-tier choice, we still flag — keeps the safety net for
-        agent-vs-AI disagreements specifically.
+        What we still flag:
+          - Stage 8 ai_client at 0.75 disagreeing with chosen client
+          - Stage 7 mail at 0.65 disagreeing with chosen client
+          - Two strong signals with different client_ids (handled separately
+            in _finalize_decision before this is called)
         """
         if not chosen_client_id:
             return False
@@ -2470,8 +2578,8 @@ class ClassificationService:
             # Skip the chosen client (no contradiction)
             if s.proposed_client_id == chosen_client_id:
                 continue
-            # A meaningful signal proposes a different client
-            if s.strength >= 0.50:
+            # A moderate-or-better signal proposes a different client
+            if s.strength >= 0.65:
                 return True
 
         return False
@@ -2519,6 +2627,49 @@ class ClassificationService:
         for s in strengths:
             prob_all_wrong *= (1.0 - s)
         return round(1.0 - prob_all_wrong, 3)
+
+    @staticmethod
+    def _dedupe_correlated_signals(signals: list) -> list:
+        """
+        Collapse correlated signals down to one per (signal_type, client_id) tuple,
+        keeping the highest-strength member of each group.
+
+        Currently applies to:
+          - learned_pattern (multiple patterns from UserWorkPattern → same client)
+
+        Does NOT apply to:
+          - org_rule, mail, calendar, agent_current_client, ai_client, ai_category,
+            title_match_*, file_path_structure, tax_software
+            (these come from independent sources — keep all)
+
+        Rationale: noisy-OR confidence combination assumes independence. Correlated
+        signals (multiple matches from the same DB table for the same user/client)
+        would falsely combine to high confidence. Treating them as one signal
+        preserves the independence assumption.
+        """
+        CORRELATED_TYPES = {'learned_pattern'}
+
+        # Bucket signals by whether they need dedup
+        independent = []
+        needs_dedup = {}  # (type, client_id) → highest-strength Signal
+
+        for s in signals:
+            if s.type not in CORRELATED_TYPES:
+                independent.append(s)
+                continue
+
+            cid = s.proposed_client_id
+            if not cid:
+                # No client to dedup against — keep as independent
+                independent.append(s)
+                continue
+
+            key = (s.type, cid)
+            existing = needs_dedup.get(key)
+            if existing is None or s.strength > existing.strength:
+                needs_dedup[key] = s
+
+        return independent + list(needs_dedup.values())
 
     # -------------------------------------------------------------------------
     # AUDIT + UTILITY

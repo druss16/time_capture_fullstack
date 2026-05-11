@@ -252,32 +252,14 @@ class PatternLearningService:
     @staticmethod
     def extract_time_patterns(block) -> List[Dict]:
         """
-        Extract SPECIFIC time slot patterns only.
-        
-        Instead of vague "morning" patterns, learns specific day+hour combos:
-        - "monday_09" = Mondays at 9am → usually team meeting
-        - "friday_16" = Fridays at 4pm → usually partner review
-        
-        These only become useful after repeated occurrences (3+).
+        DEPRECATED. Time-slot patterns are not client-specific (CPAs work on
+        any client at any time of day) and caused false positives. Kept as a
+        no-op so any old callers don't crash.
+
+        Removed from active use in v1.2.96 along with the matching
+        cleanup migration that deletes existing time_slot rows.
         """
-        patterns = []
-        start = getattr(block, 'start', None)
-        
-        if not start:
-            return patterns
-        
-        # Only learn specific day+hour combos (much more useful than vague time-of-day)
-        weekday = start.strftime('%A').lower()
-        hour = start.hour
-        
-        patterns.append({
-            'type': 'time_slot',
-            'key': f"{weekday}_{hour:02d}",
-            'metadata': {'day': weekday, 'hour': hour},
-            'confidence': 0.55  # Start low - needs repetition to matter
-        })
-        
-        return patterns
+        return []
 
     @staticmethod
     def extract_app_sequence_patterns(blocks: List) -> List[Dict]:
@@ -434,10 +416,14 @@ class PatternLearningService:
         suggestions = []
         
         # Extract patterns from current block
+        # Extract patterns from current block.
+        # Time-slot patterns are no longer extracted (Dewitt/Moose bug fix) — see
+        # learn_from_block. We also stopped retrieving them here so any pre-fix
+        # time_slot rows in the DB don't influence classification. Run the
+        # cleanup migration in step 2 to delete them outright.
         all_patterns = []
         all_patterns.extend(PatternLearningService.extract_app_patterns(block))
         all_patterns.extend(PatternLearningService.extract_file_patterns(block))
-        all_patterns.extend(PatternLearningService.extract_time_patterns(block))
         
         # Collect all pattern keys to query in ONE database call
         pattern_keys = []

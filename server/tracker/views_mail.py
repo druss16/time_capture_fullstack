@@ -89,7 +89,7 @@ def microsoft_mail_auth_callback(request):
     state = request.GET.get('state')
     error = request.GET.get('error')
 
-    frontend_base = settings.MS_GRAPH_REDIRECT_URI.rsplit('/api/', 1)[0]
+    frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or settings.MS_GRAPH_REDIRECT_URI.rsplit('/api/', 1)[0]
     success_url = f"{frontend_base}/settings?mail=connected"
     error_base = f"{frontend_base}/settings?mail=error"
 

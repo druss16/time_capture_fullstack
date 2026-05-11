@@ -515,44 +515,44 @@ class ClassificationService:
             cc = CurrentClient.objects.filter(user=self.user).first()
 
             if cc:
-                # If the current selection is already this client, nothing to do
-                if cc.client_id == mail_client_id:
-                    return
-
-                # If the user updated CurrentClient very recently, respect that
-                now = timezone.now()
-                if cc.updated_at and (now - cc.updated_at) < timedelta(minutes=5):
-                    logger.info(
-                        f"[STAGE-7-PROPAGATE] Skipping propagation — user updated "
-                        f"CurrentClient {(now - cc.updated_at).total_seconds():.0f}s ago "
-                        f"(too recent to override)"
-                    )
-                    return
-
-                old_id = cc.client_id
-                cc.client_id = mail_client_id
-                cc.started_at = timezone.now()
-                cc.save(update_fields=['client_id', 'started_at', 'updated_at'])
-
+                # ... existing if cc: branch ...
                 logger.info(
                     f"[STAGE-7-PROPAGATE] ✅ Updated CurrentClient for user "
                     f"{self.user.id}: {old_id} → {mail_client_id} "
                     f"(mail-driven, block {block.pk}, conf {mail_signals[0].strength:.2f})"
                 )
             else:
-                # First-ever CurrentClient row for this user
-                CurrentClient.objects.create(
-                    user=self.user,
-                    device_id=block.device_id or 0,
-                    client_id=mail_client_id,
-                    started_at=timezone.now(),
-                )
+                # ... existing else branch ...
                 logger.info(
                     f"[STAGE-7-PROPAGATE] ✅ Created CurrentClient for user "
                     f"{self.user.id}: client {mail_client_id} (mail-driven)"
                 )
 
-        except Exception as e:
+            # ── Audit log entry (insert HERE, indented to match the try block above) ──
+            try:
+                from tracker.models import AIProcessingLog
+                AIProcessingLog.objects.create(
+                    org=self.org,
+                    user=self.user,
+                    operation_type='stage_7_mail_propagation',
+                    input_data={
+                        'block_id': block.pk,
+                        'mail_client_id': mail_client_id,
+                        'mail_confidence': mail_signals[0].strength,
+                        'mail_evidence': mail_signals[0].evidence[:300],
+                    },
+                    output_data={
+                        'old_current_client_id': old_id if 'old_id' in locals() else None,
+                        'new_current_client_id': mail_client_id,
+                        'propagation_source': 'stage_7_mail',
+                    },
+                    processing_time_ms=0,
+                    success=True,
+                )
+            except Exception:
+                pass  # never break on logging
+
+        except Exception as e:   # this is the EXISTING outer try/except — DON'T add this line
             # Never let propagation failure break classification
             logger.warning(
                 f"[STAGE-7-PROPAGATE] Failed for block {block.pk}: {e}",

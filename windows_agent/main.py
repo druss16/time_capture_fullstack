@@ -2601,7 +2601,7 @@ def run_agent():
                             dwell = now_t - dwell_start
                             if dwell >= MIN_DWELL_SECONDS:
                                 try:
-                                    write_event(conn, cur, os_user, hostname, current_sig)
+                                    write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
                                     log(f"[TRACKING] Flushed pre-suspend dwell ({int(dwell)}s)")
                                 except Exception as e:
                                     log(f"[TRACKING] Failed to flush dwell: {e}")
@@ -2676,7 +2676,7 @@ def run_agent():
                                 if current_sig and current_sig != IDLE_SIG and dwell_start:
                                     dwell = time.time() - dwell_start
                                     if dwell >= MIN_DWELL_SECONDS:
-                                        write_event(conn, cur, os_user, hostname, current_sig)
+                                        write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
                                 current_sig = sig
                                 dwell_start = time.time()
                                 record_window_change()
@@ -2725,7 +2725,7 @@ def run_agent():
                                     effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
                                 dwell = effective_end - dwell_start
                                 if dwell >= MIN_DWELL_SECONDS:
-                                    write_event(conn, cur, os_user, hostname, current_sig)
+                                    write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
                             current_sig = IDLE_SIG
                             _idle_entered_at = time.time()  # ← ADD THIS
                             record_idle_enter()

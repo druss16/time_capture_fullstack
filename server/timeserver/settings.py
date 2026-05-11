@@ -368,6 +368,11 @@ MS_GRAPH_REDIRECT_URI = os.environ.get(
     'https://timetracker-api-k375.onrender.com/api/calendar/auth/callback/',
 )
 
+MS_GRAPH_MAIL_REDIRECT_URI = os.getenv(
+    'MS_GRAPH_MAIL_REDIRECT_URI',
+    'http://localhost:7123/api/mail/auth/callback/'
+)
+
 FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', '')
 
 # -----------------------------------------------------

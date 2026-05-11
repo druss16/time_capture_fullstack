@@ -62,7 +62,7 @@ def microsoft_mail_auth_start(request):
 
     auth_url = msgraph.build_auth_url_mail(
         state=state,
-        redirect_uri=settings.MS_GRAPH_REDIRECT_URI,
+        redirect_uri=settings.MS_GRAPH_MAIL_REDIRECT_URI,
     )
 
     return Response({'auth_url': auth_url})
@@ -118,8 +118,8 @@ def microsoft_mail_auth_callback(request):
 
     try:
         result = msgraph.exchange_code_for_tokens_mail(
-            code=code,
-            redirect_uri=settings.MS_GRAPH_REDIRECT_URI,
+            code,
+            redirect_uri=settings.MS_GRAPH_MAIL_REDIRECT_URI,
         )
     except msgraph.MSGraphAuthError as e:
         logger.error(f"[MAIL-OAUTH] Token exchange failed: {e}")

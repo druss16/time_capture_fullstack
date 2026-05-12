@@ -363,9 +363,9 @@ def timesheet_detail_view(request, pk):
  
     events = list(RawEvent.objects.filter(
         user=ts_user,
-        ts_utc__gte=start_utc,
-        ts_utc__lt=end_utc,
-    ).select_related('block', 'block__client', 'block__task_type').order_by('ts_utc'))
+        start_ts__gte=start_utc,
+        start_ts__lt=end_utc,
+    ).select_related('block', 'block__client', 'block__task_type').order_by('start_ts'))
  
     deleted_block_ids = set(
         Block.objects.filter(user=ts_user, deleted_at__isnull=False)
@@ -377,7 +377,7 @@ def timesheet_detail_view(request, pk):
  
     for i, event in enumerate(events):
         if i + 1 < len(events):
-            gap = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+            gap = (events[i + 1].start_ts - event.start_ts).total_seconds()
             duration_min = min(gap, IDLE_CAP) / 60.0
         else:
             duration_min = 3.0
@@ -396,7 +396,7 @@ def timesheet_detail_view(request, pk):
             client_id = None; client_name = 'Unassigned'
             task_type_id = None; task_type_name = 'General'; is_billable = False
  
-        day_str = localtime(event.ts_utc).date().isoformat()
+        day_str = localtime(event.start_ts).date().isoformat()
         if day_str not in day_strings:
             continue
  
@@ -700,11 +700,11 @@ def _get_event_minutes_for_week(user, week_start, week_end):
     # Fetch all events for the week in one query
     events = list(RawEvent.objects.filter(
         user=user,
-        ts_utc__gte=start_utc,
-        ts_utc__lt=end_utc,
+        start_ts__gte=start_utc,
+        start_ts__lt=end_utc,
     ).select_related(
         'block', 'block__client', 'block__task_type'
-    ).order_by('ts_utc'))
+    ).order_by('start_ts'))
 
     # Deleted block IDs
     deleted_block_ids = set(
@@ -719,7 +719,7 @@ def _get_event_minutes_for_week(user, week_start, week_end):
     for i, event in enumerate(events):
         # Duration capped at 3 min
         if i + 1 < len(events):
-            gap = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+            gap = (events[i + 1].start_ts - event.start_ts).total_seconds()
             duration_min = min(gap, IDLE_CAP_SECONDS) / 60.0
         else:
             duration_min = 3.0
@@ -741,7 +741,7 @@ def _get_event_minutes_for_week(user, week_start, week_end):
             task_type_name = 'General'
             is_billable    = False
 
-        day_str = localtime(event.ts_utc).date().isoformat()
+        day_str = localtime(event.start_ts).date().isoformat()
 
         key = (client_id, client_name, task_type_id, task_type_name, is_billable, day_str)
         minute_map[key] += duration_min
@@ -799,9 +799,9 @@ def weekly_timesheet_view(request):
     from tracker.models import RawEvent
     events = list(RawEvent.objects.filter(
         user=user,
-        ts_utc__gte=start_utc,
-        ts_utc__lt=end_utc,
-    ).select_related('block', 'block__client', 'block__task_type').order_by('ts_utc'))
+        start_ts__gte=start_utc,
+        start_ts__lt=end_utc,
+    ).select_related('block', 'block__client', 'block__task_type').order_by('start_ts'))
 
     deleted_block_ids = set(
         Block.objects.filter(user=user, deleted_at__isnull=False)
@@ -813,7 +813,7 @@ def weekly_timesheet_view(request):
     # ── Event-based attribution (3-min cap) ───────────────────────────────────
     for i, event in enumerate(events):
         if i + 1 < len(events):
-            gap = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
+            gap = (events[i + 1].start_ts - event.start_ts).total_seconds()
             duration_min = min(gap, IDLE_CAP_SECONDS) / 60.0
         else:
             duration_min = 3.0
@@ -832,7 +832,7 @@ def weekly_timesheet_view(request):
             client_id = None; client_name = 'Unassigned'
             task_type_id = None; task_type_name = 'General'; is_billable = False
 
-        day_str = localtime(event.ts_utc).date().isoformat()
+        day_str = localtime(event.start_ts).date().isoformat()
         if day_str not in day_strings:
             continue
 

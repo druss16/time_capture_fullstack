@@ -242,7 +242,7 @@ def apply_current_client_to_recent_blocks(
     # ✅ FIX 1: Update RawEvents that haven't been compacted yet
     raw_qs = RawEvent.objects.filter(
         user=user,
-        ts_utc__gte=cutoff,
+        start_ts__gte=cutoff,
         current_client_id__isnull=True
     )
     raw_count = raw_qs.update(current_client_id=client.id)

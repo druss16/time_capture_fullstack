@@ -969,7 +969,7 @@ def cleanup_old_raw_events(days_to_keep=30):
         from tracker.models import RawEvent
 
         cutoff = timezone.now() - timedelta(days=days_to_keep)
-        count = RawEvent.objects.filter(ts_utc__lt=cutoff).delete()[0]
+        count = RawEvent.objects.filter(start_ts__lt=cutoff).delete()[0]
 
         logger.info(f"[CELERY] Cleaned up {count} raw events older than {days_to_keep} days")
 
@@ -1551,7 +1551,7 @@ def purge_processed_raw_events():
 
     cutoff = timezone.now() - timedelta(days=90)
     deleted, _ = RawEvent.objects.filter(
-        ts_utc__lt=cutoff,
+        start_ts__lt=cutoff,
         block_id__isnull=False  # only purge if already processed into a block
     ).delete()
     logger.info(f"purge_processed_raw_events: deleted {deleted} rows")

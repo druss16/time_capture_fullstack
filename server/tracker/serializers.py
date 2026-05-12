@@ -23,7 +23,7 @@ class RawEventSerializer(serializers.ModelSerializer):
     class Meta:
         model = RawEvent
         fields = [
-            'id', 'ts_utc', 'app_name', 'bundle_id', 'window_title',
+            'id', 'start_ts', 'end_ts', 'app_name', 'bundle_id', 'window_title',
             'url', 'file_path', 'user', 'username', 'hostname', 'ctx'
         ]
         read_only_fields = ['id', 'username']
@@ -50,11 +50,15 @@ class RawEventSerializer(serializers.ModelSerializer):
             if data.get(k) is not None:
                 data[k] = str(data[k]).strip()
 
-        ts = data.get('ts_utc')
-        if isinstance(ts, str):
-            dt = parse_datetime(ts)
+        ts_start = data.get('start_ts'); ts_end = data.get('end_ts')
+        if isinstance(ts_start, str):
+            dt = parse_datetime(ts_start)
             if dt:
-                data['ts_utc'] = dt
+                data['start_ts'] = dt
+        if isinstance(ts_end, str):
+            dt = parse_datetime(ts_end)
+            if dt:
+                data['end_ts'] = dt
         return super().to_internal_value(data)
 
 

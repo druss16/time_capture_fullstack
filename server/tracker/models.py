@@ -1517,8 +1517,9 @@ class Block(models.Model):
             try:
                 old = Block.all_objects.get(pk=self.pk)
                 # NEW: ClassificationService can update Captured/Proposed blocks freely
-                if force_classifier and old.classification_state in ('captured', 'proposed'):
-                    pass  # Skip protection check
+            if force_classifier and old.classification_state in ('captured', 'proposed', 'committed'):
+                pass  # Skip protection check — allows AI/mail disagreement resolution
+                       # to modify committed blocks when user accepts the suggestion
                 elif old.is_protected() and not kwargs.pop('force_update', False):
                     protected_fields = {
                         'category_hours', 'client', 'project', 'task',

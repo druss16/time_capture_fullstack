@@ -2530,7 +2530,6 @@ def run_agent():
         current_sig = None
         dwell_start: Optional[float] = None    # epoch when this dwell began
         last_emit_ts: Optional[float] = None   # epoch of last event emitted for this dwell
-        client_at_dwell_start: Optional[int] = None  # client_id snapshot at dwell_start
      
         consecutive_errors = 0
         MAX_CONSECUTIVE_ERRORS = 10
@@ -2565,7 +2564,8 @@ def run_agent():
                     conn, cur, os_user, hostname, current_sig,
                     start_ts=cursor_ts,
                     end_ts=chunk_end,
-                    client_override=client_at_dwell_start,
+                    # No client_override — let write_event read live cache so
+                    # heartbeats reflect current AI-switcher state, not dwell-start state.
                 )
                 cursor_ts = chunk_end
      
@@ -2573,7 +2573,7 @@ def run_agent():
      
         def _start_new_dwell(sig, start_ts: float):
             """Helper: enter a new dwell. Captures client_id at start time."""
-            nonlocal current_sig, dwell_start, last_emit_ts, client_at_dwell_start
+            nonlocal current_sig, dwell_start, last_emit_ts
      
             current_sig = sig
             dwell_start = start_ts

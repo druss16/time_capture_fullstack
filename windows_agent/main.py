@@ -2504,502 +2504,467 @@ def run_agent():
     # sleep), emit final segment [last_emit_ts → end_ts].
      
     def tracking_loop():
-        """v1.3.38 — heartbeat-aware tracking loop with dual timestamps."""
-        global _last_subscription_check, _subscription_active
-        global _idle_entered_at, _idle_reading_unchanged_since
-     
-        log("[TRACKING] Initializing v1.3.38 heartbeat loop...")
-        _last_idle_reading = 0.0
-        _last_idle_reading_time = 0.0
-     
-        if not hasattr(tracking_loop, "_running"):
-            tracking_loop._running = True
-        else:
-            log("[TRACKING] ⚠️ Duplicate tracking loop — aborting this instance")
-            return
-     
-        try:
-            conn = ensure_db()
-            cur = conn.cursor()
-        except Exception as e:
-            log_error(f"[TRACKING] ❌ Failed to init DB: {e}")
-            report_error_to_backend("tracking_init", str(e), traceback.format_exc())
-            return
-     
-        # ── Dwell state (replaces old current_sig/dwell_start pair) ──
-        current_sig = None
-        dwell_start: Optional[float] = None    # epoch when this dwell began
-        last_emit_ts: Optional[float] = None   # epoch of last event emitted for this dwell
-     
-        consecutive_errors = 0
-        MAX_CONSECUTIVE_ERRORS = 10
-        LOCK_SCREEN_APPS = {"lockapp", "logonui"}
-     
-        def _emit_current_dwell(end_ts: float):
+            """v1.3.39 — heartbeat-aware tracking loop, live-cache client attribution.
+            
+            Each emitted event uses _get_cached_client() at write time, so the
+            AI switcher can flip clients mid-dwell and heartbeats reflect the
+            change immediately. No more frozen client_at_dwell_start.
             """
-            Helper: emit one event covering [last_emit_ts → end_ts].
+            global _last_subscription_check, _subscription_active
+            global _idle_entered_at, _idle_reading_unchanged_since
      
-            If the interval exceeds MAX_EVENT_DURATION_S, split into chunks so
-            no single event represents more than ~5 minutes. This protects
-            against tracking-loop stalls (debugger, network hang) producing
-            4-hour events on recovery.
-            """
-            nonlocal last_emit_ts
-            if current_sig is None or last_emit_ts is None:
-                return
-            if end_ts <= last_emit_ts:
-                return
+            log("[TRACKING] Initializing v1.3.39 heartbeat loop (live-cache client)...")
+            _last_idle_reading = 0.0
+            _last_idle_reading_time = 0.0
      
-            # Skip events too short to matter — agent should not spam blocks for
-            # <1s window flickers. MIN_DWELL_SECONDS check happens at dwell-end
-            # finalization in the caller; here we only filter sub-second noise.
-            if (end_ts - last_emit_ts) < 1.0:
+            if not hasattr(tracking_loop, "_running"):
+                tracking_loop._running = True
+            else:
+                log("[TRACKING] ⚠️ Duplicate tracking loop — aborting this instance")
                 return
      
-            # Chunk long intervals (loop stall recovery)
-            cursor_ts = last_emit_ts
-            while cursor_ts < end_ts:
-                chunk_end = min(cursor_ts + MAX_EVENT_DURATION_S, end_ts)
-                write_event(
-                    conn, cur, os_user, hostname, current_sig,
-                    start_ts=cursor_ts,
-                    end_ts=chunk_end,
-                    # No client_override — let write_event read live cache so
-                    # heartbeats reflect current AI-switcher state, not dwell-start state.
-                )
-                cursor_ts = chunk_end
+            try:
+                conn = ensure_db()
+                cur = conn.cursor()
+            except Exception as e:
+                log_error(f"[TRACKING] ❌ Failed to init DB: {e}")
+                report_error_to_backend("tracking_init", str(e), traceback.format_exc())
+                return
      
-            last_emit_ts = end_ts
+            # ── Dwell state ──
+            current_sig = None
+            dwell_start: Optional[float] = None    # epoch when this dwell began
+            last_emit_ts: Optional[float] = None   # epoch of last event emitted for this dwell
      
-        def _start_new_dwell(sig, start_ts: float):
-            """Helper: enter a new dwell. Captures client_id at start time."""
-            nonlocal current_sig, dwell_start, last_emit_ts
+            consecutive_errors = 0
+            MAX_CONSECUTIVE_ERRORS = 10
+            LOCK_SCREEN_APPS = {"lockapp", "logonui"}
      
-            current_sig = sig
-            dwell_start = start_ts
-            last_emit_ts = start_ts
+            def _emit_current_dwell(end_ts: float):
+                """
+                Helper: emit one event covering [last_emit_ts → end_ts].
      
-            # Capture client at dwell_start (Bug 2 race fix)
-            # _get_cached_client() reads the cache that AI switcher writes to;
-            # capturing it here means heartbeats during this dwell all bill to
-            # the client that was active when the user FOCUSED this window.
-            cid, _ = _get_cached_client()
-            client_at_dwell_start = cid
+                Each event reads the LIVE client cache at write time, so mid-dwell
+                AI-switcher flips apply to the next heartbeat. No client_override.
      
-            log(f"[DWELL] Started {sig[0]} • {(sig[2] or '')[:40]} • client={cid}")
+                If the interval exceeds MAX_EVENT_DURATION_S, split into chunks so
+                no single event represents more than ~5 minutes.
+                """
+                nonlocal last_emit_ts
+                if current_sig is None or last_emit_ts is None:
+                    return
+                if end_ts <= last_emit_ts:
+                    return
      
-        try:
-            while True:
-                try:
-                    heartbeat_touch()
-                    progress_tick()
+                if (end_ts - last_emit_ts) < 1.0:
+                    return
      
-                    # ── Drain meeting detector events ──
-                    # Meetings are special: they carry their own start/end timestamps
-                    # from MeetingDetector, so they don't go through the heartbeat
-                    # path. We emit two events (Meeting start, Meeting-End) each
-                    # spanning a 1-second sentinel interval. Compaction pairs them
-                    # via _extract_and_persist_meeting_blocks (already handles this).
-                    if meeting_detector:
-                        for kind, state in meeting_detector.drain_events():
-                            if kind == "start":
-                                sig = _meeting_sig(state.app, state.title)
-                                try:
-                                    # 1-second sentinel — the real meeting duration
-                                    # is reconstructed server-side from the start/end pair.
-                                    write_event(
-                                        conn, cur, os_user, hostname, sig,
-                                        start_ts=state.started_at,
-                                        end_ts=state.started_at + 1.0,
+                cursor_ts = last_emit_ts
+                while cursor_ts < end_ts:
+                    chunk_end = min(cursor_ts + MAX_EVENT_DURATION_S, end_ts)
+                    write_event(
+                        conn, cur, os_user, hostname, current_sig,
+                        start_ts=cursor_ts,
+                        end_ts=chunk_end,
+                        # No client_override — write_event reads live cache
+                    )
+                    cursor_ts = chunk_end
+     
+                last_emit_ts = end_ts
+     
+            def _start_new_dwell(sig, start_ts: float):
+                """Helper: enter a new dwell."""
+                nonlocal current_sig, dwell_start, last_emit_ts
+     
+                current_sig = sig
+                dwell_start = start_ts
+                last_emit_ts = start_ts
+     
+                cid, _ = _get_cached_client()
+                log(f"[DWELL] Started {sig[0]} • {(sig[2] or '')[:40]} • client={cid}")
+     
+            try:
+                while True:
+                    try:
+                        heartbeat_touch()
+                        progress_tick()
+     
+                        # ── Drain meeting detector events ──
+                        if meeting_detector:
+                            for kind, state in meeting_detector.drain_events():
+                                if kind == "start":
+                                    sig = _meeting_sig(state.app, state.title)
+                                    try:
+                                        write_event(
+                                            conn, cur, os_user, hostname, sig,
+                                            start_ts=state.started_at,
+                                            end_ts=state.started_at + 1.0,
+                                        )
+                                        log(f"[MEETING] START event: {sig[0]} / {sig[2]}")
+                                    except Exception as e:
+                                        log(f"[MEETING] Failed to write start event: {e}")
+                                elif kind == "end":
+                                    sig = ("Meeting-End", f"meeting:{state.app}",
+                                           state.title or "", None, None)
+                                    try:
+                                        write_event(
+                                            conn, cur, os_user, hostname, sig,
+                                            start_ts=state.ended_at,
+                                            end_ts=state.ended_at + 1.0,
+                                        )
+                                        log(f"[MEETING] END event written")
+                                    except Exception as e:
+                                        log(f"[MEETING] Failed to write end event: {e}")
+     
+                        # ── IDLE WATCHDOG ──
+                        if current_sig == IDLE_SIG and _idle_entered_at > 0:
+                            wall_idle_minutes = (time.time() - _idle_entered_at) / 60.0
+     
+                            current_idle_reading = mouse_idle_seconds()
+                            now_t = time.time()
+     
+                            if abs(current_idle_reading - _last_idle_reading) < 0.5:
+                                if _idle_reading_unchanged_since == 0.0:
+                                    _idle_reading_unchanged_since = now_t
+                                elif (now_t - _idle_reading_unchanged_since) > 60:
+                                    log(f"[IDLE-WD] ⚠️ GetLastInputInfo frozen at "
+                                        f"{current_idle_reading:.0f}s — force-resetting")
+                                    report_error_to_backend(
+                                        "idle_stuck_frozen",
+                                        f"GetLastInputInfo frozen at {current_idle_reading:.0f}s",
+                                        context={"frozen_seconds": now_t - _idle_reading_unchanged_since,
+                                                 "hostname": hostname},
                                     )
-                                    log(f"[MEETING] START event: {sig[0]} / {sig[2]}")
-                                except Exception as e:
-                                    log(f"[MEETING] Failed to write start event: {e}")
-                            elif kind == "end":
-                                sig = ("Meeting-End", f"meeting:{state.app}",
-                                       state.title or "", None, None)
-                                try:
-                                    write_event(
-                                        conn, cur, os_user, hostname, sig,
-                                        start_ts=state.ended_at,
-                                        end_ts=state.ended_at + 1.0,
-                                    )
-                                    log(f"[MEETING] END event written")
-                                except Exception as e:
-                                    log(f"[MEETING] Failed to write end event: {e}")
+                                    _emit_current_dwell(now_t)
+                                    current_sig = None
+                                    dwell_start = None
+                                    last_emit_ts = None
+                                    _idle_entered_at = 0.0
+                                    _idle_reading_unchanged_since = 0.0
+                                    record_idle_exit()
+                                    continue
+                            else:
+                                _idle_reading_unchanged_since = 0.0
      
-                    # ── IDLE WATCHDOG (unchanged from v1.3.37) ──
-                    if current_sig == IDLE_SIG and _idle_entered_at > 0:
-                        wall_idle_minutes = (time.time() - _idle_entered_at) / 60.0
+                            _last_idle_reading = current_idle_reading
+                            _last_idle_reading_time = now_t
      
-                        current_idle_reading = mouse_idle_seconds()
-                        now_t = time.time()
-     
-                        if abs(current_idle_reading - _last_idle_reading) < 0.5:
-                            if _idle_reading_unchanged_since == 0.0:
-                                _idle_reading_unchanged_since = now_t
-                            elif (now_t - _idle_reading_unchanged_since) > 60:
-                                log(f"[IDLE-WD] ⚠️ GetLastInputInfo frozen at "
-                                    f"{current_idle_reading:.0f}s — force-resetting")
+                            if wall_idle_minutes > _IDLE_WATCHDOG_MAX_MINUTES:
+                                log(f"[IDLE-WD] ⚠️ Stuck {wall_idle_minutes:.1f} min — force-exit")
                                 report_error_to_backend(
-                                    "idle_stuck_frozen",
-                                    f"GetLastInputInfo frozen at {current_idle_reading:.0f}s",
-                                    context={"frozen_seconds": now_t - _idle_reading_unchanged_since,
-                                             "hostname": hostname},
+                                    "idle_stuck",
+                                    f"Idle stuck {wall_idle_minutes:.1f} min",
+                                    context={"wall_idle_minutes": wall_idle_minutes, "hostname": hostname},
                                 )
-                                _emit_current_dwell(now_t)  # cap the idle at "now"
+                                _emit_current_dwell(now_t)
                                 current_sig = None
                                 dwell_start = None
                                 last_emit_ts = None
-                                client_at_dwell_start = None
                                 _idle_entered_at = 0.0
                                 _idle_reading_unchanged_since = 0.0
                                 record_idle_exit()
                                 continue
-                        else:
-                            _idle_reading_unchanged_since = 0.0
      
-                        _last_idle_reading = current_idle_reading
-                        _last_idle_reading_time = now_t
+                        # ── SUBSCRIPTION CHECK ──
+                        if not _subscription_active:
+                            now = time.time()
+                            if now - _last_subscription_check < _subscription_check_interval:
+                                time.sleep(30)
+                                continue
+                            _last_subscription_check = now
+                            try:
+                                hello(HELLO_URL, os_user, hostname, device_id)
+                                _subscription_active = True
+                                log("[SUB] ✅ Reactivated")
+                            except urllib.error.HTTPError as e:
+                                if e.code == 403:
+                                    log("[SUB] Still inactive")
+                                time.sleep(30)
+                                continue
+                            except:
+                                time.sleep(30)
+                                continue
      
-                        if wall_idle_minutes > _IDLE_WATCHDOG_MAX_MINUTES:
-                            log(f"[IDLE-WD] ⚠️ Stuck {wall_idle_minutes:.1f} min — force-exit")
-                            report_error_to_backend(
-                                "idle_stuck",
-                                f"Idle stuck {wall_idle_minutes:.1f} min",
-                                context={"wall_idle_minutes": wall_idle_minutes, "hostname": hostname},
-                            )
-                            _emit_current_dwell(now_t)
+                        # ── SUSPEND RECOVERY ──
+                        if not hasattr(tracking_loop, "_last_iter_time"):
+                            tracking_loop._last_iter_time = time.time()
+     
+                        now_t = time.time()
+                        iter_gap = now_t - tracking_loop._last_iter_time
+                        tracking_loop._last_iter_time = now_t
+     
+                        _suspended = iter_gap > 60
+     
+                        if _wake_event.is_set() or _suspended:
+                            _wake_event.clear()
+     
+                            if _suspended:
+                                log(f"[TRACKING] ⏰ Thread suspended for {int(iter_gap)}s")
+                            else:
+                                log("[TRACKING] 🔄 Wake event — resetting state")
+     
+                            pre_suspend_ts = now_t - iter_gap
+                            if current_sig and current_sig != IDLE_SIG and last_emit_ts:
+                                _emit_current_dwell(pre_suspend_ts)
+                                log(f"[TRACKING] Flushed pre-suspend dwell at {pre_suspend_ts}")
+     
                             current_sig = None
                             dwell_start = None
                             last_emit_ts = None
-                            client_at_dwell_start = None
-                            _idle_entered_at = 0.0
-                            _idle_reading_unchanged_since = 0.0
-                            record_idle_exit()
-                            continue
      
-                    # ── SUBSCRIPTION CHECK (unchanged) ──
-                    if not _subscription_active:
-                        now = time.time()
-                        if now - _last_subscription_check < _subscription_check_interval:
-                            time.sleep(30)
-                            continue
-                        _last_subscription_check = now
-                        try:
-                            hello(HELLO_URL, os_user, hostname, device_id)
-                            _subscription_active = True
-                            log("[SUB] ✅ Reactivated")
-                        except urllib.error.HTTPError as e:
-                            if e.code == 403:
-                                log("[SUB] Still inactive")
-                            time.sleep(30)
-                            continue
-                        except:
-                            time.sleep(30)
-                            continue
+                            for _i in range(6):
+                                if is_network_ok():
+                                    break
+                                time.sleep(2.5)
      
-                    # ── SUSPEND RECOVERY (unchanged structurally, uses _emit_current_dwell) ──
-                    if not hasattr(tracking_loop, "_last_iter_time"):
-                        tracking_loop._last_iter_time = time.time()
-     
-                    now_t = time.time()
-                    iter_gap = now_t - tracking_loop._last_iter_time
-                    tracking_loop._last_iter_time = now_t
-     
-                    _suspended = iter_gap > 60
-     
-                    if _wake_event.is_set() or _suspended:
-                        _wake_event.clear()
-     
-                        if _suspended:
-                            log(f"[TRACKING] ⏰ Thread suspended for {int(iter_gap)}s")
-                        else:
-                            log("[TRACKING] 🔄 Wake event — resetting state")
-     
-                        # Cap current dwell at PRE-suspend time, not now. This
-                        # prevents the Wayne TL Wall block-2077-class bug: the
-                        # event interval should end when activity actually ended,
-                        # not when the thread woke back up hours later.
-                        pre_suspend_ts = now_t - iter_gap
-                        if current_sig and current_sig != IDLE_SIG and last_emit_ts:
-                            _emit_current_dwell(pre_suspend_ts)
-                            log(f"[TRACKING] Flushed pre-suspend dwell at {pre_suspend_ts}")
-     
-                        current_sig = None
-                        dwell_start = None
-                        last_emit_ts = None
-                        client_at_dwell_start = None
-     
-                        for _i in range(6):
                             if is_network_ok():
-                                break
-                            time.sleep(2.5)
-     
-                        if is_network_ok():
-                            log("[TRACKING] ✅ Network OK — resuming")
-                        else:
-                            log("[TRACKING] ⚠️ Network still down")
-                            _start_health_monitor()
-                        continue
-     
-                    if check_control_commands(CONTROL_URL, os_user, hostname):
-                        log("[CTRL] Stopping per admin request.")
-                        break
-     
-                    # ── Idle detection ──
-                    idle = mouse_idle_seconds()
-     
-                    force_idle = False
-                    front_peek = get_foreground_window_info()
-                    if front_peek:
-                        peek_app, peek_exe, peek_pid, peek_title = front_peek
-                        if (peek_app and peek_app.lower() in LOCK_SCREEN_APPS) or \
-                           (peek_title and "lock screen" in peek_title.lower()):
-                            force_idle = True
-                            if current_sig != IDLE_SIG:
-                                log(f"[IDLE] Lock screen → entering idle immediately")
-     
-                    # ── Meeting idle suppression (unchanged behavior, new event emit) ──
-                    in_meeting = False
-                    if meeting_detector and meeting_detector.is_active():
-                        in_meeting = True
-                        if idle >= MOUSE_IDLE_PAUSE_S and current_sig != IDLE_SIG:
-                            _now = time.time()
-                            if not hasattr(tracking_loop, "_last_meeting_idle_log"):
-                                tracking_loop._last_meeting_idle_log = 0.0
-                            if _now - tracking_loop._last_meeting_idle_log > 60:
-                                log(f"[MEETING] Suppressing idle (mouse {int(idle)}s)")
-                                tracking_loop._last_meeting_idle_log = _now
-     
-                    if in_meeting:
-                        # Normal foreground tracking continues during meetings.
-                        front = front_peek
-                        if front:
-                            app_name, exe_name, pid, window_title = front
-                            window_title = normalize_window_title(window_title or "")
-                            extras = try_get_url_or_path(exe_name, window_title)
-                            url, fpath = extras.get("url"), extras.get("file_path")
-                            sig = (app_name, exe_name, window_title, url, fpath)
-                            now_loop = time.time()
-     
-                            if sig != current_sig:
-                                # Window changed: emit final segment of old dwell,
-                                # then start new dwell.
-                                if current_sig and current_sig != IDLE_SIG:
-                                    _emit_current_dwell(now_loop)
-                                _start_new_dwell(sig, now_loop)
-                                record_window_change()
-                                if ai_switcher:
-                                    ai_switcher.on_window_change(
-                                        app_name, exe_name, window_title, url, fpath
-                                    )
-                                if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):
-                                    cur_id, cur_name = _get_cached_client()
-                                    new_state = widget_tracker.on_window_change(
-                                        window_title, fpath, url, cur_name, []
-                                    )
-                                    gui_menu_bar.state.current_widget_state = new_state
+                                log("[TRACKING] ✅ Network OK — resuming")
                             else:
-                                # Same window: check if it's time for a heartbeat
-                                if last_emit_ts and (now_loop - last_emit_ts) >= HEARTBEAT_INTERVAL_S:
-                                    _emit_current_dwell(now_loop)
+                                log("[TRACKING] ⚠️ Network still down")
+                                _start_health_monitor()
+                            continue
      
-                            if ai_switcher:
-                                ai_switcher.on_dwell_tick()
-                            if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):
-                                new_state = widget_tracker.tick()
-                                gui_menu_bar.state.current_widget_state = new_state
+                        if check_control_commands(CONTROL_URL, os_user, hostname):
+                            log("[CTRL] Stopping per admin request.")
+                            break
      
-                        time.sleep(POLL_SECONDS)
-                        consecutive_errors = 0
-                        continue
+                        # ── Idle detection ──
+                        idle = mouse_idle_seconds()
      
-                    # ── Idle entry ──
-                    if force_idle or idle >= MOUSE_IDLE_PAUSE_S:
-                        if current_sig != IDLE_SIG:
-                            if notif_manager:
-                                try:
-                                    notif_manager.on_idle_start()
-                                except Exception as e:
-                                    log(f"[TRACKING] notif on_idle_start error: {e}", "warning")
+                        force_idle = False
+                        front_peek = get_foreground_window_info()
+                        if front_peek:
+                            peek_app, peek_exe, peek_pid, peek_title = front_peek
+                            if (peek_app and peek_app.lower() in LOCK_SCREEN_APPS) or \
+                               (peek_title and "lock screen" in peek_title.lower()):
+                                force_idle = True
+                                if current_sig != IDLE_SIG:
+                                    log(f"[IDLE] Lock screen → entering idle immediately")
      
-                            # Flush active dwell at the moment user actually went idle.
-                            # For mouse-idle (not force_idle), the idle started
-                            # MOUSE_IDLE_PAUSE_S seconds ago, so cap the event there.
-                            now_loop = time.time()
-                            if current_sig and current_sig != IDLE_SIG and last_emit_ts:
-                                if force_idle:
-                                    effective_end = now_loop
+                        # ── Meeting idle suppression ──
+                        in_meeting = False
+                        if meeting_detector and meeting_detector.is_active():
+                            in_meeting = True
+                            if idle >= MOUSE_IDLE_PAUSE_S and current_sig != IDLE_SIG:
+                                _now = time.time()
+                                if not hasattr(tracking_loop, "_last_meeting_idle_log"):
+                                    tracking_loop._last_meeting_idle_log = 0.0
+                                if _now - tracking_loop._last_meeting_idle_log > 60:
+                                    log(f"[MEETING] Suppressing idle (mouse {int(idle)}s)")
+                                    tracking_loop._last_meeting_idle_log = _now
+     
+                        if in_meeting:
+                            front = front_peek
+                            if front:
+                                app_name, exe_name, pid, window_title = front
+                                window_title = normalize_window_title(window_title or "")
+                                extras = try_get_url_or_path(exe_name, window_title)
+                                url, fpath = extras.get("url"), extras.get("file_path")
+                                sig = (app_name, exe_name, window_title, url, fpath)
+                                now_loop = time.time()
+     
+                                if sig != current_sig:
+                                    if current_sig and current_sig != IDLE_SIG:
+                                        _emit_current_dwell(now_loop)
+                                    _start_new_dwell(sig, now_loop)
+                                    record_window_change()
+                                    if ai_switcher:
+                                        ai_switcher.on_window_change(
+                                            app_name, exe_name, window_title, url, fpath
+                                        )
+                                    if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):
+                                        cur_id, cur_name = _get_cached_client()
+                                        new_state = widget_tracker.on_window_change(
+                                            window_title, fpath, url, cur_name, []
+                                        )
+                                        gui_menu_bar.state.current_widget_state = new_state
                                 else:
-                                    effective_end = now_loop - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
-                                effective_end = max(effective_end, last_emit_ts + 0.1)
-                                _emit_current_dwell(effective_end)
+                                    if last_emit_ts and (now_loop - last_emit_ts) >= HEARTBEAT_INTERVAL_S:
+                                        _emit_current_dwell(now_loop)
      
-                            # Enter idle state — no heartbeats, just clear bounds.
-                            if force_idle:
-                                idle_start = now_loop
-                            else:
-                                idle_start = now_loop - min(idle, MOUSE_IDLE_PAUSE_S)
-                            _start_new_dwell(IDLE_SIG, idle_start)
+                                if ai_switcher:
+                                    ai_switcher.on_dwell_tick()
+                                if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):
+                                    new_state = widget_tracker.tick()
+                                    gui_menu_bar.state.current_widget_state = new_state
      
-                            _idle_entered_at = time.time()
-                            record_idle_enter()
+                            time.sleep(POLL_SECONDS)
+                            consecutive_errors = 0
+                            continue
      
-                            verdict = classify_idle(idle, MOUSE_IDLE_PAUSE_S)
-                            if verdict.kind == IdleKind.UNINTENTIONAL:
-                                log(f"[IDLE] ⚠️ Unintentional ({verdict.reason}) — skipping")
-                                current_sig = None
-                                dwell_start = None
-                                last_emit_ts = None
-                                client_at_dwell_start = None
-                                _idle_entered_at = 0.0
-                                record_idle_exit()
-                                continue
-                            else:
-                                log(f"[IDLE] Intentional — {verdict.reason}")
+                        # ── Idle entry ──
+                        if force_idle or idle >= MOUSE_IDLE_PAUSE_S:
+                            if current_sig != IDLE_SIG:
+                                if notif_manager:
+                                    try:
+                                        notif_manager.on_idle_start()
+                                    except Exception as e:
+                                        log(f"[TRACKING] notif on_idle_start error: {e}", "warning")
      
-                        # While idle, check the soft caps (unchanged structurally)
-                        if current_sig == IDLE_SIG and dwell_start:
-                            idle_duration = time.time() - dwell_start
+                                now_loop = time.time()
+                                if current_sig and current_sig != IDLE_SIG and last_emit_ts:
+                                    if force_idle:
+                                        effective_end = now_loop
+                                    else:
+                                        effective_end = now_loop - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                                    effective_end = max(effective_end, last_emit_ts + 0.1)
+                                    _emit_current_dwell(effective_end)
      
-                            if idle_duration > MAX_IDLE_SECONDS:
-                                log(f"[IDLE] ⚠️ Max cap {int(idle_duration)}s — finalizing")
-                                _emit_current_dwell(time.time())
-                                current_sig = None
-                                dwell_start = None
-                                last_emit_ts = None
-                                client_at_dwell_start = None
-                                _idle_entered_at = 0.0
-                                record_idle_exit()
-                                continue
+                                if force_idle:
+                                    idle_start = now_loop
+                                else:
+                                    idle_start = now_loop - min(idle, MOUSE_IDLE_PAUSE_S)
+                                _start_new_dwell(IDLE_SIG, idle_start)
      
-                            if idle_duration > IDLE_STUCK_CHECK_SECONDS:
-                                fresh_idle = mouse_idle_seconds()
-                                if fresh_idle < MOUSE_IDLE_PAUSE_S:
-                                    log(f"[IDLE] ⚠️ Stuck — fresh idle={int(fresh_idle)}s, exiting")
+                                _idle_entered_at = time.time()
+                                record_idle_enter()
+     
+                                verdict = classify_idle(idle, MOUSE_IDLE_PAUSE_S)
+                                if verdict.kind == IdleKind.UNINTENTIONAL:
+                                    log(f"[IDLE] ⚠️ Unintentional ({verdict.reason}) — skipping")
+                                    current_sig = None
+                                    dwell_start = None
+                                    last_emit_ts = None
+                                    _idle_entered_at = 0.0
+                                    record_idle_exit()
+                                    continue
+                                else:
+                                    log(f"[IDLE] Intentional — {verdict.reason}")
+     
+                            if current_sig == IDLE_SIG and dwell_start:
+                                idle_duration = time.time() - dwell_start
+     
+                                if idle_duration > MAX_IDLE_SECONDS:
+                                    log(f"[IDLE] ⚠️ Max cap {int(idle_duration)}s — finalizing")
                                     _emit_current_dwell(time.time())
                                     current_sig = None
                                     dwell_start = None
                                     last_emit_ts = None
-                                    client_at_dwell_start = None
                                     _idle_entered_at = 0.0
                                     record_idle_exit()
                                     continue
      
-                        if force_idle:
-                            time.sleep(POLL_SECONDS * 3)
+                                if idle_duration > IDLE_STUCK_CHECK_SECONDS:
+                                    fresh_idle = mouse_idle_seconds()
+                                    if fresh_idle < MOUSE_IDLE_PAUSE_S:
+                                        log(f"[IDLE] ⚠️ Stuck — fresh idle={int(fresh_idle)}s, exiting")
+                                        _emit_current_dwell(time.time())
+                                        current_sig = None
+                                        dwell_start = None
+                                        last_emit_ts = None
+                                        _idle_entered_at = 0.0
+                                        record_idle_exit()
+                                        continue
+     
+                            if force_idle:
+                                time.sleep(POLL_SECONDS * 3)
+                            else:
+                                time.sleep(POLL_SECONDS)
+                            consecutive_errors = 0
+                            continue
+     
+                        # ── Active path (non-idle, non-meeting) ──
+                        if current_sig == IDLE_SIG and dwell_start:
+                            if notif_manager:
+                                try:
+                                    notif_manager.on_idle_end()
+                                except Exception as e:
+                                    log(f"[TRACKING] notif on_idle_end error: {e}", "warning")
+     
+                            _emit_current_dwell(time.time())
+                            log(f"[IDLE] Exited idle")
+                            current_sig = None
+                            dwell_start = None
+                            last_emit_ts = None
+                            _idle_entered_at = 0.0
+                            record_idle_exit()
+     
+                        front = front_peek
+                        if not front:
+                            _now = time.time()
+                            if not hasattr(tracking_loop, "_last_no_front_log"):
+                                tracking_loop._last_no_front_log = 0.0
+                            if _now - tracking_loop._last_no_front_log > 60:
+                                log("[TRACKING] ⚠️ No foreground window")
+                                tracking_loop._last_no_front_log = _now
+                            time.sleep(POLL_SECONDS)
+                            consecutive_errors = 0
+                            continue
+     
+                        app_name, exe_name, pid, window_title = front
+                        window_title = normalize_window_title(window_title or "")
+                        extras = try_get_url_or_path(exe_name, window_title)
+                        url, fpath = extras.get("url"), extras.get("file_path")
+                        sig = (app_name, exe_name, window_title, url, fpath)
+                        now_loop = time.time()
+     
+                        if sig != current_sig:
+                            if current_sig and current_sig != IDLE_SIG:
+                                _emit_current_dwell(now_loop)
+                            _start_new_dwell(sig, now_loop)
+                            log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
+                            record_window_change()
+                            if ai_switcher:
+                                ai_switcher.on_window_change(app_name, exe_name, window_title, url, fpath)
+                            if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):
+                                cur_id, cur_name = _get_cached_client()
+                                new_state = widget_tracker.on_window_change(
+                                    window_title, fpath, url, cur_name, []
+                                )
+                                gui_menu_bar.state.current_widget_state = new_state
+                        else:
+                            if last_emit_ts and (now_loop - last_emit_ts) >= HEARTBEAT_INTERVAL_S:
+                                _emit_current_dwell(now_loop)
+     
+                        if ai_switcher:
+                            ai_switcher.on_dwell_tick()
+                        if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):
+                            new_state = widget_tracker.tick()
+                            gui_menu_bar.state.current_widget_state = new_state
+     
+                        time.sleep(POLL_SECONDS)
+                        consecutive_errors = 0
+     
+                    except Exception as e:
+                        consecutive_errors += 1
+                        error_context = {
+                            "current_sig": str(current_sig) if current_sig else None,
+                            "dwell_start": dwell_start,
+                            "consecutive_errors": consecutive_errors,
+                        }
+                        log_error(f"[TRACKING] ⚠️ Iteration error ({consecutive_errors}): {e}")
+                        tb = traceback.format_exc()
+                        traceback.print_exc()
+                        report_error_to_backend("tracking_loop", str(e), tb, error_context)
+     
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                            log_error(f"[TRACKING] ❌ {consecutive_errors} errors — pausing 60s")
+                            report_error_to_backend(
+                                "tracking_loop_critical",
+                                f"Too many errors: {consecutive_errors}",
+                                tb, error_context,
+                            )
+                            time.sleep(60)
+                            consecutive_errors = 0
                         else:
                             time.sleep(POLL_SECONDS)
-                        consecutive_errors = 0
                         continue
      
-                    # ── Active path (non-idle, non-meeting) ──
-                    if current_sig == IDLE_SIG and dwell_start:
-                        # Exit idle: emit the idle event for its real duration
-                        if notif_manager:
-                            try:
-                                notif_manager.on_idle_end()
-                            except Exception as e:
-                                log(f"[TRACKING] notif on_idle_end error: {e}", "warning")
-     
-                        _emit_current_dwell(time.time())
-                        log(f"[IDLE] Exited idle")
-                        current_sig = None
-                        dwell_start = None
-                        last_emit_ts = None
-                        client_at_dwell_start = None
-                        _idle_entered_at = 0.0
-                        record_idle_exit()
-     
-                    front = front_peek
-                    if not front:
-                        _now = time.time()
-                        if not hasattr(tracking_loop, "_last_no_front_log"):
-                            tracking_loop._last_no_front_log = 0.0
-                        if _now - tracking_loop._last_no_front_log > 60:
-                            log("[TRACKING] ⚠️ No foreground window")
-                            tracking_loop._last_no_front_log = _now
-                        time.sleep(POLL_SECONDS)
-                        consecutive_errors = 0
-                        continue
-     
-                    app_name, exe_name, pid, window_title = front
-                    window_title = normalize_window_title(window_title or "")
-                    extras = try_get_url_or_path(exe_name, window_title)
-                    url, fpath = extras.get("url"), extras.get("file_path")
-                    sig = (app_name, exe_name, window_title, url, fpath)
-                    now_loop = time.time()
-     
-                    if sig != current_sig:
-                        # New window: finalize old dwell, start new
-                        if current_sig and current_sig != IDLE_SIG:
-                            _emit_current_dwell(now_loop)
-                        _start_new_dwell(sig, now_loop)
-                        log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
-                        record_window_change()
-                        if ai_switcher:
-                            ai_switcher.on_window_change(app_name, exe_name, window_title, url, fpath)
-                        if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):
-                            cur_id, cur_name = _get_cached_client()
-                            new_state = widget_tracker.on_window_change(
-                                window_title, fpath, url, cur_name, []
-                            )
-                            gui_menu_bar.state.current_widget_state = new_state
-                    else:
-                        # Same window: emit heartbeat if interval elapsed
-                        if last_emit_ts and (now_loop - last_emit_ts) >= HEARTBEAT_INTERVAL_S:
-                            _emit_current_dwell(now_loop)
-     
-                    if ai_switcher:
-                        ai_switcher.on_dwell_tick()
-                    if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):
-                        new_state = widget_tracker.tick()
-                        gui_menu_bar.state.current_widget_state = new_state
-     
-                    time.sleep(POLL_SECONDS)
-                    consecutive_errors = 0
-     
-                except Exception as e:
-                    consecutive_errors += 1
-                    error_context = {
-                        "current_sig": str(current_sig) if current_sig else None,
-                        "dwell_start": dwell_start,
-                        "consecutive_errors": consecutive_errors,
-                    }
-                    log_error(f"[TRACKING] ⚠️ Iteration error ({consecutive_errors}): {e}")
-                    tb = traceback.format_exc()
-                    traceback.print_exc()
-                    report_error_to_backend("tracking_loop", str(e), tb, error_context)
-     
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                        log_error(f"[TRACKING] ❌ {consecutive_errors} errors — pausing 60s")
-                        report_error_to_backend(
-                            "tracking_loop_critical",
-                            f"Too many errors: {consecutive_errors}",
-                            tb, error_context,
-                        )
-                        time.sleep(60)
-                        consecutive_errors = 0
-                    else:
-                        time.sleep(POLL_SECONDS)
-                    continue
-     
-        except KeyboardInterrupt:
-            log("=== Stopping (Ctrl+C) ===")
-            if current_sig and last_emit_ts and current_sig != IDLE_SIG:
-                _emit_current_dwell(time.time())
-        except Exception as e:
-            log_error(f"[TRACKING] ❌ Fatal: {e}")
-            tb = traceback.format_exc()
-            traceback.print_exc()
-            report_error_to_backend("tracking_fatal", str(e), tb)
-        finally:
-            log("[TRACKING] Cleaning up...")
-            conn.close()
-            remove_pid()
-            if notif_worker:
-                notif_worker.stop()
+            except KeyboardInterrupt:
+                log("=== Stopping (Ctrl+C) ===")
+                if current_sig and last_emit_ts and current_sig != IDLE_SIG:
+                    _emit_current_dwell(time.time())
+            except Exception as e:
+                log_error(f"[TRACKING] ❌ Fatal: {e}")
+                tb = traceback.format_exc()
+                traceback.print_exc()
+                report_error_to_backend("tracking_fatal", str(e), tb)
+            finally:
+                log("[TRACKING] Cleaning up...")
+                conn.close()
+                remove_pid()
+                if notif_worker:
+                    notif_worker.stop()
 
     # === START TRACKING THREAD ===
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)

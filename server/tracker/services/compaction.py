@@ -1,9 +1,34 @@
 # tracker/services/compaction.py
 """
-Event-centric compaction.
+Event-centric compaction — v1.3.38 (dual-timestamp).
 
-Key invariant: IDLE_CAP must match the agent's MOUSE_IDLE_PAUSE_S.
-If you change one, change the other — they encode the same concept.
+KEY CHANGE FROM v1.3.37
+=======================
+Events now carry real (start_ts, end_ts) intervals instead of a single
+ts_utc timestamp. Duration is read directly from the event interval — no
+more IDLE_CAP guessing or gap-walking to the next event.
+
+Old (v1.3.37):
+    duration ≈ min(next_event.ts_utc - this_event.ts_utc, 10min cap)
+
+New (v1.3.38):
+    duration = event.end_ts - event.start_ts
+
+A 30-minute Outlook dwell now reports 30 minutes, not capped fragments.
+
+UNCHANGED
+=========
+Meeting extraction, idle filter, foreground filter, auto-categorization,
+cleanup paths all stay identical — they were already interval-aware.
+
+KEY INVARIANTS
+==============
+- Compaction is idempotent: re-running on the same events produces the
+  same blocks (modulo race with newly-arriving events).
+- SESSION_GAP defines block boundaries — gaps larger than this start a new
+  block. Gap is now measured as next.start_ts - prev.end_ts (true gap),
+  not next.ts_utc - prev.ts_utc (start-to-start approximation).
+- The 0 <= gap < SESSION_GAP guard prevents negative-gap merges (block 10594 fix).
 """
 
 from __future__ import annotations
@@ -24,15 +49,14 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # Configuration
-IDLE_CAP = timedelta(minutes=10)  # MUST match agent's MOUSE_IDLE_PAUSE_S (10 min)
+# IDLE_CAP — DEPRECATED in v1.3.38. Events carry real intervals; no more
+# capping needed. Kept as a no-op constant so any external imports don't
+# break. New code should not reference it.
+IDLE_CAP = timedelta(minutes=10)  # DEPRECATED — unused
+
 MIN_BLOCK_MINUTES = 0.5
 SESSION_GAP = timedelta(minutes=30)
 AUTO_CATEGORIZE_THRESHOLD = 0.70
-
-# How long (in seconds) each raw event represents. Must match the agent's
-# POLL_SECONDS (main.py). Used as the "trailing duration" for the last event
-# in a series when there's no next event to measure against.
-AGENT_POLL_SECONDS = 5
 
 
 def _safe_device_id(device_id) -> int:
@@ -51,22 +75,48 @@ def _app_key(event_or_block) -> str:
 
 
 def _calculate_minutes_from_events(events_qs) -> int:
-    """Calculate total minutes from events. SINGLE SOURCE OF TRUTH."""
-    events = list(events_qs.order_by('ts_utc'))
+    """
+    Sum real interval durations across events.
+
+    v1.3.38: each event has (start_ts, end_ts). No more IDLE_CAP guessing.
+    Overlapping events (rare — only during agent bugs) are deduplicated
+    via interval union to prevent double-counting.
+    """
+    events = list(events_qs.order_by("start_ts"))
     if not events:
         return 0
-    
-    total_seconds = 0
-    for i, event in enumerate(events):
-        if i + 1 < len(events):
-            duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
-            duration = min(duration, IDLE_CAP.total_seconds())  # 10 min cap
+
+    # Union of intervals to handle any accidental overlap cleanly.
+    intervals = sorted((e.start_ts, e.end_ts) for e in events)
+    merged = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
-            duration = AGENT_POLL_SECONDS  # 5 sec for last event
-        total_seconds += duration
-    
+            merged.append((start, end))
+
+    total_seconds = sum((end - start).total_seconds() for start, end in merged)
     return int(total_seconds / 60)
 
+
+def _calculate_minutes_for_events_list(events: list) -> int:
+    """Same as above but for a Python list of RawEvent objects (no queryset)."""
+    if not events:
+        return 0
+    intervals = sorted((e.start_ts, e.end_ts) for e in events)
+    merged = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    total_seconds = sum((end - start).total_seconds() for start, end in merged)
+    return max(1, int(total_seconds / 60))
+
+
+# =============================================================================
+# Meeting extraction (unchanged from v1.3.37 — already interval-aware)
+# =============================================================================
 
 def _extract_and_persist_meeting_blocks(
     events: list, user, org, day: date_type, hostname: Optional[str]
@@ -83,14 +133,12 @@ def _extract_and_persist_meeting_blocks(
 
     Start/end pairs are matched by meeting_app within the same user/day.
     Dangling starts (no matching end) are NOT persisted — they'll be picked
-    up by the next compaction run once the end event arrives. This handles
-    users who are still in a meeting when compaction runs.
+    up by the next compaction run once the end event arrives.
 
-    Returns: count of meeting blocks created.
+    v1.3.38: start_ts replaces ts_utc for ordering and pairing.
     """
-    # Build starts dict keyed by meeting_app, ordered by time
-    starts = {}  # meeting_app → list of RawEvent
-    ends = {}    # meeting_app → list of RawEvent
+    starts = {}
+    ends = {}
 
     for event in events:
         app = event.app_name or ''
@@ -114,31 +162,25 @@ def _extract_and_persist_meeting_blocks(
         for meeting_app, start_events in starts.items():
             end_events = ends.get(meeting_app, [])
 
-            # Pair each start with the earliest end that comes after it
             for start_ev in start_events:
-                # Find first end event after this start
                 matching_end = next(
-                    (e for e in end_events if e.ts_utc > start_ev.ts_utc),
+                    (e for e in end_events if e.start_ts > start_ev.start_ts),
                     None
                 )
 
                 if not matching_end:
-                    # Dangling start — user still in meeting. Skip for now.
                     logger.debug(
                         f"[COMPACT-MEETING] Dangling start for {meeting_app} "
-                        f"at {start_ev.ts_utc} — will pick up next run"
+                        f"at {start_ev.start_ts} — will pick up next run"
                     )
                     continue
 
-                # Remove this end from pool so it's not reused
                 end_events.remove(matching_end)
 
-                # Build and save the meeting block
                 block = _create_meeting_block(
                     start_ev, matching_end, meeting_app, user, org, day, hostname
                 )
                 if block:
-                    # Link both events to this block
                     RawEvent.objects.filter(
                         id__in=[start_ev.id, matching_end.id]
                     ).update(block=block)
@@ -154,19 +196,14 @@ def _create_meeting_block(
     """
     Create a single meeting Block record from a start/end event pair.
 
-    Meeting blocks are:
-      - Always auto-categorized to 'Client Meeting' (no AI call needed)
-      - Locked (is_categorized=True) so they skip the classifier
-      - Billable by default
-      - Duration comes from actual timestamps (no 3-min cap)
-      - Attributed to whatever client was active when the meeting started
-        (the agent's AI switcher tries to set this based on meeting title)
+    v1.3.38: uses start_event.start_ts and end_event.start_ts as the
+    canonical meeting boundary timestamps. (We use start_ts of the end
+    event because Meeting-End events are 1-second sentinels — the meaningful
+    timestamp is when they begin.)
     """
-    # Duration from actual timestamps — NO IDLE CAP for meetings
-    duration_seconds = (end_event.ts_utc - start_event.ts_utc).total_seconds()
+    duration_seconds = (end_event.start_ts - start_event.start_ts).total_seconds()
     minutes = max(1, int(duration_seconds / 60))
 
-    # Skip implausibly short meetings (< 1 min — probably detector flapping)
     if minutes < 1:
         logger.warning(
             f"[COMPACT-MEETING] Skipping {meeting_app} block: "
@@ -174,8 +211,7 @@ def _create_meeting_block(
         )
         return None
 
-    # Safety cap: single meeting shouldn't exceed 8 hours — if it does,
-    # something went wrong (end event lost, sleep/wake confusion). Cap it.
+    # Safety cap: 8 hours max for a single meeting
     if duration_seconds > 8 * 3600:
         logger.warning(
             f"[COMPACT-MEETING] {meeting_app} block capped: "
@@ -192,22 +228,17 @@ def _create_meeting_block(
         except Client.DoesNotExist:
             client = None
 
-    # Fall back to device's current client if none on event
     if not client:
         device_id = _safe_device_id(getattr(start_event, 'device_id', None))
         if device_id:
             client = get_current_client_for_user(user, device_id=device_id)
 
-    # Billing rate
     billing_rate = _resolve_billing_rate(
         org, user, client.id if client else None, task_type_id=None
     )
     billing_amount = round((minutes / 60) * float(billing_rate), 2)
 
-    # Hours for category_hours dict
     hours = round(minutes / 60.0, 2)
-
-    # Window title — prefer the start event's (meeting titles are set at start)
     title = start_event.window_title or f"{meeting_app.title()} meeting"
 
     try:
@@ -216,8 +247,8 @@ def _create_meeting_block(
             user=user,
             device_id=_safe_device_id(getattr(start_event, 'device_id', None)),
             hostname=start_event.hostname or hostname or "unknown",
-            start=start_event.ts_utc,
-            end=end_event.ts_utc,
+            start=start_event.start_ts,
+            end=end_event.start_ts,
             day=day,
             minutes=minutes,
             is_meeting=True,
@@ -246,9 +277,6 @@ def _create_meeting_block(
             billing_amount=billing_amount,
         )
 
-        # Classify immediately so the API returns a fully-classified block.
-        # Stage 0-9 are deterministic and run inline. Stage 10 (AI) is skipped
-        # here; if needed, the post_save signal will queue it for Celery.
         try:
             from tracker.services.classification_service import ClassificationService
             service = ClassificationService(org=org, user=user)
@@ -259,7 +287,6 @@ def _create_meeting_block(
                 f"[COMPACT-MEETING] Classification failed for block {new_block.id}: {e}",
                 exc_info=True,
             )
-            # Block stays in 'captured' state. Signal handler will retry async.
 
         logger.info(
             f"[COMPACT-MEETING] Created {meeting_app} block {new_block.id}: "
@@ -271,14 +298,13 @@ def _create_meeting_block(
         logger.exception(f"[COMPACT-MEETING] Failed to create block: {e}")
         return None
 
-def _filter_idle_inside_meetings(user, day: date_type) -> int:
-    """
-    Safety net: delete any idle blocks that fall entirely within a meeting
-    block's time range. The agent should already suppress idle during
-    meetings, but this catches any that leak through.
 
-    Returns: count of idle blocks deleted.
-    """
+# =============================================================================
+# Meeting safety nets (unchanged from v1.3.37)
+# =============================================================================
+
+def _filter_idle_inside_meetings(user, day: date_type) -> int:
+    """Delete idle blocks that fall entirely within a meeting window."""
     meetings = list(Block.objects.filter(
         user=user,
         day=day,
@@ -303,7 +329,6 @@ def _filter_idle_inside_meetings(user, day: date_type) -> int:
 
         count = idle_blocks.count()
         if count:
-            # Unlink raw_events first so they don't get orphaned
             RawEvent.objects.filter(block__in=idle_blocks).update(block=None)
             idle_blocks.delete()
             deleted += count
@@ -316,31 +341,12 @@ def _filter_idle_inside_meetings(user, day: date_type) -> int:
 
 
 def _filter_foreground_inside_meetings(user, day: date_type) -> int:
-    """
-    Mark foreground blocks non-billable when they fall entirely within a
-    meeting block that has an attributed client.
-    
-    Rationale: when a user is in a meeting with Client A, that hour is
-    billed to Client A even if other app windows are open in the foreground
-    (notes in Excel, reference docs, etc). The foreground blocks remain
-    in the database for audit purposes but don't count toward billable totals.
-    
-    Rules (confirmed with product):
-    - Only applies when meeting.client_id IS NOT NULL (attributed only)
-    - Only blocks 100% INSIDE the meeting window (partial overlaps left alone)
-    - Manually-categorized blocks are respected (user override wins)
-    - Meeting blocks themselves are skipped (don't affect each other)
-    - Already-non-billable blocks unchanged (idempotent)
-    - Model auto-zeros billing_amount when is_billable flips to False
-    
-    Returns: count of foreground blocks marked non-billable.
-    """
-    # 1. Find attributed meeting blocks for this user/day
+    """Mark foreground blocks non-billable when entirely inside attributed meetings."""
     meetings = list(Block.objects.filter(
         user=user,
         day=day,
         bundle_id__startswith='meeting:',
-        client__isnull=False,  # ← key: only attributed meetings
+        client__isnull=False,
     ).only('id', 'start', 'end', 'client_id', 'bundle_id'))
 
     if not meetings:
@@ -351,33 +357,27 @@ def _filter_foreground_inside_meetings(user, day: date_type) -> int:
         if not (meeting.start and meeting.end):
             continue
 
-        # 2. Find foreground blocks 100% inside this meeting's time range
-        #    Exclude: meeting blocks, idle blocks, manually-categorized blocks,
-        #    already-non-billable blocks
         candidates = Block.objects.filter(
             user=user,
             day=day,
             start__gte=meeting.start,
             end__lte=meeting.end,
-            is_billable=True,  # skip already non-billable
+            is_billable=True,
         ).exclude(
-            bundle_id__startswith='meeting:',  # don't touch meetings
+            bundle_id__startswith='meeting:',
         ).exclude(
-            bundle_id='__idle__',  # idle filter handles those separately
+            bundle_id='__idle__',
         ).exclude(
-            categorized_by='manual',  # respect user's deliberate choice
+            categorized_by='manual',
         ).exclude(
-            categorized_by='correction',  # respect user corrections
+            categorized_by='correction',
         )
 
         count = candidates.count()
         if count:
-            # Save each block individually to trigger model's save() method,
-            # which auto-zeros billing_amount when is_billable becomes False.
-            # (Bulk update would bypass that logic.)
             for blk in candidates:
                 blk.is_billable = False
-                blk.billing_amount = Decimal('0.00')  # explicit — don't rely on save() hook
+                blk.billing_amount = Decimal('0.00')
                 blk.save(update_fields=['is_billable', 'billing_amount'])
 
             suppressed += count
@@ -389,24 +389,21 @@ def _filter_foreground_inside_meetings(user, day: date_type) -> int:
 
     return suppressed
 
+
 # =============================================================================
-# AUTO-CATEGORIZATION PATTERNS
+# Auto-categorization (delegates to ClassificationService)
 # =============================================================================
+
 def auto_categorize_block(block: Block) -> bool:
     """
-    Auto-categorize a block using ClassificationService deterministic stages.
+    Auto-categorize a block via ClassificationService deterministic stages.
 
     Returns True if a strong signal fired (block now committed/proposed/suppressed).
-    Returns False if no strong signal hit (block still in captured state — signal
-    handler will queue it for AI classification).
-
-    This used to do its own pattern matching. Now it delegates to
-    ClassificationService so all classification goes through the state machine.
+    Returns False if no strong signal hit.
     """
     if block.is_categorized:
         return False
 
-    # Skip if block is already in a non-captured classification state
     state = getattr(block, 'classification_state', None)
     if state and state != 'captured':
         return False
@@ -424,7 +421,6 @@ def auto_categorize_block(block: Block) -> bool:
         decision = service.classify(block, skip_ai=False)
         service.apply(block, decision)
 
-        # Refresh to see the final state after apply()
         block.refresh_from_db()
         final_state = block.classification_state
 
@@ -435,7 +431,6 @@ def auto_categorize_block(block: Block) -> bool:
             )
             return True
         else:
-            # Stayed in captured. Signal handler will queue for AI later.
             return False
 
     except Exception as e:
@@ -446,69 +441,54 @@ def auto_categorize_block(block: Block) -> bool:
         return False
 
 
-# =============================================================================
-# ✅ FIX #1: This function was MISSING - Celery was failing silently!
-# =============================================================================
-
 def auto_compact_all_active_users(minutes_back: int = 30) -> Dict[str, int]:
-    """
-    Auto-compact recent events for ALL active users.
-    Called by Celery beat every 5 minutes.
-    
-    Args:
-        minutes_back: How far back to look for unlinked events (default 30 min)
-    
-    Returns:
-        Dict with stats: users_processed, blocks_created, errors
-    """
+    """Auto-compact recent events for ALL active users (Celery beat task)."""
     stats = {
         'users_processed': 0,
         'blocks_created': 0,
         'errors': 0,
     }
-    
-    # Find all users with unlinked events in the last N minutes
+
     cutoff = timezone.now() - timedelta(minutes=minutes_back)
-    
+
     users_with_events = RawEvent.objects.filter(
-        ts_utc__gte=cutoff,
+        start_ts__gte=cutoff,
         block__isnull=True
     ).values('user').annotate(count=Count('id')).filter(count__gt=0)
-    
+
     logger.info(f"[AUTO-COMPACT] Found {len(users_with_events)} users with unlinked events")
-    
+
     for user_data in users_with_events:
         user_id = user_data['user']
         event_count = user_data['count']
-        
+
         try:
             user = User.objects.get(id=user_id)
             logger.info(f"[AUTO-COMPACT] Processing {user.username}: {event_count} events")
-            
-            # Compact today's events for this user
+
             today = timezone.localdate()
             result = compact_day(user, today)
-            
+
             stats['users_processed'] += 1
             stats['blocks_created'] += result
-            
+
         except User.DoesNotExist:
             logger.warning(f"[AUTO-COMPACT] User {user_id} not found")
             stats['errors'] += 1
         except Exception as e:
             logger.error(f"[AUTO-COMPACT] Error for user {user_id}: {e}", exc_info=True)
             stats['errors'] += 1
-    
+
     logger.info(
         f"[AUTO-COMPACT] Complete: {stats['users_processed']} users, "
         f"{stats['blocks_created']} blocks, {stats['errors']} errors"
     )
-    
+
     return stats
 
 
 def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org=None) -> int:
-    """Main entry point."""
+    """Main entry point — compacts today's events for one user."""
     today = timezone.localdate()
     if isinstance(user, str):
         try:
@@ -518,24 +498,29 @@ def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org
     return compact_day(user, today, hostname=hostname, org=org)
 
 
+# =============================================================================
+# compact_day — main compaction logic, REWRITTEN for v1.3.38
+# =============================================================================
+
 def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) -> int:
     """
-    Main compaction logic - FIXED to prevent duplicates and separate by client.
-    
-    KEY CHANGES:
-    1. Group by app AND client (not just app)
-    2. Don't merge blocks with different clients
-    3. Use .update() instead of .save() to bypass Block protection
+    Compact raw events into blocks for one user/day.
+
+    v1.3.38 changes:
+      - Events have (start_ts, end_ts) intervals
+      - Block duration = union of event intervals (no IDLE_CAP guessing)
+      - Session gap = next.start_ts - prev.end_ts (real inter-event gap)
+      - Block start = min(event.start_ts), Block end = max(event.end_ts)
     """
     if isinstance(user, str):
         try:
             user = User.objects.get(username=user)
         except User.DoesNotExist:
             return 0
-    
+
     if not user:
         return 0
-    
+
     if not org:
         from tracker.models import Organization, OrganizationMembership
         membership = OrganizationMembership.objects.filter(user=user).first()
@@ -545,13 +530,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             org, _ = Organization.objects.get_or_create(
                 name="default-org", defaults={"slug": "default-org"}
             )
-    
-    # Get unlinked events
+
+    # Unlinked events for this day, ordered by interval start
     qs = RawEvent.objects.filter(
         user=user,
-        ts_utc__date=day,
-        block__isnull=True
-    ).order_by('ts_utc')
+        start_ts__date=day,
+        block__isnull=True,
+    ).order_by("start_ts")
 
     if hostname:
         qs = qs.filter(hostname=hostname)
@@ -562,241 +547,212 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
 
     logger.info(f"[COMPACT] Processing {len(events)} unlinked events for {user.username}")
 
-    # ─────────────────────────────────────────────────────────────
-    # Stage 0: Extract meeting blocks FIRST
-    # Meeting start/end pairs form standalone blocks that run in
-    # PARALLEL with regular foreground activity (Word, Chrome, etc.)
-    # User in a Zoom call while taking notes in Word = 2 blocks.
-    # ─────────────────────────────────────────────────────────────
+    # Stage 0: meeting blocks (parallel to foreground activity)
     meeting_block_count = _extract_and_persist_meeting_blocks(
         events, user, org, day, hostname
     )
     if meeting_block_count:
         logger.info(f"[COMPACT] Created {meeting_block_count} meeting blocks")
 
-    # Filter out meeting events from what goes through normal compaction
+    # Remove meeting events from foreground processing
     events = [
         e for e in events
         if not (
-            (e.app_name in ('Meeting', 'Meeting-End'))
-            and (e.bundle_id or '').startswith('meeting:')
+            (e.app_name in ("Meeting", "Meeting-End"))
+            and (e.bundle_id or "").startswith("meeting:")
         )
     ]
     if not events:
-        # Even with no foreground events, run the safety nets — pre-existing
-        # foreground blocks from a prior compaction batch may now fall inside
-        # a meeting window we just created in _extract_and_persist_meeting_blocks.
-        # Without this, those blocks remain billable on top of the meeting block,
-        # causing double-billing for the meeting hour.
+        # Safety nets still need to run even if no foreground events
         idle_cleaned = 0
         foreground_suppressed = 0
         if meeting_block_count:
             idle_cleaned = _filter_idle_inside_meetings(user, day)
             foreground_suppressed = _filter_foreground_inside_meetings(user, day)
             logger.info(
-                f"[COMPACT] Meeting-only batch: created {meeting_block_count} meetings, "
+                f"[COMPACT] Meeting-only batch: created {meeting_block_count}, "
                 f"idle-cleaned {idle_cleaned}, fg-suppressed {foreground_suppressed}"
             )
         return meeting_block_count
 
-    # Calculate durations (for remaining non-meeting events)
+    # Build event records with REAL durations
     events_with_duration = []
-    for i, event in enumerate(events):
-        if i + 1 < len(events):
-            duration = (events[i + 1].ts_utc - event.ts_utc).total_seconds()
-        else:
-            duration = AGENT_POLL_SECONDS  # 3 min for last event
-        duration = min(duration, IDLE_CAP.total_seconds())  # 3 min cap
-        
+    for event in events:
+        duration_minutes = (event.end_ts - event.start_ts).total_seconds() / 60.0
+
         events_with_duration.append({
-            'event': event,
-            'start': event.ts_utc,
-            'duration_minutes': duration / 60.0,
-            'app_name': event.app_name or "",
-            'bundle_id': event.bundle_id or "",
-            'window_title': event.window_title or "",
-            'url': event.url or "",
-            'file_path': event.file_path or "",
-            'hostname': event.hostname or hostname or "unknown",
-            'device_id': _safe_device_id(getattr(event, 'device_id', None)),
-            'current_client_id': getattr(event, 'current_client_id', None),
+            "event": event,
+            "start": event.start_ts,
+            "end": event.end_ts,
+            "duration_minutes": duration_minutes,
+            "app_name": event.app_name or "",
+            "bundle_id": event.bundle_id or "",
+            "window_title": event.window_title or "",
+            "url": event.url or "",
+            "file_path": event.file_path or "",
+            "hostname": event.hostname or hostname or "unknown",
+            "device_id": _safe_device_id(getattr(event, "device_id", None)),
+            "current_client_id": getattr(event, "current_client_id", None),
         })
-    
-    # Split into sessions
+
+    # Split into sessions using REAL inter-event gaps (next.start - prev.end)
     sessions = []
     current_session = [events_with_duration[0]]
-    
+
     for i in range(1, len(events_with_duration)):
         prev = events_with_duration[i - 1]
         curr = events_with_duration[i]
-        gap = (curr['start'] - prev['start']).total_seconds() - prev['duration_minutes'] * 60
-        
-        if gap > SESSION_GAP.total_seconds():
+        gap_seconds = (curr["start"] - prev["end"]).total_seconds()
+
+        if gap_seconds > SESSION_GAP.total_seconds():
             sessions.append(current_session)
             current_session = [curr]
         else:
             current_session.append(curr)
-    
+
     if current_session:
         sessions.append(current_session)
-    
-    # ✅ FIX: Group by app AND client within each session
+
+    # Group within session by (app, client)
     blocks_to_create = []
     for session in sessions:
         by_app_client: Dict[str, List] = {}
         for ev in session:
             app = _app_key(ev)
-            client_id = ev.get('current_client_id') or 0
-            key = f"{app}|{client_id}"  # Group by app AND client
-            if key not in by_app_client:
-                by_app_client[key] = []
-            by_app_client[key].append(ev)
-        
+            client_id = ev.get("current_client_id") or 0
+            key = f"{app}|{client_id}"
+            by_app_client.setdefault(key, []).append(ev)
+
         for key, app_events in by_app_client.items():
             if not app_events:
                 continue
-             
-            starts = [e['start'] for e in app_events]
-            block_start = min(starts)
-            block_end = max(starts) + timedelta(minutes=app_events[-1]['duration_minutes'])
-            new_event_minutes = sum(e['duration_minutes'] for e in app_events)
-            
+
+            block_start = min(e["start"] for e in app_events)
+            block_end = max(e["end"] for e in app_events)
+            new_event_minutes = sum(e["duration_minutes"] for e in app_events)
+
             if new_event_minutes < MIN_BLOCK_MINUTES:
                 continue
-            
-            titles = [e['window_title'] for e in app_events if e['window_title']]
-            titles = [t for t in titles if t.lower() not in ('', 'open', 'untitled', 'new tab')]
-            window_title = max(titles, key=len) if titles else app_events[0]['window_title']
-            
-            urls = [e['url'] for e in app_events if e['url']]
-            paths = [e['file_path'] for e in app_events if e['file_path']]
-            
-            # Get the client_id (all events in this group have same client)
-            client_id = app_events[0].get('current_client_id')
-            
+
+            titles = [e["window_title"] for e in app_events if e["window_title"]]
+            titles = [t for t in titles if t.lower() not in ("", "open", "untitled", "new tab")]
+            window_title = max(titles, key=len) if titles else app_events[0]["window_title"]
+
+            urls = [e["url"] for e in app_events if e["url"]]
+            paths = [e["file_path"] for e in app_events if e["file_path"]]
+            client_id = app_events[0].get("current_client_id")
+
             blocks_to_create.append({
-                'start': block_start,
-                'end': block_end,
-                'app_name': app_events[0]['app_name'],
-                'bundle_id': app_events[0]['bundle_id'],
-                'window_title': window_title,
-                'url': urls[0] if urls else "",
-                'file_path': paths[0] if paths else "",
-                'hostname': app_events[0]['hostname'],
-                'device_id': app_events[0]['device_id'],
-                'current_client_id': client_id,
-                'source_events': [e['event'] for e in app_events],
+                "start": block_start,
+                "end": block_end,
+                "app_name": app_events[0]["app_name"],
+                "bundle_id": app_events[0]["bundle_id"],
+                "window_title": window_title,
+                "url": urls[0] if urls else "",
+                "file_path": paths[0] if paths else "",
+                "hostname": app_events[0]["hostname"],
+                "device_id": app_events[0]["device_id"],
+                "current_client_id": client_id,
+                "source_events": [e["event"] for e in app_events],
             })
-    
-    # Get ALL existing blocks for this day
-    existing_blocks = list(Block.objects.filter(
-        user=user,
-        day=day,
-    ).order_by('start'))
-    
-    # ✅ FIX: Build lookup by app AND client
+
+    # Merge into existing blocks where possible
+    existing_blocks = list(Block.objects.filter(user=user, day=day).order_by("start"))
+
     existing_by_app_client = {}
     for b in existing_blocks:
         app = _app_key(b)
         client_id = b.client_id or 0
         key = f"{app}|{client_id}"
-        if key not in existing_by_app_client:
-            existing_by_app_client[key] = []
-        existing_by_app_client[key].append(b)
-    
+        existing_by_app_client.setdefault(key, []).append(b)
+
     created_count = 0
     merged_count = 0
     blocks_to_categorize = []
-    
+
     with transaction.atomic():
         for block_data in blocks_to_create:
             app = _app_key(block_data)
-            new_start = block_data['start']
-            new_end = block_data['end']
-            new_client_id = block_data.get('current_client_id') or 0
+            new_start = block_data["start"]
+            new_end = block_data["end"]
+            new_client_id = block_data.get("current_client_id") or 0
             key = f"{app}|{new_client_id}"
-            
-            # Find an existing block to merge into (same app AND same client)
+
             merge_target = None
-            
             for existing in existing_by_app_client.get(key, []):
-                gap_to_existing = (new_start - existing.end).total_seconds() if existing.end else float('inf')
-                gap_from_existing = (existing.start - new_end).total_seconds() if existing.start else float('inf')
-                
-                # Merge only when gap is small AND non-negative. Negative gaps
-                # would silently merge across huge time spans — e.g. new event
-                # at 19:44 vs existing block ending at 18:56 yields
-                # gap_from_existing = -2940s, which is "less than" SESSION_GAP
-                # but represents a 49-minute gap. See block 10594 bug.
-                if 0 <= gap_to_existing < SESSION_GAP.total_seconds() or 0 <= gap_from_existing < SESSION_GAP.total_seconds():
+                gap_to_existing = (
+                    (new_start - existing.end).total_seconds()
+                    if existing.end else float("inf")
+                )
+                gap_from_existing = (
+                    (existing.start - new_end).total_seconds()
+                    if existing.start else float("inf")
+                )
+
+                # Merge only when gap is small AND non-negative
+                # (block 10594 fix preserved from v1.3.37)
+                if 0 <= gap_to_existing < SESSION_GAP.total_seconds() or \
+                   0 <= gap_from_existing < SESSION_GAP.total_seconds():
                     merge_target = existing
                     break
-                
+
                 if existing.start and existing.end:
                     if new_start >= existing.start and new_start <= existing.end:
                         merge_target = existing
                         break
-            
+
             if merge_target:
                 try:
                     locked = Block.objects.select_for_update().get(id=merge_target.id)
-                    
-                    # Link events to this block
-                    event_ids = [e.id for e in block_data['source_events']]
+
+                    event_ids = [e.id for e in block_data["source_events"]]
                     RawEvent.objects.filter(id__in=event_ids).update(block=locked)
-                    
-                    # Calculate new values
+
                     updated_start = min(locked.start, new_start)
                     updated_end = max(locked.end, new_end)
                     updated_minutes = _calculate_minutes_from_events(
                         RawEvent.objects.filter(block=locked)
                     )
-                    
-                    # Build update dict
+
                     update_fields = {
-                        'start': updated_start,
-                        'end': updated_end,
-                        'minutes': updated_minutes,
+                        "start": updated_start,
+                        "end": updated_end,
+                        "minutes": updated_minutes,
                     }
 
-                    # ✅ ADD THIS — recalculate billing_amount when minutes change
                     if locked.billing_rate and updated_minutes:
-                        update_fields['billing_amount'] = round((updated_minutes / 60) * float(locked.billing_rate), 2)
-                    
-                    # If categorized, update category_hours
+                        update_fields["billing_amount"] = round(
+                            (updated_minutes / 60) * float(locked.billing_rate), 2
+                        )
+
                     if locked.is_categorized and locked.category_hours:
                         category = list(locked.category_hours.keys())[0]
-                        update_fields['category_hours'] = {category: round(updated_minutes / 60.0, 2)}
-                    
-                    # Use .update() to bypass Block.save() protection
+                        update_fields["category_hours"] = {
+                            category: round(updated_minutes / 60.0, 2)
+                        }
+
                     Block.objects.filter(id=locked.id).update(**update_fields)
-                    
                     merged_count += 1
-                    logger.debug(f"[COMPACT] Merged into block {locked.id} ({locked.app_name})")
                     continue
-                    
+
                 except Block.DoesNotExist:
                     pass
-            
-            # CREATE new block
+
             new_block = _create_block(block_data, user, org, day)
             if new_block:
                 created_count += 1
                 if not new_block.is_categorized:
                     blocks_to_categorize.append(new_block)
-                
-                # Add to lookup for future merges in this run
-                if key not in existing_by_app_client:
-                    existing_by_app_client[key] = []
-                existing_by_app_client[key].append(new_block)
-    
+
+                existing_by_app_client.setdefault(key, []).append(new_block)
+
     # Auto-categorize new blocks
     auto_cat_count = 0
     for block in blocks_to_categorize:
         if auto_categorize_block(block):
             auto_cat_count += 1
-    
-    # Safety nets: filter idle + foreground blocks inside meeting windows
+
+    # Safety nets
     idle_cleaned = 0
     foreground_suppressed = 0
     if meeting_block_count:
@@ -810,7 +766,9 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     )
     return created_count + merged_count + meeting_block_count
 
+
 def _resolve_billing_rate(org, user, client_id, task_type_id=None):
+    """Billing rate resolution — unchanged from v1.3.37."""
     from decimal import Decimal
     from django.db.models import Q
 
@@ -846,36 +804,33 @@ def _resolve_billing_rate(org, user, client_id, task_type_id=None):
 
     return default
 
+
 def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
-    """Create a new block - checks work patterns BEFORE defaulting to idle."""
-    
-    # Extract context for pattern matching
+    """
+    Create a new block. v1.3.38 uses interval union for duration.
+
+    Work pattern detection, idle classification, billing rate resolution
+    all unchanged from v1.3.37.
+    """
     app_name = (block_data.get("app_name") or "").lower()
     bundle_id = (block_data.get("bundle_id") or "").lower()
     window_title = (block_data.get("window_title") or "").lower()
     url = (block_data.get("url") or "").lower()
     file_path = (block_data.get("file_path") or "").lower()
-    
-    # =========================================================================
-    # ✅ FIX: Check work patterns FIRST before marking as idle
-    # This prevents Claude.ai, GitHub, etc. from being marked as idle
-    # =========================================================================
-    
-    # Domains that should NEVER be marked as idle (active work tools)
+
     NEVER_IDLE_DOMAINS = {
-        'claude.ai', 'chat.openai.com', 'chatgpt.com',  # AI assistants
-        'github.com', 'gitlab.com', 'bitbucket.org',     # Code repos
-        'stackoverflow.com', 'docs.python.org',          # Research
-        'localhost', '127.0.0.1',                         # Local dev
-        'figma.com', 'canva.com',                         # Design tools
-        'notion.so', 'docs.google.com',                   # Docs
-        'slack.com', 'teams.microsoft.com',               # Communication
-        'zoom.us', 'meet.google.com',                     # Meetings
-        'qbo.intuit.com', 'quickbooks.intuit.com',        # Accounting
-        'cchaxcess.com', 'irs.gov',                       # Tax
+        'claude.ai', 'chat.openai.com', 'chatgpt.com',
+        'github.com', 'gitlab.com', 'bitbucket.org',
+        'stackoverflow.com', 'docs.python.org',
+        'localhost', '127.0.0.1',
+        'figma.com', 'canva.com',
+        'notion.so', 'docs.google.com',
+        'slack.com', 'teams.microsoft.com',
+        'zoom.us', 'meet.google.com',
+        'qbo.intuit.com', 'quickbooks.intuit.com',
+        'cchaxcess.com', 'irs.gov',
     }
-    
-    # Apps that should NEVER be marked as idle
+
     NEVER_IDLE_APPS = {
         'code', 'vscode', 'visual studio', 'sublime', 'sublime_text',
         'pycharm', 'intellij', 'webstorm', 'xcode', 'android studio',
@@ -883,24 +838,19 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
         'figma', 'sketch', 'photoshop',
         'zoom', 'teams', 'slack',
     }
-    
-    # Check if this matches a work pattern
+
     is_work_pattern = False
-    
-    # Check URL domains
     for domain in NEVER_IDLE_DOMAINS:
         if domain in url:
             is_work_pattern = True
             break
-    
-    # Check app names
+
     if not is_work_pattern:
         for app in NEVER_IDLE_APPS:
             if app in app_name:
                 is_work_pattern = True
                 break
-    
-    # Only check idle detection if no work pattern matched
+
     if is_work_pattern:
         is_idle = False
     else:
@@ -909,28 +859,14 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             bundle_id=block_data.get("bundle_id"),
             window_title=block_data.get("window_title")
         )
-    
-    # =========================================================================
-    # Rest of function unchanged
-    # =========================================================================
-    
+
     device_id = block_data.get("device_id", 0)
     source_events = block_data.get('source_events', [])
-    
-    if source_events:
-        total_seconds = 0
-        for i, event in enumerate(source_events):
-            if i + 1 < len(source_events):
-                duration = (source_events[i + 1].ts_utc - event.ts_utc).total_seconds()
-                duration = min(duration, IDLE_CAP.total_seconds())
-            else:
-                duration = AGENT_POLL_SECONDS  # 3 min for last event
-            total_seconds += duration
-        minutes = max(1, int(total_seconds / 60))
-    else:
-        minutes = 1  # fallback
-    
-    # Get client for ALL blocks (including idle)
+
+    # v1.3.38: use interval union for real duration
+    minutes = _calculate_minutes_for_events_list(source_events)
+
+    # Get client
     client = None
     client_id = block_data.get("current_client_id")
     if client_id:
@@ -941,14 +877,14 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     if not client and device_id:
         client = get_current_client_for_user(user, device_id=device_id)
 
-    # ✅ Calculate billing rate and amount for new blocks
+    # Billing
     client_id_for_rate = block_data.get("current_client_id")
-    task_type_id_for_rate = block_data.get("task_type_id")  # None for now, set when task types are tracked
+    task_type_id_for_rate = block_data.get("task_type_id")
     billing_rate = _resolve_billing_rate(org, user, client_id_for_rate, task_type_id_for_rate)
     billing_amount = round((minutes / 60) * float(billing_rate), 2)
-    
+
     if is_idle:
-        client = None  # ← ADD THIS
+        client = None
         hours = round(minutes / 60.0, 2)
         new_block = Block.objects.create(
             org=org,
@@ -1003,15 +939,15 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             billing_rate=billing_rate,
             billing_amount=billing_amount,
         )
-    
-    # Link events
+
     event_ids = [e.id for e in block_data['source_events']]
     RawEvent.objects.filter(id__in=event_ids).update(block=new_block)
-    
+
     return new_block
 
+
 def compact_recent_events(user, hostname: Optional[str] = None, minutes_back: int = 15) -> int:
-    """Quick compaction of recent events."""
+    """Quick compaction of recent events. Called from raw_events POST endpoint."""
     if isinstance(user, str):
         try:
             user = User.objects.get(username=user)
@@ -1030,24 +966,24 @@ def auto_categorize_existing_blocks(user, day: date_type = None) -> Dict[str, in
             user = User.objects.get(username=user)
         except User.DoesNotExist:
             return {'error': 'User not found'}
-    
+
     if day is None:
         day = timezone.localdate()
-    
+
     blocks = Block.objects.filter(user=user, day=day, is_categorized=False)
     stats = {'checked': 0, 'categorized': 0}
-    
+
     for block in blocks:
         stats['checked'] += 1
         if auto_categorize_block(block):
             stats['categorized'] += 1
-    
+
     logger.info(f"[AUTO-CAT] Checked {stats['checked']}, categorized {stats['categorized']}")
     return stats
 
 
 def recalculate_block_minutes(block_id: int) -> int:
-    """Recalculate minutes for a specific block."""
+    """Recalculate minutes for a specific block using real event intervals."""
     try:
         block = Block.objects.get(id=block_id)
         new_minutes = _calculate_minutes_from_events(RawEvent.objects.filter(block=block))
@@ -1059,7 +995,7 @@ def recalculate_block_minutes(block_id: int) -> int:
 
 
 # =============================================================================
-# CLEANUP FUNCTIONS
+# Cleanup (unchanged from v1.3.37)
 # =============================================================================
 
 def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) -> Dict[str, int]:
@@ -1069,44 +1005,44 @@ def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) 
             user = User.objects.get(username=user)
         except User.DoesNotExist:
             return {'error': 'User not found'}
-    
+
     if day is None:
         day = timezone.localdate()
-    
+
     blocks = list(Block.objects.filter(user=user, day=day).order_by('start'))
-    
+
     to_delete = []
     checked = set()
-    
+
     for i, b1 in enumerate(blocks):
         if b1.id in checked:
             continue
-        
+
         for b2 in blocks[i+1:]:
             if b2.id in checked:
                 continue
-            
+
             if _app_key(b1) != _app_key(b2):
                 continue
-            
+
             if not (b1.start and b1.end and b2.start and b2.end):
                 continue
-            
+
             overlap_start = max(b1.start, b2.start)
             overlap_end = min(b1.end, b2.end)
-            
+
             if overlap_start >= overlap_end:
                 continue
-            
+
             overlap_seconds = (overlap_end - overlap_start).total_seconds()
             b1_seconds = (b1.end - b1.start).total_seconds()
             b2_seconds = (b2.end - b2.start).total_seconds()
-            
+
             smaller_seconds = min(b1_seconds, b2_seconds)
             if smaller_seconds > 0 and (overlap_seconds / smaller_seconds) > 0.8:
                 b1_events = RawEvent.objects.filter(block=b1).count()
                 b2_events = RawEvent.objects.filter(block=b2).count()
-                
+
                 if b1_events > b2_events:
                     victim = b2
                 elif b2_events > b1_events:
@@ -1115,13 +1051,13 @@ def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) 
                     victim = b2
                 else:
                     victim = b1
-                
+
                 to_delete.append(victim)
                 checked.add(victim.id)
                 logger.info(f"[CLEANUP] Duplicate: {victim.app_name} block {victim.id}")
-    
+
     stats = {'checked': len(blocks), 'duplicates': len(to_delete), 'deleted': 0}
-    
+
     if not dry_run:
         for block in to_delete:
             app = _app_key(block)
@@ -1130,16 +1066,16 @@ def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) 
             ).exclude(id=block.id).filter(
                 app_name__iexact=block.app_name
             ).first()
-            
+
             if survivor:
                 RawEvent.objects.filter(block=block).update(block=survivor)
                 new_minutes = _calculate_minutes_from_events(
                     RawEvent.objects.filter(block=survivor)
                 )
                 Block.objects.filter(id=survivor.id).update(minutes=new_minutes)
-            
+
             block.delete()
             stats['deleted'] += 1
-    
+
     logger.info(f"[CLEANUP] {stats}")
     return stats

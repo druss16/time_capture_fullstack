@@ -3760,45 +3760,19 @@ def complete_onboarding(request):
     })
 
 
-"""
-COMPLETE today_time() REPLACEMENT
-=================================
-Copy this entire function and replace your existing today_time() in tracker/views.py
-
-FIX: Uses UNION of time spans instead of SUM to handle overlapping blocks correctly.
-Before: 47 + 12 + 11 = 70 min (wrong - counts overlap twice)
-After:  Union of spans = 42 min (correct - actual clock time)
-"""
-
-# =============================================================================
-# EVENT-BASED today_time() - Correct time attribution
-# =============================================================================
-#
-# KEY INSIGHT: At any given moment, only ONE app is active.
-# The app with the most recent event "owns" that time.
-#
-# OLD (wrong): Block spans → Chrome 16:15-18:03 = 1.81h, Sublime 16:40-17:38 = 0.97h
-#              Total billed: 2.78h (but you only worked 1.81h!)
-#
-# NEW (correct): Event-by-event → Each minute belongs to ONE client only
-#                Chrome gets time when YOU were using Chrome
-#                Sublime gets time when YOU were using Sublime
-#                No double-counting!
-# =============================================================================
-
-# tracker/views_today_time.py
-"""
-Updated today_time endpoint with clean display formatting.
-
-REPLACE your existing today_time function in views.py with this version.
-Also add the _today_time_from_blocks helper function.
-
-ALSO: Copy display_names.py to tracker/utils/display_names.py
-"""
 
 # ============================================================================
 # UPDATED today_time() - With Clean Display Formatting
 # ============================================================================x
+
+
+# tracker/views.py — today_time() function, v1.3.38
+#
+# REPLACE the entire today_time() function (starting at line 3806) with the
+# version below. Stop replacing at the closing `})` of the final `return Response({...})`.
+#
+# All decorators stay. All other functions in views.py stay.
+# The _today_time_from_blocks() helper this function calls is unchanged.
 
 
 @api_view(["GET"])
@@ -3806,59 +3780,60 @@ ALSO: Copy display_names.py to tracker/utils/display_names.py
 def today_time(request):
     """
     Get tracked time organized by client → category.
-    
-    Uses EVENT-BASED attribution: each minute belongs to the app
-    that had the most recent activity, not block spans.
-    
-    NOW WITH CLEAN DISPLAY FORMATTING:
+
+    v1.3.38: events have (start_ts, end_ts) intervals — no IDLE_CAP guessing.
+    Each event contributes its real interval duration to the totals.
+
+    DISPLAY FORMATTING:
     - "Chrome - Aurelia Dashboard (15m)" instead of "Google Chrome (15m)"
-    - "VS Code - views.py (timetracker) (45m)" instead of messy raw titles
+    - "VS Code - views.py (timetracker) (45m)" instead of raw titles
 
     INDIVIDUAL RETURNS:
     - Tax software open return events are excluded from client aggregation (Step 3)
-    - Instead they are bucketed by taxpayer in Step 6 (individual_returns)
+    - Instead bucketed by taxpayer in Step 6 (individual_returns)
     - IR billable minutes are added to totals so header reflects full day
     """
     from datetime import datetime, timedelta
     from datetime import timezone as dt_timezone
     from collections import defaultdict
     from django.utils.dateparse import parse_date
-    
+
     from tracker.utils.display_names import format_block_for_display, format_duration
 
     # ── Impersonation override ──
-    user = get_request_user_override(request)  # ← swap this in
-    
+    user = get_request_user_override(request)
+
     if not user.is_authenticated:
         return Response(
             {"error": "Authentication required"},
             status=status.HTTP_401_UNAUTHORIZED
         )
-    
+
     date_str = request.GET.get('date')
     if date_str:
         target_date = parse_date(date_str)
     else:
         target_date = timezone.localdate()
-    
+
     tz = timezone.get_current_timezone()
     start_local = timezone.make_aware(
-        datetime.combine(target_date, datetime.min.time()), 
+        datetime.combine(target_date, datetime.min.time()),
         tz
     )
     end_local = start_local + timedelta(days=1)
     start_utc = start_local.astimezone(dt_timezone.utc)
     end_utc = end_local.astimezone(dt_timezone.utc)
-    
+
     # =========================================================================
-    # STEP 1: Get ALL events for the day, ordered by time
+    # STEP 1: Get ALL events for the day, ordered by interval start
+    # v1.3.38: filter and order by start_ts (was ts_utc in v1.3.37)
     # =========================================================================
     events = list(RawEvent.objects.filter(
         user=user,
-        ts_utc__gte=start_utc,
-        ts_utc__lt=end_utc,
-    ).select_related('block', 'block__client').order_by('ts_utc'))
-    
+        start_ts__gte=start_utc,
+        start_ts__lt=end_utc,
+    ).select_related('block', 'block__client').order_by('start_ts'))
+
     from django.db.models import Q
     deleted_block_ids = set(
         Block.objects.filter(
@@ -3867,15 +3842,13 @@ def today_time(request):
         ).values_list('id', flat=True)
     )
 
-    
     if not events:
         return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
 
     # =========================================================================
-    # Pre-load meeting blocks for this day.
-    # Meetings use BLOCK-LEVEL canonical duration (not event-walking),
-    # because the Meeting/Meeting-End raw events only get a few seconds each
-    # under the IDLE_CAP_SECONDS rule, vastly underrepresenting meeting time.
+    # Pre-load meeting blocks. Meetings use BLOCK-LEVEL canonical duration
+    # because Meeting/Meeting-End raw events are 1-second sentinels — the
+    # meaningful duration lives on the Block, not the raw events.
     # =========================================================================
     meeting_blocks = list(Block.objects.filter(
         user=user,
@@ -3885,7 +3858,6 @@ def today_time(request):
         deleted_at__isnull=False,
     ).select_related('client'))
 
-    # Tuples for fast overlap checks: (start, end, block)
     # Only ATTRIBUTED meetings shadow events — unattributed meetings leave
     # foreground app time alone so users can manually attribute later.
     meeting_windows = [
@@ -3893,34 +3865,29 @@ def today_time(request):
         for mb in meeting_blocks
         if mb.start and mb.end and mb.client_id
     ]
-    
+
     # =========================================================================
-    # STEP 2: Calculate duration for each event
-    # Duration = time until next event (capped at 3 min)
+    # STEP 2: Calculate duration for each event using REAL intervals
+    # v1.3.38: no more IDLE_CAP / 180s-trailing-fallback. Just end_ts - start_ts.
     # =========================================================================
-    IDLE_CAP_SECONDS = 600
     NON_BILLABLE_CATEGORIES = {'personal/non-billable', 'idle', 'uncategorized'}
     EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}
 
     event_durations = []
-    for i, event in enumerate(events):
-        if i + 1 < len(events):
-            next_ts = events[i + 1].ts_utc
-            duration_sec = (next_ts - event.ts_utc).total_seconds()
-            duration_sec = min(duration_sec, IDLE_CAP_SECONDS)
-        else:
-            duration_sec = 180
-        
-        block = event.block
+    for event in events:
+        duration_sec = (event.end_ts - event.start_ts).total_seconds()
+        if duration_sec <= 0:
+            continue
 
+        block = event.block
         if block and block.id in deleted_block_ids:
             block = None
 
-        # Skip events that fall inside a meeting block's window.
-        # The meeting block itself will provide canonical attribution
-        # via the post-loop append below.
+        # Skip events that fall inside an attributed meeting window.
+        # The meeting block itself provides canonical attribution
+        # (injected in Step 2.5 below).
         if meeting_windows and any(
-            mw_start <= event.ts_utc <= mw_end
+            mw_start <= event.start_ts <= mw_end
             for mw_start, mw_end, _ in meeting_windows
         ):
             continue
@@ -3946,9 +3913,9 @@ def today_time(request):
                 (event.bundle_id or '').lower() == '__idle__' or
                 (event.window_title or '').lower() == 'idle/uncategorized'
             )
-        
+
         event_durations.append({
-            'ts':               event.ts_utc,
+            'ts':               event.start_ts,
             'duration_minutes': duration_sec / 60.0,
             'client_id':        client_id,
             'client_name':      client_name,
@@ -3969,13 +3936,13 @@ def today_time(request):
     for mb in meeting_blocks:
         if not mb.client_id:
             continue
-        
+
         mb_minutes = float(mb.minutes or 0)
         if mb_minutes <= 0:
             continue
-        
+
         client_name = mb.client.name if mb.client else 'Unattributed'
-        
+
         event_durations.append({
             'ts':               mb.start,
             'duration_minutes': mb_minutes,
@@ -3989,10 +3956,9 @@ def today_time(request):
             'url':              '',
             'block_id':         mb.id,
         })
-    
+
     # =========================================================================
     # STEP 3: Aggregate by client → category
-    # Tax return events are SKIPPED here — they go to individual_returns in Step 6
     # =========================================================================
     data = defaultdict(lambda: {
         'client_id': None,
@@ -4003,33 +3969,33 @@ def today_time(request):
             'by_activity': {},
         })
     })
-    
+
     total_minutes = 0.0
     billable_minutes = 0.0
     non_billable_minutes = 0.0
-    
+
     for ev in event_durations:
         client_name = ev['client_name']
         category = ev['category']
         minutes = ev['duration_minutes']
-        
+
         data[client_name]['client_id'] = ev['client_id']
         cat_data = data[client_name]['categories'][category]
         cat_data['minutes'] += minutes
-        
+
         if ev['block_id'] and ev['block_id'] not in cat_data['blocks_seen']:
             cat_data['blocks_seen'].add(ev['block_id'])
             cat_data['block_count'] += 1
-        
+
         formatted = format_block_for_display({
             'app_name':     ev['app_name'],
             'window_title': ev['window_title'],
             'url':          ev['url'],
             'minutes':      minutes,
         }, client_name=client_name)
-        
+
         clean_title = formatted['title']
-        
+
         if clean_title in cat_data['by_activity']:
             cat_data['by_activity'][clean_title]['minutes'] += minutes
         else:
@@ -4038,14 +4004,14 @@ def today_time(request):
                 'title': clean_title,
                 'minutes': minutes,
             }
-        
+
         if category.lower() not in EXCLUDE_FROM_TOTALS:
             total_minutes += minutes
             if ev['is_billable']:
                 billable_minutes += minutes
             else:
                 non_billable_minutes += minutes
-    
+
     # =========================================================================
     # STEP 4: Build response with clean formatting
     # =========================================================================
@@ -4059,10 +4025,10 @@ def today_time(request):
                 continue
             minutes = cat_data['minutes']
             client_total_minutes += minutes
-                    
+
             aggregated_samples = []
             sorted_activities = sorted(
-                cat_data['by_activity'].items(), 
+                cat_data['by_activity'].items(),
                 key=lambda x: -x[1]['minutes']
             )[:10]
 
@@ -4073,7 +4039,7 @@ def today_time(request):
                     aggregated_samples.append(f"[id:{info['id']}] {clean_title} ({time_str})")
                 else:
                     aggregated_samples.append(f"{clean_title} ({time_str})")
-            
+
             categories.append({
                 'name':              cat_name,
                 'hours':             round(minutes / 60, 2),
@@ -4081,7 +4047,7 @@ def today_time(request):
                 'unique_activities': len(cat_data['by_activity']),
                 'sample_activities': aggregated_samples,
             })
-        
+
         result.append({
             'client_id':   client_data['client_id'],
             'client':      client_name,
@@ -4090,10 +4056,10 @@ def today_time(request):
         })
 
     # =========================================================================
-    # STEP 5: Merge in mobile blocks (no RawEvents — must add separately)
+    # STEP 5: Merge in mobile blocks (no RawEvents — add separately)
     # =========================================================================
     flagged_blocks = []
- 
+
     mobile_blocks = Block.objects.filter(
         user=user,
         org=get_request_org_override(request),
@@ -4104,7 +4070,7 @@ def today_time(request):
         client__isnull=False,
         deleted_at__isnull=True,
     ).select_related('client')
- 
+
     for block in mobile_blocks:
         b_client_name = block.client.name
         b_minutes     = block.minutes or 0
@@ -4115,7 +4081,7 @@ def today_time(request):
             else 'Manual Entry'
         )
         b_title = f"Mobile - {block.notes or b_cat} ({b_minutes}m)"
- 
+
         if getattr(block, 'needs_review', False):
             flagged_blocks.append({
                 'block_id':      block.id,
@@ -4124,9 +4090,9 @@ def today_time(request):
                 'minutes':       b_minutes,
                 'start':         block.start.isoformat(),
             })
- 
+
         existing = next((r for r in result if r['client'] == b_client_name), None)
- 
+
         if existing:
             existing_cat = next((c for c in existing['categories'] if c['name'] == b_cat), None)
             if existing_cat:
@@ -4157,17 +4123,12 @@ def today_time(request):
                     'sample_activities': [f"[id:{block.id}] {b_title}"],
                 }],
             })
- 
+
         billable_minutes += b_minutes
         total_minutes    += b_minutes
 
     # =========================================================================
-    # STEP 6: Add AI disagreement blocks to flagged_blocks
-    # 
-    # Stage 10 in ClassificationService flags blocks where AI confidently
-    # disagrees with the agent's client assignment. We surface these in the
-    # daily review so the user can decide: accept AI's suggestion, keep the
-    # agent's pick, or pick a different client entirely.
+    # STEP 6: AI disagreement blocks → flagged_blocks
     # =========================================================================
     ai_disagreement_blocks = Block.objects.filter(
         user=user,
@@ -4192,16 +4153,7 @@ def today_time(request):
         })
 
     # =========================================================================
-    # STEP 6.5: Add MAIL disagreement blocks to flagged_blocks
-    #
-    # Stage 7 in ClassificationService flags blocks where Email metadata
-    # confidently disagrees with the block's final attribution (most
-    # commonly: agent's current_client_id was inherited from prior work
-    # but the email being read is from a different client).
-    #
-    # Same accept/dismiss/change pattern as AI disagreements; rendered
-    # in an amber-themed banner separate from the AI's blue banner so
-    # users can see at a glance which type of evidence is disagreeing.
+    # STEP 6.5: MAIL disagreement blocks → flagged_blocks
     # =========================================================================
     mail_disagreement_blocks = Block.objects.filter(
         user=user,
@@ -4210,7 +4162,7 @@ def today_time(request):
         mail_disagreement_resolved_at__isnull=True,
         deleted_at__isnull=True,
     ).select_related('client', 'mail_proposed_client')
- 
+
     for block in mail_disagreement_blocks:
         proposed_name = (
             block.mail_proposed_client.name

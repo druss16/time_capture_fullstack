@@ -21,6 +21,7 @@ DEBUG = os.getenv("DJANGO_DEBUG", "1") not in ("0", "false", "False") and not IS
 # ALLOWED_HOSTS - NO https:// prefix!
 ALLOWED_HOSTS = [
     "localhost", 
+    '192.168.1.183',
     "127.0.0.1",
     "timetracker-api-k375.onrender.com",
     "time-capture-fullstack-frontend.onrender.com",

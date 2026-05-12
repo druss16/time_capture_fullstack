@@ -359,7 +359,25 @@ class ClassificationService:
         # confirmed or is awaiting user review.
         if new_state in ('committed', 'proposed'):
             if decision.client_id:
-                block.client_id = decision.client_id
+                # v1.3.41: Respect agent attribution. If the block already has
+                # a client (set by compaction from RawEvent.current_client_id),
+                # the classifier should SUGGEST not overwrite. Stage 10 already
+                # handles this for AI signals; mirror that for deterministic
+                # stages by recording disagreement and leaving block.client_id.
+                if old_client_id and old_client_id != decision.client_id:
+                    # Agent already attributed. Don't overwrite — surface as disagreement.
+                    block.ai_disagrees_with_agent = True
+                    block.ai_proposed_client_id = decision.client_id
+                    block.ai_proposed_confidence = decision.confidence or 0.0
+                    block.ai_disagreement_reasoning = (decision.reasoning or '')[:500]
+                    logger.info(
+                        f"[CLASSIFY-DISAGREE] Block {block.pk}: agent={old_client_id} "
+                        f"vs classifier={decision.client_id} at {decision.confidence:.2f} — "
+                        f"keeping agent's pick"
+                    )
+                    # Don't write block.client_id — keep agent's choice
+                else:
+                    block.client_id = decision.client_id
             
             # Ensure category_hours is populated with a real category. The
             # dashboard's today_time filters out 'Idle' and 'Uncategorized'

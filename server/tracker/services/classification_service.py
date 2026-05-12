@@ -58,6 +58,111 @@ from django.utils import timezone
 
 logger = logging.getLogger('timetracker.classification')
 
+_PATH_NOISE_SEGMENTS = {
+    # Windows system / user paths
+    'users', 'documents', 'desktop', 'downloads', 'pictures', 'videos', 'music',
+    'appdata', 'local', 'roaming', 'localtemp', 'temp', 'tmp',
+    'packages', 'programdata', 'program files', 'program files (x86)',
+    'system32', 'syswow64', 'windows', 'winnt', 'inetcache',
+    'temporary internet files', 'recent', 'favorites',
+    # macOS noise
+    'library', 'caches', 'application support', 'applications',
+    'preferences', 'containers',
+    # Office Protected View / sandbox intermediate folders
+    'ac', 'office', 'office15', 'office16',
+    # Common cloud sync folder names — too generic to be client signal
+    'onedrive', 'dropbox', 'box', 'sync', 'icloud drive', 'icloud',
+    'google drive', 'googledrive',
+}
+
+def _is_office_protected_view(window_title) -> bool:
+    """Return True when the block's window title indicates Office Protected View.
+ 
+    When Excel/Word/PowerPoint open a downloaded file in Protected View, they
+    extract it to a randomized temp directory like:
+ 
+      C:\\Users\\<username>\\AppData\\Local\\Packages\\oice_16_*\\AC\\Temp\\CC19E877.xlsx
+ 
+    The filename in that path is a content hash (e.g. CC19E877.xlsx), NOT the
+    original filename. The directory structure is also useless for client
+    matching — it's a sandbox path, not a folder under "Clients/<name>/".
+ 
+    In Protected View, file_path is meaningless for client attribution. The
+    classifier should fall back to the window title (which DOES contain the
+    original filename, e.g. "PureADK_Expense_Report_Q1_2026 - Protected View").
+    """
+    return 'protected view' in (window_title or '').lower()
+ 
+ 
+def _infer_username_from_path(file_path) -> str:
+    """Extract OS username from a path like C:\\Users\\<username>\\... or /Users/<username>/...
+ 
+    Returns the lowercased username, or empty string if not detectable.
+ 
+    Used to strip the user's home folder name from path matching, since every
+    path on a machine contains it.
+    """
+    if not file_path:
+        return ''
+    normalized = file_path.replace('\\', '/').lower()
+    segments = [s for s in normalized.split('/') if s]
+    # Windows: C:/Users/<username>/...
+    if 'users' in segments:
+        idx = segments.index('users')
+        if idx + 1 < len(segments):
+            return segments[idx + 1]
+    # macOS: /Users/<username>/...
+    if segments[:1] == ['users'] and len(segments) > 1:
+        return segments[1]
+    return ''
+ 
+ 
+def _clean_path_segments(file_path, username='') -> list:
+    """Tokenize file_path into matchable segments, dropping system noise.
+ 
+    Drops:
+      - Empty / single-char segments
+      - Windows/macOS system paths (Users, AppData, Local, Temp, etc.)
+      - The OS username (inferred or passed in)
+      - Office Protected View randomized directory names (oice_*, temp* longer
+        than 10 chars which suggests a UUID/hash)
+      - Drive letters (c:, d:)
+ 
+    Returns a list of cleaned segments suitable for client-name matching.
+ 
+    Example:
+      Input:  C:\\Users\\mavops\\AppData\\Local\\Packages\\oice_16_x\\AC\\Temp\\CC19E877.xlsx
+      Output: ['cc19e877.xlsx']    # everything else stripped as noise
+ 
+    Example:
+      Input:  C:\\Users\\mavops\\Documents\\Clients\\PureADK\\report.xlsx
+      Output: ['clients', 'pureadk', 'report.xlsx']
+              # 'users', 'mavops', 'documents' all stripped
+    """
+    if not file_path:
+        return []
+    normalized = file_path.replace('\\', '/').lower()
+    raw_segments = [s for s in normalized.split('/') if len(s) > 1]
+    username_lower = (username or '').lower()
+    cleaned = []
+    for seg in raw_segments:
+        # Drop drive letters like 'c:' or 'd:'
+        if len(seg) == 2 and seg.endswith(':'):
+            continue
+        # Drop known noise segments
+        if seg in _PATH_NOISE_SEGMENTS:
+            continue
+        # Drop OS username
+        if username_lower and seg == username_lower:
+            continue
+        # Drop Office sandbox / random hash directories
+        if seg.startswith('oice_'):
+            continue
+        if seg.startswith('temp') and len(seg) > 10:
+            continue
+        cleaned.append(seg)
+    return cleaned
+
 
 # =============================================================================
 # DATA CLASSES — the contracts that callers + stages consume
@@ -1189,49 +1294,59 @@ class ClassificationService:
     # STAGE 3 — Deterministic title / domain / path match
     # -------------------------------------------------------------------------
 
-    def _stage_3_title_match(self, block, decision: ClassificationDecision):
+    def _stage_3_title_match(self, block, decision: 'ClassificationDecision'):
         """
-        Score each org client against the block's window title, URL, and file path.
-        Emits a Signal for the best match; multiple clients matching at low strength
-        produces no signal.
-
-        Three match types in priority order:
-          1. URL domain matches client name/alias  → strength 0.92 (strong)
-          2. File path contains client name/alias  → strength 0.90 (strong)
-          3. Title contains client alias           → strength 0.82 (moderate-high)
-
-        GUARDRAILS to prevent false-matches:
-          - Skip aliases that match SHORT_ALIAS_STOPLIST (generic words like
-            "Internal", "Tax", "Office") — these match too broadly.
-          - For aliases shorter than 8 chars AND containing only one word,
-            require word-boundary match (\\bWORD\\b), not substring match.
-            This stops "Internal" from matching "Internal Revenue Service".
-          - Skip clients whose normalized name is a known meta-client
-            (META_CLIENT_NAMES) — these represent firm overhead, not real clients.
+        Match block content (window title, URL, file path) against client names
+        and aliases. The strongest match wins.
+ 
+        Signal order (best wins):
+          1. URL domain (0.92) — strongest, hard to fake
+          2. File path (0.90) — strong unless Office Protected View
+          3. Title alias (0.82) — moderate-high
+ 
+        v1.3.41 changes:
+          - Skip file_path matching when window indicates Office Protected View
+            (path is a sandbox temp dir, not real client folder)
+          - Strip OS user home, AppData, Temp, etc. from file_path before
+            matching to avoid coincidental matches on system folders
+          - When file_path is fully noise after cleaning, skip the file_path
+            stage and let the title stage decide
+ 
+        Meta-clients (firm overhead) are skipped entirely.
         """
         if not self._clients:
             return
-
+ 
         haystack = self._build_haystack(block)
         if not haystack:
             return
-
+ 
         url = (block.url or '').strip().lower()
-        file_path = (block.file_path or '').strip().lower()
-
+        file_path_raw = (block.file_path or '').strip()
+ 
+        # v1.3.41: clean file_path before matching
+        is_protected_view = _is_office_protected_view(block.window_title)
+        if file_path_raw and not is_protected_view:
+            username = _infer_username_from_path(file_path_raw)
+            cleaned_segments = _clean_path_segments(file_path_raw, username)
+            # Rebuild as a space-joined searchable string for substring matching
+            file_path_searchable = ' '.join(cleaned_segments)
+        else:
+            file_path_searchable = ''
+ 
         best_client = None
         best_strength = 0.0
         best_match_type = ''
-
+ 
         for client in self._clients:
-            # Skip meta-clients — these represent internal firm work, not real clients
+            # Skip meta-clients
             if client.name.lower().strip() in META_CLIENT_NAMES:
                 continue
-
+ 
             name_lower = client.name.lower()
             aliases = [a.lower() for a in (client.aliases or [])] if client.aliases else []
             all_names = [name_lower] + aliases
-
+ 
             # Match 1: URL domain (strongest)
             if url:
                 domain = self._extract_domain(url)
@@ -1239,7 +1354,6 @@ class ClassificationService:
                     for alias in all_names:
                         if not self._alias_is_safe(alias):
                             continue
-                        # Compare alphanumeric-only versions
                         alias_clean = ''.join(c for c in alias if c.isalnum())
                         domain_clean = ''.join(c for c in domain if c.isalnum())
                         if len(alias_clean) >= 4 and alias_clean in domain_clean:
@@ -1248,19 +1362,19 @@ class ClassificationService:
                                 best_strength = 0.92
                                 best_match_type = 'domain'
                             break
-
-            # Match 2: File path (strong)
-            if file_path:
+ 
+            # Match 2: File path (strong) — only if not Protected View and has signal
+            if file_path_searchable:
                 for alias in all_names:
                     if not self._alias_is_safe(alias):
                         continue
-                    if self._alias_matches_safely(alias, file_path):
+                    if self._alias_matches_safely(alias, file_path_searchable):
                         if 0.90 > best_strength:
                             best_client = client
                             best_strength = 0.90
                             best_match_type = 'file_path'
                         break
-
+ 
             # Match 3: Title alias (moderate-high)
             for alias in all_names:
                 if not self._alias_is_safe(alias):
@@ -1271,10 +1385,10 @@ class ClassificationService:
                         best_strength = 0.82
                         best_match_type = 'title_alias'
                     break
-
+ 
         if not best_client or best_strength < 0.65:
             return
-
+ 
         decision.matched_signals.append(Signal(
             type=f'title_match_{best_match_type}',
             strength=best_strength,
@@ -1358,11 +1472,11 @@ class ClassificationService:
     # STAGE 4 — File path structure analysis
     # -------------------------------------------------------------------------
 
-    def _stage_4_file_path(self, block, decision: ClassificationDecision):
+    def _stage_4_file_path(self, block, decision: 'ClassificationDecision'):
         """
         Analyze file_path STRUCTURE for client signals beyond simple containment
         (which Stage 3 already does).
-
+ 
         Patterns to detect:
           1. Client name as a clean folder segment (highest signal)
              Example: '/Clients/Wood, Michael/2024/return.pdf' → 'Wood, Michael'
@@ -1370,25 +1484,33 @@ class ClassificationService:
              Example: 'C:/Customers/Acme Corp/Q4/file.xlsx' → 'Acme Corp'
           3. UNC paths with client folder structure
              Example: '\\\\server\\Shared\\Acme Corp\\file.pdf' → 'Acme Corp'
-
+ 
         Strength: 0.90 for clean folder segment match, 0.85 for container-folder match.
-
+ 
+        v1.3.41 changes:
+          - Skip entirely when window indicates Office Protected View
+          - Strip OS user home, AppData, Temp, etc. before segment analysis
+          - Drop randomized Office sandbox folder names (oice_*, temp UUIDs)
+ 
         Skipped if:
           - file_path is empty
-          - No client matches with sufficient specificity
+          - Office Protected View detected
+          - No client matches with sufficient specificity after cleaning
         """
         file_path = (block.file_path or '').strip()
         if not file_path:
             return
-
-        # Normalize separators for analysis (Windows + Unix paths)
-        normalized = file_path.replace('\\', '/').lower()
-
-        # Split into segments, filter empty
-        segments = [s for s in normalized.split('/') if s]
+ 
+        # v1.3.41: skip Protected View entirely — path is a sandbox temp dir
+        if _is_office_protected_view(block.window_title):
+            return
+ 
+        # v1.3.41: clean segments before matching
+        username = _infer_username_from_path(file_path)
+        segments = _clean_path_segments(file_path, username)
         if not segments:
             return
-
+ 
         # Look for "Clients" / "Customers" container — client name should follow
         CONTAINER_NAMES = {'clients', 'customers', 'firms', 'accounts'}
         container_idx = -1
@@ -1396,27 +1518,24 @@ class ClassificationService:
             if seg in CONTAINER_NAMES:
                 container_idx = i
                 break
-
+ 
         best_client = None
         best_strength = 0.0
         best_evidence = ''
-
+ 
         for client in self._clients:
-            # Skip meta-clients (same as Stage 3)
             if client.name.lower().strip() in META_CLIENT_NAMES:
                 continue
-
+ 
             name_lower = client.name.lower()
             aliases = [a.lower() for a in (client.aliases or [])] if client.aliases else []
             all_names = [name_lower] + aliases
-
+ 
             for alias in all_names:
                 if not self._alias_is_safe(alias):
                     continue
-
-                # Pattern 1: Clean folder segment match (alias IS a path segment)
-                # This is the strongest signal — the user is literally inside the
-                # client's folder
+ 
+                # Pattern 1: Clean folder segment match
                 if alias in segments:
                     if 0.90 > best_strength:
                         best_client = client
@@ -1426,13 +1545,10 @@ class ClassificationService:
                             f"(segment match in '{file_path}')"
                         )
                     break
-
+ 
                 # Pattern 2: Container-relative match
-                # If we found a 'Clients/' or 'Customers/' folder above, the
-                # NEXT segment should be the client name
                 if container_idx >= 0 and container_idx + 1 < len(segments):
                     next_seg = segments[container_idx + 1]
-                    # Allow alias-as-prefix match (handles "Wood, Michael" vs "wood-michael")
                     if alias in next_seg or next_seg.startswith(alias):
                         if 0.85 > best_strength:
                             best_client = client
@@ -1442,10 +1558,10 @@ class ClassificationService:
                                 f"under '{segments[container_idx]}/' container"
                             )
                         break
-
+ 
         if not best_client:
             return
-
+ 
         decision.matched_signals.append(Signal(
             type='file_path_structure',
             strength=best_strength,
@@ -1453,7 +1569,7 @@ class ClassificationService:
             detail={
                 'client_id':   best_client.id,
                 'client_name': best_client.name,
-                'file_path':   file_path[:200],  # truncate for storage
+                'file_path':   file_path[:200],
             },
         ))
 

@@ -224,37 +224,83 @@ class OrganizationMembership(models.Model):
 # ===========================
 # ======  RAW EVENTS  =======
 # ===========================
+# tracker/models.py — RawEvent class
+# Replace the existing RawEvent class definition with this version.
+
 class RawEvent(models.Model):
-    ts_utc = models.DateTimeField()
+    """
+    A single agent-emitted activity interval.
+
+    DUAL TIMESTAMPS (v1.3.38)
+    =========================
+    Each event represents a real time interval, not a point. The agent
+    emits events in three places:
+
+      1. dwell start  — when user focuses a new window
+      2. heartbeats   — every 60s while still on the same window
+      3. dwell end    — window change, idle entry, or sleep
+
+    For each emission, start_ts = last emit time, end_ts = now. So a
+    5-minute dwell in Outlook becomes ~5 events of ~60s each, all with
+    the same window signature. Compaction merges them into one block
+    using the real durations instead of guessing via IDLE_CAP.
+
+    Idle events have clear start/end semantics too (idle entry/exit),
+    so they don't need heartbeats — one event per idle period.
+    """
+
+    # ── Dual interval timestamps ──
+    start_ts = models.DateTimeField(db_index=True)
+    end_ts = models.DateTimeField(db_index=True)
+
+    # ── Window signature ──
     app_name = models.CharField(max_length=255, blank=True, null=True)
     bundle_id = models.CharField(max_length=255, blank=True, null=True)
     window_title = models.TextField(blank=True, null=True)
     url = models.TextField(blank=True, null=True)
     file_path = models.TextField(blank=True, null=True)
+
+    # ── Identity ──
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     device_id = models.CharField(max_length=64, db_index=True, default="unknown")
     hostname = models.CharField(max_length=255, blank=True, null=True, default="unknown")
+
+    # ── Context ──
     ctx = models.JSONField(default=dict, blank=True)
-    
-    # NEW: Store which client was selected when this event was captured
+
+    # Snapshot of the user's selected client at start_ts.
+    # Captured at dwell_start time, NOT at write_event time, so AI-switcher
+    # flips mid-dwell don't retroactively reattribute earlier heartbeats.
     current_client_id = models.IntegerField(null=True, blank=True, db_index=True)
 
-
+    # ── Compaction linkage ──
     block = models.ForeignKey(
-        'Block',
+        "Block",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name='source_events',
-        help_text="The block this event was compacted into"
+        related_name="source_events",
+        help_text="The block this event was compacted into",
     )
-    
+
     class Meta:
         indexes = [
-            models.Index(fields=["ts_utc"]),
-            models.Index(fields=["user", "device_id", "ts_utc"]),
+            models.Index(fields=["start_ts"]),
+            models.Index(fields=["user", "start_ts"]),
+            models.Index(fields=["user", "device_id", "start_ts"]),
             models.Index(fields=["user", "hostname"]),
         ]
+        # ts_utc → start_ts: keep ordering on start_ts to preserve event order.
+        ordering = ["start_ts"]
+
+    @property
+    def duration_seconds(self) -> float:
+        """Real interval duration. Replaces IDLE_CAP-guessed durations."""
+        return (self.end_ts - self.start_ts).total_seconds()
+
+    def __str__(self):
+        u = getattr(self.user, "username", self.user_id)
+        return f"{u} {self.app_name} {self.start_ts}–{self.end_ts}"
 
 # ===========================
 # ======  AGENT MODELS  =====
@@ -1517,9 +1563,9 @@ class Block(models.Model):
             try:
                 old = Block.all_objects.get(pk=self.pk)
                 # NEW: ClassificationService can update Captured/Proposed blocks freely
-            if force_classifier and old.classification_state in ('captured', 'proposed', 'committed'):
-                pass  # Skip protection check — allows AI/mail disagreement resolution
-                       # to modify committed blocks when user accepts the suggestion
+                if force_classifier and old.classification_state in ('captured', 'proposed', 'committed'):
+                    pass  # Skip protection check — allows AI/mail disagreement resolution
+                          # to modify committed blocks when user accepts the suggestion
                 elif old.is_protected() and not kwargs.pop('force_update', False):
                     protected_fields = {
                         'category_hours', 'client', 'project', 'task',

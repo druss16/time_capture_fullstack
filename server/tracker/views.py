@@ -1150,62 +1150,93 @@ logger = logging.getLogger(__name__)
 @permission_classes([IsAuthenticated])
 def raw_events(request):
     """
-    Ingest events from a paired agent.
-    NOW: Auto-tags events with current client AND triggers compaction immediately.
-    
-    - Requires Authorization: DeviceKey <api_key>
-    - request.user = linked user from AgentDevice
-    - request.agent_device = the AgentDevice instance
+    Ingest agent events. v1.3.38 hard cutover to dual timestamps.
+
+    EXPECTED PAYLOAD (per event)
+    ============================
+      {
+        "start_ts":  "2026-05-11T15:00:00Z",   # required, ISO-8601
+        "end_ts":    "2026-05-11T15:01:00Z",   # required, ISO-8601, > start_ts
+        "app_name":  "Outlook",
+        "bundle_id": "outlook.exe",
+        "window_title": "Inbox - wayne@tlwall.com",
+        "url":       None,
+        "file_path": None,
+        "hostname":  "WAYNE-PC",
+        "current_client_id": 42,
+        "ctx":       {...}
+      }
+
+    STRICT VALIDATION
+    =================
+    Missing start_ts/end_ts → 400. End ≤ start → 400. Old-format events
+    (ts_utc only) → 400. TL Wall is beta — no compat path.
+
+    DOWNSTREAM
+    ==========
+    On success, kicks compact_recent_events for the user/hostname. Block
+    creation now uses real event durations instead of IDLE_CAP-guessed.
     """
     agent_user = request.user
     device = getattr(request, "agent_device", None)
-    
+
     if not getattr(agent_user, "is_authenticated", False):
         return Response({"error": "Not authenticated"}, status=403)
-    
+
     payload = request.data
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list):
         return Response({"error": "Must be object or array"}, status=400)
-    
-    # Get current client for this user/device
+
+    # Look up the user/device current client once for the whole batch.
     current_client_id = None
     current_client_name = None
     try:
-        current = CurrentClient.objects.select_related('client').get(
+        current = CurrentClient.objects.select_related("client").get(
             user=agent_user,
-            device_id=device.id if device else 0
+            device_id=device.id if device else 0,
         )
         current_client_id = current.client.id if current.client else None
         current_client_name = current.client.name if current.client else None
     except CurrentClient.DoesNotExist:
-        pass  # No current client set
-    
+        pass
+
     header_host = (request.headers.get("X-Agent-Host") or "").strip()
     device_host = getattr(device, "hostname", "") if device else ""
     default_host = header_host or device_host or "unknown"
-    
+
     created, errors = 0, []
-    
+
     for item in payload:
-        ts = item.get("ts_utc")
-        if isinstance(ts, str):
-            dt = parse_datetime(ts)
-            if dt is None:
-                errors.append({"item": item, "error": "Invalid ts_utc"})
-                continue
-            item["ts_utc"] = dt
-        elif not ts:
-            errors.append({"item": item, "error": "Missing ts_utc"})
+        # ── Strict dual-timestamp validation ──
+        start_raw = item.get("start_ts")
+        end_raw = item.get("end_ts")
+
+        if not start_raw or not end_raw:
+            errors.append({
+                "item": item,
+                "error": "Missing start_ts or end_ts (v1.3.38 requires both)",
+            })
             continue
-        
+
+        start_dt = parse_datetime(start_raw) if isinstance(start_raw, str) else start_raw
+        end_dt = parse_datetime(end_raw) if isinstance(end_raw, str) else end_raw
+
+        if start_dt is None or end_dt is None:
+            errors.append({"item": item, "error": "Invalid start_ts/end_ts format"})
+            continue
+
+        if end_dt <= start_dt:
+            errors.append({"item": item, "error": "end_ts must be > start_ts"})
+            continue
+
         hostname = (default_host or item.get("hostname") or "unknown").strip() or "unknown"
-        
+
         try:
-            # Create RawEvent with current_client_id
-            event = RawEvent.objects.create(
-                ts_utc=item["ts_utc"],
+            RawEvent.objects.create(
+                start_ts=start_dt,
+                end_ts=end_dt,
                 app_name=item.get("app_name"),
                 bundle_id=item.get("bundle_id"),
                 window_title=item.get("window_title") or "",
@@ -1214,56 +1245,50 @@ def raw_events(request):
                 user=agent_user,
                 hostname=hostname,
                 ctx=item.get("ctx", {}) or {},
-                device_id=device.id if device else None,
-                current_client_id=item.get("current_client_id") or current_client_id,  # ← Prefer agent payload
-
+                device_id=str(device.id) if device else "unknown",
+                # Prefer the agent's payload (captured at dwell_start) over the
+                # server-side lookup (captured at write time). The agent knows
+                # which client was active when the dwell began — that's what
+                # the AI switcher race fix relies on.
+                current_client_id=item.get("current_client_id") or current_client_id,
             )
-            
             created += 1
         except Exception as e:
             errors.append({"item": item, "error": str(e)})
-    
-    # ✅ NEW: Trigger compaction immediately after ingesting events
+
+    # Kick compaction for this user/host so blocks appear immediately.
+    blocks_created = 0
     if created > 0:
         try:
             from tracker.services.compaction import compact_recent_events
-            
-            # Run quick compaction for recent events (last 15 minutes)
             blocks_created = compact_recent_events(
                 user=agent_user,
                 hostname=hostname,
-                minutes_back=15
-            )
-            
+                minutes_back=15,
+            ) or 0
             logger.info(
-                f"[INGEST] Created {created} events → {blocks_created} blocks "
+                f"[INGEST] {created} events → {blocks_created} blocks "
                 f"for {agent_user.username}@{hostname}"
             )
-            
         except Exception as e:
             logger.error(f"[INGEST] Compaction failed: {e}", exc_info=True)
-            # Don't fail the request if compaction fails
-    
+            # Don't fail the request — events are already persisted.
+
     status_code = (
         status.HTTP_201_CREATED if created and not errors
         else status.HTTP_207_MULTI_STATUS if created and errors
         else status.HTTP_400_BAD_REQUEST
     )
-    
-    response = {
-        "created": created,
-        "errors": errors,
-        "current_client": current_client_name
-    }
-    
-    # Add blocks_created to response if compaction ran
-    if created > 0:
-        try:
-            response["blocks_created"] = blocks_created
-        except NameError:
-            pass
-    
-    return Response(response, status=status_code)
+
+    return Response(
+        {
+            "created": created,
+            "errors": errors,
+            "blocks_created": blocks_created,
+            "current_client": current_client_name,
+        },
+        status=status_code,
+    )
 
 
 # -------------------------------------------------------------------
@@ -3873,7 +3898,7 @@ def today_time(request):
     # STEP 2: Calculate duration for each event
     # Duration = time until next event (capped at 3 min)
     # =========================================================================
-    IDLE_CAP_SECONDS = 180
+    IDLE_CAP_SECONDS = 600
     NON_BILLABLE_CATEGORIES = {'personal/non-billable', 'idle', 'uncategorized'}
     EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}
 

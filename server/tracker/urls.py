@@ -17,6 +17,7 @@ router.register(r'billing/rates', views_billing.BillingRateViewSet, basename='bi
 # router.register(r'billing/timesheets', views_billing.TimesheetViewSet, basename='timesheet')
 
 
+
 urlpatterns = [
     # -------------------------------
     # Basic / Health
@@ -450,5 +451,7 @@ urlpatterns = [
     path('mail/status/',         views_mail.microsoft_mail_status,        name='mail_status'),
     path('mail/disconnect/',     views_mail.microsoft_mail_disconnect,    name='mail_disconnect'),
     path('mail/webhook/',        views_mail.microsoft_mail_webhook,       name='mail_webhook'),
+
+    path('task-management/', include('tracker.api.task_type_urls')),
 
 ]

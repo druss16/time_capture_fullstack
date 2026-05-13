@@ -981,6 +981,7 @@ class Integration(models.Model):
         ('quickbooks', 'QuickBooks Online'),
         ('xero', 'Xero'),
         ('karbon', 'Karbon'),
+        ('task_type_matrix', 'TaskType Matrix Rule'),
     ]
     
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='integrations')
@@ -1909,6 +1910,7 @@ class OrgRoutingRule(models.Model):
         ('duration_gt', 'Block Duration Greater Than (minutes)'),
         ('inside_meeting', 'Block Is Inside a Meeting'),
         ('idle_gt', 'Idle Duration Greater Than (minutes)'),
+        ('task_type_matrix', 'TaskType Matrix Rule'),
     ]
     match_type = models.CharField(
         max_length=32,
@@ -3522,3 +3524,7 @@ class UserIntegration(models.Model):
 
 # Calendar matching rules
 from tracker.models_calendar_rules import OrgCalendarRule  # noqa: F401, E402
+from tracker.models_task_type_sets import (
+    TaskTypeSet, TaskTypeSetMember, ClientTaskType,
+    ExternalClientMapping, ExternalTaskTypeMapping, ExternalStaffMapping,
+)

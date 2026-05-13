@@ -5,17 +5,9 @@ export type PlanType = 'professional' | 'executive' | 'none';
 export type RoleType = 'owner' | 'admin' | 'manager' | 'member';
 
 export type Tab =
-  | 'organization'
-  | 'team'
-  | 'clients'
-  | 'assignments'
-  | 'groups'
-  | 'integrations'
-  | 'billing'
-  | 'costs'
-  | 'devices'
-  | 'token'
-  | 'deployment';
+  | 'organization' | 'team' | 'clients' | 'assignments' | 'groups'
+  | 'integrations' | 'billing' | 'costs' | 'devices' | 'token' | 'deployment'
+  | 'task-types' | 'task-type-sets';
 
 export interface TabConfig {
   id: Tab;

@@ -8,7 +8,7 @@ import {
   Building2, Users, Briefcase, Monitor, Key,
   DollarSign, Lock, Shield, Sparkles,
   CheckCircle2, AlertCircle, RefreshCw,
-  Folder, Link2,
+  Folder, Link2, Tag, Layers,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
@@ -25,6 +25,8 @@ import ClientAssignmentManager from '@/components/ClientAssignmentManager';
 import ClientGroupManager      from '@/components/ClientGroupManager';
 import IntegrationsTab         from '@/components/IntegrationsTab';
 import DeploymentTab           from '@/components/DeploymentTab';
+import TaskTypesTab        from '@/pages/settings/TaskTypesTab';
+import TaskTypeSetsTab     from '@/pages/settings/TaskTypeSetsTab';
 
 // Types
 import {
@@ -72,7 +74,7 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','billing','costs','devices','token','deployment'];
+    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','billing','costs','devices','token','deployment','task-types','task-type-sets'];
     return valid.includes(tab as Tab) ? (tab as Tab) : 'organization';
   });
 
@@ -189,6 +191,8 @@ export default function Settings() {
     { id: 'clients',      label: 'Clients',       icon: <Briefcase className="w-4 h-4" /> },
     { id: 'assignments',  label: 'Client Access', icon: <Shield className="w-4 h-4" />, requiredRole: ['owner','admin','manager'] },
     { id: 'groups',       label: 'Client Groups', icon: <Folder className="w-4 h-4" />, requiredRole: ['owner','admin','manager'] },
+    { id: 'task-types',     label: 'Task Types',     icon: <Tag className="w-4 h-4" />,    requiredRole: ['owner','admin'] },
+    { id: 'task-type-sets', label: 'Task Type Sets', icon: <Layers className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'integrations', label: 'Integrations',  icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'billing',      label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
     { id: 'costs',        label: 'Employee Costs',icon: <Users className="w-4 h-4" />,     requiredPlan: EXECUTIVE_PLANS },
@@ -366,6 +370,12 @@ export default function Settings() {
               )}
               {activeTab === 'deployment' && (
                 <DeploymentTab apiBase={API_BASE} />
+              )}
+              {activeTab === 'task-types' && (
+                <TaskTypesTab />
+              )}
+              {activeTab === 'task-type-sets' && (
+                <TaskTypeSetsTab />
               )}
             </>
           )}

@@ -61,11 +61,15 @@ INSTALLED_APPS = [
 ]
 
 SITE_ID = 1
-ACCOUNT_LOGIN_METHODS = {"username", "email"}
-ACCOUNT_SIGNUP_FIELDS = ["email", "username*", "password1*", "password2*"]
+ACCOUNT_AUTHENTICATION_METHOD = "username_email"
+ACCOUNT_EMAIL_REQUIRED = False
 ACCOUNT_EMAIL_VERIFICATION = "none"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"
+
+SILENCED_SYSTEM_CHECKS = [
+    "account.W001",
+]
 
 # -----------------------------------------------------
 # Middleware

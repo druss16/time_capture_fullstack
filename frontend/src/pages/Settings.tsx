@@ -384,10 +384,18 @@ export default function Settings() {
                 <DeploymentTab apiBase={API_BASE} />
               )}
               {activeTab === 'task-types' && (
-                <TaskTypesTab />
+                <TaskTypesTab
+                  currentUserRole={currentUserRole as RoleType}
+                  onSuccess={showSuccess}
+                  onError={showError}
+                />
               )}
               {activeTab === 'task-type-sets' && (
-                <TaskTypeSetsTab />
+                <TaskTypeSetsTab
+                  currentUserRole={currentUserRole as RoleType}
+                  onSuccess={showSuccess}
+                  onError={showError}
+                />
               )}
             </>
           )}

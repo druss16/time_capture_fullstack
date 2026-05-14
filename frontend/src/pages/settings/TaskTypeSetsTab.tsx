@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Layers, Plus, Trash2, RefreshCw, Star, Check, X,
+  Layers, Plus, Trash2, RefreshCw, Star, Check, X, Tag, DollarSign,
   Lock, AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
@@ -49,18 +49,31 @@ interface Props {
   onError: (msg: string) => void;
 }
 
+// Shared palette (matches TaskTypesTab)
+const COLOR_PRESETS = [
+  '#1F3D34', '#2563eb', '#7c3aed', '#db2777', '#dc2626',
+  '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#475569',
+];
+
+const BLANK_TT_FORM = {
+  name: '', code: '', is_billable: true, color: '#1F3D34',
+};
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function TaskTypeSetsTab({ currentUserRole, onSuccess, onError }: Props) {
   const [sets,          setSets]          = useState<TaskTypeSet[]>([]);
   const [allTypes,      setAllTypes]      = useState<TaskType[]>([]);
   const [selectedId,    setSelectedId]    = useState<number | null>(null);
+  const [showTTForm,    setShowTTForm]    = useState(false);
+  const [ttForm,        setTtForm]        = useState(BLANK_TT_FORM);
+  const [ttSaving,      setTtSaving]      = useState(false);
   const [detail,        setDetail]        = useState<TaskTypeSet | null>(null);
   const [loadingList,   setLoadingList]   = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
 const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRole;
-  
+
   // ── Load ──
   const fetchSets = async () => {
     setLoadingList(true);
@@ -139,6 +152,40 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
       await fetchSets();
     } catch (err: any) {
       onError(err?.message || 'Failed to update members');
+    }
+  };
+
+  const createTaskTypeAndAdd = async () => {
+    if (!ttForm.name.trim() || !detail) return;
+    setTtSaving(true);
+    try {
+      // 1. Create the org-wide task type
+      const created = await safeFetchJson<TaskType>(`${TM}/task-types/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: ttForm.name.trim(),
+          code: ttForm.code.trim(),
+          is_billable: ttForm.is_billable,
+          color: ttForm.color,
+        }),
+      });
+      // 2. Add it to the currently-selected set
+      await safeFetchJson(`${TM}/task-type-sets/${detail.id}/members/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_type_id: created.id }),
+      });
+      onSuccess(`"${created.name}" created and added to ${detail.name}`);
+      setTtForm(BLANK_TT_FORM);
+      setShowTTForm(false);
+      // 3. Refresh both lists
+      await fetchDetail(detail.id);
+      await fetchSets();
+    } catch (err: any) {
+      onError(err?.message || 'Failed to create task type');
+    } finally {
+      setTtSaving(false);
     }
   };
 
@@ -301,9 +348,103 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
               </div>
 
               {/* Members */}
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">
-                Task Types in this set
-              </p>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                  Task Types in this set
+                </p>
+                {!isReadOnly && (
+                  <button
+                    onClick={() => setShowTTForm(v => !v)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold border border-border/60 rounded-lg text-slate-600 hover:bg-slate-50 transition-all"
+                  >
+                    {showTTForm ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                    {showTTForm ? 'Cancel' : 'New Task Type'}
+                  </button>
+                )}
+              </div>
+
+              {/* Quick-create form */}
+              {showTTForm && !isReadOnly && (
+                <div className="mb-4 p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">
+                    New Task Type — added to {detail.name}
+                  </p>
+                  <div className="grid grid-cols-12 gap-3 mb-3">
+                    <div className="col-span-7">
+                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Name *</label>
+                      <input
+                        type="text"
+                        value={ttForm.name}
+                        onChange={e => setTtForm({ ...ttForm, name: e.target.value })}
+                        placeholder="Tax Preparation"
+                        className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                      />
+                    </div>
+                    <div className="col-span-3">
+                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Code</label>
+                      <input
+                        type="text"
+                        value={ttForm.code}
+                        onChange={e => setTtForm({ ...ttForm, code: e.target.value.toUpperCase().slice(0, 20) })}
+                        placeholder="TAX"
+                        maxLength={20}
+                        className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm font-mono bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all uppercase"
+                      />
+                    </div>
+                    <div className="col-span-2 flex items-end">
+                      <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer pb-2">
+                        <input
+                          type="checkbox"
+                          checked={ttForm.is_billable}
+                          onChange={e => setTtForm({ ...ttForm, is_billable: e.target.checked })}
+                          className="w-4 h-4 rounded border-slate-300 text-primary focus:ring-primary/20"
+                        />
+                        Billable
+                      </label>
+                    </div>
+                  </div>
+                  <div className="mb-3">
+                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Color</label>
+                    <div className="flex items-center gap-2">
+                      {COLOR_PRESETS.map(c => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => setTtForm({ ...ttForm, color: c })}
+                          className={cn(
+                            'w-7 h-7 rounded-lg transition-all',
+                            ttForm.color === c ? 'ring-2 ring-offset-2 ring-primary' : 'hover:scale-110'
+                          )}
+                          style={{ backgroundColor: c }}
+                          aria-label={`Color ${c}`}
+                        />
+                      ))}
+                      <input
+                        type="text"
+                        value={ttForm.color}
+                        onChange={e => setTtForm({ ...ttForm, color: e.target.value })}
+                        className="ml-2 w-24 border border-border/60 rounded-lg px-2 py-1.5 text-xs font-mono bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2 pt-3 border-t border-border/50">
+                    <button
+                      onClick={createTaskTypeAndAdd}
+                      disabled={ttSaving || !ttForm.name.trim()}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50 transition-all"
+                    >
+                      {ttSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                      Create & Add
+                    </button>
+                    <button
+                      onClick={() => { setShowTTForm(false); setTtForm(BLANK_TT_FORM); }}
+                      className="px-4 py-2 border border-border/60 rounded-lg font-semibold text-sm text-slate-600 hover:bg-slate-100 transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {allTypes.length === 0 ? (
                 <div className="text-center py-10 border border-dashed border-slate-200 rounded-xl">

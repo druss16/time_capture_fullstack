@@ -59,8 +59,8 @@ export default function TaskTypeSetsTab({ currentUserRole, onSuccess, onError }:
   const [loadingList,   setLoadingList]   = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
-  const canManage = ['owner', 'admin'].includes(currentUserRole);
-
+const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRole;
+  
   // ── Load ──
   const fetchSets = async () => {
     setLoadingList(true);

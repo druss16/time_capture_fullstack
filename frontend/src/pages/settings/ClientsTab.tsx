@@ -1,7 +1,7 @@
 // src/pages/settings/ClientsTab.tsx
 import { useState, useMemo, useRef } from 'react';
 import {
-  Briefcase, Plus, Pencil, Trash2, Upload, Search, X,
+  Briefcase, Plus, Pencil, Trash2, Upload, Search, X, Tag,
   ChevronDown, Check, RefreshCw, CheckSquare, Square,
   MinusSquare, UserPlus, UserMinus, FileSpreadsheet,
   Copy, AlertCircle, CheckCircle2, Loader2, Download,
@@ -11,6 +11,8 @@ import { safeFetchJson } from '@/lib/api';
 import { getUserDisplayName } from './types';
 import type { Client, TeamMember, RoleType } from './types';
 import ClientImportWizard from '@/components/ClientImportWizard';
+import ClientTaskTypesPanel from '@/components/ClientTaskTypesPanel';
+
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -409,6 +411,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
   const [showImportDropdown, setShowImportDropdown] = useState(false);
   const [search,             setSearch]             = useState('');
   const [statusFilter,       setStatusFilter]       = useState<'all' | 'active' | 'inactive'>('active');
+  const [taskTypeClientId, setTaskTypeClientId] = useState<number | null>(null);
 
   const canManage = ['owner', 'admin'].includes(currentUserRole);
 
@@ -681,6 +684,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
                     {canManage && (
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => setTaskTypeClientId(client.id)} title="Task Types" className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/8 rounded-lg transition-colors"><Tag className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleEdit(client)} className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/8 rounded-lg transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleDelete(client.id, client.name)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
                         </div>
@@ -712,6 +716,31 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
       {/* Modals */}
       {showImportWizard   && <ClientImportWizard onClose={() => setShowImportWizard(false)} onSuccess={() => { onRefresh(); onSuccess('Clients imported!'); }} users={users} />}
       {showBulkAssignModal && <BulkAssignModal isOpen={showBulkAssignModal} onClose={() => setShowBulkAssignModal(false)} selectedClients={selectedClients} users={users} onSuccess={() => { onRefresh(); clearSelection(); onSuccess('Team assigned!'); }} />}
+        {taskTypeClientId !== null && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col" style={{ maxHeight: '90vh' }}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border/50 shrink-0">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Task Types · {clients.find(c => c.id === taskTypeClientId)?.name}
+                </h2>
+                <p className="text-xs text-slate-400">Configure which task types apply to this client</p>
+              </div>
+              <button onClick={() => setTaskTypeClientId(null)} className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors">
+                <X className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-5">
+              <ClientTaskTypesPanel
+                clientId={taskTypeClientId}
+                canManage={canManage}
+                onSuccess={onSuccess}
+                onError={onError}
+              />
+            </div>
+          </div>
+        </div>
+      )}
       {showCSVImportModal  && <CSVImportModal isOpen={showCSVImportModal} onClose={() => setShowCSVImportModal(false)} onSuccess={() => { onRefresh(); onSuccess('Assignments imported!'); }} />}
       {showCopyModal       && <CopyAssignmentsModal isOpen={showCopyModal} onClose={() => setShowCopyModal(false)} clients={clients} onSuccess={() => { onRefresh(); onSuccess('Team copied!'); }} />}
     </div>

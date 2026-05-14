@@ -2,27 +2,31 @@
 tracker/management/commands/provision_firm.py
 
 White-glove bulk provisioning command.
-Imports team roster + client list from CSV files and sets up everything.
+Imports team roster + client list + task types from CSV files and sets up everything.
 
 Usage:
     # Import team & devices
     python manage.py provision_firm --org smith-associates --team team.csv
-    
+
     # Import clients
     python manage.py provision_firm --org smith-associates --clients clients.csv
-    
-    # Import both at once
-    python manage.py provision_firm --org smith-associates --team team.csv --clients clients.csv
-    
+
+    # Import task types (service codes)
+    python manage.py provision_firm --org smith-associates --task-types task_types.csv
+
+    # Import everything at once
+    python manage.py provision_firm --org smith-associates --team team.csv --clients clients.csv --task-types task_types.csv
+
     # Dry run (preview without making changes)
-    python manage.py provision_firm --org smith-associates --team team.csv --clients clients.csv --dry-run
+    python manage.py provision_firm --org smith-associates --team team.csv --dry-run
 
     # Re-run with updated CSVs (updates existing records)
     python manage.py provision_firm --org smith-associates --team team.csv --update
 
 CSV Formats:
-    team.csv:    email, display_name, role, billing_rate, cost_rate, machine_hostname, windows_username
-    clients.csv: client_name, billing_rate, assigned_team (comma-separated emails)
+    team.csv:       email, display_name, role, billing_rate, cost_rate, machine_hostname, windows_username
+    clients.csv:    client_name, billing_rate, assigned_team (comma-separated emails)
+    task_types.csv: name, code, is_billable, default_rate
 """
 
 import csv
@@ -37,6 +41,7 @@ from tracker.models import (
     Organization, OrganizationMembership, Client, ClientAssignment,
     BillingRate, EmployeeCostRate, OrgDeploymentToken, Invitation,
     OnboardingBatch, DeviceProvisioningMap,
+    TaskType, TaskTypeSet, TaskTypeSetMember,
 )
 
 User = get_user_model()
@@ -59,6 +64,10 @@ class Command(BaseCommand):
             help='Path to clients CSV (client_name, billing_rate, assigned_team)'
         )
         parser.add_argument(
+            '--task-types', type=str, default=None,
+            help='Path to task types CSV (name, code, is_billable, default_rate)'
+        )
+        parser.add_argument(
             '--dry-run', action='store_true',
             help='Preview what would be created without making changes'
         )
@@ -79,12 +88,13 @@ class Command(BaseCommand):
         org_slug = options['org']
         team_csv = options['team']
         clients_csv = options['clients']
+        task_types_csv = options['task_types']
         dry_run = options['dry_run']
         update = options['update']
         generate_token = options['generate_token']
 
-        if not team_csv and not clients_csv:
-            raise CommandError('Provide at least one of --team or --clients')
+        if not team_csv and not clients_csv and not task_types_csv:
+            raise CommandError('Provide at least one of --team, --clients, or --task-types')
 
         # ─── Resolve org ───
         try:
@@ -122,6 +132,10 @@ class Command(BaseCommand):
         # ─── Process clients CSV ───
         if clients_csv:
             self._import_clients(org, clients_csv, users_created, dry_run, update)
+
+        # ─── Process task types CSV ───
+        if task_types_csv:
+            self._import_task_types(org, task_types_csv, dry_run, update)
 
         # ─── Generate deployment token ───
         if generate_token and not dry_run:
@@ -398,7 +412,7 @@ class Command(BaseCommand):
 
                 # ─── Parse and create assignments ───
                 if assigned_raw:
-                    emails = [e.strip().lower() for e in assigned_raw.split(',') if e.strip()]
+                    emails = [e.strip().lower() for e in assigned_raw.split(';') if e.strip()]
                     for email in emails:
                         user = users_created.get(email)
                         if not user:
@@ -422,12 +436,119 @@ class Command(BaseCommand):
             else:
                 # Dry run — just report
                 if assigned_raw:
-                    emails = [e.strip() for e in assigned_raw.split(',')]
+                    emails = [e.strip() for e in assigned_raw.split(';')]
                     self.stdout.write(f'    Assignments: {", ".join(emails)}')
 
         summary = f'\n  Client summary: {clients_created} clients, {assignments_created} assignments'
         if update and clients_updated:
             summary += f', {clients_updated} updated'
+        self.stdout.write(summary)
+
+
+    # ═══════════════════════════════════════════════════════════════
+    # TASK TYPE IMPORT
+    # ═══════════════════════════════════════════════════════════════
+    def _import_task_types(self, org, csv_path, dry_run, update):
+        """
+        Import task_types.csv → creates TaskTypes and adds them all to
+        the org's default TaskTypeSet (creating "Standard" if none exists).
+        """
+        self.stdout.write(self.style.HTTP_INFO(f'\n── Importing task types from: {csv_path}'))
+
+        rows = self._read_csv(csv_path)
+        required = {'name'}
+        self._validate_headers(rows[0].keys(), required, csv_path)
+
+        types_created = 0
+        types_updated = 0
+        imported_task_types = []  # collected for set membership
+
+        for i, row in enumerate(rows, 1):
+            name = row.get('name', '').strip()
+            code = row.get('code', '').strip().upper()
+            billable_raw = row.get('is_billable', 'true').strip().lower()
+            is_billable = billable_raw not in ('false', 'no', '0', 'n', '')
+            default_rate = self._parse_decimal(row.get('default_rate', ''))
+
+            if not name:
+                self.stdout.write(self.style.WARNING(f'  Row {i}: Skipping — missing name'))
+                continue
+
+            label = f'{name}' + (f' ({code})' if code else '')
+            self.stdout.write(f'  Task Type: {label} — {"billable" if is_billable else "non-billable"}')
+
+            if not dry_run:
+                tt, created = TaskType.objects.get_or_create(
+                    org=org,
+                    name=name,
+                    defaults={
+                        'code': code,  # blank → TaskType.save() auto-generates
+                        'is_billable': is_billable,
+                        'default_rate': default_rate,
+                        'is_active': True,
+                    }
+                )
+                if created:
+                    types_created += 1
+                    self.stdout.write(self.style.SUCCESS(f'    ✓ Task type created'))
+                elif update:
+                    changed = False
+                    if code and tt.code != code:
+                        tt.code = code
+                        changed = True
+                    if tt.is_billable != is_billable:
+                        tt.is_billable = is_billable
+                        changed = True
+                    if default_rate is not None and tt.default_rate != default_rate:
+                        tt.default_rate = default_rate
+                        changed = True
+                    if not tt.is_active:
+                        tt.is_active = True
+                        changed = True
+                    if changed:
+                        tt.save()
+                        types_updated += 1
+                        self.stdout.write(self.style.SUCCESS(f'    ✓ Task type updated'))
+                    else:
+                        self.stdout.write(f'    → Task type exists (unchanged)')
+                else:
+                    self.stdout.write(f'    → Task type already exists')
+
+                imported_task_types.append(tt)
+
+        # ─── Add all imported task types to the org's default set ───
+        if not dry_run and imported_task_types:
+            default_set = TaskTypeSet.objects.filter(org=org, is_default=True).first()
+            if not default_set:
+                default_set = TaskTypeSet.objects.create(
+                    org=org,
+                    name='Standard',
+                    description='Default firm-wide task type set.',
+                    is_default=True,
+                    source='manual',
+                )
+                self.stdout.write(self.style.SUCCESS(
+                    f'    ✓ Created default set "Standard"'
+                ))
+
+            members_added = 0
+            for idx, tt in enumerate(imported_task_types):
+                _, member_created = TaskTypeSetMember.objects.get_or_create(
+                    set=default_set,
+                    task_type=tt,
+                    defaults={'sort_order': idx},
+                )
+                if member_created:
+                    members_added += 1
+            self.stdout.write(self.style.SUCCESS(
+                f'    ✓ Added {members_added} task type(s) to set "{default_set.name}"'
+            ))
+
+        summary = f'\n  Task type summary: {types_created} created'
+        if update and types_updated:
+            summary += f', {types_updated} updated'
+        if dry_run:
+            summary += ' (dry run — no changes made)'
         self.stdout.write(summary)
 
     # ═══════════════════════════════════════════════════════════════

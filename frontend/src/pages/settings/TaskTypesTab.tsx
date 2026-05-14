@@ -58,7 +58,7 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
     default_rate: '', color: '#1F3D34', sort_order: 0, is_active: true,
   });
 
-  const canManage = ['owner', 'admin'].includes(currentUserRole);
+  const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRole;
 
   // ── Load ──
   const fetchTaskTypes = async () => {

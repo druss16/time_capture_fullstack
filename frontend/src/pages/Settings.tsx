@@ -99,7 +99,19 @@ export default function Settings() {
   // Load user info once
   useEffect(() => {
     safeFetchJson<any>(`${API_BASE}/whoami/`)
-      .then(d => { setCurrentUserId(d.user_id); setCurrentUserRole(d.role || 'member'); })
+      .then(d => {
+        setCurrentUserId(d.user_id);
+        if (d.role) setCurrentUserRole(d.role);
+        // If whoami didn't return a role, fetch the team list to resolve it
+        if (!d.role && d.user_id) {
+          safeFetchJson<any[]>(`${API_BASE}/settings/team/`)
+            .then(team => {
+              const me = team?.find(m => m.id === d.user_id);
+              if (me?.role) setCurrentUserRole(me.role);
+            })
+            .catch(() => {});
+        }
+      })
       .catch(() => {});
   }, []);
 

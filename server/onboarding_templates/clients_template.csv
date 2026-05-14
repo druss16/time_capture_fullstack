@@ -1,0 +1,4 @@
+client_name,billing_rate,assigned_team
+Acme Corporation,175,jsmith@firm.com;mjones@firm.com
+Bedrock LLC,150,jsmith@firm.com
+Cyberdyne Systems,200,bwilson@firm.com;mjones@firm.com

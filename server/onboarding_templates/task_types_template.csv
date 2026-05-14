@@ -1,0 +1,12 @@
+name,code,is_billable,default_rate
+Tax Preparation,TAX,true,175
+Tax Planning,TAXPL,true,200
+Bookkeeping,BOOK,true,95
+Payroll,PAY,true,110
+Audit & Assurance,AUDIT,true,165
+Advisory/Consulting,ADV,true,225
+Client Communication,COMM,true,150
+Research,RES,true,150
+Document Review,DOC,true,140
+Admin/Internal,ADMIN,false,
+Training,TRAIN,false,

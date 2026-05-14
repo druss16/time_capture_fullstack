@@ -1,0 +1,4 @@
+email,display_name,role,billing_rate,cost_rate,machine_hostname,windows_username
+jsmith@firm.com,John Smith,manager,200,95,FIRM-PC-101,FIRMNAME\jsmith
+mjones@firm.com,Mary Jones,member,150,70,FIRM-PC-102,FIRMNAME\mjones
+bwilson@firm.com,Bob Wilson,owner,250,110,FIRM-PC-103,FIRMNAME\bwilson

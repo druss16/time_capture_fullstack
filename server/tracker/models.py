@@ -669,6 +669,15 @@ class Client(models.Model):
     quickbooks_realm_id = models.CharField(max_length=50, blank=True, null=True)
     xero_tenant_id = models.CharField(max_length=50, blank=True, null=True)
 
+    # ── TaskType management (migration 0106) ──
+    default_task_type_set = models.ForeignKey(
+        'tracker.TaskTypeSet',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='clients_using_as_default',
+        help_text='Optional: overrides the org default TaskTypeSet for this client.',
+    )
+
     
     # ═══════════════════════════════════════════════════════════════════════
     
@@ -981,7 +990,7 @@ class Integration(models.Model):
         ('quickbooks', 'QuickBooks Online'),
         ('xero', 'Xero'),
         ('karbon', 'Karbon'),
-        ('task_type_matrix', 'TaskType Matrix Rule'),
+        ('cch_axcess', 'CCH Axcess Practice'),
     ]
     
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='integrations')
@@ -1002,6 +1011,24 @@ class Integration(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     last_synced_at = models.DateTimeField(null=True, blank=True)
+
+    # ── CCH Axcess sync extensions (migration 0109) ──
+    enforce_matrix = models.BooleanField(
+        default=False,
+        help_text='If True, the validator enforces the client/task/staff matrix '
+                  'rules synced from this integration. If False, matrix rules are '
+                  'advisory only (logged but not blocking).',
+    )
+    auto_create_internal_records = models.BooleanField(
+        default=True,
+        help_text='If True, sync auto-creates internal Client / TaskType records '
+                  'when it encounters external records with no mapping.',
+    )
+    last_sync_status = models.CharField(
+        max_length=32, blank=True, default='',
+        help_text='Result of last sync: success, partial, failed.',
+    )
+    last_sync_error = models.TextField(blank=True, default='')
     
     class Meta:
         unique_together = ['organization', 'provider']
@@ -2042,6 +2069,19 @@ class OrgRoutingRule(models.Model):
     # Telemetry — updated asynchronously by the rule firing pipeline
     fire_count = models.IntegerField(default=0)
     last_fired_at = models.DateTimeField(null=True, blank=True)
+
+    # ── Source tracking (migration 0109) ──
+    source = models.CharField(
+        max_length=32,
+        choices=[
+            ('manual', 'Manual'),
+            ('default_seed', 'Default Seed'),
+            ('cch_axcess_sync', 'CCH Axcess Sync'),
+        ],
+        default='manual',
+        help_text='How this rule was created. Synced rules are managed by the '
+                  'integration and should not be manually edited.',
+    )
  
     class Meta:
         ordering = ['-priority', 'id']

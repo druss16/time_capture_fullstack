@@ -197,7 +197,10 @@ class Command(BaseCommand):
                 block.category_hours = new_hours
                 if resolved_tt is not None:
                     block.task_type = resolved_tt
-                block.save(update_fields=['ai_category', 'category_hours', 'task_type'])
+                block.save(
+                    update_fields=['ai_category', 'category_hours', 'task_type'],
+                    force_classifier=True,
+                )
 
             if resolved_tt is not None:
                 task_type_set += 1

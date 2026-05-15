@@ -378,10 +378,6 @@ def resolve_task_type_for_category(org, category_str):
         .first()
     )
     if mapping is None:
-        logger.debug(
-            'No CategoryTaskTypeMapping for org=%s category=%r',
-            getattr(org, 'id', org), category_str,
-        )
         return None
 
     return mapping.task_type

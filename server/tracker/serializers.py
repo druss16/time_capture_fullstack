@@ -134,6 +134,7 @@ class BlockSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source='project.name', read_only=True, allow_null=True)
     task_name = serializers.CharField(source='task.name', read_only=True, allow_null=True)
     task_type_name = serializers.CharField(source='task_type.name', read_only=True, allow_null=True)
+    task_type_code = serializers.CharField(source='task_type.code', read_only=True, allow_null=True)
     task_type_color = serializers.CharField(source='task_type.color', read_only=True, allow_null=True)
     task_type_is_billable = serializers.BooleanField(source='task_type.is_billable', read_only=True, allow_null=True)
     
@@ -162,8 +163,8 @@ class BlockSerializer(serializers.ModelSerializer):
             "client", "project", "task", "task_type",
             
             # Classification - Names (read-only)
-            "client_name", "project_name", "task_name", 
-            "task_type_name", "task_type_color", "task_type_is_billable",
+            "client_name", "project_name", "task_name",
+            "task_type_name", "task_type_code", "task_type_color", "task_type_is_billable",
             
             # Legacy/computed
             "category_hours", "notes",
@@ -178,7 +179,7 @@ class BlockSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id", "minutes", "day", "user", "hostname", "device_id",
             "client_name", "project_name", "task_name",
-            "task_type_name", "task_type_color", "task_type_is_billable",
+            "task_type_name", "task_type_code", "task_type_color", "task_type_is_billable",
             "ai_extracted_client", "ai_category", "ai_confidence", "ai_processed_at",
             "categorized_at", "approved_at",
         ]

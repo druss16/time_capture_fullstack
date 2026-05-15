@@ -505,7 +505,29 @@ class ClassificationService:
                 # Classifier had a client but no usable category. Use 'General'
                 # so the block appears in dashboards instead of being filtered out.
                 block.category_hours = {'General': hours}
-            
+
+            # Plan B: resolve the dominant category to this firm's TaskType
+            # (Layer 1 -> Layer 2 bridge). Sets block.task_type if a
+            # CategoryTaskTypeMapping exists for this org; leaves it unset
+            # otherwise (None is a valid, expected outcome).
+            try:
+                from tracker.services.task_type_resolver import (
+                    resolve_task_type_for_category,
+                )
+                dominant_category = self._extract_dominant_category(block)
+                if dominant_category:
+                    resolved_tt = resolve_task_type_for_category(
+                        block.org, dominant_category
+                    )
+                    if resolved_tt is not None:
+                        block.task_type = resolved_tt
+            except Exception as e:
+                # Never let task_type resolution break classification.
+                logger.warning(
+                    '[TASK-TYPE-RESOLVE] Block %s: failed to resolve '
+                    'task_type for category — %s', block.pk, e,
+                )
+
             block.is_billable = decision.is_billable
             # Backwards compat with existing is_categorized field
             block.is_categorized = True

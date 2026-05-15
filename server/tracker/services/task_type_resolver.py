@@ -46,6 +46,7 @@ from tracker.models import (
     TaskType,
 )
 from tracker.models_task_type_sets import (
+    CategoryTaskTypeMapping,
     ClientTaskType,
     TaskTypeSet,
 )
@@ -337,3 +338,50 @@ def commit_block_with_task_type(block: Block, task_type: TaskType, user, source:
     block.save(force_classifier=True)
 
     return True, ''
+
+# ============================================================================
+# Category -> TaskType resolution (Layer 1 -> Layer 2 bridge)
+# ============================================================================
+
+def resolve_task_type_for_category(org, category_str):
+    """
+    Map a canonical classifier category string to this org's TaskType.
+
+    Reads the per-firm CategoryTaskTypeMapping table. This is the bridge
+    from Layer 1 (the classifier's universal category vocabulary) to
+    Layer 2 (this firm's TaskType records).
+
+    Called from ClassificationService.apply() to set Block.task_type, and
+    by the billing export.
+
+    Args:
+        org: Organization instance (or org_id-bearing object)
+        category_str: a canonical category string, e.g. "Tax Preparation"
+
+    Returns:
+        TaskType instance if a mapping exists, else None.
+        None is a valid, expected result — the caller leaves
+        Block.task_type unset (the block shows as uncategorized until a
+        mapping is added or a user assigns one manually).
+    """
+    if not org or not category_str:
+        return None
+
+    category_str = category_str.strip()
+    if not category_str:
+        return None
+
+    mapping = (
+        CategoryTaskTypeMapping.objects
+        .filter(org=org, category__iexact=category_str)
+        .select_related('task_type')
+        .first()
+    )
+    if mapping is None:
+        logger.debug(
+            'No CategoryTaskTypeMapping for org=%s category=%r',
+            getattr(org, 'id', org), category_str,
+        )
+        return None
+
+    return mapping.task_type

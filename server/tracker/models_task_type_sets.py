@@ -370,3 +370,55 @@ class ExternalStaffMapping(models.Model):
 
     def __str__(self):
         return f'{self.integration.provider}: {self.user.username} ↔ {self.external_code or self.external_id}'
+
+
+class CategoryTaskTypeMapping(models.Model):
+    """
+    Maps a canonical classifier category string to an org's TaskType.
+
+    Layer 1 (the classifier's universal category vocabulary) -> Layer 2
+    (this firm's TaskType records). Populated at onboarding, read by
+    resolve_task_type_for_category() in the classification pipeline AND by
+    the billing export.
+
+    Example: canonical category "Tax Preparation" -> this org's TaskType
+    with code "1040PREP".
+    """
+    SOURCE_CHOICES = [
+        ('seed', 'Seed (1:1 default from onboarding)'),
+        ('manual', 'Manually configured'),
+        ('cch_sync', 'CCH Axcess sync'),
+    ]
+
+    org = models.ForeignKey(
+        'tracker.Organization',
+        on_delete=models.CASCADE,
+        related_name='category_task_type_mappings',
+    )
+    # The canonical Layer 1 category string the classifier emits.
+    # Not a FK — Layer 1 is a code-level constant list, not a DB table.
+    category = models.CharField(max_length=100, db_index=True)
+
+    task_type = models.ForeignKey(
+        'tracker.TaskType',
+        on_delete=models.CASCADE,
+        related_name='category_mappings',
+    )
+
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        default='manual',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['org', 'category']]
+        ordering = ['org_id', 'category']
+        verbose_name = 'Category → TaskType Mapping'
+        verbose_name_plural = 'Category → TaskType Mappings'
+
+    def __str__(self):
+        return f'{self.org_id}: "{self.category}" → {self.task_type.code}'

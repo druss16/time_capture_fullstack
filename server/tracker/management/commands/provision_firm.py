@@ -41,8 +41,10 @@ from tracker.models import (
     Organization, OrganizationMembership, Client, ClientAssignment,
     BillingRate, EmployeeCostRate, OrgDeploymentToken, Invitation,
     OnboardingBatch, DeviceProvisioningMap,
-    TaskType, TaskTypeSet, TaskTypeSetMember,
+    TaskType, TaskTypeSet, TaskTypeSetMember, 
 )
+
+from tracker.models_task_type_sets import CategoryTaskTypeMapping
 
 User = get_user_model()
 
@@ -68,6 +70,14 @@ class Command(BaseCommand):
             help='Path to task types CSV (name, code, is_billable, default_rate)'
         )
         parser.add_argument(
+            '--seed-category-mappings', action='store_true',
+            help='Auto-seed 1:1 canonical-category -> TaskType mappings (Layer 1 -> Layer 2 bridge)'
+        )
+        parser.add_argument(
+            '--category-mappings', type=str, default=None,
+            help='Path to custom category mappings CSV (category, task_type_code)'
+        )
+        parser.add_argument(
             '--dry-run', action='store_true',
             help='Preview what would be created without making changes'
         )
@@ -89,12 +99,18 @@ class Command(BaseCommand):
         team_csv = options['team']
         clients_csv = options['clients']
         task_types_csv = options['task_types']
+        seed_category_mappings = options['seed_category_mappings']
+        category_mappings_csv = options['category_mappings']
         dry_run = options['dry_run']
         update = options['update']
         generate_token = options['generate_token']
 
-        if not team_csv and not clients_csv and not task_types_csv:
-            raise CommandError('Provide at least one of --team, --clients, or --task-types')
+        if not team_csv and not clients_csv and not task_types_csv \
+                and not seed_category_mappings and not category_mappings_csv:
+            raise CommandError(
+                'Provide at least one of --team, --clients, --task-types, '
+                '--seed-category-mappings, or --category-mappings'
+            )
 
         # ─── Resolve org ───
         try:
@@ -136,6 +152,12 @@ class Command(BaseCommand):
         # ─── Process task types CSV ───
         if task_types_csv:
             self._import_task_types(org, task_types_csv, dry_run, update)
+
+        # ─── Process category -> TaskType mappings (Layer 1 -> Layer 2 bridge) ───
+        if seed_category_mappings or category_mappings_csv:
+            self._import_category_mappings(
+                org, category_mappings_csv, seed_category_mappings, dry_run, update
+            )
 
         # ─── Generate deployment token ───
         if generate_token and not dry_run:
@@ -547,6 +569,116 @@ class Command(BaseCommand):
         summary = f'\n  Task type summary: {types_created} created'
         if update and types_updated:
             summary += f', {types_updated} updated'
+        if dry_run:
+            summary += ' (dry run — no changes made)'
+        self.stdout.write(summary)
+
+    def _import_category_mappings(self, org, csv_path, seed_default, dry_run, update):
+        """
+        Populate CategoryTaskTypeMapping — the Layer 1 -> Layer 2 bridge.
+
+        Two modes:
+          seed_default=True  → auto-seed 1:1 mappings. For each canonical
+              category in the org's industry vocabulary, find the org's
+              TaskType with the matching name, create a mapping with
+              source='seed'.
+          csv_path given     → import a custom mapping CSV (category,
+              task_type_code), create mappings with source='manual'.
+
+        --update: 'seed' rows are regenerated freely; 'manual' rows are
+        never clobbered (a human deliberately set those).
+        """
+        from tracker.industry_categories import get_categories_for_industry
+
+        self.stdout.write(self.style.HTTP_INFO(
+            f'\n── Importing category → TaskType mappings'
+        ))
+
+        mappings_created = 0
+        mappings_updated = 0
+        mappings_skipped = 0
+
+        # Build the (category_string, task_type) pairs to map.
+        pairs = []  # list of (category_str, task_type_obj_or_None, source)
+
+        if csv_path:
+            # ─── Mode 2: custom CSV ───
+            rows = self._read_csv(csv_path)
+            required = {'category', 'task_type_code'}
+            self._validate_headers(rows[0].keys(), required, csv_path)
+
+            for i, row in enumerate(rows, 1):
+                category = row.get('category', '').strip()
+                tt_code = row.get('task_type_code', '').strip().upper()
+                if not category or not tt_code:
+                    self.stdout.write(self.style.WARNING(
+                        f'  Row {i}: Skipping — missing category or task_type_code'
+                    ))
+                    continue
+                tt = TaskType.objects.filter(org=org, code=tt_code).first()
+                if not tt:
+                    self.stdout.write(self.style.WARNING(
+                        f'  Row {i}: Skipping — no TaskType with code "{tt_code}" '
+                        f'for this org'
+                    ))
+                    continue
+                pairs.append((category, tt, 'manual'))
+        else:
+            # ─── Mode 1: auto-seed 1:1 default ───
+            canonical = get_categories_for_industry(org.industry_type)
+            for category in canonical:
+                tt = TaskType.objects.filter(org=org, name__iexact=category).first()
+                if not tt:
+                    self.stdout.write(self.style.WARNING(
+                        f'  No TaskType named "{category}" for this org — '
+                        f'skipping (run --task-types first?)'
+                    ))
+                    continue
+                pairs.append((category, tt, 'seed'))
+
+        # Apply the pairs.
+        for category, tt, source in pairs:
+            self.stdout.write(f'  Mapping: "{category}" → {tt.code}  [{source}]')
+
+            if dry_run:
+                continue
+
+            existing = CategoryTaskTypeMapping.objects.filter(
+                org=org, category=category
+            ).first()
+
+            if existing is None:
+                CategoryTaskTypeMapping.objects.create(
+                    org=org, category=category, task_type=tt, source=source,
+                )
+                mappings_created += 1
+                self.stdout.write(self.style.SUCCESS(f'    ✓ Mapping created'))
+            elif update:
+                # Never clobber a human-set mapping.
+                if existing.source == 'manual' and source == 'seed':
+                    mappings_skipped += 1
+                    self.stdout.write(
+                        f'    → Skipped — manual mapping exists (not overwriting)'
+                    )
+                elif existing.task_type_id != tt.id or existing.source != source:
+                    existing.task_type = tt
+                    existing.source = source
+                    existing.save(update_fields=['task_type', 'source', 'updated_at'])
+                    mappings_updated += 1
+                    self.stdout.write(self.style.SUCCESS(f'    ✓ Mapping updated'))
+                else:
+                    self.stdout.write(f'    → Mapping exists (unchanged)')
+            else:
+                mappings_skipped += 1
+                self.stdout.write(f'    → Mapping already exists (use --update to modify)')
+
+        summary = (
+            f'\n  Category mapping summary: {mappings_created} created'
+        )
+        if mappings_updated:
+            summary += f', {mappings_updated} updated'
+        if mappings_skipped:
+            summary += f', {mappings_skipped} skipped'
         if dry_run:
             summary += ' (dry run — no changes made)'
         self.stdout.write(summary)

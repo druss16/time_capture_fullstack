@@ -133,20 +133,15 @@ CPA_CATEGORIES = [
     "Financial Statement Prep",
     "Audit/Assurance",
     "Payroll Services",
-    "Advisory/Financial Planning",
-    "Valuation/Advisory",
-    "Forensic/Fraud Investigation",
-    "SEC/Regulatory Compliance",
-    "Employee Benefits/ERISA",
-    "Real Estate/Property",
-    "Nonprofit/Form 990",
-    "Healthcare/Medical Practice",
-    "Construction/Contractors",
+    "Advisory",
+    "Document Management",
+    "Research",
     "Email/Communication",
     "Meetings",
     "Administration",
-    "Document Management",
-    "Review",
+    "Billing/Admin",
+    "Training",
+    "General Client Work",
 ]
 
 CPA_TOOL_DETECTION = {
@@ -218,15 +213,25 @@ CPA_TOOL_DETECTION = {
 }
 
 CPA_TASK_TYPES = [
-    {"name": "Tax Preparation", "code": "TAX", "color": "#2563eb", "is_billable": True},
-    {"name": "Tax Planning", "code": "PLAN", "color": "#7c3aed", "is_billable": True},
-    {"name": "Accounting/Bookkeeping", "code": "ACCT", "color": "#059669", "is_billable": True},
+    {"name": "Tax Preparation", "code": "TAXPREP", "color": "#2563eb", "is_billable": True},
+    {"name": "Tax Planning", "code": "TAXPLAN", "color": "#7c3aed", "is_billable": True},
+    {"name": "Tax Research", "code": "TAXRSCH", "color": "#0891b2", "is_billable": True},
+    {"name": "Tax Compliance", "code": "TAXCOMP", "color": "#0d9488", "is_billable": True},
+    {"name": "Accounting/Bookkeeping", "code": "BOOK", "color": "#059669", "is_billable": True},
+    {"name": "Financial Statement Prep", "code": "FINSTMT", "color": "#16a34a", "is_billable": True},
     {"name": "Audit/Assurance", "code": "AUDIT", "color": "#dc2626", "is_billable": True},
-    {"name": "Advisory", "code": "ADV", "color": "#ea580c", "is_billable": True},
-    {"name": "Email/Communication", "code": "EMAIL", "color": "#6b7280", "is_billable": False},
-    {"name": "Meetings", "code": "MTG", "color": "#0891b2", "is_billable": True},
+    {"name": "Payroll Services", "code": "PAYROLL", "color": "#ea580c", "is_billable": True},
+    {"name": "Advisory", "code": "ADVISORY", "color": "#d97706", "is_billable": True},
+    {"name": "Document Management", "code": "DOCMGMT", "color": "#6b7280", "is_billable": False},
+    {"name": "Research", "code": "RESEARCH", "color": "#8b5cf6", "is_billable": True},
+    {"name": "Email/Communication", "code": "EMAIL", "color": "#64748b", "is_billable": False},
+    {"name": "Meetings", "code": "MEETINGS", "color": "#0891b2", "is_billable": True},
     {"name": "Administration", "code": "ADMIN", "color": "#9ca3af", "is_billable": False},
-    {"name": "Personal/Non-Billable", "code": "PERS", "color": "#d1d5db", "is_billable": False},
+    {"name": "Billing/Admin", "code": "BILLING", "color": "#a8a29e", "is_billable": False},
+    {"name": "Training", "code": "TRAINING", "color": "#7c3aed", "is_billable": False},
+    {"name": "General Client Work", "code": "GENWORK", "color": "#3b82f6", "is_billable": True},
+    {"name": "Idle", "code": "IDLE", "color": "#e5e7eb", "is_billable": False},
+    {"name": "Personal/Non-Billable", "code": "PERSONAL", "color": "#d1d5db", "is_billable": False},
 ]
 
 
@@ -1401,25 +1406,9 @@ from typing import Optional
 
 
 def _get_allowed_categories(industry_type: str) -> list[str]:
-    cpa_categories = [
-        "Tax Preparation",
-        "Tax Review",
-        "Tax Research",
-        "Bookkeeping",
-        "Reconciliation",
-        "Audit Fieldwork",
-        "Audit Review",
-        "Client Email / Communication",
-        "Client Meeting",
-        "Internal Meeting",
-        "Billing / Admin",
-        "Practice Development",
-        "Training",
-        "IT / Setup",
-        "Uncategorized",
-    ]
-    return cpa_categories
-
+    # Fixed: previously returned a hardcoded CPA list regardless of industry.
+    # Now delegates to the single source of truth.
+    return get_categories_for_industry(industry_type)
 
 def _build_category_system_prompt(allowed_categories: list[str]) -> str:
     cat_list = "\n".join(f"  - {c}" for c in allowed_categories)

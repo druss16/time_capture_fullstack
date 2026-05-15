@@ -36,6 +36,8 @@ export type Category = {
   block_count: number;
   sample_activities: string[];
   needs_review?: boolean;
+  task_type_code?: string | null;
+  task_type_name?: string | null;
 };
 export type ClientTime = {
   client_id: number | null;
@@ -782,10 +784,17 @@ function CategorySection({
               : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
           </button>
 
-          <span className={cn(
-            "font-bold text-sm flex-1 truncate",
-            nonBillable ? "text-slate-400" : "text-slate-800"
-          )}>
+          <span
+            className={cn(
+              "font-bold text-sm flex-1 truncate",
+              nonBillable ? "text-slate-400" : "text-slate-800"
+            )}
+            title={
+              cat.task_type_code
+                ? `TaskType: ${cat.task_type_name ?? cat.name} (${cat.task_type_code})`
+                : undefined
+            }
+          >
             {cat.name}
           </span>
 

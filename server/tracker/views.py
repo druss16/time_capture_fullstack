@@ -3815,6 +3815,15 @@ def today_time(request):
     else:
         target_date = timezone.localdate()
 
+    # Plan B: get the user's org once for TaskType code lookups in category loop.
+    user_org = None
+    try:
+        membership = OrganizationMembership.objects.filter(user=user).first()
+        if membership:
+            user_org = membership.organization
+    except Exception:
+        pass
+
     tz = timezone.get_current_timezone()
     start_local = timezone.make_aware(
         datetime.combine(target_date, datetime.min.time()),
@@ -4040,12 +4049,28 @@ def today_time(request):
                 else:
                     aggregated_samples.append(f"{clean_title} ({time_str})")
 
+            # Plan B: surface the firm's TaskType for this canonical category
+            # so the UI can show the code in a tooltip.
+            task_type_code = None
+            task_type_name = None
+            if user_org is not None:
+                try:
+                    from tracker.services.task_type_resolver import resolve_task_type_for_category
+                    tt = resolve_task_type_for_category(user_org, cat_name)
+                    if tt:
+                        task_type_code = tt.code
+                        task_type_name = tt.name
+                except Exception:
+                    pass
+
             categories.append({
                 'name':              cat_name,
                 'hours':             round(minutes / 60, 2),
                 'block_count':       cat_data['block_count'],
                 'unique_activities': len(cat_data['by_activity']),
                 'sample_activities': aggregated_samples,
+                'task_type_code':    task_type_code,
+                'task_type_name':    task_type_name,
             })
 
         result.append({
@@ -4355,10 +4380,15 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
     total_minutes = 0.0
     billable_minutes = 0.0
     
+    # Plan B: derive the org once for the TaskType code lookup at the end
+    user_org = None
+    
     for block in blocks:
         client_name = block.client.name if block.client else 'Unassigned'
         client_id = block.client_id
         minutes = block.minutes or 0
+        if user_org is None:
+            user_org = block.org
         
         if block.category_hours and isinstance(block.category_hours, dict):
             categories = list(block.category_hours.keys())
@@ -4416,12 +4446,28 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
                 else:
                     samples.append(f"{clean_title} ({time_str})")
             
+            # Plan B: surface the firm's TaskType code for this canonical category
+            # so the UI can show it in tooltips.
+            task_type_code = None
+            task_type_name = None
+            if user_org is not None:
+                try:
+                    from tracker.services.task_type_resolver import resolve_task_type_for_category
+                    tt = resolve_task_type_for_category(user_org, cat_name)
+                    if tt:
+                        task_type_code = tt.code
+                        task_type_name = tt.name
+                except Exception:
+                    pass
+
             categories.append({
                 'name': cat_name,
                 'hours': round(minutes / 60, 2),
                 'block_count': cat_data['block_count'],
                 'unique_activities': len(cat_data['by_activity']),
                 'sample_activities': samples,
+                'task_type_code': task_type_code,
+                'task_type_name': task_type_name,
             })
         
         result.append({

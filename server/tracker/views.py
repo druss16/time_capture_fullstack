@@ -228,6 +228,20 @@ def get_request_user_override(request):
             pass
     return request.user
 
+def _get_meeting_category_for_org(org):
+    """Return the canonical meeting category for this org's industry."""
+    try:
+        from tracker.industry_categories import get_categories_for_industry
+        industry = getattr(org, 'industry_type', None) or 'general'
+        cats = get_categories_for_industry(industry)
+        # Prefer plural 'Meetings', fall back to other reasonable names
+        for candidate in ('Meetings', 'Client Meeting', 'Meeting', 'Calls'):
+            if candidate in cats:
+                return candidate
+    except Exception:
+        pass
+    return 'Meetings'
+
 def match_client_in_text(text: str, clients: list, known_entities: list = None) -> list:
     """
     Smart client matching that handles various naming patterns.
@@ -4381,10 +4395,11 @@ def resolve_ai_disagreement(request, block_id):
             block.is_meeting = True
             minutes = block.minutes or 0
             hours = round(minutes / 60.0, 2) if minutes else 0.0
-            block.category_hours = {'Client Meeting': hours}
+            meeting_category = _get_meeting_category_for_org(block.org)
+            block.category_hours = {meeting_category: hours}
             logger.info(
                 f"[CAL-ACCEPT] Block {block.pk}: reclassified to "
-                f"Client Meeting ({hours}h) for {block.client.name if block.client else '?'}"
+                f"'{meeting_category}' ({hours}h) for {block.client.name if block.client else '?'}"
             )
     elif action == 'change':
         new_client_id = body.get('client_id')

@@ -1578,12 +1578,25 @@ class ClassificationService:
 
     @staticmethod
     def _build_haystack(block) -> str:
-        """Combine searchable text fields into one lowercase string."""
+        """Combine searchable text fields into one lowercase string.
+
+        File path is cleaned via _clean_path_segments to strip OS user home,
+        AppData, Temp, Protected View randomized dirs, etc. Otherwise the
+        Windows username (e.g. C:\\Users\\mavops\\) would produce false matches
+        against clients whose name happens to equal the OS username.
+        """
         parts = [
             (block.window_title or block.title or ''),
             (block.url or ''),
-            (block.file_path or ''),
         ]
+        # Clean file_path before adding it to the haystack. Same cleanup
+        # used by Stage 3 Match 2 (file_path stage); without this, title_alias
+        # matching would see the raw path and false-positive on the OS username.
+        if block.file_path:
+            username = _infer_username_from_path(block.file_path)
+            cleaned_segments = _clean_path_segments(block.file_path, username)
+            if cleaned_segments:
+                parts.append(' '.join(cleaned_segments))
         return ' '.join(p for p in parts if p).lower()
 
     @staticmethod

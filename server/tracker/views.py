@@ -4347,29 +4347,24 @@ def resolve_ai_disagreement(request, block_id):
     if not (is_ai or is_mail or is_calendar):
         return JsonResponse({'error': 'block_not_flagged'}, status=404)
 
-    # Pick which flow we're in. Priority: AI > mail > calendar.
-    if is_ai:
-        flow = 'ai'
-    elif is_mail:
-        flow = 'mail'
-    else:
-        flow = 'calendar'
+    ai_open       = is_ai       and not block.ai_disagreement_resolved_at
+    mail_open     = is_mail     and not block.mail_disagreement_resolved_at
+    calendar_open = is_calendar and not block.calendar_disagreement_resolved_at
 
-    if flow == 'ai':
-        if block.ai_disagreement_resolved_at:
-            return JsonResponse({'error': 'already_resolved'}, status=409)
+    if ai_open:
+        flow = 'ai'
         proposed_client_id = block.ai_proposed_client_id
         no_proposal_error = 'no_ai_proposal'
-    elif flow == 'mail':
-        if block.mail_disagreement_resolved_at:
-            return JsonResponse({'error': 'already_resolved'}, status=409)
+    elif mail_open:
+        flow = 'mail'
         proposed_client_id = block.mail_proposed_client_id
         no_proposal_error = 'no_mail_proposal'
-    else:  # calendar
-        if block.calendar_disagreement_resolved_at:
-            return JsonResponse({'error': 'already_resolved'}, status=409)
+    elif calendar_open:
+        flow = 'calendar'
         proposed_client_id = block.calendar_proposed_client_id
         no_proposal_error = 'no_calendar_proposal'
+    else:
+        return JsonResponse({'error': 'already_resolved'}, status=409)
 
     old_client_id = block.client_id
 

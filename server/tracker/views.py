@@ -4206,6 +4206,49 @@ def today_time(request):
             'mail_reasoning':            block.mail_disagreement_reasoning or '',
         })
 
+    # =========================================================================
+    # STEP 6.6: CALENDAR disagreement blocks → flagged_blocks (v1.3.42)
+    # =========================================================================
+    # Mirrors STEP 6.5 (mail disagreements) for the new Stage 6 calendar
+    # disagreement signal. The frontend reads `type` and renders different
+    # banner copy for 'classifier' vs 'manual' disagreement sources.
+    calendar_disagreement_blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        calendar_disagrees_with_agent=True,
+        calendar_disagreement_resolved_at__isnull=True,
+        deleted_at__isnull=True,
+    ).select_related('client', 'calendar_proposed_client')
+
+    for block in calendar_disagreement_blocks:
+        proposed_name = (
+            block.calendar_proposed_client.name
+            if block.calendar_proposed_client else 'a different client'
+        )
+
+        # Source-aware banner copy. Mirrors apply()'s FIX D logic.
+        if block.calendar_disagreement_source == 'manual':
+            review_reason = (
+                f"You picked a different client, but this block overlaps "
+                f"a calendar event associated with {proposed_name}"
+            )
+        else:
+            review_reason = f"Calendar event suggests {proposed_name}"
+
+        flagged_blocks.append({
+            'block_id':                      block.id,
+            'client_name':                   block.client.name if block.client else 'Uncategorized',
+            'review_reason':                 review_reason,
+            'minutes':                       block.minutes or 0,
+            'start':                         block.start.isoformat() if block.start else '',
+            'type':                          'calendar_disagreement',
+            'calendar_proposed_client_id':   block.calendar_proposed_client_id,
+            'calendar_proposed_client_name': block.calendar_proposed_client.name if block.calendar_proposed_client else None,
+            'calendar_confidence':           block.calendar_proposed_confidence or 0.0,
+            'calendar_reasoning':            block.calendar_disagreement_reasoning or '',
+            'calendar_disagreement_source':  block.calendar_disagreement_source or 'classifier',
+        })
+
     # Tag mobile-review-flagged blocks with their type for the frontend
     for fb in flagged_blocks:
         if 'type' not in fb:

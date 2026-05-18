@@ -1301,6 +1301,67 @@ class Block(models.Model):
         default='',
         help_text='How the user resolved the mail disagreement: accepted / dismissed / changed_to_other.',
     )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Calendar signal disagreement — set by Stage 6 classifier (v1.3.42)
+    # when an overlapping CalendarEvent with a matched client disagrees with
+    # the block's final attribution. Surfaced in Daily Review for user
+    # confirmation, but does NOT auto-overwrite the client. Mirrors the
+    # mail_disagrees_with_agent pattern above.
+    # ─────────────────────────────────────────────────────────────────────
+    calendar_disagrees_with_agent = models.BooleanField(
+        default=False,
+        help_text='True when Stage 6 calendar event points to a different client than the block was attributed to.',
+    )
+    calendar_proposed_client = models.ForeignKey(
+        'Client',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='calendar_proposed_blocks',
+        help_text='Client that the overlapping calendar event suggests, if different from block.client.',
+    )
+    calendar_proposed_confidence = models.FloatField(
+        null=True, blank=True,
+        help_text='Stage 6 signal confidence for the calendar-proposed client (0.55-0.85).',
+    )
+    calendar_disagreement_reasoning = models.CharField(
+        max_length=500,
+        blank=True,
+        default='',
+        help_text='Human-readable explanation of why calendar signal disagrees, shown in Daily Review.',
+    )
+
+    # Source of the calendar disagreement — 'classifier' (auto-attribution)
+    # vs 'manual' (user explicitly picked a different client). Drives banner
+    # copy in Daily Review: classifier disagreements get the standard
+    # "reassign?" prompt; manual disagreements get a softer "keep or reassign?".
+    calendar_disagreement_source = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        choices=[
+            ('classifier', 'Classifier picked vs. calendar'),
+            ('manual', 'User manually picked vs. calendar'),
+        ],
+        help_text='Which attribution path produced the conflict. Drives Daily Review banner copy.',
+    )
+
+    # Mirrors mail_disagreement_resolved_at — set when user actions the
+    # calendar disagreement (accept / dismiss / change). today_time filters
+    # by this being null to know what's still "open" for the user to review.
+    calendar_disagreement_resolved_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the user resolved the calendar disagreement; null = still pending review.',
+    )
+
+    # Mirrors mail_disagreement_resolution. Stores the user's action so we
+    # can compute calendar-signal accuracy stats later.
+    calendar_disagreement_resolution = models.CharField(
+        max_length=32,
+        blank=True,
+        default='',
+        help_text='User action when resolving (e.g. accepted, dismissed, reassigned).',
+    )
  
 
     # ===============================

@@ -4373,6 +4373,19 @@ def resolve_ai_disagreement(request, block_id):
             return JsonResponse({'error': no_proposal_error}, status=400)
         block.client_id = proposed_client_id
         resolution = 'accepted'
+        # v1.3.47: For calendar accept, also reclassify as meeting time.
+        # The user is confirming "this block represents meeting time," not
+        # "this foreground app is owned by the meeting's client." So bill
+        # under the meeting category, not the original foreground category.
+        if flow == 'calendar':
+            block.is_meeting = True
+            minutes = block.minutes or 0
+            hours = round(minutes / 60.0, 2) if minutes else 0.0
+            block.category_hours = {'Client Meeting': hours}
+            logger.info(
+                f"[CAL-ACCEPT] Block {block.pk}: reclassified to "
+                f"Client Meeting ({hours}h) for {block.client.name if block.client else '?'}"
+            )
     elif action == 'change':
         new_client_id = body.get('client_id')
         if not new_client_id:

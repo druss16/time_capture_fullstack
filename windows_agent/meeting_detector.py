@@ -14,6 +14,8 @@ Design:
 - Uses hysteresis to prevent flapping:
     * 2 consecutive positive polls → fire on_meeting_start (20s min)
     * 3 consecutive negative polls → fire on_meeting_end (30s grace)
+      EXCEPT once a meeting is active, sticky-state logic raises the bar
+      for ending — see v1.2.99 notes below.
 
 Detection signals (priority order):
 1. Audio session active on meeting app (pycaw on Windows, CoreAudio on Mac)
@@ -25,17 +27,43 @@ Any two signals = high confidence. One signal = medium confidence, still fires
 after hysteresis clears.
 
 v1.2.98: Browser meeting fixes
-  * NEW: Chrome/Edge/Firefox/Brave map to "_browser" pseudo-app — audio
-         sessions on browsers count as a signal but only when paired with
-         a meeting title probe. Fixes Google Meet detection (was completely
-         broken: Chrome wasn't in MEETING_APPS_WINDOWS, so audio probe
-         never matched, leaving title probe as the only possible signal).
-  * NEW: probe_browser_windows() enumerates ALL visible browser windows
-         instead of only checking foreground title. Meet now detects even
-         when user has switched to Excel/Outlook or is screen-sharing.
-  * NEW: Aggregator promotes browser+title combos — chrome.exe with audio
-         + "meet.google.com" in any window title = {audio, title} = passes
-         the 2+ signal filter.
+  * Chrome/Edge/Firefox/Brave map to "_browser" pseudo-app — audio sessions
+    on browsers count as a signal but only when paired with a meeting title
+    probe. Fixes Google Meet detection (was completely broken).
+  * probe_browser_windows() enumerates ALL visible browser windows instead
+    of only checking foreground title. Meet now detects even when user has
+    switched to Excel/Outlook or is screen-sharing.
+  * Aggregator promotes browser+title combos — chrome.exe with audio +
+    "meet.google.com" in any window title = {audio, title} = passes the 2+
+    signal filter.
+
+v1.2.99: Native Teams 2.0 fixes (root cause: TL Wall 1-minute Fabius block)
+  * NEW: msteams.exe added to MEETING_APPS_WINDOWS. New Teams 2.0 (default
+         since 2024) ships as a packaged MSIX app and the audio session is
+         owned by "MSTeams.exe" — case-insensitive in pycaw but the dict
+         lookup used a literal string. Audio probe missed every new Teams
+         meeting in production.
+  * NEW: probe_camera() now reads BOTH the NonPackaged AND Packaged consent
+         store hives. New Teams is packaged → its mic/camera consent lives
+         under Packaged, which we weren't checking. Camera probe was blind
+         to every new Teams meeting.
+  * NEW: probe_native_windows() enumerates ALL visible windows looking for
+         native meeting app title markers (Microsoft Teams, Zoom Meeting,
+         Webex Meeting). Complement to probe_browser_windows() — catches
+         the case where the Teams window is minimized but the meeting is
+         going. Native Teams reports its title even when minimized.
+  * NEW: Sticky meeting state. Once a meeting has started (we've confirmed
+         a real meeting with 2 signals), the bar for ending is raised:
+           - Negative streak threshold extends from 3 polls (30s) to 30
+             polls (5 minutes) while state.active = True
+           - 'process' signal ALONE is enough to keep an active meeting
+             alive — the meeting only truly ends when the meeting process
+             disappears (Teams closed) or 5 minutes of total silence pass
+         This fixes the "user mutes and switches windows → meeting ends
+         60s later" failure mode that produced the 1-minute Fabius block.
+         The START gate is unchanged — you still need 2 independent signals
+         to BEGIN a meeting, so Spotify, YouTube, etc. can never accidentally
+         trigger a sticky meeting.
 """
 
 import os
@@ -101,7 +129,8 @@ MEETING_APPS_WINDOWS = {
     # Native meeting apps
     "cpthost.exe": "zoom",           # Zoom meeting subprocess (NOT Zoom.exe tray)
     "zoom.exe": "zoom",              # fallback — main Zoom process during active call
-    "ms-teams.exe": "teams",         # new Teams
+    "ms-teams.exe": "teams",         # new Teams (older variant)
+    "msteams.exe": "teams",          # v1.2.99: new Teams 2.0 (packaged MSIX)
     "teams.exe": "teams",            # classic Teams
     "webexmta.exe": "webex",
     "webex.exe": "webex",
@@ -150,6 +179,27 @@ MEETING_TITLE_PATTERNS = {
     "whereby": "whereby",
     "around.co": "around",
     "gather.town": "gather",
+}
+
+# v1.2.99: Native meeting app window title markers.
+# Used by probe_native_windows() to find meetings even when the meeting
+# app is minimized. Unlike MEETING_TITLE_PATTERNS (which is for browser
+# tabs), these match native window titles. Patterns are checked in order;
+# first match wins. All lowercase.
+NATIVE_WINDOW_PATTERNS = {
+    # Teams — both old and new Teams 2.0 use these patterns
+    "microsoft teams": "teams",
+    "teams meeting": "teams",
+    # Zoom native
+    "zoom meeting": "zoom",
+    "zoom workplace": "zoom",
+    # Webex native
+    "webex meeting": "webex",
+    "cisco webex": "webex",
+    # Slack Huddles
+    "huddle in": "slack",
+    # GoToMeeting
+    "gotomeeting": "gotomeeting",
 }
 
 
@@ -241,6 +291,9 @@ class WindowsMeetingProbe(_BaseProbe):
         v1.2.98: Browsers (chrome.exe etc.) now match too — they map to
         the "_browser" pseudo-app. The aggregator in _poll_once() promotes
         these onto the real meeting app identified by the title probe.
+
+        v1.2.99: msteams.exe now in MEETING_APPS_WINDOWS — fixes new Teams 2.0
+        which ships as packaged MSIX with that process name.
         """
         if not _PYCAW_AVAILABLE:
             return []
@@ -302,9 +355,14 @@ class WindowsMeetingProbe(_BaseProbe):
 
         Windows tracks device access at:
           HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\
-          ConsentStore\\{webcam,microphone}\\NonPackaged\\*
+          ConsentStore\\{webcam,microphone}\\(NonPackaged|<Packaged App Family>)\\*
 
         LastUsedTimeStop == 0 means "currently in use"
+
+        v1.2.99: Now reads BOTH NonPackaged AND Packaged hives. Pre-fix we
+        only read NonPackaged, so new Teams 2.0 (packaged MSIX) was invisible
+        to the camera/mic probe. Packaged apps live under their family name
+        (e.g., MSTeams_8wekyb3d8bbwe) rather than NonPackaged.
         """
         if not IS_WINDOWS:
             return []
@@ -312,50 +370,107 @@ class WindowsMeetingProbe(_BaseProbe):
         results = []
         for device_type in ("webcam", "microphone"):
             source = DetectionSource.CAMERA if device_type == "webcam" else DetectionSource.AUDIO
+
+            # Enumerate both the NonPackaged hive AND every Packaged app
+            # family hive directly under ConsentStore/<device>/. The
+            # ConsentStore layout looks like:
+            #   ConsentStore\webcam\NonPackaged\<encoded exe path>
+            #   ConsentStore\webcam\MSTeams_8wekyb3d8bbwe\...
+            #   ConsentStore\webcam\Microsoft.SkypeApp_kzf8qxf38zg5c\...
+            # We walk both levels.
+            hives_to_check = []
             try:
-                base_path = (
+                consent_base_path = (
                     r"Software\Microsoft\Windows\CurrentVersion"
                     r"\CapabilityAccessManager\ConsentStore"
-                    f"\\{device_type}\\NonPackaged"
+                    f"\\{device_type}"
                 )
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base_path) as base_key:
-                    i = 0
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, consent_base_path) as consent_key:
+                    j = 0
                     while True:
                         try:
-                            subkey_name = winreg.EnumKey(base_key, i)
-                            i += 1
+                            hive_name = winreg.EnumKey(consent_key, j)
+                            j += 1
+                            hives_to_check.append((hive_name, f"{consent_base_path}\\{hive_name}"))
                         except OSError:
                             break
-
-                        try:
-                            with winreg.OpenKey(base_key, subkey_name) as sub:
-                                try:
-                                    last_stop, _ = winreg.QueryValueEx(sub, "LastUsedTimeStop")
-                                except FileNotFoundError:
-                                    continue
-
-                                # 0 = currently in use
-                                if last_stop != 0:
-                                    continue
-
-                                # subkey_name is a registry-encoded exe path
-                                # e.g. "C:#Program Files#Zoom#bin#Zoom.exe"
-                                path_lower = subkey_name.lower().replace('#', '\\')
-                                for exe, app in MEETING_APPS_WINDOWS.items():
-                                    if exe in path_lower:
-                                        results.append(DetectionProbe(
-                                            active=True, app=app, source=source
-                                        ))
-                                        break
-                        except OSError:
-                            continue
             except FileNotFoundError:
-                # Registry path doesn't exist — no apps have requested access
+                # No consent store for this device type at all
                 continue
             except Exception as e:
-                logger.debug(f"[MEETING] Registry probe error ({device_type}): {e}")
+                logger.debug(f"[MEETING] Registry enumeration ({device_type}): {e}")
+                continue
 
-        return results
+            for hive_name, hive_path in hives_to_check:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, hive_path) as base_key:
+                        i = 0
+                        while True:
+                            try:
+                                subkey_name = winreg.EnumKey(base_key, i)
+                                i += 1
+                            except OSError:
+                                break
+
+                            try:
+                                with winreg.OpenKey(base_key, subkey_name) as sub:
+                                    try:
+                                        last_stop, _ = winreg.QueryValueEx(sub, "LastUsedTimeStop")
+                                    except FileNotFoundError:
+                                        continue
+
+                                    # 0 = currently in use
+                                    if last_stop != 0:
+                                        continue
+
+                                    # For NonPackaged: subkey_name is encoded
+                                    # exe path like "C:#Program Files#Zoom#bin#Zoom.exe"
+                                    # For Packaged: hive_name itself is the
+                                    # package family (e.g., "MSTeams_8wekyb3d8bbwe")
+                                    # and subkey_name is the app's relative key.
+                                    if hive_name.lower() == "nonpackaged":
+                                        path_lower = subkey_name.lower().replace('#', '\\')
+                                    else:
+                                        # Packaged: identify by the hive name
+                                        # (MSTeams_*, etc.)
+                                        path_lower = hive_name.lower()
+
+                                    matched_app = None
+                                    for exe, app in MEETING_APPS_WINDOWS.items():
+                                        if exe in path_lower:
+                                            matched_app = app
+                                            break
+
+                                    # v1.2.99: also match packaged app family
+                                    # names that don't appear in our exe map
+                                    if not matched_app:
+                                        if 'msteams' in path_lower or 'microsoft.teams' in path_lower:
+                                            matched_app = 'teams'
+                                        elif 'zoom' in path_lower:
+                                            matched_app = 'zoom'
+                                        elif 'webex' in path_lower:
+                                            matched_app = 'webex'
+
+                                    if matched_app:
+                                        results.append(DetectionProbe(
+                                            active=True, app=matched_app, source=source
+                                        ))
+                            except OSError:
+                                continue
+                except FileNotFoundError:
+                    continue
+                except Exception as e:
+                    logger.debug(f"[MEETING] Registry probe error ({device_type}/{hive_name}): {e}")
+
+        # De-dupe per app+source
+        seen = set()
+        unique = []
+        for r in results:
+            key = (r.app, r.source)
+            if key not in seen:
+                seen.add(key)
+                unique.append(r)
+        return unique
 
     def probe_process(self) -> List[DetectionProbe]:
         """Scan running processes for meeting subprocesses.
@@ -363,6 +478,8 @@ class WindowsMeetingProbe(_BaseProbe):
         v1.2.98: Skip browsers here — they're long-lived background
         processes that don't indicate an active meeting on their own.
         Their meeting state comes from probe_audio + probe_browser_windows.
+
+        v1.2.99: msteams.exe now matches (new Teams 2.0).
         """
         if not _PSUTIL_AVAILABLE:
             return []
@@ -402,9 +519,6 @@ class WindowsMeetingProbe(_BaseProbe):
           - User has switched to Excel/Outlook/etc.
           - User is screen-sharing (which steals foreground)
           - Meet tab is in a background browser window
-
-        This is the second half of the Google Meet fix — without this,
-        we only see Meet when the user is staring directly at it.
         """
         if not _WIN32_AVAILABLE:
             return []
@@ -436,6 +550,67 @@ class WindowsMeetingProbe(_BaseProbe):
             win32gui.EnumWindows(_enum_handler, None)
         except Exception as e:
             logger.debug(f"[MEETING] EnumWindows error: {e}")
+
+        return results
+
+    def probe_native_windows(self) -> List[DetectionProbe]:
+        """v1.2.99: Scan ALL windows for NATIVE meeting app title patterns.
+
+        Complement to probe_browser_windows(). That one looks for browser
+        tab patterns (meet.google.com, etc.). This one looks for native app
+        title patterns (Microsoft Teams, Zoom Meeting, Webex Meeting).
+
+        Critical for catching native Teams meetings where:
+          - The Teams meeting window is minimized
+          - User has alt-tabbed to Excel for note-taking
+          - The audio session got missed (e.g., owned by a sandbox helper)
+          - The camera/mic registry probe was blind (Packaged hive issue)
+
+        Native Windows windows report their title via win32gui.GetWindowText
+        even when minimized, so we can find a Teams meeting window that's
+        hidden in the taskbar.
+
+        Uses IsWindowVisible — which is True for minimized windows. (Hidden
+        background windows return False and are skipped.)
+        """
+        if not _WIN32_AVAILABLE:
+            return []
+
+        results = []
+        seen_apps = set()
+
+        def _enum_handler(hwnd, _):
+            try:
+                # IsWindowVisible returns True for minimized windows too.
+                # It only returns False for windows with the hidden style flag.
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                title = win32gui.GetWindowText(hwnd)
+                if not title or len(title) < 4:
+                    return
+                title_lower = title.lower()
+                for pattern, app in NATIVE_WINDOW_PATTERNS.items():
+                    if pattern in title_lower and app not in seen_apps:
+                        # Avoid double-counting if browser probe already
+                        # caught this (would have used MEETING_TITLE_PATTERNS).
+                        # Browser probe runs first, so if browser already
+                        # matched a "| Microsoft Teams" tab, native probe
+                        # might also match "microsoft teams" — that's fine,
+                        # they're both TITLE source and de-duped by aggregator.
+                        seen_apps.add(app)
+                        results.append(DetectionProbe(
+                            active=True, app=app,
+                            source=DetectionSource.TITLE,
+                            title=title.strip()
+                        ))
+                        break
+            except Exception:
+                pass
+
+        try:
+            win32gui.EnumWindows(_enum_handler, None)
+        except Exception as e:
+            logger.debug(f"[MEETING] Native EnumWindows error: {e}")
 
         return results
 
@@ -579,7 +754,7 @@ class MeetingDetector:
         detector = MeetingDetector(
             on_meeting_start=my_start_handler,
             on_meeting_end=my_end_handler,
-            context_bus=_CONTEXT,  # main.py's shared dict
+            context_bus=_CONTEXT,
             get_foreground_title=lambda: current_window_title,
         )
         detector.start()
@@ -590,7 +765,13 @@ class MeetingDetector:
     # Polling tunables
     POLL_INTERVAL_S = 10
     POSITIVE_HYSTERESIS = 2   # consecutive positives → start (20s)
-    NEGATIVE_HYSTERESIS = 3   # consecutive negatives → end (30s)
+    NEGATIVE_HYSTERESIS = 3   # consecutive negatives → end (30s) when no sticky
+
+    # v1.2.99: sticky meeting state — once active, much harder to end.
+    # 30 polls × 10s = 5 minutes of total silence before we declare the
+    # meeting ended. Prevents flicker-induced premature endings (mute,
+    # mic switch, audio session ownership transfer, etc.).
+    STICKY_NEGATIVE_HYSTERESIS = 30   # 5 min while active
 
     def __init__(
         self,
@@ -689,7 +870,10 @@ class MeetingDetector:
         logger.info("[MEETING] Poll loop stopped")
 
     def _poll_once(self):
-        """Run all probes, aggregate, update state with hysteresis."""
+        """Run all probes, aggregate, update state with hysteresis.
+
+        v1.2.99: Adds probe_native_windows() and sticky meeting state.
+        """
         probes: List[DetectionProbe] = []
 
         # Gather signals from all probes (failures in one don't kill others)
@@ -704,13 +888,21 @@ class MeetingDetector:
                 logger.debug(f"[MEETING] {probe_name} probe failed: {e}")
 
         # v1.2.98: Scan ALL browser windows on Windows — not just foreground.
-        # This is what makes Meet detect when user has switched to Excel
-        # or is screen-sharing (which steals foreground).
         if IS_WINDOWS and hasattr(self.probe, 'probe_browser_windows'):
             try:
                 probes.extend(self.probe.probe_browser_windows())
             except Exception as e:
                 logger.debug(f"[MEETING] browser_windows probe failed: {e}")
+
+        # v1.2.99: Scan ALL windows for native meeting app title patterns.
+        # Catches minimized Teams/Zoom/Webex native windows even when the
+        # audio/camera probes miss them (new Teams 2.0 audio ownership,
+        # packaged registry hive, etc.).
+        if IS_WINDOWS and hasattr(self.probe, 'probe_native_windows'):
+            try:
+                probes.extend(self.probe.probe_native_windows())
+            except Exception as e:
+                logger.debug(f"[MEETING] native_windows probe failed: {e}")
 
         # Browser title probe needs foreground title from caller (Mac path
         # and Windows fallback for non-foreground-stealing cases)
@@ -733,22 +925,13 @@ class MeetingDetector:
                 app_titles[p.app] = p.title
 
         # === v1.2.98: Browser-meeting promotion ===
-        # If a browser has audio/camera AND a title probe identified a
-        # meeting app, merge them: the meeting app inherits the browser's
-        # signals. This is the Google Meet fix (and also catches
-        # Zoom-in-browser, Teams-in-browser, Webex-in-browser).
-        #
-        # Example: chrome.exe audio session active → "_browser" with
-        # sources={"audio"}. Title probe sees "meet.google.com" → "meet"
-        # with sources={"title"}. After promotion: "meet" with
-        # sources={"title", "audio"} — passes the 2+ signal filter.
+        # Chrome with audio + "meet.google.com" in any window title → meet
+        # gets both audio and title signals.
         browser_signals = app_sources.pop("_browser", set())
         if browser_signals:
             promoted_any = False
             for app, sources in list(app_sources.items()):
                 if "title" in sources:
-                    # Title probe identified a meeting in a browser tab —
-                    # inherit the browser's audio/camera signals
                     app_sources[app] = sources | browser_signals
                     promoted_any = True
                     logger.debug(
@@ -756,25 +939,38 @@ class MeetingDetector:
                         f"now has sources={app_sources[app]}"
                     )
             if not promoted_any:
-                # Browser has audio but no meeting title — could be
-                # Spotify, YouTube, etc. Drop silently.
                 logger.debug(
                     f"[MEETING] Browser audio with no meeting title — "
                     f"likely media playback, ignoring"
                 )
 
-        # Process alone is never enough. Meeting apps (Teams, Zoom, Slack,
-        # Webex) run persistent background processes even when no call is
-        # active. Browser window titles alone can also be misleading
-        # (e.g., "Zoom Meeting" left in a browser tab).
-        #
-        # Require: at least one STRONG signal (audio or camera), OR
-        #          at least 2 independent signals of any kind.
+        # === Snapshot pre-filter state for sticky logic ===
+        with self._state_lock:
+            was_active = self.state.active
+            active_app = self.state.app
+
+        # === Filter: require strong signal OR 2+ signals to START a meeting ===
+        # v1.2.99: While a meeting is ACTIVE, process alone is enough to
+        # sustain it. The active_app's process being still alive is the
+        # ground truth that the meeting is ongoing. This is what fixes
+        # the "mute + alt-tab → meeting dies in 30s" bug.
         filtered = {}
         for app, sources in app_sources.items():
             has_strong = bool(sources & {"audio", "camera"})
             has_multiple = len(sources) >= 2
-            if not (has_strong or has_multiple):
+
+            # Sticky-state acceptance: if we're already in a meeting for
+            # THIS app, and we still see ANY signal at all (even just
+            # process), treat it as a sustaining signal. This is the
+            # second half of the sticky behavior — the first half is
+            # the extended negative_hysteresis threshold below.
+            sticky_sustain = (
+                was_active
+                and app == active_app
+                and len(sources) >= 1
+            )
+
+            if not (has_strong or has_multiple or sticky_sustain):
                 logger.debug(
                     f"[MEETING] Dropping {app}: weak signal "
                     f"(sources={sources}, need audio/camera or 2+ signals)"
@@ -796,7 +992,7 @@ class MeetingDetector:
 
         # Update hysteresis counters
         with self._state_lock:
-            was_active = self.state.active
+            was_active = self.state.active  # re-read; could have changed
 
             if is_meeting_active_now:
                 self._positive_streak += 1
@@ -814,6 +1010,14 @@ class MeetingDetector:
                 self._negative_streak += 1
                 self._positive_streak = 0
 
+            # v1.2.99: Choose end-threshold based on sticky state. When a
+            # meeting has started, we require 5 minutes of TOTAL silence
+            # before declaring it ended. Before it starts, 30 seconds.
+            end_threshold = (
+                self.STICKY_NEGATIVE_HYSTERESIS if was_active
+                else self.NEGATIVE_HYSTERESIS
+            )
+
             # State transitions
             if not was_active and self._positive_streak >= self.POSITIVE_HYSTERESIS:
                 # Transition to active
@@ -826,8 +1030,13 @@ class MeetingDetector:
                 self.state.confidence = min(1.0, len(best_sources) / 3.0)
                 self._fire_start_locked()
 
-            elif was_active and self._negative_streak >= self.NEGATIVE_HYSTERESIS:
-                # Transition to inactive
+            elif was_active and self._negative_streak >= end_threshold:
+                # Transition to inactive — sticky threshold cleared
+                logger.info(
+                    f"[MEETING] Ending after {self._negative_streak} negative "
+                    f"polls (~{int(self._negative_streak * self.POLL_INTERVAL_S)}s) — "
+                    f"sticky threshold = {end_threshold}"
+                )
                 self._fire_end_locked()
 
             elif was_active:
@@ -847,7 +1056,8 @@ class MeetingDetector:
             logger.debug(
                 f"[MEETING] poll: active_now={is_meeting_active_now} "
                 f"best_app={best_app} sources={best_sources} "
-                f"streaks(+{self._positive_streak}/-{self._negative_streak})"
+                f"streaks(+{self._positive_streak}/-{self._negative_streak}) "
+                f"sticky_active={was_active}"
             )
 
     # ---------- State transitions (must hold _state_lock) ----------
@@ -867,13 +1077,11 @@ class MeetingDetector:
             confidence=self.state.confidence,
         )
 
-        # Enqueue synthetic event for tracking loop to write
         try:
             self.event_queue.put_nowait(("start", snapshot))
         except queue.Full:
             logger.warning("[MEETING] Event queue full, dropping start event")
 
-        # Fire callback (non-blocking — run in thread so slow handlers don't stall poll)
         if self.on_meeting_start:
             threading.Thread(
                 target=self._safe_callback,

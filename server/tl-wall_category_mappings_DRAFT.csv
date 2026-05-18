@@ -1,0 +1,20 @@
+category,task_type_code
+Idle,IDLE
+Personal/Non-Billable,PERSONAL
+Tax Preparation,TAXPREP
+Tax Planning,TAXPLAN
+Tax Research,TAXRSCH
+Tax Compliance,TAXCOMP
+Accounting/Bookkeeping,BOOK
+Financial Statement Prep,FINSTMT
+Audit/Assurance,AUDIT
+Payroll Services,PAYROLL
+Advisory,ADVISORY
+Document Management,DOCMGMT
+Research,RESEARCH
+Email/Communication,EMAIL
+Meetings,MEETINGS
+Administration,ADMIN
+Billing/Admin,BILLING
+Training,TRAINING
+General Client Work,GENWORK

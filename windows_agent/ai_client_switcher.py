@@ -201,8 +201,8 @@ _PATH_NOISE_FOLDERS = {
 # Shared exe family → process name prefixes. Keep in sync with
 # views_routing_rules.EXE_FAMILIES on the backend.
 _EXE_FAMILIES = {
-    'taxwise':     ['utw', 'taxwise'],
-    'ultratax':    ['uts', 'ultratax'],
+    'taxwise':     ['tww', 'taxwise'],   # tww24.exe / tww25.exe / TaxWise.exe
+    'ultratax':    ['uts', 'ultratax', 'utw'],   # utw24.exe / utw25.exe
     'lacerte':     ['lacerte', 'lacertepro'],
     'proseries':   ['proseries', 'ps'],
     'drake':       ['drake'],
@@ -412,10 +412,27 @@ _STOP_WORDS = {
     "tax", "firm", "cpas", "cpa", "associates", "partners", "services",
 }
 
+
 _GENERIC_WORD_BLOCKLIST = {
+    # Original
     "professional", "services", "accounting", "management",
     "associates", "solutions", "group", "local", "national",
     "international", "community", "united", "general", "advanced",
+    # Added 2026-05-18: "-service" matched Self-Service Portal against
+    # Mike's Painting Service, locking Wayne onto the wrong client for
+    # ~30 minutes. Singular was missing; plural already present.
+    "service",
+    # Generic legal-entity / business-noun tokens — these are never
+    # discriminating partial-word matches. If a client name literally
+    # IS one of these, they need a real alias, not partial-word fallback.
+    "company", "co", "corp", "inc", "llc", "ltd",
+    "holdings", "enterprises", "systems", "partners",
+    "consulting", "properties", "investments",
+    "the", "and", "of",
+    # Tax-domain tokens — partial-word on these would false-positive
+    # against every UltraTax title and tax-related email in an
+    # accounting firm.
+    "tax", "taxes", "law",
 }
 
 
@@ -1416,7 +1433,42 @@ class AIClientSwitcher:
             )
             return
 
-        # Skip the title-based filter when we have a real file_path. The
+
+        # ── Tier -2: Org routing rules run FIRST, before any skip ──────
+        # Org admin hard rules must not be filterable by heuristics. If
+        # a rule matches and routes to a client, switch immediately and
+        # bypass everything else. This is what makes UltraTax → Internal-Tax
+        # actually work — _should_skip used to block it.
+        rule_hit = self._routing_engine.match(title or "", exe_name or "", file_path or "")
+        if rule_hit:
+            action = rule_hit.get('action')
+            if action == 'route_to_client':
+                target_id = rule_hit.get('target_client_id')
+                target_name = rule_hit.get('target_client_name')
+                if target_id and target_id != self._current_client_id:
+                    match = ClientMatch(
+                        client_id=int(target_id),
+                        client_name=target_name or "",
+                        confidence=1.0,
+                        match_method="org_routing_rule",
+                        matched_token=rule_hit.get('match_value', '')[:80],
+                        reasoning=(
+                            f"Org rule: {rule_hit.get('match_type')}="
+                            f"{rule_hit.get('match_value')!r} → {target_name}"
+                        ),
+                    )
+                    self.stats["org_rule"] += 1
+                    self._queue_switch(match)
+                # On target client or about to switch — done either way
+                return
+            elif action == 'suppress':
+                logger.info(f"[AI-SWITCH] on_window_change: suppressed by rule {rule_hit.get('id')}")
+                self.stats["suppressed"] += 1
+                return
+            elif action == 'never_switch_away':
+                logger.info(f"[AI-SWITCH] on_window_change: never_switch_away rule {rule_hit.get('id')}")
+                return
+
         # explorer_watcher dispatches folder paths even when the window title
         # is just a folder name (e.g. "Dauphin & Fantacone"), and we want
         # those to flow through to regex matching against the client list.
@@ -1424,22 +1476,6 @@ class AIClientSwitcher:
             logger.info(f"[AI-SWITCH] on_window_change: skipped by _should_skip")
             self._clear_pending()
             self._cancel_stability_timer()
-            return
-
-        # ── Does an org routing rule match on exe/path? ────────────────
-        # If yes, chrome guards do NOT apply — org admin hard rules beat
-        # everything else. This is what makes "UltraTax → Internal-Tax"
-        # fire even when the title is bare "UltraTax CS" with no return.
-        org_rule_exe_match = bool(
-            self._routing_engine.match(title, exe_name, file_path)
-        )
-        if org_rule_exe_match:
-            logger.info(
-                f"[AI-SWITCH] Org rule matches on exe/path — bypassing chrome guards"
-            )
-            # Still gate through Layer 3 stability so a 100ms flash
-            # doesn't auto-switch, but skip Layers 1 & 2.
-            self._arm_stability_timer(app_name, exe_name, title, url, file_path)
             return
 
         # ── LAYER 1: Chrome-only titles ────────────────────────────────
@@ -1577,55 +1613,13 @@ class AIClientSwitcher:
 
             cur_id = self._current_client_id
 
-            # ── Tier -1: Org routing rules (v1.2.95) ──────────────────
-            # HIGHEST priority. Runs before chrome guards because org rules
-            # can match on exe/file_path alone — e.g. "UltraTax → Internal-Tax"
-            # fires even when UltraTax's title is just "UltraTax CS" with no
-            # return open. This is exactly what TL Wall wants.
-            rule_hit = self._routing_engine.match(title, exe_name, file_path)
-            if rule_hit:
-                action = rule_hit.get('action')
-
-                if action == 'suppress':
-                    logger.info(
-                        f"[AI-SWITCH] Tier -1: suppress — rule {rule_hit.get('id')} "
-                        f"matched, ignoring window"
-                    )
-                    self.stats["suppressed"] += 1
-                    return
-
-                if action == 'never_switch_away':
-                    logger.info(
-                        f"[AI-SWITCH] Tier -1: never_switch_away — rule {rule_hit.get('id')} "
-                        f"holds cur={cur_id}"
-                    )
-                    return
-
-                if action == 'route_to_client':
-                    target_id = rule_hit.get('target_client_id')
-                    target_name = rule_hit.get('target_client_name')
-                    if target_id and target_id != cur_id:
-                        match = ClientMatch(
-                            client_id=int(target_id),
-                            client_name=target_name or "",
-                            confidence=1.0,
-                            match_method="org_routing_rule",
-                            matched_token=rule_hit.get('match_value', '')[:80],
-                            reasoning=(
-                                f"Org rule: {rule_hit.get('match_type')}="
-                                f"{rule_hit.get('match_value')!r} → {target_name}"
-                            ),
-                        )
-                        self.stats["org_rule"] += 1
-                        self._queue_switch(match)
-                        return
-                    # Already on target client — no-op
-                    return
+            # Org routing rules now run in on_window_change (Tier -2),
+            # before _should_skip. See on_window_change top.
 
             # Defense in depth: on_window_change already applies these
-            # guards, but catch any direct callers that bypass it.
-            # Note: runs AFTER Tier -1 so org rules can fire on chrome-only
-            # titles (e.g. bare "UltraTax CS" → Internal - Tax via exe match).
+            # guards (chrome-only, no-signal), but catch any direct callers
+            # that bypass it. Note: org rules ran in on_window_change before
+            # we got here, so this block won't override them.
             if _is_chrome_only_title(title):
                 logger.info(f"[AI-SWITCH] _detect safety-net: chrome-only — holding")
                 self.stats["suppressed"] += 1
@@ -1993,7 +1987,10 @@ class AIClientSwitcher:
 
     def _should_skip(self, title: str, exe_name: str) -> bool:
         title_lower = title.lower().strip()
-        if any(title_lower == d or title_lower.startswith(d) for d in GENERIC_TAX_DIALOGS):
+        # Exact match only — startswith() was overreaching. Every loaded
+        # UltraTax return title starts with "2025 ultratax cs" so the old
+        # logic was hiding every real return from the rule engine.
+        if title_lower in GENERIC_TAX_DIALOGS:
             return True
      
         if exe_name and exe_name.lower() in self._skip_exes:

@@ -600,26 +600,142 @@ class ClassificationService:
                     block.mail_proposed_client = None
                     block.mail_proposed_confidence = None
                     block.mail_disagreement_reasoning = ''
-            # ─────────────────────────────────────────────────────────────────
-            # FIX C (v1.2.97): Mail-derived client propagation
-            # ─────────────────────────────────────────────────────────────────
-            # When Stage 7 commits a block with a mail-derived client at high
-            # confidence, propagate that to the user's CurrentClient record so
-            # subsequent blocks (Excel, browser, etc.) inherit the new client
-            # instead of the stale agent selection.
-            #
-            # Without this, the inheritance bug just shifts one block forward:
-            #   QuickBooks (Client A) → Outlook (correctly attributed to B via mail)
-            #   → Excel (still wrongly attributed to A because agent never updated)
-            #
-            # Conditions to propagate:
-            #   1. This block was mail-driven (mail_proposed_id present)
-            #   2. The block actually committed to the mail-proposed client (no
-            #      disagreement, no override)
-            #   3. The decision came from Stage 7 with confidence >= 0.85 (strong)
-            #   4. The user's CurrentClient hasn't been manually updated very
-            #      recently (don't clobber a user who just switched)
-            self._propagate_mail_client_if_applicable(block, decision)
+
+
+        # ─────────────────────────────────────────────────────────────────────
+        # FIX D (v1.3.42): Calendar vs. attribution disagreement
+        # ─────────────────────────────────────────────────────────────────────
+        # Mirrors the Stage 7 mail reconciliation above. When Stage 6 stashed
+        # a calendar-proposed client and the final attribution disagrees,
+        # flag for Daily Review.
+        #
+        # Two sources of disagreement, distinguished by state_changed_by:
+        #
+        #   'classifier'  — agent/classifier picked X, calendar says Y.
+        #                   Banner: "Calendar shows '<event>' during this block —
+        #                            reassign from X to Y?"
+        #
+        #   'manual'      — user manually picked X (state_changed_by in
+        #                   {'user','user_edit','correction'}), calendar says Y.
+        #                   Banner: "You picked X, but this overlaps '<event>'.
+        #                            Keep X or reassign?"
+        #
+        # We never overwrite the attribution — we only flag. The user decides
+        # in Daily Review, same as mail.
+        #
+        # We also write the meeting flag here. Stage 6 set decision.is_meeting,
+        # and Block.is_meeting is the persisted field that
+        # _filter_foreground_inside_meetings reads downstream in compaction.
+        cal_detail = (getattr(decision, 'detail', {}) or {})
+        cal_proposed_id = cal_detail.get('calendar_proposed_client_id')
+
+        # Apply the meeting flag whenever Stage 6 raised it. Done independently
+        # of disagreement so calendar-flagged meetings work even when the user
+        # and calendar agree on the client.
+        if decision.is_meeting and not block.is_meeting:
+            block.is_meeting = True
+            # Save will happen below in the disagreement branch, or here if
+            # there's no disagreement processing to follow.
+            try:
+                from tracker.models import Block
+                Block.objects.filter(pk=block.pk).update(is_meeting=True)
+            except Exception as e:
+                logger.warning(
+                    f"[STAGE-6-MEETING] Failed to persist is_meeting=True "
+                    f"for block {block.pk}: {e}"
+                )
+
+        if cal_proposed_id:
+            final_client_id = block.client_id
+
+            # Determine source for banner copy. state_changed_by was set
+            # earlier in this apply() call from the `source` argument.
+            if source in ('user', 'user_edit', 'correction'):
+                disagreement_source = 'manual'
+            else:
+                disagreement_source = 'classifier'
+
+            if final_client_id and final_client_id != cal_proposed_id:
+                # Disagreement — flag it
+                event_title = cal_detail.get('calendar_event_title', '?')
+                proposed_name = cal_detail.get('calendar_proposed_client_name', '?')
+
+                if disagreement_source == 'manual':
+                    reasoning = (
+                        f"You picked a different client, but this block overlaps "
+                        f"the calendar event '{event_title[:80]}' which is "
+                        f"associated with '{proposed_name}'. "
+                        f"Calendar evidence: {cal_detail.get('calendar_proposed_evidence', '')[:200]}"
+                    )
+                else:
+                    reasoning = (
+                        f"Calendar shows '{event_title[:80]}' during this block, "
+                        f"associated with '{proposed_name}', but the block was "
+                        f"attributed to a different client. "
+                        f"Calendar evidence: {cal_detail.get('calendar_proposed_evidence', '')[:200]}"
+                    )
+
+                from tracker.models import Block
+                Block.objects.filter(pk=block.pk).update(
+                    calendar_disagrees_with_agent=True,
+                    calendar_proposed_client_id=cal_proposed_id,
+                    calendar_proposed_confidence=cal_detail.get('calendar_proposed_confidence', 0.0),
+                    calendar_disagreement_reasoning=reasoning[:500],
+                    calendar_disagreement_source=disagreement_source,
+                )
+                # Mirror to in-memory instance so subsequent block.save()
+                # calls (e.g. propagation) don't clobber the flag.
+                block.calendar_disagrees_with_agent = True
+                block.calendar_proposed_client_id = cal_proposed_id
+                block.calendar_proposed_confidence = cal_detail.get('calendar_proposed_confidence', 0.0)
+                block.calendar_disagreement_reasoning = reasoning[:500]
+                block.calendar_disagreement_source = disagreement_source
+
+                logger.info(
+                    f"[STAGE-6-DISAGREE] Block {block.pk}: "
+                    f"attributed={final_client_id} vs calendar-proposed={cal_proposed_id} "
+                    f"source={disagreement_source} "
+                    f"(conf {cal_detail.get('calendar_proposed_confidence', 0.0):.2f})"
+                )
+            else:
+                # Agreement (or no final client) — clear any stale flag from
+                # an earlier classification run that since got resolved.
+                if getattr(block, 'calendar_disagrees_with_agent', False):
+                    from tracker.models import Block
+                    Block.objects.filter(pk=block.pk).update(
+                        calendar_disagrees_with_agent=False,
+                        calendar_proposed_client=None,
+                        calendar_proposed_confidence=None,
+                        calendar_disagreement_reasoning='',
+                        calendar_disagreement_source='',
+                    )
+                    block.calendar_disagrees_with_agent = False
+                    block.calendar_proposed_client = None
+                    block.calendar_proposed_confidence = None
+                    block.calendar_disagreement_reasoning = ''
+                    block.calendar_disagreement_source = ''
+
+
+        # ─────────────────────────────────────────────────────────────────
+        # FIX C (v1.2.97): Mail-derived client propagation
+        # ─────────────────────────────────────────────────────────────────
+        # When Stage 7 commits a block with a mail-derived client at high
+        # confidence, propagate that to the user's CurrentClient record so
+        # subsequent blocks (Excel, browser, etc.) inherit the new client
+        # instead of the stale agent selection.
+        #
+        # Without this, the inheritance bug just shifts one block forward:
+        #   QuickBooks (Client A) → Outlook (correctly attributed to B via mail)
+        #   → Excel (still wrongly attributed to A because agent never updated)
+        #
+        # Conditions to propagate:
+        #   1. This block was mail-driven (mail_proposed_id present)
+        #   2. The block actually committed to the mail-proposed client (no
+        #      disagreement, no override)
+        #   3. The decision came from Stage 7 with confidence >= 0.85 (strong)
+        #   4. The user's CurrentClient hasn't been manually updated very
+        #      recently (don't clobber a user who just switched)
+        self._propagate_mail_client_if_applicable(block, decision)
 
         return block
 
@@ -1595,52 +1711,73 @@ class ClassificationService:
             },
         ))
 
+
     # -------------------------------------------------------------------------
-    # STAGE 6 — CALENDAR EVENT OVERLAP
+    # STAGE 6 — CALENDAR EVENT OVERLAP (v1.3.42)
     # -------------------------------------------------------------------------
+    #
+    # v1.3.42 additions over the prior implementation:
+    #
+    #   (a) Flips decision.is_meeting = True when overlap >= 70% AND match
+    #       confidence >= 0.80 AND block duration >= 3 minutes. Calendar wins
+    #       over audio/camera detector (calendar is intent, audio/camera was
+    #       always an inference — listen-only calls, phone dial-ins, and
+    #       browser meetings the detector misses all get caught).
+    #
+    #   (b) Stashes calendar-proposed client on decision.detail so apply() can
+    #       perform mail-style reconciliation and set the disagreement flag.
+    #       Mirrors the Stage 7 mail pattern exactly.
+    #
+    # Ghost-meeting risk (calendar says meeting but user actually skipped it
+    # and worked on something else): mitigated by the existing contradicting-
+    # signal check in _finalize_decision. A strong Stage 3 title_match for a
+    # different client will force the block to 'proposed' for human review
+    # rather than auto-committing as a Bowers meeting block.
 
     def _stage_6_calendar(self, block, decision: ClassificationDecision):
         """
-        Use overlapping CalendarEvent records as a classification signal.
+        Use overlapping CalendarEvent records as a classification signal and
+        (new in v1.3.42) as a meeting source.
 
-        Calendar events are pre-matched to clients during sync (see
-        tracker.calendar_matching.find_best_match). This stage just looks up
-        which calendar events overlap the block's time window and emits a
-        Signal for the best match.
+        Calendar events are pre-matched to clients during sync via
+        tracker.calendar_matching.find_best_match. This stage reads the pre-
+        computed extracted_client / extraction_confidence — zero network calls
+        in the hot path.
 
         Behavior:
           - Find CalendarEvents for self.user that overlap [block.start, block.end]
           - Filter to events with extracted_client and extraction_confidence >= 0.70
-          - Pick the event with greatest overlap with the block
-          - Emit Signal proportional to overlap percentage and match confidence
+          - Pick the event with greatest overlap
+          - Emit a Signal proportional to overlap percentage and match confidence
+          - If overlap >= 70% AND match_conf >= 0.80 AND block.minutes >= 3:
+              * Set decision.is_meeting = True
+              * Existing _filter_foreground_inside_meetings then handles
+                supersede semantics for foreground apps inside the meeting
+          - Always stash calendar-proposed client on decision.detail for
+            apply()-time disagreement reconciliation (see FIX D in apply())
 
-        Signal strength is downgraded from match confidence:
-          - direct rule match (0.95) → signal 0.80 (strong-but-not-auto)
+        Signal strength is downgraded from raw match confidence:
+          - direct rule match (0.95) → signal 0.80 (strong, near-auto-commit)
           - fuzzy title match (0.80) → signal 0.65 (moderate)
-          - fuzzy alias (0.75)       → signal 0.55 (weak)
-
-        Reasoning: even strong calendar evidence shouldn't auto-commit because
-        users sometimes have meetings on calendar but actually work on something
-        else during that time. Combined with agent_current_client or learned
-        patterns, calendar becomes a powerful corroborator.
+          - fuzzy alias (0.75)       → signal 0.55 (weak corroborator)
+        Strength is further modulated by overlap percentage and capped at 0.85
+        so calendar alone never auto-commits without corroboration.
         """
         from tracker.models import CalendarEvent
 
-        # Feature flag — only enabled when org explicitly opts in
-        # For tonight: only mavops org has this on.
+        # Feature flag — org must opt in. Currently mavops only.
         if not getattr(self.org, 'calendar_classification_enabled', False):
             return
 
         if not block.start or not block.end:
             return
 
-        # Block duration in seconds (avoid div-by-zero)
         block_seconds = (block.end - block.start).total_seconds()
         if block_seconds <= 0:
             return
 
-        # Find overlapping events with a matched client
-        # Cache on classifier instance per (user, date) to avoid repeated queries
+        # Cache events per (user, date) so back-to-back classify() calls
+        # don't re-query.
         cache_key = f"{self.user.id}:{block.start.date().isoformat()}"
         if cache_key not in self._calendar_events_cache:
             day_start = block.start.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1659,7 +1796,7 @@ class ClassificationService:
         if not candidates:
             return
 
-        # Find best overlapping event
+        # Find the event with greatest temporal overlap with this block
         best_event = None
         best_overlap_seconds = 0.0
 
@@ -1676,30 +1813,27 @@ class ClassificationService:
         if not best_event or best_overlap_seconds <= 0:
             return
 
-        # Calculate overlap percentage of the block
         overlap_pct = best_overlap_seconds / block_seconds
 
-        # Require meaningful overlap — at least 30% of the block coincides with the event
+        # Stage 6 attribution threshold — at least 30% of block coincides
         if overlap_pct < 0.30:
             return
 
         # Map raw match confidence to signal strength
-        # extraction_confidence is what calendar_matching returned
         match_conf = best_event.extraction_confidence or 0.0
         if match_conf >= 0.95:
-            base_strength = 0.80  # direct rule
+            base_strength = 0.80   # direct rule (OrgCalendarRule)
         elif match_conf >= 0.80:
-            base_strength = 0.65  # fuzzy title
+            base_strength = 0.65   # fuzzy title
         elif match_conf >= 0.70:
-            base_strength = 0.55  # fuzzy alias
+            base_strength = 0.55   # fuzzy alias
         else:
             return
 
-        # Modulate by overlap percentage (more overlap = stronger evidence)
-        # 30% overlap → 0.85x of base, 100% overlap → 1.0x
+        # Modulate by overlap (30% → 0.85x of base, 100% → 1.0x)
         overlap_modifier = 0.85 + (0.15 * overlap_pct)
         strength = round(base_strength * overlap_modifier, 2)
-        strength = min(strength, 0.85)  # cap at strong-but-not-auto
+        strength = min(strength, 0.85)  # cap — never auto-commits alone
 
         client = best_event.extracted_client
         evidence = (
@@ -1712,15 +1846,44 @@ class ClassificationService:
             strength=strength,
             evidence=evidence,
             detail={
-                'client_id':       client.id,
-                'client_name':     client.name,
-                'event_id':        best_event.id,
-                'event_title':     best_event.title,
-                'overlap_pct':     round(overlap_pct, 2),
-                'match_method':    'calendar_overlap',
+                'client_id':        client.id,
+                'client_name':      client.name,
+                'event_id':         best_event.id,
+                'event_title':      best_event.title,
+                'overlap_pct':      round(overlap_pct, 2),
+                'match_method':     'calendar_overlap',
                 'match_confidence': match_conf,
             },
         ))
+
+        # ─── v1.3.42 (a): meeting flag from calendar ──────────────────────────
+        # Require all three conditions to avoid false-positive meeting flags:
+        #   - High overlap so we're confident the block IS the meeting
+        #   - Strong match confidence (direct rule or strong fuzzy)
+        #   - Non-transient block (>= 3 min) so we don't flag drive-bys
+        is_meeting_candidate = (
+            overlap_pct >= 0.70
+            and match_conf >= 0.80
+            and (block.minutes or 0) >= 3
+        )
+        if is_meeting_candidate:
+            decision.is_meeting = True
+            logger.info(
+                f"[STAGE-6-MEETING] Block {getattr(block, 'pk', None)} flagged is_meeting=True "
+                f"via calendar: event '{best_event.title[:60]}' "
+                f"overlap={overlap_pct:.0%} match_conf={match_conf:.2f}"
+            )
+
+        # ─── v1.3.42 (b): stash for apply()-time disagreement reconciliation ─
+        # apply() compares this to the final block.client_id after all stages
+        # and writes calendar_disagrees_with_agent if they disagree. Mirrors
+        # the Stage 7 mail pattern.
+        decision.detail = getattr(decision, 'detail', {}) or {}
+        decision.detail['calendar_proposed_client_id'] = client.id
+        decision.detail['calendar_proposed_client_name'] = client.name
+        decision.detail['calendar_proposed_confidence'] = strength
+        decision.detail['calendar_proposed_evidence'] = evidence
+        decision.detail['calendar_event_title'] = best_event.title
 
 
     # -------------------------------------------------------------------------

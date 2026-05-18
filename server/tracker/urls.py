@@ -224,6 +224,7 @@ urlpatterns = [
     path('billing/clients/update-billed/', views_billing.update_client_billed, name='update-client-billed'),
     path('billing/export/worked-hours/', views_billing.export_worked_hours_csv, name='export-worked-hours'),
     path('billing/realization/', views_billing.realization_with_editable, name='realization-editable'),
+    path('billing/export-csv/', views_billing.export_billing_csv, name='billing-export-csv'),
 
     path('billing/invoices/conflicts/', views_integrations.invoice_conflicts_count),
     path('billing/invoices/conflicts/<int:conflict_id>/resolve/', views_integrations.resolve_invoice_conflict),
@@ -235,9 +236,7 @@ urlpatterns = [
     path('billing/invoices/import-csv/commit/', views_billing.csv_invoice_commit,  name='csv-commit'),
     path('billing/invoices/import-csv/template/', views_billing.csv_invoice_template, name='csv-template'),
     path('billing/invoices/<int:invoice_id>/delete/', views_billing.delete_invoice, name='delete_invoice'),
-
-
-        
+            
 
     path('auth/change-password/', views.auth_change_password, name='auth_change_password'),
 

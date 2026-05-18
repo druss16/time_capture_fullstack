@@ -648,8 +648,8 @@ def mavops_update_delete_routing_rule(request, org_id, rule_id):
 # Mirrors agent's OrgRoutingRuleEngine._rule_matches() — keep in sync!
  
 _MAVOPS_EXE_FAMILIES = {
-    'taxwise':    ['utw', 'taxwise'],
-    'ultratax':   ['uts', 'ultratax'],
+    'taxwise':    ['tww', 'taxwise'],
+    'ultratax':   ['uts', 'ultratax', 'utw'],
     'lacerte':    ['lacerte', 'lacertepro'],
     'proseries':  ['proseries', 'ps'],
     'drake':      ['drake'],

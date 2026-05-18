@@ -17,6 +17,12 @@ Usage:
     # Import everything at once
     python manage.py provision_firm --org smith-associates --team team.csv --clients clients.csv --task-types task_types.csv
 
+    # AI-powered mapping suggestion (writes DRAFT CSV, never touches DB)
+    python manage.py provision_firm --org smith-associates --suggest-mappings
+
+    # Apply reviewed mapping CSV
+    python manage.py provision_firm --org smith-associates --category-mappings mappings.csv
+
     # Dry run (preview without making changes)
     python manage.py provision_firm --org smith-associates --team team.csv --dry-run
 
@@ -24,9 +30,10 @@ Usage:
     python manage.py provision_firm --org smith-associates --team team.csv --update
 
 CSV Formats:
-    team.csv:       email, display_name, role, billing_rate, cost_rate, machine_hostname, windows_username
-    clients.csv:    client_name, billing_rate, assigned_team (comma-separated emails)
-    task_types.csv: name, code, is_billable, default_rate
+    team.csv:               email, display_name, role, billing_rate, cost_rate, machine_hostname, windows_username
+    clients.csv:            client_name, billing_rate, assigned_team (comma-separated emails)
+    task_types.csv:         name, code, is_billable, default_rate
+    category_mappings.csv:  category, task_type_code
 """
 
 import csv
@@ -78,6 +85,12 @@ class Command(BaseCommand):
             help='Path to custom category mappings CSV (category, task_type_code)'
         )
         parser.add_argument(
+            '--suggest-mappings', action='store_true',
+            help='Use OpenAI to suggest a category -> task_type mapping CSV based on the firm\'s '
+                 'existing TaskTypes. Writes a draft CSV to /app/<slug>_category_mappings_DRAFT.csv. '
+                 'Run --task-types first. Never writes to DB.'
+        )
+        parser.add_argument(
             '--dry-run', action='store_true',
             help='Preview what would be created without making changes'
         )
@@ -101,15 +114,17 @@ class Command(BaseCommand):
         task_types_csv = options['task_types']
         seed_category_mappings = options['seed_category_mappings']
         category_mappings_csv = options['category_mappings']
+        suggest_mappings = options['suggest_mappings']
         dry_run = options['dry_run']
         update = options['update']
         generate_token = options['generate_token']
 
         if not team_csv and not clients_csv and not task_types_csv \
-                and not seed_category_mappings and not category_mappings_csv:
+                and not seed_category_mappings and not category_mappings_csv \
+                and not suggest_mappings:
             raise CommandError(
                 'Provide at least one of --team, --clients, --task-types, '
-                '--seed-category-mappings, or --category-mappings'
+                '--seed-category-mappings, --category-mappings, or --suggest-mappings'
             )
 
         # ─── Resolve org ───
@@ -117,6 +132,18 @@ class Command(BaseCommand):
             org = Organization.objects.get(slug=org_slug)
         except Organization.DoesNotExist:
             raise CommandError(f'Organization with slug "{org_slug}" not found.')
+
+        # ─── --suggest-mappings is a read-only operation: short-circuit ───
+        # Writes a draft CSV from AI suggestions. Never touches DB. We
+        # handle it before the normal provisioning flow so it can run
+        # standalone (no team/clients/task-types args needed).
+        if suggest_mappings:
+            self.stdout.write(f'\n{"=" * 60}')
+            self.stdout.write(f'  AI MAPPING SUGGESTION: {org.name}')
+            self.stdout.write(f'  MODE: READ-ONLY (writes DRAFT CSV only)')
+            self.stdout.write(f'{"=" * 60}\n')
+            self._suggest_category_mappings(org)
+            return
 
         mode = 'DRY RUN' if dry_run else ('UPDATE' if update else 'LIVE')
         self.stdout.write(f'\n{"=" * 60}')
@@ -682,6 +709,253 @@ class Command(BaseCommand):
         if dry_run:
             summary += ' (dry run — no changes made)'
         self.stdout.write(summary)
+
+    # ═══════════════════════════════════════════════════════════════
+    # AI-POWERED MAPPING SUGGESTION
+    # ═══════════════════════════════════════════════════════════════
+    def _suggest_category_mappings(self, org):
+        """
+        AI-powered mapping suggestion. Reads the firm's existing TaskTypes,
+        asks OpenAI to map each canonical category to the best-fit TaskType
+        code, prints a color-coded preview, writes a draft CSV for human
+        review. NEVER writes to DB.
+
+        Output: /app/<slug>_category_mappings_DRAFT.csv
+
+        Workflow:
+          1. provision_firm --org X --task-types X.csv     (creates TaskTypes)
+          2. provision_firm --org X --suggest-mappings     (this method)
+          3. docker compose cp api:/app/X_..._DRAFT.csv ./
+          4. Review/edit the draft, save as final
+          5. provision_firm --org X --category-mappings X.csv
+        """
+        import json
+        import csv as csv_module
+        from django.conf import settings
+        from tracker.industry_categories import get_categories_for_industry
+
+        # Suppress noisy HTTP/SDK debug logging during the API call
+        import logging
+        for noisy in ('openai', 'httpx', 'httpcore'):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+
+        # ── Step 1: Validate prereqs ──────────────────────────────────────
+        if not settings.OPENAI_API_KEY:
+            raise CommandError(
+                'OPENAI_API_KEY not configured. Set it in .env or environment.'
+            )
+
+        task_types = list(
+            TaskType.objects.filter(org=org, is_active=True).order_by('name')
+        )
+        if not task_types:
+            raise CommandError(
+                f'No TaskTypes found for {org.name}. Run --task-types first '
+                f'to provision the firm\'s vocabulary, then re-run --suggest-mappings.'
+            )
+
+        canonical = get_categories_for_industry(org.industry_type)
+        if not canonical:
+            raise CommandError(
+                f'No canonical categories for industry_type="{org.industry_type}". '
+                f'Check that industry_type is set correctly (e.g., "cpa").'
+            )
+
+        self.stdout.write(self.style.NOTICE(
+            f'Mapping {len(canonical)} canonical categories → '
+            f'{len(task_types)} firm TaskTypes\n'
+        ))
+
+        # ── Step 2: Build the prompt ──────────────────────────────────────
+        tt_lines = []
+        for tt in task_types:
+            billable = 'billable' if tt.is_billable else 'non-billable'
+            tt_lines.append(f'  - {tt.code} | {tt.name} | {billable}')
+        firm_codes_block = '\n'.join(tt_lines)
+
+        canonical_block = '\n'.join(f'  {i+1}. {c}' for i, c in enumerate(canonical))
+
+        system_prompt = (
+            'You are an expert at mapping CPA work categories to a firm\'s '
+            'billing service codes (also called task type codes). Given a '
+            'firm\'s billing codes and a list of canonical categories, you '
+            'produce a JSON mapping from each canonical category to the '
+            'best-fit firm code.'
+        )
+
+        user_prompt = f"""A CPA firm uses these billing service codes:
+
+{firm_codes_block}
+
+For each of the following {len(canonical)} canonical work categories, select the BEST matching firm code from the list above.
+
+CANONICAL CATEGORIES:
+{canonical_block}
+
+RULES:
+- Use ONLY codes from the firm's list above. Never invent codes.
+- If multiple canonical categories naturally fit the same firm code, use the same code for all of them. That is fine and expected.
+- For "Idle" and "Personal/Non-Billable" categories, strongly prefer non-billable firm codes.
+- If a canonical category has no reasonable firm-code match, use null for the code and explain why in reasoning.
+
+OUTPUT FORMAT: JSON only, no commentary, no markdown fences. Object with one key per canonical category. Each value is an object with "code", "confidence" (HIGH/MEDIUM/LOW), and "reasoning" (one short sentence).
+
+Example structure:
+{{
+  "Tax Preparation": {{"code": "PREP1040", "confidence": "HIGH", "reasoning": "Direct match"}},
+  "Tax Planning":    {{"code": "PREP1040", "confidence": "MEDIUM", "reasoning": "Firm does not distinguish planning from prep"}}
+}}
+
+Confidence guidance:
+- HIGH: obvious match, no review needed
+- MEDIUM: reasonable match but worth a glance
+- LOW: best guess, definitely review
+"""
+
+        # ── Step 3: Call OpenAI ───────────────────────────────────────────
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise CommandError(
+                'openai SDK not installed. Run: pip install openai'
+            )
+
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        model = getattr(settings, 'AI_CLASSIFY_MODEL', 'gpt-4o-mini')
+
+        self.stdout.write(f'Calling OpenAI ({model})...')
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt},
+                ],
+                response_format={'type': 'json_object'},
+                temperature=0.1,  # Low temp for consistency
+            )
+            raw_content = response.choices[0].message.content
+        except Exception as e:
+            raise CommandError(f'OpenAI API call failed: {e}')
+
+        # ── Step 4: Parse response ────────────────────────────────────────
+        try:
+            suggestions = json.loads(raw_content)
+        except json.JSONDecodeError as e:
+            self.stderr.write(self.style.ERROR(
+                f'Failed to parse OpenAI JSON: {e}'
+            ))
+            self.stderr.write(f'Raw response was:\n{raw_content}')
+            raise CommandError('OpenAI returned invalid JSON. Try re-running.')
+
+        # ── Step 5: Validate codes against firm's actual TaskTypes ────────
+        valid_codes = {tt.code for tt in task_types}
+        rows = []
+        invalid_count = 0
+
+        for category in canonical:
+            suggestion = suggestions.get(category, {})
+            if not isinstance(suggestion, dict):
+                suggestion = {
+                    'code': None,
+                    'confidence': 'LOW',
+                    'reasoning': 'Missing from AI response',
+                }
+
+            code = suggestion.get('code')
+            confidence = (suggestion.get('confidence') or 'LOW').upper()
+            reasoning = suggestion.get('reasoning') or ''
+
+            # Validate the suggested code actually exists
+            if code and code not in valid_codes:
+                self.stderr.write(self.style.WARNING(
+                    f'  AI suggested unknown code "{code}" for '
+                    f'"{category}" — clearing.'
+                ))
+                code = None
+                confidence = 'LOW'
+                reasoning = (
+                    f'AI suggested invalid code; needs manual review. '
+                    f'({reasoning})'
+                )
+                invalid_count += 1
+
+            rows.append({
+                'category': category,
+                'task_type_code': code,
+                'confidence': confidence,
+                'reasoning': reasoning,
+            })
+
+        # ── Step 6: Print color-coded preview ─────────────────────────────
+        self.stdout.write(self.style.NOTICE(
+            '\nMapping suggestions (review LOW/MED confidence carefully):\n'
+        ))
+
+        icons = {'HIGH': '✓', 'MEDIUM': '⚠', 'LOW': '✗'}
+        styles = {
+            'HIGH':   self.style.SUCCESS,
+            'MEDIUM': self.style.WARNING,
+            'LOW':    self.style.ERROR,
+        }
+
+        for row in rows:
+            icon = icons.get(row['confidence'], '?')
+            style = styles.get(row['confidence'], lambda s: s)
+            code = row['task_type_code'] or '(NONE)'
+            line = (
+                f'  {icon} {row["category"]:30s} → '
+                f'{code:12s} ({row["confidence"]:6s}) '
+                f'{row["reasoning"]}'
+            )
+            self.stdout.write(style(line))
+
+        # ── Step 7: Write draft CSV ───────────────────────────────────────
+        draft_path = f'/app/{org.slug}_category_mappings_DRAFT.csv'
+        try:
+            with open(draft_path, 'w', newline='') as f:
+                writer = csv_module.writer(f)
+                writer.writerow(['category', 'task_type_code'])
+                for row in rows:
+                    writer.writerow([row['category'], row['task_type_code'] or ''])
+        except (OSError, PermissionError) as e:
+            raise CommandError(
+                f'Failed to write draft CSV to {draft_path}: {e}\n'
+                f'Hint: when running inside Docker, /app is writable; '
+                f'outside Docker, adjust the path.'
+            )
+
+        # ── Step 8: Summary + next-steps guidance ─────────────────────────
+        high_count = sum(1 for r in rows if r['confidence'] == 'HIGH')
+        med_count  = sum(1 for r in rows if r['confidence'] == 'MEDIUM')
+        low_count  = sum(1 for r in rows if r['confidence'] == 'LOW')
+        null_count = sum(1 for r in rows if not r['task_type_code'])
+
+        self.stdout.write('')
+        self.stdout.write(self.style.SUCCESS(
+            f'Draft written to: {draft_path}'
+        ))
+        self.stdout.write(
+            f'Summary: {high_count} HIGH, {med_count} MEDIUM, '
+            f'{low_count} LOW, {null_count} unmapped'
+        )
+        if invalid_count:
+            self.stdout.write(self.style.WARNING(
+                f'Note: {invalid_count} AI suggestions referenced invalid '
+                f'codes and were cleared — manual mapping needed for those rows.'
+            ))
+
+        self.stdout.write('')
+        self.stdout.write(self.style.NOTICE('Next steps:'))
+        self.stdout.write(
+            f'  1. Copy draft out:  docker compose cp api:{draft_path} ./\n'
+            f'  2. Review/edit LOW/MED confidence rows in your editor\n'
+            f'  3. Copy back in:    docker compose cp '
+            f'./{org.slug}_category_mappings.csv api:/app/\n'
+            f'  4. Apply mappings:  python manage.py provision_firm '
+            f'--org {org.slug} --category-mappings '
+            f'{org.slug}_category_mappings.csv'
+        )
 
     # ═══════════════════════════════════════════════════════════════
     # DEPLOYMENT TOKEN

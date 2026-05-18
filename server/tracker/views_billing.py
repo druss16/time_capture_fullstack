@@ -4137,4 +4137,370 @@ def realization_with_editable(request):
 path('billing/clients/update-billed/', update_client_billed, name='update-client-billed'),
 path('billing/export/worked-hours/', export_worked_hours_csv, name='export-worked-hours'),
 path('billing/realization/', realization_with_editable, name='realization-editable'),
-"""
+"""# ============================================================================
+# BILLING CSV EXPORT (Plan B downstream beneficiary)
+# ============================================================================
+#
+# Single endpoint that produces a clean, CCH-import-shaped CSV of all billable
+# work in a date range. Designed for the firm's bookkeeper to download and
+# import into CCH Axcess Practice (or QuickBooks, Karbon, etc.).
+#
+# Endpoint: GET /api/billing/export-csv/
+#
+# Query params:
+#   start_date  YYYY-MM-DD  required
+#   end_date    YYYY-MM-DD  required
+#   user        username or 'me'         optional (limits to one user)
+#   level       'daily' or 'block'       default 'daily' (per-day-per-client-per-task)
+#   format      'generic' or 'cch_axcess'  default 'generic'
+#   include     'committed', 'proposed', or 'all'  default 'committed'
+#
+# Permissions:
+#   - ?user=me           → any authenticated user can export their own
+#   - no user param      → owner/admin/manager only (org-wide)
+#   - ?user=<username>   → owner/admin/manager only
+#
+# Column shape (generic format):
+#   date, staff, staff_code, client, client_code, task_type, task_type_code,
+#   hours, billable, description, blocks
+#
+# - date         YYYY-MM-DD (block.day or block.start.date())
+# - staff        user's display name or username
+# - staff_code   username (no separate staff_code field today)
+# - client       Client.name or 'Unassigned'
+# - client_code  Client.code or '' (CCH calls this 'client code')
+# - task_type    TaskType.name or '(unmapped)' when null
+# - task_type_code   TaskType.code or '(unmapped)' (CCH calls this 'service code')
+# - hours        decimal, 2 places
+# - billable     'Y' or 'N' (from TaskType.is_billable; falls back to block.is_billable)
+# - description  comma-joined sample of block window titles (or 'Professional services')
+# - blocks       pipe-separated block IDs (audit trail)
+#
+# Streams response — works for orgs with thousands of rows in a single call.
+# ============================================================================
+
+from django.http import StreamingHttpResponse
+from collections import defaultdict
+
+
+class _Echo:
+    """Minimal file-like object that csv.writer can write to for streaming."""
+    def write(self, value):
+        return value
+
+
+def _can_export_org_wide(request, org):
+    """Owner/admin/manager only. Staff bypass for impersonation."""
+    if request.user.is_staff or request.user.is_superuser:
+        return True
+    membership = OrganizationMembership.objects.filter(
+        user=request.user, organization=org
+    ).first()
+    return bool(membership and membership.role in ('owner', 'admin', 'manager'))
+
+
+def _resolve_export_target_user(request, org):
+    """
+    Returns (target_user, is_self_export, error_response).
+    target_user=None means "all users in the org" (org-wide export).
+    """
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    raw = (request.GET.get('user') or '').strip()
+
+    if not raw:
+        # Org-wide export — requires manager+ role
+        if not _can_export_org_wide(request, org):
+            return None, False, Response(
+                {'error': 'Org-wide export requires owner, admin, or manager role. '
+                          'Use ?user=me to export only your own time.'},
+                status=403,
+            )
+        return None, False, None
+
+    if raw.lower() == 'me':
+        # Self-export — any authenticated user can do this
+        return request.user, True, None
+
+    # Specific user requested — requires manager+ role
+    if not _can_export_org_wide(request, org):
+        return None, False, Response(
+            {'error': 'Exporting another user\'s time requires owner, admin, or '
+                      'manager role.'},
+            status=403,
+        )
+
+    # Resolve username → user, but only if they belong to this org
+    target = User.objects.filter(username=raw).first()
+    if not target:
+        return None, False, Response(
+            {'error': f'User "{raw}" not found.'}, status=404,
+        )
+
+    in_org = OrganizationMembership.objects.filter(
+        user=target, organization=org
+    ).exists()
+    if not in_org and not (request.user.is_staff or request.user.is_superuser):
+        return None, False, Response(
+            {'error': f'User "{raw}" is not in this organization.'}, status=404,
+        )
+
+    return target, False, None
+
+
+def _allowed_block_states(include_param):
+    """
+    Map the ?include= flag to a list of classification_state values that
+    are billing-relevant. Never includes 'captured' or 'suppressed' — those
+    are not user-confirmed time and have no business in billing exports.
+    """
+    include = (include_param or 'committed').strip().lower()
+    if include == 'committed':
+        return ['committed']
+    elif include == 'proposed':
+        return ['committed', 'proposed']
+    elif include == 'all':
+        # Still excludes captured/suppressed for safety
+        return ['committed', 'proposed']
+    else:
+        # Unknown value → default to safest (committed only)
+        return ['committed']
+
+
+def _block_description(block, max_titles=3):
+    """
+    Build the description column. Prefers description_override → notes →
+    a sample of window titles → fallback. Truncated and quote-safe.
+    """
+    text = (block.description_override or block.notes or '').strip()
+    if text:
+        return text[:200].replace('"', "'").replace('\n', ' ')
+
+    # Fallback: sample window titles from this block's raw events
+    titles = []
+    try:
+        from tracker.models import RawEvent
+        sample = (RawEvent.objects.filter(block=block)
+                  .exclude(window_title__isnull=True)
+                  .exclude(window_title__exact='')
+                  .values_list('window_title', flat=True)
+                  .distinct()[:max_titles])
+        titles = [t for t in sample if t]
+    except Exception:
+        pass
+
+    if titles:
+        return ', '.join(titles)[:200].replace('"', "'").replace('\n', ' ')
+
+    return 'Professional services'
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def export_billing_csv(request):
+    """
+    Stream a CCH-import-shaped billing CSV. See the long docblock above for
+    full query-param documentation and column shape.
+    """
+    # ── Resolve org (with admin impersonation support) ────────────────────
+    org = get_request_org_override_billing(request)
+    if not org:
+        return Response({'error': 'No organization'}, status=400)
+
+    # ── Parse + validate date range ───────────────────────────────────────
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+    if not start_date_str or not end_date_str:
+        return Response(
+            {'error': 'start_date and end_date are required (YYYY-MM-DD)'},
+            status=400,
+        )
+    try:
+        start_date = date.fromisoformat(start_date_str)
+        end_date = date.fromisoformat(end_date_str)
+    except ValueError:
+        return Response(
+            {'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400,
+        )
+    if start_date > end_date:
+        return Response(
+            {'error': 'start_date must be on or before end_date'}, status=400,
+        )
+
+    # ── Resolve target user (with permission checks) ──────────────────────
+    target_user, is_self, err = _resolve_export_target_user(request, org)
+    if err:
+        return err
+
+    # ── Read flags ────────────────────────────────────────────────────────
+    level = (request.GET.get('level') or 'daily').strip().lower()
+    if level not in ('daily', 'block'):
+        level = 'daily'
+
+    fmt = (request.GET.get('format') or 'generic').strip().lower()
+    if fmt not in ('generic', 'cch_axcess'):
+        fmt = 'generic'
+    # cch_axcess is currently identical to generic — placeholder until Bowers
+    # gets the spec from Wolters Kluwer. Reserved so future change is just
+    # a column remap, not a new endpoint.
+
+    allowed_states = _allowed_block_states(request.GET.get('include'))
+
+    # ── Query blocks ──────────────────────────────────────────────────────
+    blocks_qs = Block.objects.filter(
+        org=org,
+        day__gte=start_date,
+        day__lte=end_date,
+        deleted_at__isnull=True,
+        classification_state__in=allowed_states,
+    ).select_related('user', 'client', 'task_type')
+
+    if target_user:
+        blocks_qs = blocks_qs.filter(user=target_user)
+
+    blocks_qs = blocks_qs.order_by('day', 'user__username', 'client__name', 'start')
+
+    # ── Build CSV rows ────────────────────────────────────────────────────
+    columns = [
+        'date', 'staff', 'staff_code', 'client', 'client_code',
+        'task_type', 'task_type_code', 'hours', 'billable',
+        'description', 'blocks',
+    ]
+
+    def aggregate_daily(blocks):
+        """
+        Group by (day, user_id, client_id, task_type_id). Sum hours. Merge
+        descriptions and block IDs.
+        """
+        groups = {}
+        for b in blocks:
+            key = (
+                b.day,
+                b.user_id,
+                b.client_id or 0,
+                b.task_type_id or 0,
+            )
+            if key not in groups:
+                groups[key] = {
+                    'day': b.day,
+                    'user': b.user,
+                    'client': b.client,
+                    'task_type': b.task_type,
+                    'minutes': 0,
+                    'is_billable': False,
+                    'descriptions': [],
+                    'block_ids': [],
+                }
+            grp = groups[key]
+            grp['minutes'] += int(b.minutes or 0)
+            # OR the billable flag — if ANY block in the group is billable,
+            # the aggregated row is billable. (TaskType.is_billable is the
+            # source of truth; block.is_billable is a per-block override.)
+            tt_billable = b.task_type.is_billable if b.task_type else b.is_billable
+            grp['is_billable'] = grp['is_billable'] or bool(tt_billable)
+            grp['block_ids'].append(b.id)
+            desc = _block_description(b)
+            if desc and desc not in grp['descriptions']:
+                grp['descriptions'].append(desc)
+        return groups
+
+    def row_for_block(b):
+        """Per-block row (level=block mode)."""
+        user = b.user
+        staff_name = (f'{user.first_name} {user.last_name}'.strip()
+                      or user.username)
+        client_name = b.client.name if b.client else 'Unassigned'
+        client_code = (b.client.code if b.client else '') or ''
+        if b.task_type:
+            tt_name = b.task_type.name
+            tt_code = b.task_type.code or '(unmapped)'
+            billable = 'Y' if b.task_type.is_billable else 'N'
+        else:
+            tt_name = '(unmapped)'
+            tt_code = '(unmapped)'
+            billable = 'Y' if b.is_billable else 'N'
+        hours = round(Decimal(b.minutes or 0) / Decimal('60'), 2)
+        return [
+            b.day.isoformat() if b.day else '',
+            staff_name,
+            user.username,
+            client_name,
+            client_code,
+            tt_name,
+            tt_code,
+            f'{hours}',
+            billable,
+            _block_description(b),
+            str(b.id),
+        ]
+
+    def row_for_group(grp):
+        """Aggregated daily row (level=daily mode, default)."""
+        user = grp['user']
+        staff_name = (f'{user.first_name} {user.last_name}'.strip()
+                      or user.username)
+        client = grp['client']
+        tt = grp['task_type']
+        if tt:
+            tt_name = tt.name
+            tt_code = tt.code or '(unmapped)'
+        else:
+            tt_name = '(unmapped)'
+            tt_code = '(unmapped)'
+        hours = round(Decimal(grp['minutes']) / Decimal('60'), 2)
+        return [
+            grp['day'].isoformat() if grp['day'] else '',
+            staff_name,
+            user.username,
+            client.name if client else 'Unassigned',
+            (client.code if client else '') or '',
+            tt_name,
+            tt_code,
+            f'{hours}',
+            'Y' if grp['is_billable'] else 'N',
+            ' | '.join(grp['descriptions'])[:300] or 'Professional services',
+            '|'.join(str(bid) for bid in grp['block_ids']),
+        ]
+
+    # ── Stream the CSV response ───────────────────────────────────────────
+    pseudo_buffer = _Echo()
+    writer = csv.writer(pseudo_buffer, quoting=csv.QUOTE_MINIMAL)
+
+    def row_iter():
+        # Header
+        yield writer.writerow(columns)
+
+        # Materialize blocks once. For huge orgs this would need true chunking;
+        # we're optimizing for Bowers-scale (~10K rows/month) where the whole
+        # set fits comfortably in memory.
+        blocks = list(blocks_qs)
+
+        if level == 'block':
+            for b in blocks:
+                yield writer.writerow(row_for_block(b))
+        else:
+            groups = aggregate_daily(blocks)
+            # Sort: day, then staff, then client, then task_type
+            sorted_keys = sorted(
+                groups.keys(),
+                key=lambda k: (
+                    k[0] or date.min,
+                    (groups[k]['user'].username or ''),
+                    (groups[k]['client'].name if groups[k]['client'] else 'ZZZ'),
+                    (groups[k]['task_type'].code if groups[k]['task_type'] else 'ZZZ'),
+                ),
+            )
+            for k in sorted_keys:
+                yield writer.writerow(row_for_group(groups[k]))
+
+    # Build filename
+    scope = (target_user.username if target_user
+             else (org.slug if org.slug else 'org'))
+    filename = (f'billing_export_{scope}_'
+                f'{start_date.isoformat()}_to_{end_date.isoformat()}_'
+                f'{level}.csv')
+
+    response = StreamingHttpResponse(row_iter(), content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response

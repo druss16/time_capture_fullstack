@@ -176,8 +176,8 @@ def detail_update_delete_rule(request, org_id, rule_id):
 # Shared mapping: agent + backend both need to know what exe names
 # belong to each "app family."
 EXE_FAMILIES = {
-    'taxwise':     ['utw', 'taxwise'],
-    'ultratax':    ['uts', 'ultratax'],
+    'taxwise':     ['tww', 'taxwise'],  
+    'ultratax':    ['uts', 'ultratax', 'utw'], 
     'lacerte':     ['lacerte', 'lacertepro'],
     'proseries':   ['proseries', 'ps'],
     'drake':       ['drake'],

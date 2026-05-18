@@ -149,10 +149,10 @@ def sync_user_calendar(self, integration_id):
                 event_start = datetime.fromisoformat(start_iso.replace('Z', '+00:00'))
                 event_end = datetime.fromisoformat(end_iso.replace('Z', '+00:00'))
                 if event_start.tzinfo is None:
-                    from django.utils.timezone import utc
-                    event_start = event_start.replace(tzinfo=utc)
-                    event_end = event_end.replace(tzinfo=utc)
-                
+                    from datetime import timezone as dt_timezone
+                    event_start = event_start.replace(tzinfo=dt_timezone.utc)
+                    event_end = event_end.replace(tzinfo=dt_timezone.utc)
+                                
                 # Extract attendees minimally — email + domain + response
                 attendees_raw = evt.get('attendees', []) or []
                 attendees = []

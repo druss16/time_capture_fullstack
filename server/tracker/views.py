@@ -4542,11 +4542,105 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
             'categories': categories,
         })
     
+    # =========================================================================
+    # Surface disagreement banners even when there are no RawEvents.
+    # Mirrors STEP 6 / 6.5 / 6.6 from the main today_time path.
+    # =========================================================================
+    flagged_blocks = []
+
+    # AI disagreement
+    ai_disagreement_blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        ai_disagrees_with_agent=True,
+        ai_disagreement_resolved_at__isnull=True,
+        deleted_at__isnull=True,
+    ).select_related('client', 'ai_proposed_client')
+
+    for block in ai_disagreement_blocks:
+        flagged_blocks.append({
+            'block_id':                block.id,
+            'client_name':             block.client.name if block.client else 'Uncategorized',
+            'review_reason':           f"AI suggests {block.ai_proposed_client.name if block.ai_proposed_client else 'a different client'}",
+            'minutes':                 block.minutes or 0,
+            'start':                   block.start.isoformat() if block.start else '',
+            'type':                    'ai_disagreement',
+            'ai_proposed_client_id':   block.ai_proposed_client_id,
+            'ai_proposed_client_name': block.ai_proposed_client.name if block.ai_proposed_client else None,
+            'ai_confidence':           block.ai_proposed_confidence or 0.0,
+            'ai_reasoning':            block.ai_disagreement_reasoning or '',
+        })
+
+    # Mail disagreement
+    mail_disagreement_blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        mail_disagrees_with_agent=True,
+        mail_disagreement_resolved_at__isnull=True,
+        deleted_at__isnull=True,
+    ).select_related('client', 'mail_proposed_client')
+
+    for block in mail_disagreement_blocks:
+        proposed_name = (
+            block.mail_proposed_client.name
+            if block.mail_proposed_client else 'a different client'
+        )
+        flagged_blocks.append({
+            'block_id':                  block.id,
+            'client_name':               block.client.name if block.client else 'Uncategorized',
+            'review_reason':             f"Email metadata suggests {proposed_name}",
+            'minutes':                   block.minutes or 0,
+            'start':                     block.start.isoformat() if block.start else '',
+            'type':                      'mail_disagreement',
+            'mail_proposed_client_id':   block.mail_proposed_client_id,
+            'mail_proposed_client_name': block.mail_proposed_client.name if block.mail_proposed_client else None,
+            'mail_confidence':           block.mail_proposed_confidence or 0.0,
+            'mail_reasoning':            block.mail_disagreement_reasoning or '',
+        })
+
+    # Calendar disagreement (v1.3.42)
+    calendar_disagreement_blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        calendar_disagrees_with_agent=True,
+        calendar_disagreement_resolved_at__isnull=True,
+        deleted_at__isnull=True,
+    ).select_related('client', 'calendar_proposed_client')
+
+    for block in calendar_disagreement_blocks:
+        proposed_name = (
+            block.calendar_proposed_client.name
+            if block.calendar_proposed_client else 'a different client'
+        )
+        if block.calendar_disagreement_source == 'manual':
+            review_reason = (
+                f"You picked a different client, but this block overlaps "
+                f"a calendar event associated with {proposed_name}"
+            )
+        else:
+            review_reason = f"Calendar event suggests {proposed_name}"
+
+        flagged_blocks.append({
+            'block_id':                      block.id,
+            'client_name':                   block.client.name if block.client else 'Uncategorized',
+            'review_reason':                 review_reason,
+            'minutes':                       block.minutes or 0,
+            'start':                         block.start.isoformat() if block.start else '',
+            'type':                          'calendar_disagreement',
+            'calendar_proposed_client_id':   block.calendar_proposed_client_id,
+            'calendar_proposed_client_name': block.calendar_proposed_client.name if block.calendar_proposed_client else None,
+            'calendar_confidence':           block.calendar_proposed_confidence or 0.0,
+            'calendar_reasoning':            block.calendar_disagreement_reasoning or '',
+            'calendar_disagreement_source':  block.calendar_disagreement_source or 'classifier',
+        })
+
     return Response({
-        'clients': result,
-        'global_hours': round(total_minutes / 60, 2),
-        'billable_hours': round(billable_minutes / 60, 2),
-        'date': target_date.isoformat(),
+        'clients':            result,
+        'global_hours':       round(total_minutes / 60, 2),
+        'billable_hours':     round(billable_minutes / 60, 2),
+        'non_billable_hours': round((total_minutes - billable_minutes) / 60, 2),
+        'date':               target_date.isoformat(),
+        'flagged_blocks':     flagged_blocks,
     })
 
 # ============================================================================

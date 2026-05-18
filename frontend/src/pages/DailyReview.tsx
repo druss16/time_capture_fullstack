@@ -58,16 +58,21 @@ type FlaggedBlock = {
   review_reason: string;
   minutes: number;
   start: string;
-  type?: 'mobile_review' | 'ai_disagreement' | 'mail_disagreement';  // ← add 'mail_disagreement'
+  type?: 'mobile_review' | 'ai_disagreement' | 'mail_disagreement' | 'calendar_disagreement';
   ai_proposed_client_id?: number | null;
   ai_proposed_client_name?: string | null;
   ai_confidence?: number;
   ai_reasoning?: string;
-  // ↓ NEW: Stage 7 v2 disagreement fields
   mail_proposed_client_id?: number | null;
   mail_proposed_client_name?: string | null;
   mail_confidence?: number;
   mail_reasoning?: string;
+  // v1.3.42: Stage 6 calendar disagreement fields
+  calendar_proposed_client_id?: number | null;
+  calendar_proposed_client_name?: string | null;
+  calendar_confidence?: number;
+  calendar_reasoning?: string;
+  calendar_disagreement_source?: 'classifier' | 'manual';
 };
 type TodayTimeResponse = {
   clients: ClientTime[];
@@ -232,7 +237,7 @@ export default function DailyReview() {
       });
       setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
       showToast(
-        action === 'accept' ? "Switched to AI's suggestion" : "Kept original client",
+        action === 'accept' ? "Switched to suggested client" : "Kept original client",
         "success"
       );
       loadTimeSummary();

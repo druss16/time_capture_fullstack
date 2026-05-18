@@ -19,6 +19,7 @@ import {
   ArrowRightLeft,
   MousePointerClick,
   Mail,
+  CalendarClock,
 } from "lucide-react";
 import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -46,24 +47,27 @@ export type ClientTime = {
   categories: Category[];
 };
 export type ClientOption = { id: number; name: string };
-export type FlaggedBlock = {
+type FlaggedBlock = {
   block_id: number;
   client_name: string;
   review_reason: string;
   minutes: number;
   start: string;
-  // Discriminator — which kind of flag this is
-  type?: 'mobile_review' | 'ai_disagreement' | 'mail_disagreement';
-  // AI disagreement fields (only set when type='ai_disagreement')
+  type?: 'mobile_review' | 'ai_disagreement' | 'mail_disagreement' | 'calendar_disagreement';
   ai_proposed_client_id?: number | null;
   ai_proposed_client_name?: string | null;
   ai_confidence?: number;
   ai_reasoning?: string;
-  // Mail disagreement fields (only set when type='mail_disagreement')
   mail_proposed_client_id?: number | null;
   mail_proposed_client_name?: string | null;
   mail_confidence?: number;
   mail_reasoning?: string;
+  // v1.3.42: Stage 6 calendar disagreement fields
+  calendar_proposed_client_id?: number | null;
+  calendar_proposed_client_name?: string | null;
+  calendar_confidence?: number;
+  calendar_reasoning?: string;
+  calendar_disagreement_source?: 'classifier' | 'manual';
 };
 
 type ParsedActivity = { blockId: number | null; title: string };
@@ -898,6 +902,7 @@ function FlaggedBanner({
   const mobileFlags = flagged.filter(f => f.type === 'mobile_review' || (!f.type));
   const aiDisagreements = flagged.filter(f => f.type === 'ai_disagreement');
   const mailDisagreements = flagged.filter(f => f.type === 'mail_disagreement');
+  const calendarDisagreements = flagged.filter(f => f.type === 'calendar_disagreement');
  
   return (
     <>
@@ -1038,6 +1043,73 @@ function FlaggedBanner({
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Calendar disagreement flags — teal-cyan, distinct from mail's violet and AI's blue */}
+      {calendarDisagreements.length > 0 && (
+        <div className="mb-4 rounded-xl border border-cyan-200 bg-cyan-50 overflow-hidden">
+          <div className="px-4 py-2 bg-cyan-100/70 border-b border-cyan-200 flex items-center gap-2">
+            <CalendarClock className="w-3.5 h-3.5 text-cyan-600" />
+            <span className="text-cyan-800 font-semibold text-sm">
+              Calendar suggests {calendarDisagreements.length} {calendarDisagreements.length === 1 ? "change" : "changes"} for review
+            </span>
+          </div>
+          <div className="divide-y divide-cyan-100">
+            {calendarDisagreements.map((f) => {
+              // Source-aware secondary copy. classifier = standard reassign prompt.
+              // manual = softer "you picked X, calendar says Y" prompt.
+              const isManual = f.calendar_disagreement_source === 'manual';
+              const headerCopy = isManual
+                ? `You picked: ${f.client_name} — ${fmt(f.minutes / 60)}`
+                : `Currently: ${f.client_name} — ${fmt(f.minutes / 60)}`;
+              const dismissCopy = isManual
+                ? `Keep my pick (${f.client_name})`
+                : `Keep ${f.client_name}`;
+       
+              return (
+                <div key={f.block_id} className="px-4 py-3">
+                  <div className="flex items-start justify-between gap-4 mb-2">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <AlertCircle className="w-3.5 h-3.5 text-cyan-500 mt-0.5 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-cyan-900">
+                          {headerCopy}
+                        </p>
+                        <p className="text-sm font-semibold text-cyan-900 mt-1">
+                          Calendar suggests: {f.calendar_proposed_client_name}
+                          {f.calendar_confidence && (
+                            <span className="text-cyan-600 font-normal ml-1.5">
+                              ({Math.round(f.calendar_confidence * 100)}% confident)
+                            </span>
+                          )}
+                        </p>
+                        {f.calendar_reasoning && (
+                          <p className="text-xs text-cyan-600 mt-1.5 italic line-clamp-2">
+                            {f.calendar_reasoning}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-2 ml-5">
+                    <button
+                      onClick={() => onResolveDisagreement?.(f.block_id, 'accept')}
+                      className="px-3 py-1.5 text-xs font-semibold bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg transition-all"
+                    >
+                      Switch to {f.calendar_proposed_client_name}
+                    </button>
+                    <button
+                      onClick={() => onResolveDisagreement?.(f.block_id, 'dismiss')}
+                      className="px-3 py-1.5 text-xs font-semibold bg-cyan-100 hover:bg-cyan-200 text-cyan-900 rounded-lg transition-all"
+                    >
+                      {dismissCopy}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

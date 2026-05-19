@@ -4280,7 +4280,7 @@ def today_time(request):
             'review_reason': block.review_reason or 'Needs review',
             'minutes':       block.minutes or 0,
             'start':         block.start.isoformat() if block.start else '',
-            'type':          'mobile_review',
+            'type':          'needs_review',
         })
 
     # Tag mobile-review-flagged blocks with their type for the frontend

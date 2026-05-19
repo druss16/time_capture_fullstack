@@ -381,16 +381,6 @@ export default function DailyReview() {
           {/* RIGHT — flags, date, refresh, stats */}
           <div className="flex items-center gap-2.5">
 
-            {/* Flagged badge — subtle, not alarming */}
-            {flaggedBlocks.length > 0 && (
-              <div className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-lg">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                <span className="text-amber-700 font-semibold text-xs">
-                  {flaggedBlocks.length} flagged
-                </span>
-              </div>
-            )}
-
             {/* Date nav: ‹ date › */}
             <div className="flex items-center gap-0.5 bg-muted/70 border border-border/50 rounded-lg overflow-hidden">
               <button

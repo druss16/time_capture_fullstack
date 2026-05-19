@@ -899,7 +899,7 @@ function FlaggedBanner({
   if (!flagged.length) return null;
  
   // Split flagged blocks by type
-  const mobileFlags = flagged.filter(f => f.type === 'mobile_review' || (!f.type));
+  const mobileFlags = flagged.filter(f => (f.type === 'mobile_review' || (!f.type)) && !f.review_reason?.includes("Mixed content"));
   const aiDisagreements = flagged.filter(f => f.type === 'ai_disagreement');
   const mailDisagreements = flagged.filter(f => f.type === 'mail_disagreement');
   const calendarDisagreements = flagged.filter(f => f.type === 'calendar_disagreement');

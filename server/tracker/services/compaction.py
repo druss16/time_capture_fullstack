@@ -1,34 +1,38 @@
 # tracker/services/compaction.py
 """
-Event-centric compaction — v1.3.38 (dual-timestamp).
+Event-centric compaction — v1.3.39 (content-split).
 
-KEY CHANGE FROM v1.3.37
+KEY CHANGE FROM v1.3.38
 =======================
-Events now carry real (start_ts, end_ts) intervals instead of a single
-ts_utc timestamp. Duration is read directly from the event interval — no
-more IDLE_CAP guessing or gap-walking to the next event.
+Compaction now groups events by (app, client, content_bucket) instead of
+just (app, client). This prevents personal browsing (Fox News, social
+media) from being merged into the same Block as legitimate work that
+happens to share the same app/client/session.
 
-Old (v1.3.37):
-    duration ≈ min(next_event.ts_utc - this_event.ts_utc, 10min cap)
+Block 11005 example (Wayne, 11:39-13:00 Internal-Tax Edge):
+  Before: 1 Block containing CS login + Onvio + Fox News + Sonia Citron
+          (all merged because app=Msedge, client=Internal-Tax matched)
+  After:  Multiple Blocks split by content type:
+            - work bucket: CS login + Onvio events
+            - personal bucket: Fox News + Sonia Citron events
 
-New (v1.3.38):
-    duration = event.end_ts - event.start_ts
+Pure-personal blocks also drop the client attribution (high-confidence
+news/social browsing was never for any client; the agent's selection
+was just stale state).
 
-A 30-minute Outlook dwell now reports 30 minutes, not capped fragments.
-
-UNCHANGED
-=========
-Meeting extraction, idle filter, foreground filter, auto-categorization,
-cleanup paths all stay identical — they were already interval-aware.
+UNCHANGED FROM v1.3.38
+======================
+Dual interval timestamps, meeting extraction, idle filter, foreground
+filter, auto-categorization, cleanup paths.
 
 KEY INVARIANTS
 ==============
 - Compaction is idempotent: re-running on the same events produces the
   same blocks (modulo race with newly-arriving events).
 - SESSION_GAP defines block boundaries — gaps larger than this start a new
-  block. Gap is now measured as next.start_ts - prev.end_ts (true gap),
-  not next.ts_utc - prev.ts_utc (start-to-start approximation).
-- The 0 <= gap < SESSION_GAP guard prevents negative-gap merges (block 10594 fix).
+  block. Gap is measured as next.start_ts - prev.end_ts (true gap).
+- The 0 <= gap < SESSION_GAP guard prevents negative-gap merges
+  (block 10594 fix preserved).
 """
 
 from __future__ import annotations
@@ -42,7 +46,10 @@ from decimal import Decimal
 
 from tracker.models import Block, RawEvent, Client
 from tracker.utils.blocks import is_idle_activity, get_current_client_for_user
-from tracker.utils.content_classifier import classify_event_content, is_high_confidence_personal
+from tracker.utils.content_classifier import (
+    classify_event_content,
+    is_high_confidence_personal,
+)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -52,7 +59,7 @@ User = get_user_model()
 # Configuration
 # IDLE_CAP — DEPRECATED in v1.3.38. Events carry real intervals; no more
 # capping needed. Kept as a no-op constant so any external imports don't
-# break. New code should not reference it.
+# break.
 IDLE_CAP = timedelta(minutes=10)  # DEPRECATED — unused
 
 MIN_BLOCK_MINUTES = 0.5
@@ -78,16 +85,12 @@ def _app_key(event_or_block) -> str:
 def _calculate_minutes_from_events(events_qs) -> int:
     """
     Sum real interval durations across events.
-
-    v1.3.38: each event has (start_ts, end_ts). No more IDLE_CAP guessing.
-    Overlapping events (rare — only during agent bugs) are deduplicated
-    via interval union to prevent double-counting.
+    Overlapping events deduplicated via interval union to prevent double-counting.
     """
     events = list(events_qs.order_by("start_ts"))
     if not events:
         return 0
 
-    # Union of intervals to handle any accidental overlap cleanly.
     intervals = sorted((e.start_ts, e.end_ts) for e in events)
     merged = []
     for start, end in intervals:
@@ -124,19 +127,7 @@ def _extract_and_persist_meeting_blocks(
 ) -> int:
     """
     Pull meeting start/end pairs out of raw_events and create standalone
-    Block records. Meeting blocks bypass the regular compaction pipeline —
-    no idle cap, no per-app grouping, no merging with adjacent activity.
-
-    Meeting events come from the agent's MeetingDetector and have:
-      app_name == 'Meeting'       → meeting start
-      app_name == 'Meeting-End'   → meeting end
-      bundle_id == 'meeting:zoom' (or 'teams', 'meet', etc.)
-
-    Start/end pairs are matched by meeting_app within the same user/day.
-    Dangling starts (no matching end) are NOT persisted — they'll be picked
-    up by the next compaction run once the end event arrives.
-
-    v1.3.38: start_ts replaces ts_utc for ordering and pairing.
+    Block records. Meeting blocks bypass the regular compaction pipeline.
     """
     starts = {}
     ends = {}
@@ -194,14 +185,7 @@ def _create_meeting_block(
     start_event, end_event, meeting_app: str,
     user, org, day: date_type, hostname: Optional[str]
 ) -> Optional[Block]:
-    """
-    Create a single meeting Block record from a start/end event pair.
-
-    v1.3.38: uses start_event.start_ts and end_event.start_ts as the
-    canonical meeting boundary timestamps. (We use start_ts of the end
-    event because Meeting-End events are 1-second sentinels — the meaningful
-    timestamp is when they begin.)
-    """
+    """Create a single meeting Block record from a start/end event pair."""
     duration_seconds = (end_event.start_ts - start_event.start_ts).total_seconds()
     minutes = max(1, int(duration_seconds / 60))
 
@@ -212,7 +196,6 @@ def _create_meeting_block(
         )
         return None
 
-    # Safety cap: 8 hours max for a single meeting
     if duration_seconds > 8 * 3600:
         logger.warning(
             f"[COMPACT-MEETING] {meeting_app} block capped: "
@@ -220,7 +203,6 @@ def _create_meeting_block(
         )
         minutes = 8 * 60
 
-    # Client attribution from start event (set by agent's AI switcher)
     client = None
     client_id = getattr(start_event, 'current_client_id', None)
     if client_id:
@@ -396,12 +378,7 @@ def _filter_foreground_inside_meetings(user, day: date_type) -> int:
 # =============================================================================
 
 def auto_categorize_block(block: Block) -> bool:
-    """
-    Auto-categorize a block via ClassificationService deterministic stages.
-
-    Returns True if a strong signal fired (block now committed/proposed/suppressed).
-    Returns False if no strong signal hit.
-    """
+    """Auto-categorize a block via ClassificationService deterministic stages."""
     if block.is_categorized:
         return False
 
@@ -500,18 +477,15 @@ def compact_rawevents_into_blocks(user=None, hostname: Optional[str] = None, org
 
 
 # =============================================================================
-# compact_day — main compaction logic, REWRITTEN for v1.3.38
+# compact_day — main compaction logic with v1.3.39 content-split
 # =============================================================================
 
 def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) -> int:
     """
     Compact raw events into blocks for one user/day.
 
-    v1.3.38 changes:
-      - Events have (start_ts, end_ts) intervals
-      - Block duration = union of event intervals (no IDLE_CAP guessing)
-      - Session gap = next.start_ts - prev.end_ts (real inter-event gap)
-      - Block start = min(event.start_ts), Block end = max(event.end_ts)
+    v1.3.39 — group by (app, client, content_bucket) so personal browsing
+    doesn't merge with legitimate work.
     """
     if isinstance(user, str):
         try:
@@ -532,7 +506,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 name="default-org", defaults={"slug": "default-org"}
             )
 
-    # Unlinked events for this day, ordered by interval start
     qs = RawEvent.objects.filter(
         user=user,
         start_ts__date=day,
@@ -564,7 +537,6 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         )
     ]
     if not events:
-        # Safety nets still need to run even if no foreground events
         idle_cleaned = 0
         foreground_suppressed = 0
         if meeting_block_count:
@@ -614,16 +586,20 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if current_session:
         sessions.append(current_session)
 
-    # Group within session by (app, client)
+    # =========================================================================
+    # v1.3.39: Group within session by (app, client, CONTENT_BUCKET)
+    # =========================================================================
+    # The content_bucket dimension prevents Fox News from being merged with
+    # Onvio into the same Block. See tracker/utils/content_classifier.py.
     blocks_to_create = []
     for session in sessions:
         by_app_client: Dict[str, List] = {}
         for ev in session:
-              app = _app_key(ev)
-              client_id = ev.get("current_client_id") or 0
-              content_bucket = classify_event_content(ev["event"])
-              key = f"{app}|{client_id}|{content_bucket}"
-              by_app_client.setdefault(key, []).append(ev)
+            app = _app_key(ev)
+            client_id = ev.get("current_client_id") or 0
+            content_bucket = classify_event_content(ev["event"])
+            key = f"{app}|{client_id}|{content_bucket}"
+            by_app_client.setdefault(key, []).append(ev)
 
         for key, app_events in by_app_client.items():
             if not app_events:
@@ -644,16 +620,22 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             paths = [e["file_path"] for e in app_events if e["file_path"]]
             client_id = app_events[0].get("current_client_id")
 
-              source_events = [e["event"] for e in app_events]
-              if is_high_confidence_personal(source_events):
-                  client_id = None
-                  logger.info(
-                      f"[COMPACT] Dropped client_id from personal block: "
-                      f"app={app_events[0]['app_name']!r} "
-                      f"events={len(app_events)}"
-                  )
+            # v1.3.39: drop client attribution on pure-personal blocks.
+            # If every event in this group is high-confidence personal content,
+            # the agent's client selection is stale — the user was reading news,
+            # not working on any client. Mixed/ambiguous blocks keep the client.
+            source_events = [e["event"] for e in app_events]
+            if is_high_confidence_personal(source_events):
+                if client_id:
+                    logger.info(
+                        f"[COMPACT] Dropped client_id={client_id} from pure-personal block: "
+                        f"app={app_events[0]['app_name']!r} "
+                        f"events={len(app_events)} "
+                        f"first_title={(app_events[0]['window_title'] or '')[:60]!r}"
+                    )
+                client_id = None
 
-              blocks_to_create.append({
+            blocks_to_create.append({
                 "start": block_start,
                 "end": block_end,
                 "app_name": app_events[0]["app_name"],
@@ -817,12 +799,7 @@ def _resolve_billing_rate(org, user, client_id, task_type_id=None):
 
 
 def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
-    """
-    Create a new block. v1.3.38 uses interval union for duration.
-
-    Work pattern detection, idle classification, billing rate resolution
-    all unchanged from v1.3.37.
-    """
+    """Create a new block. Work pattern detection, idle classification, billing rate resolution unchanged."""
     app_name = (block_data.get("app_name") or "").lower()
     bundle_id = (block_data.get("bundle_id") or "").lower()
     window_title = (block_data.get("window_title") or "").lower()
@@ -874,10 +851,8 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     device_id = block_data.get("device_id", 0)
     source_events = block_data.get('source_events', [])
 
-    # v1.3.38: use interval union for real duration
     minutes = _calculate_minutes_for_events_list(source_events)
 
-    # Get client
     client = None
     client_id = block_data.get("current_client_id")
     if client_id:
@@ -888,7 +863,6 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
     if not client and device_id:
         client = get_current_client_for_user(user, device_id=device_id)
 
-    # Billing
     client_id_for_rate = block_data.get("current_client_id")
     task_type_id_for_rate = block_data.get("task_type_id")
     billing_rate = _resolve_billing_rate(org, user, client_id_for_rate, task_type_id_for_rate)

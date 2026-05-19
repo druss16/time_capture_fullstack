@@ -479,25 +479,6 @@ export default function DailyReview() {
               </div>
             )}
 
-            {needsReviewBlocks.length > 0 && (
-              <div className="mb-4 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-lg">
-                <div className="flex items-center gap-2 text-blue-700 text-sm font-semibold mb-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  {needsReviewBlocks.length} block{needsReviewBlocks.length !== 1 ? "s" : ""} need review — mixed content
-                </div>
-                <div className="space-y-1">
-                  {needsReviewBlocks.slice(0, 5).map(b => (
-                    <div key={b.block_id} className="text-xs text-blue-600">
-                      • Block {b.block_id}: {b.review_reason}
-                    </div>
-                  ))}
-                  {needsReviewBlocks.length > 5 && (
-                    <div className="text-xs text-blue-600">+ {needsReviewBlocks.length - 5} more</div>
-                  )}
-                </div>
-              </div>
-            )}
-
             <CategorySummary
               timeSummary={timeSummary}
               availableClients={availableClients}

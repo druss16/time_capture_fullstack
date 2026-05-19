@@ -4263,6 +4263,26 @@ def today_time(request):
             'calendar_disagreement_source':  block.calendar_disagreement_source or 'classifier',
         })
 
+    # =========================================================================
+    # STEP 6.7: NEEDS_REVIEW blocks → flagged_blocks (mixed content)
+    # =========================================================================
+    needs_review_blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        needs_review=True,
+        deleted_at__isnull=True,
+    ).select_related('client')
+    
+    for block in needs_review_blocks:
+        flagged_blocks.append({
+            'block_id':      block.id,
+            'client_name':   block.client.name if block.client else 'Uncategorized',
+            'review_reason': block.review_reason or 'Needs review',
+            'minutes':       block.minutes or 0,
+            'start':         block.start.isoformat() if block.start else '',
+            'type':          'mobile_review',
+        })
+
     # Tag mobile-review-flagged blocks with their type for the frontend
     for fb in flagged_blocks:
         if 'type' not in fb:

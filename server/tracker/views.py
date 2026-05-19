@@ -3774,6 +3774,34 @@ def complete_onboarding(request):
     })
 
 
+def _humanize_mixed_content(review_reason):
+    """
+    Convert {'unknown': 18} → human-readable message
+    """
+    if not review_reason or 'Mixed content:' not in review_reason:
+        return review_reason or 'Needs review'
+    
+    # Extract the dict part: "Mixed content: {'work': 37, 'unknown': 8}"
+    try:
+        dict_str = review_reason.split('Mixed content:')[1].strip()
+        content_dict = eval(dict_str)  # Safe here since we generated it
+        
+        has_work = 'work' in content_dict
+        has_unknown = 'unknown' in content_dict
+        has_personal = 'personal' in content_dict
+        
+        if has_work and has_unknown:
+            return "Mixed work and unclear activity"
+        elif has_personal and has_work:
+            return "Mixed work and personal activity"
+        elif has_unknown:
+            return "Contains unclear activity that needs categorization"
+        elif has_personal:
+            return "Contains personal activity mixed with work"
+        else:
+            return "Mixed activity types detected"
+    except:
+        return "Block contains mixed activity types"
 
 # ============================================================================
 # UPDATED today_time() - With Clean Display Formatting
@@ -4277,7 +4305,7 @@ def today_time(request):
         flagged_blocks.append({
             'block_id':      block.id,
             'client_name':   block.client.name if block.client else 'Uncategorized',
-            'review_reason': block.review_reason or 'Needs review',
+            'review_reason': _humanize_mixed_content(block.review_reason),
             'minutes':       block.minutes or 0,
             'start':         block.start.isoformat() if block.start else '',
             'type':          'needs_review',

@@ -42,6 +42,7 @@ from decimal import Decimal
 
 from tracker.models import Block, RawEvent, Client
 from tracker.utils.blocks import is_idle_activity, get_current_client_for_user
+from tracker.utils.content_classifier import classify_event_content, is_high_confidence_personal
 
 import logging
 logger = logging.getLogger(__name__)
@@ -618,10 +619,11 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     for session in sessions:
         by_app_client: Dict[str, List] = {}
         for ev in session:
-            app = _app_key(ev)
-            client_id = ev.get("current_client_id") or 0
-            key = f"{app}|{client_id}"
-            by_app_client.setdefault(key, []).append(ev)
+              app = _app_key(ev)
+              client_id = ev.get("current_client_id") or 0
+              content_bucket = classify_event_content(ev["event"])
+              key = f"{app}|{client_id}|{content_bucket}"
+              by_app_client.setdefault(key, []).append(ev)
 
         for key, app_events in by_app_client.items():
             if not app_events:
@@ -642,7 +644,16 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             paths = [e["file_path"] for e in app_events if e["file_path"]]
             client_id = app_events[0].get("current_client_id")
 
-            blocks_to_create.append({
+              source_events = [e["event"] for e in app_events]
+              if is_high_confidence_personal(source_events):
+                  client_id = None
+                  logger.info(
+                      f"[COMPACT] Dropped client_id from personal block: "
+                      f"app={app_events[0]['app_name']!r} "
+                      f"events={len(app_events)}"
+                  )
+
+              blocks_to_create.append({
                 "start": block_start,
                 "end": block_end,
                 "app_name": app_events[0]["app_name"],
@@ -653,7 +664,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 "hostname": app_events[0]["hostname"],
                 "device_id": app_events[0]["device_id"],
                 "current_client_id": client_id,
-                "source_events": [e["event"] for e in app_events],
+                "source_events": source_events,
             })
 
     # Merge into existing blocks where possible

@@ -488,23 +488,42 @@ class ClassificationService:
             # dashboard's today_time filters out 'Idle' and 'Uncategorized'
             # (they EXCLUDE_FROM_TOTALS), so blocks with those category names
             # become invisible. For proposed/committed blocks WITH a client,
-            # fall back to 'General' if the classifier produced no usable category.
+            # pick a fallback category based on the org's industry and the
+            # classifier's billability judgment.
+            #
+            # Previously this hardcoded 'General' regardless, which:
+            #   (a) wrote a category name that wasn't in any industry's
+            #       allowed list (phantom bucket on the dashboard)
+            #   (b) silently overrode the AI's is_billable=False signal when
+            #       it picked 'Idle' — filter dropped 'Idle' → fallback wrote
+            #       billable 'General'. Identical news-browsing activity
+            #       ended up in different buckets across clients depending
+            #       purely on whether the AI happened to pick 'Idle' vs
+            #       'Personal/Non-Billable' for the category.
             hours = round((block.minutes or 0) / 60.0, 2) if block.minutes else 0.01
             EXCLUDE_CATEGORIES = {'idle', 'uncategorized'}
-            
+
+            industry = getattr(self.org, 'industry_type', None) or 'general'
+            billable_fb, non_billable_fb = FALLBACK_CATEGORIES.get(
+                industry, FALLBACK_CATEGORIES_DEFAULT
+            )
+            fallback_category = non_billable_fb if not decision.is_billable else billable_fb
+
             if decision.category_hours:
                 cleaned = {k: v for k, v in decision.category_hours.items()
                            if k.lower() not in EXCLUDE_CATEGORIES}
                 if cleaned:
                     block.category_hours = cleaned
                 else:
-                    block.category_hours = {'General': hours}
+                    block.category_hours = {fallback_category: hours}
             elif decision.category and decision.category.lower() not in EXCLUDE_CATEGORIES:
                 block.category_hours = {decision.category: hours}
             else:
-                # Classifier had a client but no usable category. Use 'General'
-                # so the block appears in dashboards instead of being filtered out.
-                block.category_hours = {'General': hours}
+                # Classifier had a client but no usable category. Respect the
+                # AI's billability judgment via the industry-aware fallback so
+                # the block appears in dashboards without misrepresenting
+                # whether it's billable.
+                block.category_hours = {fallback_category: hours}
 
             # Plan B: resolve the dominant category to this firm's TaskType
             # (Layer 1 -> Layer 2 bridge). Sets block.task_type if a
@@ -2439,6 +2458,14 @@ class ClassificationService:
                 )
                 if category_signal:
                     decision.matched_signals.append(category_signal)
+                    # The AI's billability call is authoritative when AI is the
+                    # category source. The signal carries detail['is_billable']
+                    # but decision.is_billable defaults to True — propagate
+                    # explicitly or the judgment gets lost downstream (e.g.
+                    # apply() writes is_billable=True over an AI is_billable=False).
+                    ai_is_billable = category_signal.detail.get('is_billable')
+                    if ai_is_billable is not None:
+                        decision.is_billable = bool(ai_is_billable)
 
         except Exception as e:
             logger.warning(f'Stage 10 AI inference failed for block {block.pk}: {e}')
@@ -3101,6 +3128,21 @@ class ClassificationService:
 # =============================================================================
 # CONSTANTS — kept at the bottom for readability
 # =============================================================================
+
+# Per-industry fallback categories for the rare case where the classifier
+# produced a client but no usable category (or only an Idle-bucket category
+# which gets filtered out so the block doesn't disappear from the dashboard).
+#
+# Keys are Organization.industry_type values. Values are
+# (billable_fallback, non_billable_fallback). Both names must exist in the
+# industry's allowed category list (see industry_categories.py).
+FALLBACK_CATEGORIES = {
+    'cpa': ('General Client Work', 'Personal/Non-Billable'),
+    'general': ('Project Work', 'Personal/Non-Billable'),
+    'ai_consulting': ('Project Work', 'Personal/Non-Billable'),
+}
+# Used when industry_type isn't in the map above
+FALLBACK_CATEGORIES_DEFAULT = ('Project Work', 'Personal/Non-Billable')
 
 # Patterns that, if found in window title (case-insensitive substring), suppress the block.
 # These are generic OS dialogs and transient windows that shouldn't count as work.

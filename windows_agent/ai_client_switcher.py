@@ -412,6 +412,24 @@ _STOP_WORDS = {
     "tax", "firm", "cpas", "cpa", "associates", "partners", "services",
 }
 
+# v1.3.21: Words that appear in many client names within a vertical
+# (CPAs serving churches, medical practices, law firms) and are NOT
+# distinctive enough to identify a client by themselves. A multi-word
+# alias match must include at least one token outside this set, or
+# any "St. X Church" title would match every "St. Y Church" client
+# in the list.
+_DOMAIN_COMMON_WORDS = {
+    # Religious
+    'saint', 'church', 'catholic', 'parish', 'diocese', 'cemetery',
+    'school', 'foundation', 'community', 'ministry', 'mission',
+    'chapel', 'temple', 'synagogue', 'mosque', 'baptist', 'methodist',
+    'presbyterian', 'episcopal',
+    # Generic facility / business descriptors
+    'center', 'centre', 'house', 'place', 'office', 'building',
+    'company', 'enterprises', 'practice', 'clinic', 'medical',
+    'dental', 'family', 'general',
+}
+
 
 _GENERIC_WORD_BLOCKLIST = {
     # Original
@@ -874,8 +892,15 @@ class LearnedRules:
             s = re.sub(r'\bft\.?\s', 'fort ', s)
             # Strip apostrophes — "Mary's" == "Marys"
             s = s.replace("'", "").replace("\u2019", "")
-            # Strip punctuation (keep word boundaries)
-            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014]+', ' ', s)
+            # v1.3.21: Stem possessive 's' so "Theresas" matches "Theresa".
+            # Only on words 5+ chars to avoid stripping legitimate trailing
+            # 's' (e.g. preserves "tess", "cass", "ross" — and "us"/"is").
+            s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
+            # Strip punctuation (keep word boundaries) — includes hyphen
+            # so "Church-Hamilton" → "church hamilton" → tokens split
+            # properly. Without this, hyphenated names trap distinctive
+            # tokens inside one mega-token nothing matches against.
+            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014\-\[\]{}]+', ' ', s)
             # Collapse whitespace
             s = re.sub(r'\s+', ' ', s).strip()
             return s
@@ -938,8 +963,59 @@ class LearnedRules:
         # client names. For single-word distinctive names, 1 token is
         # enough since the direct substring check above already failed.
         if len(client_tokens) == 1:
+            # Single-word distinctive client name. If the token is itself
+            # domain-common (e.g. an org named "Church" or "Foundation"),
+            # we already require the full substring match above, which
+            # failed. Reject rather than match on a common word.
+            if client_tokens[0] in _DOMAIN_COMMON_WORDS:
+                return False
             return matches >= 1
-        return matches >= 2
+
+        # v1.3.21: Multi-word case. In addition to needing 2+ total token
+        # matches, require at least ONE matched token to be distinctive
+        # (i.e. NOT in _DOMAIN_COMMON_WORDS). Without this, "St. Theresa
+        # Catholic Church" matches "St. Patrick's Church" purely on the
+        # shared generic words "saint" and "church" — a common over-match
+        # for CPAs serving many churches, medical practices, or law firms.
+        #
+        # We compute matched_distinctive by re-running the same match
+        # logic restricted to distinctive client tokens. This avoids
+        # double-counting and keeps the fuzzy-prefix logic consistent.
+        if matches < 2:
+            return False
+
+        distinctive_client_tokens = [
+            t for t in client_tokens if t not in _DOMAIN_COMMON_WORDS
+        ]
+        if not distinctive_client_tokens:
+            # Client name is entirely domain-common words. The direct
+            # substring check above failed, so reject — there's no way
+            # to distinguish this client from peers by tokens alone.
+            return False
+
+        distinctive_matched = 0
+        for ct in distinctive_client_tokens:
+            if ct in title_tokens:
+                distinctive_matched += 1
+                continue
+            for tt in title_tokens:
+                if len(tt) < 4:
+                    continue
+                # v1.3.21: A fuzzy-prefix match against a domain-common
+                # title token doesn't count. Otherwise "church-hamilton"
+                # would fuzzy-match on title's "church" alone, defeating
+                # the whole distinctive-token check.
+                if tt in _DOMAIN_COMMON_WORDS:
+                    continue
+                common_prefix = 0
+                for a, b in zip(ct, tt):
+                    if a != b:
+                        break
+                    common_prefix += 1
+                if common_prefix >= 4:
+                    distinctive_matched += 1
+                    break
+        return distinctive_matched >= 1
 
     def learn(self, title: str, client_id: int, client_name: str, source: str = "ai"):
         # v1.2.96: Only learn from email titles when the client name is

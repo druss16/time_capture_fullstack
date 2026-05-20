@@ -100,20 +100,26 @@ RULES:
 3. Common abbreviations: first letters of multi-word names (e.g., "D&F" = "Dauphin & Fantacone")
 4. file_path is your STRONGEST signal — if the path contains a client folder, that's almost
    certainly the answer. Use the deepest folder name first.
-5. The "current_client" field shows who the user is CURRENTLY tracked as. If the new title
-   has weak or no client signal (generic apps like "Outlook", "TimeTracker", "Chrome",
-   PowerShell, source code files), prefer returning the current_client at moderate confidence
-   (0.50-0.65) — they're still working on the same thing, just switched windows briefly.
-6. NEVER return a client just because it matches the current_client — there must be SOME
+5. The "current_client" field shows who the user is CURRENTLY tracked as. ONLY return
+   current_client when the title is GENUINELY GENERIC and contains NO client name —
+   examples of genuinely generic: "Inbox - user@firm.com - Outlook", "New Tab", bare
+   "TimeTracker", "PowerShell", a code file path with no client folder. In those cases
+   return current_client at moderate confidence (0.50-0.65).
+6. If the title contains ANY name resembling a client (even with minor spelling/punctuation
+   differences like "St.Anthony" vs "St. Anthony"), match THAT client — never return
+   current_client to override evidence in the title. When in doubt between current_client
+   and a name actually present in the title, return null. Returning the wrong client is
+   strictly worse than returning null.
+7. NEVER return a client just because it matches the current_client — there must be SOME
    signal in title/path/url, OR the title must be generic enough to be a "brief detour"
    (alt-tabbing to a calculator, terminal, or browser with no relevant content).
-7. Source code files (.py, .js, .tsx, etc.) and IDE windows (Sublime, VS Code, PyCharm)
+8. Source code files (.py, .js, .tsx, etc.) and IDE windows (Sublime, VS Code, PyCharm)
    are developer tools — almost never a real client signal. Return null unless path
    contains a client folder name.
-8. Email titles ("Inbox - user@firm.com - Outlook") with no client name → null.
-9. Confidence: clear match 0.85-0.95. Partial/ambiguous 0.50-0.75. Generic-but-staying-on-
-   current 0.50-0.65. NO match → null with confidence 0.0.
-10. Generic windows with no client signal AND no current_client → null.
+9. Email titles ("Inbox - user@firm.com - Outlook") with no client name → null.
+10. Confidence: clear match 0.85-0.95. Partial/ambiguous 0.50-0.75. Generic-but-staying-on-
+    current 0.50-0.65. NO match → null with confidence 0.0.
+11. Generic windows with no client signal AND no current_client → null.
 
 Return ONLY a JSON array, one object per input:
 [{{"idx":<int>,"client_id":<int|null>,"client_name":"<str|null>","confidence":<float>,"reasoning":"<brief>"}}]"""

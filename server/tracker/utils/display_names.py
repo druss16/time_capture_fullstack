@@ -212,41 +212,51 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
         return title[:50]
     
     # ========================================
-    # TAX SOFTWARE - Extract app + client
+    # TAX SOFTWARE - Extract app + client from title
     # ========================================
     tax_apps = ['ultratax', 'proseries', 'lacerte', 'drake', 'taxact', 'cch']
     for tax_app in tax_apps:
         if tax_app in title.lower():
             parts = [p.strip() for p in title.split(' - ')]
-            # Look for client name in parts
-            if client_name:
-                for p in parts:
-                    if client_name.lower() in p.lower():
-                        return client_name
-            # Use last meaningful part (often client)
+            # Use last meaningful part (often the open return/client)
             if len(parts) > 1:
                 return parts[-1][:40]
             return title[:50]
-    
+        
+
     # ========================================
-    # QUICKBOOKS - Clean up
+    # QUICKBOOKS - Extract company + current screen
+    # Format: "{Company Name} - QuickBooks <edition> - [{Current Screen}]"
     # ========================================
     if 'quickbooks' in title.lower() or 'qbo' in title.lower():
-        if client_name:
-            return client_name
-        parts = [p.strip() for p in title.split(' - ')]
-        if len(parts) >= 2:
-            for p in parts[1:]:
-                if p.lower() not in ('chart of accounts', 'dashboard', 'home'):
-                    return p[:40]
-        return ''
+        company = ''
+        screen = ''
+        
+        # Extract bracketed screen, e.g. "[Reconcile - Mass Stipend Account 3345]"
+        bracket_match = re.search(r'\[([^\]]+)\]', title)
+        if bracket_match:
+            screen = bracket_match.group(1).strip()
+            # Often "Reconcile - Mass Stipend Account 3345" — take the first part as the action
+            if ' - ' in screen:
+                screen = screen.split(' - ')[0].strip()
+        
+        # Extract company name (everything before " - QuickBooks")
+        qb_split = re.split(r'\s*-\s*QuickBooks', title, maxsplit=1, flags=re.IGNORECASE)
+        if qb_split and qb_split[0].strip():
+            company = qb_split[0].strip()
+        
+        if company and screen:
+            return f"{company[:40]} - {screen[:25]}"
+        if company:
+            return company[:50]
+        if screen:
+            return screen[:50]
+        # No usable info from title — fall through to generic at bottom
     
     # ========================================
     # MEETINGS - Simplify
     # ========================================
     if any(x in app_lower for x in ['zoom', 'teams', 'facetime', 'meet']):
-        if client_name:
-            return client_name
         # Remove "Zoom Meeting" prefix
         title = re.sub(r'^(Zoom|Teams)\s*(Meeting|Call)\s*[-\u2013\u2014]?\s*', '', title, flags=re.IGNORECASE)
         return title[:50] if title else 'Call'

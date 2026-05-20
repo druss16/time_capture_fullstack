@@ -477,7 +477,7 @@ def _partial_word_confidence(word_len: int, sensitivity: int) -> float:
 # =====================================================================
 
 class PatternCache:
-    def __init__(self, path, max_entries=2000, ttl_days=30):
+    def __init__(self, path, max_entries=2000, ttl_days=3):
         self.path = path
         self.max_entries = max_entries
         self.ttl_seconds = ttl_days * 86400
@@ -536,6 +536,21 @@ class PatternCache:
                 oldest = min(self._data, key=lambda k: self._data[k].get("ts", 0))
                 del self._data[oldest]
             self._save()
+
+    def invalidate(self, title: str) -> bool:
+        """Remove a single cache entry by title. Returns True if removed.
+
+        Used by _detect and _fire_ai_batch to drop cache entries that
+        contradict the title evidence (e.g. cache says client A but the
+        title clearly contains client B's name).
+        """
+        sig = self._signature(title)
+        with self._lock:
+            if sig in self._data:
+                del self._data[sig]
+                self._save()
+                return True
+        return False
 
     def remove_client(self, client_id: int):
         with self._lock:
@@ -1606,6 +1621,35 @@ class AIClientSwitcher:
     # Detection Pipeline
     # =================================================================
 
+    def _title_strongly_matches_other_client(
+        self, title: str, exclude_client_id: int
+    ) -> Optional[int]:
+        """
+        Returns the client_id of an active client (other than
+        exclude_client_id) whose name or any alias is clearly present in
+        the title. Returns None if no other client matches.
+
+        Used to validate cache hits and backend AI verdicts: if the title
+        evidence clearly points to a different client than the proposed
+        attribution, reject it (don't trust, don't cache, don't learn).
+
+        Uses LearnedRules._title_contains_client for CPA-friendly fuzzy
+        matching (St. <-> Saint, apostrophes, suffixes, etc.).
+        """
+        if not title:
+            return None
+        for client in self._clients:
+            cid = client.get("id")
+            if not cid or cid == exclude_client_id:
+                continue
+            name = client.get("name") or ""
+            if name and LearnedRules._title_contains_client(title, name):
+                return cid
+            for alias in client.get("aliases", []) or []:
+                if alias and LearnedRules._title_contains_client(title, alias):
+                    return cid
+        return None
+
     def _detect(self, app_name: str, exe_name: str, title: str,
                 url: str, file_path: str):
         try:
@@ -1650,9 +1694,30 @@ class AIClientSwitcher:
             # Tier 1a: Pattern cache
             cached = self._cache.get(title)
             if cached and cached.get("client_id"):
-                if cached["client_id"] != cur_id:
+                cached_id = cached["client_id"]
+                # v1.3.20: Validate cache against title content. If the
+                # title contains a DIFFERENT active client's name or
+                # alias, the cache is stale or was poisoned (e.g. by a
+                # prior backend AI call that fell back to current_client
+                # per Rule 5 of the OpenAI prompt). Invalidate and fall
+                # through to fresh detection.
+                contradicted_by = self._title_strongly_matches_other_client(
+                    title, exclude_client_id=cached_id
+                )
+                if contradicted_by is not None:
+                    logger.warning(
+                        f"[AI-SWITCH] cache INVALIDATED for {title[:60]!r}: "
+                        f"cached client_id={cached_id} "
+                        f"({cached.get('client_name')!r}) but title evidence "
+                        f"points to client_id={contradicted_by}. Dropping entry."
+                    )
+                    self._cache.invalidate(title)
+                    self.stats["cache_invalidated"] = (
+                        self.stats.get("cache_invalidated", 0) + 1
+                    )
+                elif cached_id != cur_id:
                     match = ClientMatch(
-                        client_id=cached["client_id"],
+                        client_id=cached_id,
                         client_name=cached["client_name"],
                         confidence=cached["confidence"],
                         match_method="pattern_cache",
@@ -1831,6 +1896,30 @@ class AIClientSwitcher:
                             f"[AI-SWITCH] LLM verdict: {match.client_name!r} "
                             f"(conf={match.confidence:.2f}) for {item['title'][:60]!r}"
                         )
+                    
+                    # v1.3.20: Validate backend AI verdict before
+                    # persisting. If the title clearly contains a
+                    # different active client's name or alias, the
+                    # backend AI guessed wrong (likely fell back to
+                    # "current_client" per Rule 5 of the OpenAI prompt
+                    # in views_ai_classify.py). Don't cache, don't
+                    # learn, don't switch. Prevents cache poisoning of
+                    # all subsequent events with this title.
+                    contradicted_by = self._title_strongly_matches_other_client(
+                        item["title"], exclude_client_id=match.client_id
+                    )
+                    if contradicted_by is not None:
+                        logger.warning(
+                            f"[AI-SWITCH] backend AI REJECTED for "
+                            f"{item['title'][:60]!r}: returned client_id="
+                            f"{match.client_id} ({match.client_name!r}) but "
+                            f"title evidence points to client_id={contradicted_by}."
+                        )
+                        self.stats["backend_ai_rejected"] = (
+                            self.stats.get("backend_ai_rejected", 0) + 1
+                        )
+                        continue
+
                     self._cache.put(item["title"], match.client_id, match.client_name, match.confidence)
                     if self.config["learn_from_confirms"]:
                         self._learned.learn(

@@ -1623,6 +1623,18 @@ class ClassificationService:
         alias_n = _normalize(a)
         haystack_n = _normalize(haystack)
 
+        # v1.3.23: Generic-haystack early reject. If the title is entirely
+        # generic app/file vocabulary (no client-specific tokens), refuse
+        # to fire any strong match. Catches "client tracking file 2025 -
+        # Excel", "CS Connect Background Services", etc.
+        haystack_token_set_early = set(haystack_n.split())
+        haystack_distinctive = [
+            t for t in haystack_token_set_early
+            if len(t) >= 4 and t not in GENERIC_HAYSTACK_WORDS
+        ]
+        if not haystack_distinctive:
+            return False
+
         # Direct substring hit — easiest case, preserves prior behavior
         # for aliases that already matched exactly.
         if alias_n and alias_n in haystack_n:
@@ -1695,7 +1707,25 @@ class ClassificationService:
             if _token_matches(at, haystack_tokens, haystack_token_set, False)
         )
 
-        return distinctive_matches >= 1
+        if distinctive_matches < 1:
+            return False
+
+        # v1.3.23: Entity-class exclusion check. If the title and the
+        # client name contain words from opposed classes (e.g. title
+        # says "Church", client name says "Cemetery"), reject the match.
+        # Same parish often has church + cemetery + fund as DIFFERENT
+        # accounting clients — matching one to the other is always wrong.
+        for class_group in EXCLUSIVE_ENTITY_CLASSES:
+            alias_classes = class_group & set(alias_tokens)
+            haystack_classes = class_group & haystack_token_set
+            # If both sides have an entity class word from this group,
+            # they must agree (be the same word). If they disagree,
+            # reject.
+            if alias_classes and haystack_classes:
+                if not (alias_classes & haystack_classes):
+                    return False
+
+        return True
 
     @staticmethod
     def _build_haystack(block) -> str:
@@ -3325,12 +3355,22 @@ SHORT_ALIAS_STOPLIST = {
     'help',
 }
 
+# v1.3.23: Mutually exclusive entity classes. If the title contains
+# one of these AND the client name contains the OTHER one from the same
+# group, the match is rejected. Prevents "St. Mary's Church" titles
+# matching "St. Mary's Cemetery" client and similar mixups.
+#
+# Each set is a group of mutually exclusive types — a real-world entity
+# is one of them, never multiple. A parish might have BOTH a church and
+# a cemetery as separate accounting entities (separate clients), so
+# matching one to the other is always wrong.
+EXCLUSIVE_ENTITY_CLASSES = [
+    # Religious entity types
+    {'church', 'cemetery', 'fund', 'foundation', 'school'},
+    # Business entity types
+    {'inc', 'llc', 'cemetery', 'fund'},
+]
 
-# v1.3.22: Words that appear in many client names within a vertical
-# (CPAs serving churches, medical practices, law firms) and are NOT
-# distinctive enough to identify a client by themselves. A multi-word
-# alias match must include at least one token outside this set.
-# Mirrors _DOMAIN_COMMON_WORDS in windows_agent/ai_client_switcher.py.
 DOMAIN_COMMON_WORDS = {
     # Religious
     'saint', 'church', 'catholic', 'parish', 'diocese', 'cemetery',
@@ -3341,6 +3381,18 @@ DOMAIN_COMMON_WORDS = {
     'center', 'centre', 'house', 'place', 'office', 'building',
     'company', 'enterprises', 'practice', 'clinic', 'medical',
     'dental', 'family', 'general',
+}
+
+# v1.3.23: Reject matches where the haystack has no specific content.
+# "client tracking file 2025 - Excel" has zero distinctive tokens after
+# removing generic words, so it shouldn't fire a strong match against
+# anything. Extends DOMAIN_COMMON_WORDS with generic app / OS / file
+# vocabulary that appears in titles without indicating a client.
+GENERIC_HAYSTACK_WORDS = DOMAIN_COMMON_WORDS | {
+    'client', 'file', 'tracking', 'information', 'compatibility',
+    'mode', 'excel', 'outlook', 'word', 'processing', 'managing',
+    'background', 'services', 'connect', 'system', 'login',
+    'document', 'untitled', 'work',
 }
 
 # Stop words for tokenization (mirrors agent's _STOP_WORDS).

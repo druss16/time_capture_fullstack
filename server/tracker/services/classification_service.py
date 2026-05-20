@@ -1514,32 +1514,43 @@ class ClassificationService:
                         alias_clean = ''.join(c for c in alias if c.isalnum())
                         domain_clean = ''.join(c for c in domain if c.isalnum())
                         if len(alias_clean) >= 4 and alias_clean in domain_clean:
-                            if 0.92 > best_strength:
+                            # v1.3.24: Use specificity score as tiebreaker.
+                            # Domain is the strongest signal type — base
+                            # strength 0.92 stays, but among multiple
+                            # matching clients, prefer the one whose alias
+                            # tokens most completely match.
+                            spec = self._alias_match_score(alias, domain_clean)
+                            this_strength = 0.92 + (spec - 0.5) * 0.02  # tiny nudge
+                            if this_strength > best_strength:
                                 best_client = client
-                                best_strength = 0.92
+                                best_strength = this_strength
                                 best_match_type = 'domain'
                             break
- 
+
             # Match 2: File path (strong) — only if not Protected View and has signal
             if file_path_searchable:
                 for alias in all_names:
                     if not self._alias_is_safe(alias):
                         continue
                     if self._alias_matches_safely(alias, file_path_searchable):
-                        if 0.90 > best_strength:
+                        spec = self._alias_match_score(alias, file_path_searchable)
+                        this_strength = 0.90 + (spec - 0.5) * 0.02
+                        if this_strength > best_strength:
                             best_client = client
-                            best_strength = 0.90
+                            best_strength = this_strength
                             best_match_type = 'file_path'
                         break
- 
+
             # Match 3: Title alias (moderate-high)
             for alias in all_names:
                 if not self._alias_is_safe(alias):
                     continue
                 if self._alias_matches_safely(alias, haystack):
-                    if 0.82 > best_strength:
+                    spec = self._alias_match_score(alias, haystack)
+                    this_strength = 0.82 + (spec - 0.5) * 0.02
+                    if this_strength > best_strength:
                         best_client = client
-                        best_strength = 0.82
+                        best_strength = this_strength
                         best_match_type = 'title_alias'
                     break
  
@@ -1569,6 +1580,75 @@ class ClassificationService:
         if a in SHORT_ALIAS_STOPLIST:
             return False
         return True
+
+    @staticmethod
+    def _alias_match_score(alias: str, haystack: str) -> float:
+        """
+        v1.3.24: When multiple clients match the same haystack, score
+        each match by how COMPLETELY the alias's distinctive tokens
+        cover the alias. Higher = more specific match. Used as a
+        tiebreaker so that "St Mary's Church-Clinton" beats "Sacred
+        Heart & St. Mary's Church" against a "St Marys_Clinton" haystack
+        (both match on "mary", but 388 also matches on "clinton").
+
+        Returns 0.0 if the alias doesn't match. Returns a score in
+        (0, 1] otherwise: distinctive_matches / distinctive_total.
+        """
+        import re
+
+        if not ClassificationService._alias_matches_safely(alias, haystack):
+            return 0.0
+
+        def _normalize(s: str) -> str:
+            s = s.lower()
+            s = re.sub(r'\bst\.?\s', 'saint ', s)
+            s = re.sub(r'\bmt\.?\s', 'mount ', s)
+            s = re.sub(r'\bft\.?\s', 'fort ', s)
+            s = s.replace("'", "").replace("\u2019", "")
+            s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
+            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014\-\[\]{}]+', ' ', s)
+            s = re.sub(r'\s+', ' ', s).strip()
+            return s
+
+        alias_n = _normalize(alias)
+        haystack_n = _normalize(haystack)
+
+        alias_tokens = [
+            t for t in alias_n.split()
+            if len(t) >= 4
+            and t not in ALIAS_STOP_WORDS
+            and t not in ALIAS_GENERIC_SUFFIXES
+        ]
+        distinctive_alias = [t for t in alias_tokens if t not in DOMAIN_COMMON_WORDS]
+
+        if not distinctive_alias:
+            return 0.5  # fallback for domain-common-only aliases that
+                        # passed the matcher via direct substring
+
+        haystack_tokens = haystack_n.split()
+        haystack_set = set(haystack_tokens)
+
+        matched = 0
+        for ct in distinctive_alias:
+            if ct in haystack_set:
+                matched += 1
+                continue
+            # Fuzzy prefix match (4+ char shared prefix), excluding
+            # domain-common haystack tokens
+            for ht in haystack_tokens:
+                if len(ht) < 4 or ht in DOMAIN_COMMON_WORDS:
+                    continue
+                cp = 0
+                for x, y in zip(ct, ht):
+                    if x != y:
+                        break
+                    cp += 1
+                if cp >= 4:
+                    matched += 1
+                    break
+
+        # Score: fraction of distinctive alias tokens that matched
+        return matched / len(distinctive_alias)
 
     @staticmethod
     def _alias_matches_safely(alias: str, haystack: str) -> bool:

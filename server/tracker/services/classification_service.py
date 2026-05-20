@@ -1573,27 +1573,129 @@ class ClassificationService:
     @staticmethod
     def _alias_matches_safely(alias: str, haystack: str) -> bool:
         """
-        Match an alias against text safely:
-          - Multi-word aliases ("st. theresa catholic church"): substring match OK
-          - Single-word aliases >= 8 chars: substring match OK
-          - Single-word aliases < 8 chars: require word-boundary match
+        Match an alias against text using token-based matching with
+        CPA-friendly normalization.
 
-        This stops "Internal" matching "Internal Revenue Service" while
-        allowing "Pinnacle Sealing & Plowing" to match by substring.
+        v1.3.22: Replaces brittle substring matching that failed on
+        apostrophe/possessive/extra-word variants. For example,
+        previously "St. Theresa's Church" required the literal string
+        "st. theresa's church" to appear contiguously in the haystack,
+        which never happens in real titles like
+        "St. Theresa Catholic Church - QuickBooks...".
+
+        Strategy (mirrors agent's LearnedRules._title_contains_client):
+          1. Normalize both strings (St. → Saint, strip apostrophes,
+             stem possessive 's, split hyphens, strip punctuation)
+          2. Direct substring match still preferred (cheap, exact)
+          3. Token-based fallback with fuzzy-prefix matching
+          4. For multi-token aliases: require >=2 token matches AND
+             >=1 distinctive (non-domain-common) match
+          5. Single-token aliases: require 1 match, reject if the
+             token itself is domain-common
+
+        Other safety: stops "Internal" matching "Internal Revenue
+        Service" via word-boundary requirement; stops "St. Patrick"
+        matching "St. Theresa" via distinctive-token requirement.
         """
         import re
 
         a = alias.strip().lower()
-        words = a.split()
+        if not a or not haystack:
+            return False
 
-        # Multi-word alias OR long single word — substring match is safe
-        if len(words) >= 2 or len(a) >= 8:
-            return a in haystack
+        def _normalize(s: str) -> str:
+            s = s.lower()
+            # Common abbreviation expansions
+            s = re.sub(r'\bst\.?\s', 'saint ', s)
+            s = re.sub(r'\bmt\.?\s', 'mount ', s)
+            s = re.sub(r'\bft\.?\s', 'fort ', s)
+            # Strip apostrophes — "Mary's" == "Marys"
+            s = s.replace("'", "").replace("\u2019", "")
+            # Stem possessive 's on 4+ char words so "theresas" matches "theresa"
+            s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
+            # Strip punctuation + hyphens + brackets — "Church-Hamilton"
+            # splits into "church hamilton" so distinctive tokens are reachable
+            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014\-\[\]{}]+', ' ', s)
+            # Collapse whitespace
+            s = re.sub(r'\s+', ' ', s).strip()
+            return s
 
-        # Short single-word alias — require word boundary
-        # Use \W (any non-word char) on both sides instead of \b which is locale-sensitive
-        pattern = r'(?:^|\W)' + re.escape(a) + r'(?:\W|$)'
-        return bool(re.search(pattern, haystack))
+        alias_n = _normalize(a)
+        haystack_n = _normalize(haystack)
+
+        # Direct substring hit — easiest case, preserves prior behavior
+        # for aliases that already matched exactly.
+        if alias_n and alias_n in haystack_n:
+            return True
+
+        # Token-based fallback
+        alias_tokens = [
+            t for t in alias_n.split()
+            if len(t) >= 4
+            and t not in ALIAS_STOP_WORDS
+            and t not in ALIAS_GENERIC_SUFFIXES
+        ]
+
+        if not alias_tokens:
+            # Alias is entirely stop words / suffixes / too short — already
+            # failed substring check above, so reject.
+            return False
+
+        haystack_tokens = haystack_n.split()
+        haystack_token_set = set(haystack_tokens)
+
+        # Count total matches with fuzzy-prefix support
+        def _token_matches(at, htoks, hset, allow_domain_common_fuzzy=True):
+            """Direct match, or 4+ char shared prefix with a haystack token."""
+            if at in hset:
+                return True
+            for ht in htoks:
+                if len(ht) < 4:
+                    continue
+                # If this is the distinctive-tokens pass, don't allow fuzzy
+                # matches against domain-common haystack tokens — otherwise
+                # "church-hamilton" sneaks past via "church" alone.
+                if not allow_domain_common_fuzzy and ht in DOMAIN_COMMON_WORDS:
+                    continue
+                cp = 0
+                for x, y in zip(at, ht):
+                    if x != y:
+                        break
+                    cp += 1
+                if cp >= 4:
+                    return True
+            return False
+
+        total_matches = sum(
+            1 for at in alias_tokens
+            if _token_matches(at, haystack_tokens, haystack_token_set, True)
+        )
+
+        # Single-token alias: 1 match needed, but reject if the token is
+        # itself domain-common (e.g. an alias literally named "Church").
+        if len(alias_tokens) == 1:
+            if alias_tokens[0] in DOMAIN_COMMON_WORDS:
+                return False
+            return total_matches >= 1
+
+        # Multi-token alias: 2+ total matches AND >=1 distinctive match
+        if total_matches < 2:
+            return False
+
+        distinctive_alias_tokens = [
+            t for t in alias_tokens if t not in DOMAIN_COMMON_WORDS
+        ]
+        if not distinctive_alias_tokens:
+            # Alias is entirely domain-common — direct substring above
+            # already failed, so reject. No way to disambiguate.
+            return False
+
+        distinctive_matches = sum(
+            1 for at in distinctive_alias_tokens
+            if _token_matches(at, haystack_tokens, haystack_token_set, False)
+        )
+
+        return distinctive_matches >= 1
 
     @staticmethod
     def _build_haystack(block) -> str:
@@ -3221,6 +3323,37 @@ SHORT_ALIAS_STOPLIST = {
     'open',
     'save',
     'help',
+}
+
+
+# v1.3.22: Words that appear in many client names within a vertical
+# (CPAs serving churches, medical practices, law firms) and are NOT
+# distinctive enough to identify a client by themselves. A multi-word
+# alias match must include at least one token outside this set.
+# Mirrors _DOMAIN_COMMON_WORDS in windows_agent/ai_client_switcher.py.
+DOMAIN_COMMON_WORDS = {
+    # Religious
+    'saint', 'church', 'catholic', 'parish', 'diocese', 'cemetery',
+    'school', 'foundation', 'community', 'ministry', 'mission',
+    'chapel', 'temple', 'synagogue', 'mosque', 'baptist', 'methodist',
+    'presbyterian', 'episcopal',
+    # Generic facility / business descriptors
+    'center', 'centre', 'house', 'place', 'office', 'building',
+    'company', 'enterprises', 'practice', 'clinic', 'medical',
+    'dental', 'family', 'general',
+}
+
+# Stop words for tokenization (mirrors agent's _STOP_WORDS).
+ALIAS_STOP_WORDS = {
+    "and", "the", "for", "inc", "llc", "ltd", "corp", "co", "group",
+    "tax", "firm", "cpas", "cpa", "associates", "partners", "services",
+}
+
+# Generic legal-entity suffixes (mirrors agent's _GENERIC_SUFFIXES).
+ALIAS_GENERIC_SUFFIXES = {
+    'inc', 'llc', 'ltd', 'corp', 'co', 'company', 'group',
+    'associates', 'partners', 'services', 'holdings', 'trust',
+    'llp', 'pllc', 'pc',
 }
 
 

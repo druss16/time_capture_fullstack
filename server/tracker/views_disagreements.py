@@ -26,6 +26,7 @@ from django.db import transaction
 
 from tracker.models import Block, Client
 from tracker.views import get_request_user_override
+from tracker.utils.user_reasoning import humanize_for_api
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _serialize_disagreement(b: Block) -> dict:
             'name': b.ai_proposed_client.name if b.ai_proposed_client else None,
         },
         'ai_confidence': b.ai_proposed_confidence,
-        'ai_reasoning': b.ai_disagreement_reasoning,
+        'ai_reasoning': humanize_for_api(b),
         'resolved_at': (
             b.ai_disagreement_resolved_at.isoformat()
             if b.ai_disagreement_resolved_at else None

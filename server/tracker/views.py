@@ -4216,7 +4216,7 @@ def today_time(request):
             'ai_proposed_client_id':   block.ai_proposed_client_id,
             'ai_proposed_client_name': block.ai_proposed_client.name if block.ai_proposed_client else None,
             'ai_confidence':           block.ai_proposed_confidence or 0.0,
-            'ai_reasoning':            block.ai_disagreement_reasoning or '',
+            'ai_reasoning':            humanize_for_api(block),
         })
 
     # =========================================================================
@@ -4639,7 +4639,7 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
             'ai_proposed_client_id':   block.ai_proposed_client_id,
             'ai_proposed_client_name': block.ai_proposed_client.name if block.ai_proposed_client else None,
             'ai_confidence':           block.ai_proposed_confidence or 0.0,
-            'ai_reasoning':            block.ai_disagreement_reasoning or '',
+            'ai_reasoning':            humanize_for_api(block),
         })
 
     # Mail disagreement

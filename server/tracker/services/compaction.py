@@ -117,42 +117,91 @@ def _calculate_minutes_for_events_list(events: list) -> int:
     total_seconds = sum((end - start).total_seconds() for start, end in merged)
     return max(1, int(total_seconds / 60))
 
-def _qb_file_name(window_title: str) -> str:
+
+def _content_identifier(window_title: str, file_path: str, url: str) -> str:
     """
-    Extract the QuickBooks company file name from a window title.
+    Universal content identifier for compaction grouping. Returns a
+    stable string identifying WHAT the user is working on, independent
+    of the agent's current_client_id (which can be stale).
 
-    QB Desktop window titles have this structure:
-      "{file_name} (Primary)  - QuickBooks Accountant Desktop Plus 2024 - [{screen}]"
-    or:
-      "{file_name}  - QuickBooks Accountant Desktop Plus 2024"
+    Priority order:
+      1. file_path basename (most reliable — actual file the user opened)
+      2. URL host + path prefix (web-based work)
+      3. Window title's "file part" (extracted from common app patterns)
+      4. Empty string (no signal — fall back to existing grouping)
 
-    For compaction-grouping purposes, the FILE NAME is what matters —
-    it identifies which client's books the user opened. The bracket
-    portion changes constantly as the user navigates screens.
-
-    Returns the lowercased file name portion (without "(Primary)" or
-    "(Secondary)" suffix), or empty string if not a QB title.
+    Used as a grouping dimension so that when the user switches between
+    files/sites/documents, compaction creates separate blocks even when
+    the agent's client_id is stale.
     """
-    if not window_title:
-        return ""
-    title_lower = window_title.lower()
-    if "quickbooks" not in title_lower:
-        return ""
+    import os
 
-    # Find " - QuickBooks" or "  - QuickBooks" and take everything before
-    parts = window_title.split(" - QuickBooks", 1)
-    if len(parts) < 2:
-        return ""
+    # Priority 1: file_path basename — most reliable signal
+    if file_path:
+        normalized = file_path.replace("\\", "/")
+        basename = os.path.basename(normalized)
+        if basename and len(basename) >= 3:
+            # Strip common extensions for stable grouping
+            # (.xlsx vs .xlsm shouldn't split the same workbook)
+            name, ext = os.path.splitext(basename)
+            return f"file={name.lower()}"
 
-    file_name = parts[0].strip()
+    # Priority 2: URL — for web-based work
+    if url:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url if "://" in url else f"http://{url}")
+            host = (parsed.hostname or "").lower()
+            if host.startswith("www."):
+                host = host[4:]
+            if host:
+                # Use host + first path segment for stability
+                # (so /clients/123/dashboard and /clients/123/billing group together,
+                #  but /clients/456/dashboard is separate)
+                path_parts = [p for p in (parsed.path or "").split("/") if p]
+                if path_parts:
+                    return f"url={host}/{path_parts[0]}"
+                return f"url={host}"
+        except Exception:
+            pass
 
-    # Strip "(Primary)" / "(Secondary)" / "(Tertiary)" suffix
-    for suffix in [" (Primary)", " (Secondary)", " (Tertiary)", "(Primary)", "(Secondary)"]:
-        if file_name.endswith(suffix):
-            file_name = file_name[:-len(suffix)].strip()
-            break
+    # Priority 3: Parse "file part" from common window title patterns
+    # Pattern: "{file_part}  - {app_name}" or "{file_part} - {app_name}"
+    if window_title:
+        # Look for common app suffix markers
+        APP_SUFFIX_MARKERS = (
+            " - QuickBooks",
+            " - Excel",
+            " - Word",
+            " - PowerPoint",
+            " - Adobe Acrobat",
+            " - Acrobat Reader",
+            " - Outlook",
+            " - UltraTax",
+            " - Lacerte",
+            " - ProSeries",
+            " - Drake",
+            " - TaxWise",
+            " - CCH",
+            " - Onvio",
+            " - Karbon",
+        )
+        for marker in APP_SUFFIX_MARKERS:
+            if marker in window_title:
+                file_part = window_title.split(marker, 1)[0].strip()
+                # Strip QB-style screen brackets
+                bracket_pos = file_part.rfind(" - [")
+                if bracket_pos > 0:
+                    file_part = file_part[:bracket_pos].strip()
+                # Strip mode markers
+                for mode in ("(Primary)", "(Secondary)", "[Compatibility Mode]",
+                             "- Compatibility Mode", "[Read-Only]", "[Protected View]"):
+                    file_part = file_part.replace(mode, "").strip()
+                if file_part and len(file_part) >= 3:
+                    return f"title={file_part.lower()}"
+                break
 
-    return file_name.lower()
+    return ""
 
 # =============================================================================
 # Meeting extraction (unchanged from v1.3.37 — already interval-aware)
@@ -635,18 +684,22 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             client_id = ev.get("current_client_id") or 0
             content_bucket = classify_event_content(ev["event"])
 
-            # v1.3.40: For QuickBooks events, add the company file name
-            # to the grouping key. Without this, if the agent's stale
-            # current_client_id stays on one client (e.g. 125 Cemetery)
-            # while the user opens a different QB file (e.g. Church),
-            # all events merge into one block at the wrong client.
-            # Using file_name as a grouping dimension splits these
-            # naturally — block boundaries align with file switches
-            # even when the agent failed to update current_client_id.
-            qb_file = _qb_file_name(ev.get("window_title") or "")
-            qb_part = f"|qb={qb_file}" if qb_file else ""
+            # v1.3.46: Universal content-identifier grouping. When the
+            # user opens a different file/URL/document, that's different
+            # work — even if the agent's current_client_id is stale.
+            # Without this, e.g. opening St Mary's Church QB file while
+            # current_client_id still points at St Mary's Cemetery would
+            # merge both into one wrong block. The file_path/URL/title
+            # captures the user's actual context independent of the
+            # agent's client opinion.
+            content_id = _content_identifier(
+                ev.get("window_title") or "",
+                ev.get("file_path") or "",
+                ev.get("url") or "",
+            )
+            content_part = f"|{content_id}" if content_id else ""
 
-            key = f"{app}|{client_id}|{content_bucket}{qb_part}"
+            key = f"{app}|{client_id}|{content_bucket}{content_part}"
             by_app_client.setdefault(key, []).append(ev)
 
         for key, app_events in by_app_client.items():

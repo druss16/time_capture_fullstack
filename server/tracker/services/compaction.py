@@ -117,6 +117,42 @@ def _calculate_minutes_for_events_list(events: list) -> int:
     total_seconds = sum((end - start).total_seconds() for start, end in merged)
     return max(1, int(total_seconds / 60))
 
+def _qb_file_name(window_title: str) -> str:
+    """
+    Extract the QuickBooks company file name from a window title.
+
+    QB Desktop window titles have this structure:
+      "{file_name} (Primary)  - QuickBooks Accountant Desktop Plus 2024 - [{screen}]"
+    or:
+      "{file_name}  - QuickBooks Accountant Desktop Plus 2024"
+
+    For compaction-grouping purposes, the FILE NAME is what matters —
+    it identifies which client's books the user opened. The bracket
+    portion changes constantly as the user navigates screens.
+
+    Returns the lowercased file name portion (without "(Primary)" or
+    "(Secondary)" suffix), or empty string if not a QB title.
+    """
+    if not window_title:
+        return ""
+    title_lower = window_title.lower()
+    if "quickbooks" not in title_lower:
+        return ""
+
+    # Find " - QuickBooks" or "  - QuickBooks" and take everything before
+    parts = window_title.split(" - QuickBooks", 1)
+    if len(parts) < 2:
+        return ""
+
+    file_name = parts[0].strip()
+
+    # Strip "(Primary)" / "(Secondary)" / "(Tertiary)" suffix
+    for suffix in [" (Primary)", " (Secondary)", " (Tertiary)", "(Primary)", "(Secondary)"]:
+        if file_name.endswith(suffix):
+            file_name = file_name[:-len(suffix)].strip()
+            break
+
+    return file_name.lower()
 
 # =============================================================================
 # Meeting extraction (unchanged from v1.3.37 — already interval-aware)
@@ -598,7 +634,19 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             app = _app_key(ev)
             client_id = ev.get("current_client_id") or 0
             content_bucket = classify_event_content(ev["event"])
-            key = f"{app}|{client_id}|{content_bucket}"
+
+            # v1.3.40: For QuickBooks events, add the company file name
+            # to the grouping key. Without this, if the agent's stale
+            # current_client_id stays on one client (e.g. 125 Cemetery)
+            # while the user opens a different QB file (e.g. Church),
+            # all events merge into one block at the wrong client.
+            # Using file_name as a grouping dimension splits these
+            # naturally — block boundaries align with file switches
+            # even when the agent failed to update current_client_id.
+            qb_file = _qb_file_name(ev.get("window_title") or "")
+            qb_part = f"|qb={qb_file}" if qb_file else ""
+
+            key = f"{app}|{client_id}|{content_bucket}{qb_part}"
             by_app_client.setdefault(key, []).append(ev)
 
         for key, app_events in by_app_client.items():

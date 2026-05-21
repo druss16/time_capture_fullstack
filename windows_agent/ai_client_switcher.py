@@ -753,6 +753,31 @@ def _path_depth_boost(needle: str, file_path: str) -> float:
 
     return boost
 
+def _strip_qb_screen_bracket(title: str) -> str:
+    """
+    v1.3.22 (agent): QuickBooks Desktop window titles have this structure:
+      "{company_file_name} (Primary)  - QuickBooks Accountant Desktop Plus 2024 - [{current_screen}]"
+
+    The bracket portion changes every few seconds as the user navigates
+    QuickBooks screens (Home, Vendor Center, Enter Bills, Vendor Center: <vendor>, etc.)
+    and contains vendor/customer names like "Clinton Agway", "Caitlin Recchio",
+    "Sacred Heart Hospital" that hijack client attribution.
+
+    For client identification, only the COMPANY FILE NAME matters. Strip
+    everything from " - [" onward when matching QB titles.
+
+    Returns the original title unchanged if not a QB window.
+    """
+    if not title:
+        return title
+    title_lower = title.lower()
+    if 'quickbooks' not in title_lower and 'qbw' not in title_lower:
+        return title
+    bracket_pos = title.rfind(' - [')
+    if bracket_pos > 0:
+        return title[:bracket_pos]
+    return title
+
 def _regex_match(title: str, file_path: str, matchers: list,
                  sensitivity: int = 50) -> Optional[ClientMatch]:
     search_text = _normalize(f"{title or ''} {file_path or ''}")
@@ -1730,6 +1755,17 @@ class AIClientSwitcher:
                 url: str, file_path: str):
         try:
             logger.info(f"[AI-SWITCH] _detect entered: {title[:60]!r}")
+
+            # v1.3.22: Strip QuickBooks screen bracket before matching.
+            # Bracket changes every few seconds as user navigates QB screens
+            # and contains vendor names that hijack client attribution.
+            original_title = title
+            title = _strip_qb_screen_bracket(title)
+            if title != original_title:
+                logger.info(
+                    f"[AI-SWITCH] QB title stripped: "
+                    f"{original_title[:80]!r} -> {title[:60]!r}"
+                )
 
             cur_id = self._current_client_id
 

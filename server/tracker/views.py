@@ -31,6 +31,7 @@ from django.views.decorators.http import require_http_methods
 
 
 
+
 # --- DRF ---
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
@@ -141,6 +142,9 @@ from tracker.utils.blocks import (
     get_current_client_for_user,
     apply_current_client_to_recent_blocks
 )
+
+from tracker.utils.user_reasoning import humanize_for_api
+
 
 # REPLACE your existing raw_events() function with this version
 

@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -452,5 +452,7 @@ urlpatterns = [
     path('mail/webhook/',        views_mail.microsoft_mail_webhook,       name='mail_webhook'),
 
     path('task-management/', include('tracker.api.task_type_urls')),
+
+    path("blocks/<int:block_id>/evidence/", views_block_evidence.block_evidence, name="block_evidence"),
 
 ]

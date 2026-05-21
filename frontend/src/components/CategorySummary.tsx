@@ -24,6 +24,9 @@ import {
 import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 
+import { BlockEvidencePanel } from "@/components/BlockEvidencePanel";
+
+
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api")
   ? RAW_BASE
@@ -885,6 +888,55 @@ function CategorySection({
   );
 }
 
+// ─── Evidence Expansion ─────────────────────────────────────────────────
+
+function EvidenceExpansion({
+  blockId,
+  isExpanded,
+  onToggle,
+  colorScheme,
+}: {
+  blockId: number;
+  isExpanded: boolean;
+  onToggle: () => void;
+  colorScheme: 'blue' | 'violet' | 'cyan';
+}) {
+  // Color tokens per scheme — matches the parent banner so the panel
+  // feels like part of the same card, not a foreign element.
+  const colors = {
+    blue:   { text: 'text-blue-600 hover:text-blue-800',     border: 'border-blue-200',   bg: 'bg-white/60' },
+    violet: { text: 'text-violet-600 hover:text-violet-800', border: 'border-violet-200', bg: 'bg-white/60' },
+    cyan:   { text: 'text-cyan-600 hover:text-cyan-800',     border: 'border-cyan-200',   bg: 'bg-white/60' },
+  }[colorScheme];
+
+  return (
+    <>
+      <button
+        onClick={onToggle}
+        className={cn(
+          "flex items-center gap-1 mt-2 ml-5 text-[11px] font-semibold transition-colors",
+          colors.text
+        )}
+      >
+        {isExpanded
+          ? <ChevronDown className="w-3 h-3" />
+          : <ChevronRight className="w-3 h-3" />
+        }
+        <span>{isExpanded ? 'Hide details' : 'Show details'}</span>
+      </button>
+
+      {isExpanded && (
+        <div className={cn(
+          "mt-2 ml-5 rounded-lg overflow-hidden border",
+          colors.border, colors.bg
+        )}>
+          <BlockEvidencePanel blockId={blockId} />
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Flagged Banner ───────────────────────────────────────────────────────────
 
 function FlaggedBanner({
@@ -896,15 +948,27 @@ function FlaggedBanner({
   onDismiss: (id: number) => void;
   onResolveDisagreement?: (id: number, action: 'accept' | 'dismiss') => void;
 }) {
+  // Hooks FIRST — must run on every render
+  const [expandedBlocks, setExpandedBlocks] = useState<Set<number>>(new Set());
+  const toggleExpanded = (blockId: number) => {
+    setExpandedBlocks((prev) => {
+      const next = new Set(prev);
+      next.has(blockId) ? next.delete(blockId) : next.add(blockId);
+      return next;
+    });
+  };
+
+  // THEN the early return
   if (!flagged.length) return null;
- 
-  // Split flagged blocks by type
+
+  // Then everything else
   const mobileFlags = flagged.filter(f => (f.type === 'mobile_review' || (!f.type)) && !f.review_reason?.includes("Mixed content"));
   const aiDisagreements = flagged.filter(f => f.type === 'ai_disagreement');
   const mailDisagreements = flagged.filter(f => f.type === 'mail_disagreement');
   const calendarDisagreements = flagged.filter(f => f.type === 'calendar_disagreement');
- 
+
   return (
+
     <>
       {/* Mobile review flags — existing UI unchanged */}
       {mobileFlags.length > 0 && (
@@ -986,6 +1050,12 @@ function FlaggedBanner({
                     Keep {f.client_name}
                   </button>
                 </div>
+                <EvidenceExpansion
+                  blockId={f.block_id}
+                  isExpanded={expandedBlocks.has(f.block_id)}
+                  onToggle={() => toggleExpanded(f.block_id)}
+                  colorScheme="blue"
+                />
               </div>
             ))}
           </div>
@@ -1041,6 +1111,12 @@ function FlaggedBanner({
                     Keep {f.client_name}
                   </button>
                 </div>
+                <EvidenceExpansion
+                    blockId={f.block_id}
+                    isExpanded={expandedBlocks.has(f.block_id)}
+                    onToggle={() => toggleExpanded(f.block_id)}
+                    colorScheme="violet"
+                />
               </div>
             ))}
           </div>
@@ -1107,6 +1183,12 @@ function FlaggedBanner({
                       {dismissCopy}
                     </button>
                   </div>
+                  <EvidenceExpansion
+                    blockId={f.block_id}
+                    isExpanded={expandedBlocks.has(f.block_id)}
+                    onToggle={() => toggleExpanded(f.block_id)}
+                    colorScheme="cyan"
+                  />
                 </div>
               );
             })}

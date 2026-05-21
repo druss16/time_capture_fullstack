@@ -12,11 +12,23 @@ widget via `floating_widget.update_client(client_id, client_name, state)`.
 
 Hooked into the same window-change events that the AI client switcher uses,
 so it costs nothing extra in CPU.
+
+v1.3.47:
+  * Added on_demote_to_captured callback. Fires once when the tracker
+    transitions from committed/proposed → captured, passing the stale
+    client name. Main.py wires this to clear the agent's current_client
+    so subsequent events aren't misattributed to a client the user has
+    clearly moved away from. Without this hook, the widget went gray
+    visually but the agent kept emitting current_client_id=<stale> on
+    every event indefinitely (see TL Wall Terri block 11218: 165 min
+    of generic Outlook Inbox attributed entirely to Z-Loupes because
+    she opened one Z-Loupes email at the start of the session and
+    nothing ever cleared the client).
 """
 
 import re
 import time
-from typing import Optional, List
+from typing import Optional, List, Callable
 
 import os
 import json
@@ -44,7 +56,15 @@ PROPOSED_TO_CAPTURED_SECONDS = 600 # 10 more min (15 total before gray)
 class WidgetStateTracker:
     """State machine for the floating widget's color indicator."""
 
-    def __init__(self):
+    def __init__(self, on_demote_to_captured: Optional[Callable[[Optional[str]], None]] = None):
+        """
+        Args:
+          on_demote_to_captured: Optional callback fired once when the state
+            transitions INTO 'captured' from committed or proposed. Receives
+            the stale client name (or None) so the caller can clear cached
+            client state and notify the backend. NOT called when the tracker
+            is initialized in 'captured' (no prior state to demote from).
+        """
         self._state = "captured"  # committed | proposed | captured
         self._last_match_time = 0.0
         self._last_state_change = time.time()
@@ -54,10 +74,20 @@ class WidgetStateTracker:
         self._last_url: Optional[str] = None
         self._last_client_name: Optional[str] = None
         self._last_aliases: List[str] = []
+        # v1.3.47: Demote-to-captured hook
+        self._on_demote_to_captured = on_demote_to_captured
 
     @property
     def state(self) -> str:
         return self._state
+
+    def set_on_demote_to_captured(self, callback: Callable[[Optional[str]], None]) -> None:
+        """
+        Late-bind the demote callback. Useful when the tracker is created
+        as a singleton at import time but the agent's clear-client helper
+        isn't defined until main.run_agent() runs.
+        """
+        self._on_demote_to_captured = callback
 
     def on_user_set_client(self, client_name: Optional[str] = None,
                            aliases: Optional[List[str]] = None):
@@ -86,7 +116,7 @@ class WidgetStateTracker:
         self._last_url = url
         self._last_client_name = current_client_name
         self._last_aliases = current_client_aliases or []
-        
+
         # DEBUG: print what we got + match result
         try:
             matched = self._title_matches_client(
@@ -154,8 +184,17 @@ class WidgetStateTracker:
                 pass
 
         return self._state
+
     def _evaluate_timed_demotion(self):
-        """Demote state based on elapsed time since last match."""
+        """Demote state based on elapsed time since last match.
+
+        v1.3.47: Fires on_demote_to_captured callback when transitioning
+        INTO 'captured' from a non-captured state. The callback is the
+        agent's hook to clear current_client_id so future events don't
+        get attributed to a client the user has clearly moved away from.
+        """
+        prev_state = self._state
+
         if self._state == "committed":
             elapsed = time.time() - self._last_match_time
             if elapsed >= COMMITTED_TO_PROPOSED_SECONDS:
@@ -166,6 +205,25 @@ class WidgetStateTracker:
             if elapsed >= COMMITTED_TO_PROPOSED_SECONDS + PROPOSED_TO_CAPTURED_SECONDS:
                 self._state = "captured"
                 self._last_state_change = time.time()
+
+        # v1.3.47: notify caller on demote-to-captured so the agent can
+        # clear current_client. Only fires on a real prev→captured edge,
+        # not when we were already captured.
+        if prev_state != "captured" and self._state == "captured":
+            stale_client = self._last_client_name
+            _safe_print(
+                f"[WIDGET-TRACKER] Demoted {prev_state}→captured after stale "
+                f"client {stale_client!r} (15+ min without title match). "
+                f"Firing on_demote_to_captured callback."
+            )
+            if self._on_demote_to_captured:
+                try:
+                    self._on_demote_to_captured(stale_client)
+                except Exception as e:
+                    _safe_print(
+                        f"[WIDGET-TRACKER] on_demote_to_captured callback "
+                        f"raised: {e!r}"
+                    )
 
     # Tokens that should never count as a "distinctive" partial-word match.
     # If a client name reduces to only these after stop-word filtering, fall
@@ -192,7 +250,7 @@ class WidgetStateTracker:
         """
         Check if any client signal appears in title, path, or URL.
 
-        Three matching modes (any one wins):
+        Four matching modes (any one wins):
           1. Full-name flexible match (ignores spaces/underscores/hyphens)
              so "Smith & Co" matches "smith_co" and "smith-co.pdf".
           2. Apostrophe-tolerant substring so "Lola's Pet Shop" matches
@@ -200,6 +258,8 @@ class WidgetStateTracker:
           3. Partial-word match on distinctive tokens (5+ chars, not a
              stop word) so "Lola's Pet Shop" matches "Lolas_AR_Aging.xlsx"
              via the "lolas" token.
+          4. Acronym match ("DF" for "Dauphin & Fantacone") for filenames
+             that use the client's initials as a prefix.
         """
         # Build raw + apostrophe-stripped haystacks.
         # URL-decode each input — browser URL bars show paths like
@@ -248,7 +308,7 @@ class WidgetStateTracker:
                 )
                 if tok_pattern.search(stripped_hay):
                     return True
-            
+
             # Mode 4: acronym match (e.g. "DF" matches "Dauphin & Fantacone").
             # Build acronym from first letter of each non-stopword token >=2 chars.
             # Acronym must be at least 2 letters and appear as its own token in the haystack.
@@ -275,9 +335,21 @@ class WidgetStateTracker:
 _singleton: Optional[WidgetStateTracker] = None
 
 
-def get_widget_state_tracker() -> WidgetStateTracker:
-    """Return the process-wide WidgetStateTracker instance."""
+def get_widget_state_tracker(
+    on_demote_to_captured: Optional[Callable[[Optional[str]], None]] = None,
+) -> WidgetStateTracker:
+    """
+    Return the process-wide WidgetStateTracker instance.
+
+    Args:
+      on_demote_to_captured: Optional callback. Only used on first call
+        (when the singleton is created). To attach a callback later, use
+        `get_widget_state_tracker().set_on_demote_to_captured(...)`.
+    """
     global _singleton
     if _singleton is None:
-        _singleton = WidgetStateTracker()
+        _singleton = WidgetStateTracker(on_demote_to_captured=on_demote_to_captured)
+    elif on_demote_to_captured is not None and _singleton._on_demote_to_captured is None:
+        # Singleton already exists but no callback was bound — late-bind it
+        _singleton.set_on_demote_to_captured(on_demote_to_captured)
     return _singleton

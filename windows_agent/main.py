@@ -1580,12 +1580,17 @@ def get_current_client_from_backend(api_base: str, api_key: str) -> dict:
         log(f"[CLIENT] Failed to fetch current client: {e}")
         return {"client_id": None, "client_name": None}
 
-def set_current_client_backend(api_base: str, api_key: str, client_id: int) -> bool:
+def set_current_client_backend(api_base: str, api_key: str, client_id) -> bool:
     if not api_base or not api_key:
         return False
     
     url = f"{api_base}/client/set-current/"
-    data = {"client_id": client_id}
+    # Explicitly send both keys; when clearing, both are None.
+    # Backend uses (not client_id and not client_name) to detect clear.
+    data = {
+        "client_id": client_id,
+        "client_name": None,
+    }
     
     req = urllib.request.Request(
         url,
@@ -1599,7 +1604,10 @@ def set_current_client_backend(api_base: str, api_key: str, client_id: int) -> b
         with urllib.request.urlopen(req, timeout=6) as resp:
             result = json.loads(resp.read())
             if result.get("ok"):
-                log(f"[CLIENT] Set current client to ID {client_id}")
+                if client_id is None:
+                    log(f"[CLIENT] Cleared current client")
+                else:
+                    log(f"[CLIENT] Set current client to ID {client_id}")
                 return True
             else:
                 log(f"[CLIENT] Failed to set client: {result.get('error', 'unknown')}")
@@ -1783,7 +1791,41 @@ def run_agent():
 
     from watchdog import heartbeat_touch, watchdog as _watchdog
 
+    # === WIDGET TRACKER → CLEAR CLIENT ON DEMOTE ===
+    # When the widget tracker transitions to 'captured' after 15 min of
+    # no title match, clear the agent's current_client so subsequent
+    # events aren't attributed to a stale client. Without this hook, the
+    # widget went gray visually but the agent kept emitting
+    # current_client_id=<stale> indefinitely (see TL Wall Terri block
+    # 11218: 165 min of generic Outlook Inbox attributed entirely to
+    # Z-Loupes after she opened one Z-Loupes email at session start).
+    def _on_widget_demote_to_captured(stale_client_name):
+        log(f"[WIDGET-DEMOTE] Clearing stale client {stale_client_name!r} "
+            f"after 15 min without title match")
+        # 1. Clear local cache so write_event stops emitting the stale id
+        _set_cached_client(None, None)
+        # 2. Clear backend so next refresh of the cache doesn't re-pull
+        #    the stale value (cache TTL is 60s; without this, the agent
+        #    would re-fetch and overwrite the local None within a minute)
+        api_key_val = config.get("api_key") or API_KEY
+        if api_key_val and API_BASE and is_network_ok():
+            try:
+                set_current_client_backend(API_BASE, api_key_val, None)
+            except Exception as e:
+                log(f"[WIDGET-DEMOTE] Backend clear failed: {e}")
+        # 3. Notify the GUI so the floating widget + tray reflect the change
+        if gui_menu_bar:
+            if hasattr(gui_menu_bar, 'state'):
+                gui_menu_bar.state.set_client(None, None)
+            if hasattr(gui_menu_bar, 'floating_widget') and gui_menu_bar.floating_widget:
+                try:
+                    gui_menu_bar.floating_widget.update_client(None, None, state="captured")
+                except Exception as e:
+                    log(f"[WIDGET-DEMOTE] Floating widget update failed: {e}")
 
+    if widget_tracker:
+        widget_tracker.set_on_demote_to_captured(_on_widget_demote_to_captured)
+        log("[WIDGET-DEMOTE] Callback wired — stale clients will auto-clear after 15 min")
 
     # === FORCED UPDATE CHECK ===
     from update_checker import check_for_update_blocking, start_background_checker

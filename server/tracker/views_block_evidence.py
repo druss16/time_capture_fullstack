@@ -28,16 +28,17 @@ from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse
 import os
 import re
+import logging
 
 from django.shortcuts import get_object_or_404
-from django.http import JsonResponse
-from django.views.decorators.http import require_GET
-from django.views.decorators.cache import never_cache
+
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from tracker.models import Block, RawEvent, Client
-from tracker.auth import BearerTokenAuthentication  # adjust to your auth path
+from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
 
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -145,8 +146,9 @@ def _find_alias_matches(
 # Endpoint
 # =============================================================================
 
-@require_GET
-@never_cache
+@api_view(["GET"])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
 def block_evidence(request, block_id: int):
     """
     GET /api/blocks/{block_id}/evidence/
@@ -154,42 +156,36 @@ def block_evidence(request, block_id: int):
     Returns the raw events backing this block, plus per-event signal
     detection results, plus a summary roll-up by suggested client.
     """
-    # ── Auth ──
-    auth = BearerTokenAuthentication()
-    try:
-        user_auth = auth.authenticate(request)
-    except Exception as e:
-        return JsonResponse({"error": "auth_failed", "detail": str(e)}, status=401)
+    user = request.user
 
-    if not user_auth:
-        return JsonResponse({"error": "unauthorized"}, status=401)
-
-    user, _ = user_auth
-
-    # ── Fetch block, scoped to user's org ──
+    # ── Fetch block ──
     block = get_object_or_404(
         Block.objects.select_related("client", "org", "user"),
         id=block_id,
     )
 
-    # Authorization: user must be in the block's org, OR be a MavOps admin
-    if block.org_id != getattr(user, "organization_id", None):
-        # Check MavOps admin override
-        if not getattr(user, "is_mavops_admin", False):
-            return JsonResponse({"error": "forbidden"}, status=403)
+    # ── Authorization: user must be a member of the block's org ──
+    # Use the membership relation (NOT user.organization_id, which doesn't
+    # exist on this User model — confirmed via Django shell earlier).
+    # MavOps admins and Django superusers can see any block.
+    is_member = user.memberships.filter(organization_id=block.org_id).exists()
+    is_mavops_admin = getattr(user, "is_mavops_admin", False) or user.is_superuser
+
+    if not is_member and not is_mavops_admin:
+        return Response({"error": "forbidden"}, status=403)
 
     # ── Fetch the client list once for signal matching ──
-    org_clients_qs = Client.objects.filter(org=block.org).values(
-        "id", "name", "aliases"
+    org_clients = list(
+        Client.objects.filter(org=block.org).values("id", "name", "aliases")
     )
-    org_clients = list(org_clients_qs)
 
     # ── Fetch raw events for this block ──
-    events_qs = RawEvent.objects.filter(block=block).order_by("start_ts")
-    events_list = list(events_qs)
+    events_list = list(
+        RawEvent.objects.filter(block=block).order_by("start_ts")
+    )
 
     if not events_list:
-        return JsonResponse({
+        return Response({
             "block": _serialize_block(block),
             "suggestion": _serialize_suggestion(block),
             "events": [],
@@ -203,7 +199,10 @@ def block_evidence(request, block_id: int):
     for ev in events_list:
         # Calculate offset relative to block start (always >= 0)
         offset_seconds = max(0, int((ev.start_ts - block_start).total_seconds()))
-        duration_seconds = max(0, int((ev.end_ts - ev.start_ts).total_seconds()))
+        duration_seconds = (
+            max(0, int((ev.end_ts - ev.start_ts).total_seconds()))
+            if ev.end_ts else 0
+        )
 
         # ── Collect signals for this event ──
         signals: List[Dict[str, Any]] = []
@@ -235,7 +234,7 @@ def block_evidence(request, block_id: int):
             "id": ev.id,
             "offset_seconds": offset_seconds,
             "start_ts": ev.start_ts.isoformat(),
-            "end_ts": ev.end_ts.isoformat(),
+            "end_ts": ev.end_ts.isoformat() if ev.end_ts else None,
             "duration_seconds": duration_seconds,
             "app_name": ev.app_name or "",
             "window_title": ev.window_title or "",
@@ -269,7 +268,7 @@ def block_evidence(request, block_id: int):
             entry["event_count"] += 1
             entry["duration_seconds"] += duration_seconds
 
-    return JsonResponse({
+    return Response({
         "block": _serialize_block(block),
         "suggestion": _serialize_suggestion(block),
         "events": serialized_events,

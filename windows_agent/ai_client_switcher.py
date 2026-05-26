@@ -753,6 +753,56 @@ def _path_depth_boost(needle: str, file_path: str) -> float:
 
     return boost
 
+
+def _title_position_boost(needle: str, title: str) -> float:
+    """
+    v1.3.23 (agent): Boost confidence based on WHERE in the title the
+    match occurs.
+
+    QB Desktop titles have structure:
+      "{company_file} (Primary)  - QuickBooks ... - [{vendor_screen}]"
+
+    A match at the START of the title (the company file name) is strong
+    evidence. A match inside the bracket (a vendor or customer name) is
+    weak evidence — those are NOT the client whose books are open.
+
+    Returns a delta to add to base confidence:
+      +0.05  if match at position 0
+      +0.03  if match early (within 10 chars)
+      +0.00  if match elsewhere pre-bracket
+      -0.30  if match ONLY inside the bracket — heavy penalty
+    """
+    if not needle or not title:
+        return 0.0
+
+    title_lower = title.lower()
+    needle_lower = needle.lower()
+
+    # Locate the bracket (QB screen indicator)
+    bracket_pos = title_lower.find(' - [')
+    if bracket_pos > 0:
+        pre_bracket = title_lower[:bracket_pos]
+        in_bracket = title_lower[bracket_pos:]
+    else:
+        pre_bracket = title_lower
+        in_bracket = ''
+
+    # Pre-bracket match
+    pre_pos = pre_bracket.find(needle_lower)
+    if pre_pos == 0:
+        return 0.05
+    if 0 < pre_pos < 10:
+        return 0.03
+    if pre_pos > 0:
+        return 0.0
+
+    # Match ONLY inside bracket — heavy penalty
+    # (Cacciatore Cemetery Services -> '266 Services LLC' shouldn't win)
+    if in_bracket and needle_lower in in_bracket:
+        return -0.30
+
+    return 0.0
+
 def _strip_qb_screen_bracket(title: str) -> str:
     """
     v1.3.22 (agent): QuickBooks Desktop window titles have this structure:
@@ -822,6 +872,14 @@ def _regex_match(title: str, file_path: str, matchers: list,
             # Depth-aware boost
             depth_delta = _path_depth_boost(needle, file_path)
             conf = max(0.0, min(1.0, conf + depth_delta))
+
+            # v1.3.23 (agent): Title-position boost. Front-of-title matches are
+            # strong evidence; in-bracket matches are weak (vendor names, not clients).
+            # Critical for QB Desktop where "[Vendor Center: Cacciatore Cemetery
+            # Services]" used to make "266 Services LLC" outscore the actual file's
+            # client.
+            title_position_delta = _title_position_boost(needle, title)
+            conf = max(0.0, min(1.0, conf + title_position_delta))
 
             this_depth = 0
             if file_path:

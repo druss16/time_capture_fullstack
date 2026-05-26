@@ -1584,18 +1584,33 @@ class ClassificationService:
     @staticmethod
     def _alias_match_score(alias: str, haystack: str) -> float:
         """
-        v1.3.24: When multiple clients match the same haystack, score
-        each match by how COMPLETELY the alias's distinctive tokens
-        cover the alias. Higher = more specific match. Used as a
-        tiebreaker so that "St Mary's Church-Clinton" beats "Sacred
-        Heart & St. Mary's Church" against a "St Marys_Clinton" haystack
-        (both match on "mary", but 388 also matches on "clinton").
+        v1.3.48: Position- and contiguity-aware specificity score.
 
-        Returns 0.0 if the alias doesn't match. Returns a score in
-        (0, 1] otherwise: distinctive_matches / distinctive_total.
+        Returns 0.0 if alias doesn't match haystack (via _alias_matches_safely).
+        Returns a score in (0, 1] otherwise, weighted by:
+
+          1. Contiguous match position (front-of-haystack > later > in-bracket)
+          2. Distinctive token coverage (fallback for non-contiguous matches)
+
+        The score is used by Stage 3 to break ties when multiple clients
+        match the same haystack. Higher score = more specific identification.
+
+        Score tiers:
+          1.00 - Alias appears contiguously at position 0 (after normalization)
+          0.95 - Alias appears contiguously early in pre-bracket region (<10 chars in)
+          0.85 - Alias appears contiguously somewhere in pre-bracket region
+          0.40 - Alias matches ONLY inside a QB screen bracket
+          (0, 0.5] - Token-based fallback (current v1.3.24 behavior)
+
+        Rationale: When a QB title like
+            "St Marys Cemetery (Secondary) - QuickBooks ... - [Vendor Center: Cacciatore Cemetery Services]"
+        matches BOTH "St Marys Cemetery" (alias on client 125, contiguous at
+        position 0) AND "266 Services LLC" (matched on single shared token
+        "services" inside the vendor bracket), the front-contiguous match
+        must crush the token-bracket match. Previously both scored 1.0 via
+        1/1 distinctive tokens, leaving Stage 3 to pick by iteration order.
         """
         import re
-
         if not ClassificationService._alias_matches_safely(alias, haystack):
             return 0.0
 
@@ -1613,6 +1628,46 @@ class ClassificationService:
         alias_n = _normalize(alias)
         haystack_n = _normalize(haystack)
 
+        if not alias_n or not haystack_n:
+            return 0.5
+
+        # v1.3.48 - Find bracket boundary (e.g. "QuickBooks ... - [Vendor Center: ...]")
+        # Bracket may be normalized away — we need to find it in the RAW
+        # haystack and project the split into the normalized one.
+        raw_bracket_pos = haystack.find(' - [')
+        if raw_bracket_pos > 0:
+            # Apply same normalization to the pre-bracket portion to find
+            # its position in normalized space
+            raw_pre = haystack[:raw_bracket_pos]
+            pre_bracket = _normalize(raw_pre)
+            # Everything after pre_bracket in haystack_n is "in_bracket"
+            in_bracket = haystack_n[len(pre_bracket):].strip()
+        else:
+            pre_bracket = haystack_n
+            in_bracket = ''
+
+        # v1.3.48 Tier 1: Contiguous match in pre-bracket region.
+        # This is the dominant signal — a client name appearing as a
+        # contiguous phrase at or near the start of the title is the
+        # strongest evidence we can get.
+        alias_pos = pre_bracket.find(alias_n)
+        if alias_pos == 0:
+            return 1.0
+        if 0 < alias_pos < 10:
+            return 0.95
+        if alias_pos > 0:
+            return 0.85
+
+        # v1.3.48 Tier 2: Alias matches ONLY inside the bracket.
+        # QB vendor-center brackets contain vendor/customer names that are
+        # NOT the client whose file the user is working on. Drop the score.
+        if in_bracket and alias_n in in_bracket:
+            return 0.40
+
+        # Tier 3 (existing v1.3.24 behavior): Token-coverage fallback.
+        # For aliases whose words appear scattered through the haystack
+        # rather than contiguously. Capped at 0.5 so non-contiguous
+        # matches always lose to contiguous ones above.
         alias_tokens = [
             t for t in alias_n.split()
             if len(t) >= 4
@@ -1620,22 +1675,29 @@ class ClassificationService:
             and t not in ALIAS_GENERIC_SUFFIXES
         ]
         distinctive_alias = [t for t in alias_tokens if t not in DOMAIN_COMMON_WORDS]
-
         if not distinctive_alias:
-            return 0.5  # fallback for domain-common-only aliases that
-                        # passed the matcher via direct substring
+            return 0.5
 
         haystack_tokens = haystack_n.split()
         haystack_set = set(haystack_tokens)
 
-        matched = 0
+        # v1.3.48: Weight pre-bracket token matches at full value,
+        # in-bracket matches at 0.3x.
+        pre_bracket_tokens = set(pre_bracket.split())
+        in_bracket_tokens = set(in_bracket.split()) if in_bracket else set()
+
+        matched_score = 0.0
         for ct in distinctive_alias:
-            if ct in haystack_set:
-                matched += 1
+            # Direct token match
+            if ct in pre_bracket_tokens:
+                matched_score += 1.0
                 continue
-            # Fuzzy prefix match (4+ char shared prefix), excluding
-            # domain-common haystack tokens
-            for ht in haystack_tokens:
+            if ct in in_bracket_tokens:
+                matched_score += 0.3
+                continue
+            # Fuzzy 4+ char prefix match against pre-bracket only
+            # (no fuzzy-in-bracket — too risky)
+            for ht in pre_bracket_tokens:
                 if len(ht) < 4 or ht in DOMAIN_COMMON_WORDS:
                     continue
                 cp = 0
@@ -1644,12 +1706,13 @@ class ClassificationService:
                         break
                     cp += 1
                 if cp >= 4:
-                    matched += 1
+                    matched_score += 1.0
                     break
 
-        # Score: fraction of distinctive alias tokens that matched
-        return matched / len(distinctive_alias)
-
+        coverage = matched_score / len(distinctive_alias)
+        # Cap at 0.5 so non-contiguous matches lose to contiguous ones
+        return min(0.5, coverage * 0.5)
+    
     @staticmethod
     def _alias_matches_safely(alias: str, haystack: str) -> bool:
         """

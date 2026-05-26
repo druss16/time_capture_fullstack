@@ -1522,6 +1522,15 @@ def write_event(
     if notif_manager:
         notif_manager.set_current_client(current_client_id, current_client_name)
  
+    # ── Agent version (v1.3.24): include in every event payload ──
+    # Allows server-side fleet visibility into which agent versions
+    # produced which events. Useful for triaging bugs ("did this
+    # event come from an agent without the bracket-strip fix?").
+    try:
+        from version import APP_VERSION as _agent_version
+    except ImportError:
+        _agent_version = None
+
     # ── Build dual-timestamp payload ──
     payload = {
         "start_ts": start_iso,
@@ -1537,6 +1546,7 @@ def write_event(
         "ctx": snapshot_ctx(),
         "current_client_id": current_client_id,
         "current_client_name": current_client_name,
+        "agent_version": _agent_version,
     }
  
     toolish, tool_reason, tool_host = looks_toolish(bundle_id, url)

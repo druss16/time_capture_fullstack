@@ -713,8 +713,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             if new_event_minutes < MIN_BLOCK_MINUTES:
                 continue
 
+            # v1.3.49: Expanded generic-title exclusion list. "Open a Company" is
+            # the QB Desktop dialog name when no file is loaded — same low-info
+            # class as "Untitled" or "New Tab".
+            GENERIC_TITLES = ("", "open", "untitled", "new tab", "open a company",
+                              "loading", "blank", "save as", "save", "exit")
             titles = [e["window_title"] for e in app_events if e["window_title"]]
-            titles = [t for t in titles if t.lower() not in ("", "open", "untitled", "new tab")]
+            titles = [t for t in titles if t.lower().strip() not in GENERIC_TITLES]
             window_title = max(titles, key=len) if titles else app_events[0]["window_title"]
 
             urls = [e["url"] for e in app_events if e["url"]]
@@ -836,10 +841,30 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                         RawEvent.objects.filter(block=locked)
                     )
 
+                    # v1.3.49: Refresh window_title from ALL events (existing + newly merged)
+                    # rather than letting the block keep its original title forever.
+                    #
+                    # Bug: Block 11397 created from a single "Open a Company" event, then
+                    # 15 more events merged in (titles like "Select Checks to Print",
+                    # "Print Checks - Confirmation", "(Primary) QuickBooks Accountant
+                    # Desktop Plus 2024"). Block kept its 14-char "Open a Company" title.
+                    # AI classifier saw only that, marked block as Personal/Non-Billable.
+                    #
+                    # Fix: recalculate window_title at merge time using the longest non-
+                    # generic title from all events now linked to this block.
+                    GENERIC_TITLES = ("", "open", "untitled", "new tab", "open a company",
+                                      "loading", "blank", "save as", "save", "exit")
+                    all_titles = list(RawEvent.objects.filter(block=locked).values_list(
+                        'window_title', flat=True
+                    ))
+                    candidates = [t for t in all_titles if t and t.lower().strip() not in GENERIC_TITLES]
+                    new_title = max(candidates, key=len) if candidates else locked.window_title
+
                     update_fields = {
                         "start": updated_start,
                         "end": updated_end,
                         "minutes": updated_minutes,
+                        "window_title": new_title,
                     }
 
                     if locked.billing_rate and updated_minutes:

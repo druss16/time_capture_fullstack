@@ -226,6 +226,22 @@ app.conf.beat_schedule = {
         # 'schedule': crontab(hour=3, minute=0),  # 3 AM daily
     },
 
+    "v2-rollup-client-daily": {
+        "task": "tracker.v2_rollup_yesterday_client_daily",
+        "schedule": crontab(hour=2, minute=15),
+        "options": {"queue": "default"},
+    },
+    "v2-rollup-staff-daily": {
+        "task": "tracker.v2_rollup_yesterday_staff_daily",
+        "schedule": crontab(hour=2, minute=30),
+        "options": {"queue": "default"},
+    },
+    "v2-snapshot-wip-hourly": {
+        "task": "tracker.v2_snapshot_wip",
+        "schedule": crontab(minute=10),  # 10 past every hour
+        "options": {"queue": "default"},
+    },
+
 }
 
 # ============================================================================

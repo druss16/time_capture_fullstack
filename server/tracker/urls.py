@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -454,5 +454,21 @@ urlpatterns = [
     path('task-management/', include('tracker.api.task_type_urls')),
 
     path("blocks/<int:block_id>/evidence/", views_block_evidence.block_evidence, name="block_evidence"),
+
+    path("analytics/query/",
+         views_analytics_v2.analytics_query,
+         name="analytics_v2_query"),
+    
+    path("analytics/permissions/",
+         views_analytics_v2.analytics_permissions,
+         name="analytics_v2_permissions"),
+    
+    path("analytics/saved-views/",
+         views_analytics_v2.saved_views_list,
+         name="analytics_v2_saved_views_list"),
+    
+    path("analytics/saved-views/<int:view_id>/",
+         views_analytics_v2.saved_view_detail,
+         name="analytics_v2_saved_view_detail"),
 
 ]

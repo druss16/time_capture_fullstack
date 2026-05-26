@@ -1431,6 +1431,22 @@ Response format:
 
 
 def _build_category_user_prompt(block, client_name: Optional[str]) -> str:
+    """
+    Build the AI category-classification prompt for a block.
+
+    v1.3.50: Now includes a summary of ALL distinct window titles from the
+    block's raw events, not just block.window_title (one snapshot).
+
+    Why: block.window_title is set once at compaction and can be stale or
+    unrepresentative. Example: block 11397 had window_title "Open a Company"
+    but contained 17 raw events with titles like "Select Checks to Print"
+    (5x), "Print Checks - Confirmation" (3x), etc. The AI saw only
+    "Open a Company" and bucketed the block as Personal/Non-Billable.
+
+    Showing the AI the full distinct-title distribution lets it reason
+    over the block's actual content, not one frame.
+    """
+    from collections import Counter
     title     = getattr(block, 'window_title', '') or getattr(block, 'title', '') or ''
     app       = getattr(block, 'app_name', '') or ''
     file_path = getattr(block, 'file_path', '') or ''
@@ -1442,11 +1458,52 @@ def _build_category_user_prompt(block, client_name: Optional[str]) -> str:
     except Exception:
         pass
 
+    # v1.3.50: Pull distinct event titles for richer context
+    activity_summary = ""
+    try:
+        from tracker.models import RawEvent
+        event_titles = list(
+            RawEvent.objects
+            .filter(block=block)
+            .exclude(window_title__exact='')
+            .exclude(window_title__isnull=True)
+            .values_list('window_title', flat=True)
+        )
+        if event_titles:
+            counter = Counter(event_titles)
+            # Sort by count desc, then longer titles first (more informative)
+            sorted_titles = sorted(
+                counter.items(),
+                key=lambda x: (-x[1], -len(x[0])),
+            )
+            # Cap at 10 titles to keep prompt size reasonable
+            MAX_TITLES = 10
+            lines = []
+            for t, count in sorted_titles[:MAX_TITLES]:
+                truncated = t[:120] + '...' if len(t) > 120 else t
+                suffix = f" ({count}x)" if count > 1 else ""
+                lines.append(f"  - {truncated}{suffix}")
+            if len(sorted_titles) > MAX_TITLES:
+                remaining = len(sorted_titles) - MAX_TITLES
+                lines.append(f"  - ... and {remaining} more distinct title(s)")
+            activity_summary = "\n".join(lines)
+    except Exception:
+        # If event-titles lookup fails, fall back to just the block title.
+        # Never let prompt-enrichment break classification.
+        activity_summary = ""
+
     parts = [f"Client: {client_name or 'Unknown'}"]
-    if title:     parts.append(f"Window: {title[:160]}")
     if app:       parts.append(f"App: {app[:80]}")
+    if minutes:   parts.append(f"Duration: {minutes} min")
     if file_path: parts.append(f"File path: {file_path[:140]}")
     if url:       parts.append(f"URL: {url[:140]}")
-    if minutes:   parts.append(f"Duration: {minutes} min")
+
+    if activity_summary:
+        parts.append("")
+        parts.append("Activity in this block (distinct window titles, most frequent first):")
+        parts.append(activity_summary)
+    elif title:
+        # Fallback when no raw events found (shouldn't happen but safe)
+        parts.append(f"Window: {title[:160]}")
 
     return "\n".join(parts)

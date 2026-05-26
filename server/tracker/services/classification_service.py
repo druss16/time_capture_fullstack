@@ -1695,17 +1695,22 @@ class ClassificationService:
             if ct in in_bracket_tokens:
                 matched_score += 0.3
                 continue
-            # Fuzzy 4+ char prefix match against pre-bracket only
-            # (no fuzzy-in-bracket — too risky)
+            # v1.3.53: Fuzzy 5+ char prefix match (tightened from 4).
+            # 4 was too loose: "complete" matched "complex" (both share
+            # "comp"), causing client name false matches against common
+            # English words in haystack. 5+ chars rejects this while
+            # preserving legitimate near-matches like "cemete"/"cemetery"
+            # (6 char shared prefix). Possessive variants ("mary"/"marys")
+            # are already handled by _normalize's stem-trailing-s logic.
             for ht in pre_bracket_tokens:
-                if len(ht) < 4 or ht in DOMAIN_COMMON_WORDS:
+                if len(ht) < 5 or ht in DOMAIN_COMMON_WORDS:
                     continue
                 cp = 0
                 for x, y in zip(ct, ht):
                     if x != y:
                         break
                     cp += 1
-                if cp >= 4:
+                if cp >= 5:
                     matched_score += 1.0
                     break
 
@@ -1805,19 +1810,21 @@ class ClassificationService:
             if at in hset:
                 return True
             for ht in htoks:
-                if len(ht) < 4:
+                if len(ht) < 5:
                     continue
                 # If this is the distinctive-tokens pass, don't allow fuzzy
                 # matches against domain-common haystack tokens — otherwise
                 # "church-hamilton" sneaks past via "church" alone.
                 if not allow_domain_common_fuzzy and ht in DOMAIN_COMMON_WORDS:
                     continue
+                # v1.3.53: Tightened fuzzy-prefix from 4 to 5 chars to
+                # reject false matches like complete/complex.
                 cp = 0
                 for x, y in zip(at, ht):
                     if x != y:
                         break
                     cp += 1
-                if cp >= 4:
+                if cp >= 5:
                     return True
             return False
 
@@ -2921,10 +2928,32 @@ class ClassificationService:
             import time
             t_start = time.monotonic()
 
+            # v1.3.52: Pull distinct event titles from this block for richer
+            # context. Single window_title is one snapshot; the AI now sees
+            # all titles in the block and reasons over the full activity.
+            try:
+                from tracker.models import RawEvent
+                additional_titles = list(
+                    RawEvent.objects
+                    .filter(block=block)
+                    .exclude(window_title__exact='')
+                    .exclude(window_title__isnull=True)
+                    .values_list('window_title', flat=True)
+                    .distinct()
+                )
+                # Exclude the primary title (don't duplicate it) and cap at 10
+                # to keep prompt size reasonable
+                additional_titles = [
+                    t for t in additional_titles if t != title
+                ][:10]
+            except Exception:
+                additional_titles = []
+
             titles_batch = [{
                 'title':     title,
                 'app_name':  getattr(block, 'app_name', '') or '',
                 'file_path': getattr(block, 'file_path', '') or '',
+                'additional_titles': additional_titles,
             }]
             clients_payload = [
                 {'id': c.id, 'name': c.name, 'aliases': c.aliases or []}
@@ -3562,15 +3591,21 @@ DOMAIN_COMMON_WORDS = {
     # Generic facility / location descriptors
     'center', 'centre', 'house', 'place', 'office', 'building',
     'practice', 'clinic', 'medical', 'dental', 'family', 'general',
-    # v1.3.51: Business-type descriptors. These appear in many client
-    # names AND in unrelated content (government agency names like
-    # "Internal Revenue Service", news article titles, dialog screens).
-    # Not distinctive enough to identify a client by themselves.
-    # Example: "266 Services LLC" was matching "Internal Revenue Service"
-    # browsing because "service" alone passed the distinctive-token test.
+    # v1.3.51: Business-type descriptors. Appear in many client names
+    # AND in unrelated content (government agency names like "Internal
+    # Revenue Service", news article titles, dialog screens).
     'service', 'services', 'company', 'enterprises', 'group',
     'associates', 'partners', 'solutions', 'holdings', 'consulting',
     'inc', 'llc', 'corp', 'ltd',
+    # v1.3.53: Common-English qualifier adjectives that appear in real
+    # client names AND in everyday writing. "Complete" was matching
+    # "complex" via 4-char fuzzy prefix and causing "CNY Complete
+    # Contracting LLC" to false-match an IRS tax-research haystack
+    # containing "complex tax topics". Same risk applies to other
+    # qualifier words — they don't uniquely identify a client.
+    'complete', 'comprehensive', 'professional', 'premium', 'standard',
+    'national', 'regional', 'local', 'global', 'advanced', 'integrated',
+    'unified', 'universal', 'modern', 'classic', 'essential',
 }
 # v1.3.23: Reject matches where the haystack has no specific content.
 # "client tracking file 2025 - Excel" has zero distinctive tokens after

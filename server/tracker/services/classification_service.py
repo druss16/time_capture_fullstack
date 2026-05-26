@@ -1712,7 +1712,7 @@ class ClassificationService:
         coverage = matched_score / len(distinctive_alias)
         # Cap at 0.5 so non-contiguous matches lose to contiguous ones
         return min(0.5, coverage * 0.5)
-    
+
     @staticmethod
     def _alias_matches_safely(alias: str, haystack: str) -> bool:
         """
@@ -1878,11 +1878,24 @@ class ClassificationService:
         AppData, Temp, Protected View randomized dirs, etc. Otherwise the
         Windows username (e.g. C:\\Users\\mavops\\) would produce false matches
         against clients whose name happens to equal the OS username.
+
+        v1.3.51: Aggregate distinct titles from ALL raw events in the block,
+        not just block.window_title. Reasons:
+          - block.window_title is a snapshot from one event chosen at
+            compaction time; it can be unrepresentative
+          - When the user's activity spans many windows (e.g. 17 IRS pages,
+            or 30 QB Payroll Center clicks), each event's title is a clue
+            to the real client context
+          - A single-title haystack lets incidental word matches dominate
+            (e.g. "Internal Revenue Service" -> matched "266 Services LLC")
+          - With all event titles aggregated, the real content dominates
+            and incidental matches lose to actually-present client names
         """
         parts = [
             (block.window_title or block.title or ''),
             (block.url or ''),
         ]
+
         # Clean file_path before adding it to the haystack. Same cleanup
         # used by Stage 3 Match 2 (file_path stage); without this, title_alias
         # matching would see the raw path and false-positive on the OS username.
@@ -1891,8 +1904,34 @@ class ClassificationService:
             cleaned_segments = _clean_path_segments(block.file_path, username)
             if cleaned_segments:
                 parts.append(' '.join(cleaned_segments))
-        return ' '.join(p for p in parts if p).lower()
 
+        # v1.3.51: Aggregate distinct event titles. Fail-safe: if the query
+        # throws or block has no raw events, skip this — haystack falls
+        # back to v1.3.50 behavior (just window_title + url + file_path).
+        try:
+            from tracker.models import RawEvent
+            event_titles = list(
+                RawEvent.objects
+                .filter(block=block)
+                .exclude(window_title__exact='')
+                .exclude(window_title__isnull=True)
+                .values_list('window_title', flat=True)
+                .distinct()
+            )
+            # Only add titles NOT already in window_title to avoid duplicates
+            # (the chosen window_title is typically the longest event title,
+            # so most aliases would be subsumed; including the rest expands
+            # haystack coverage without bloating the front-of-haystack region
+            # that position-aware scoring uses).
+            block_title_lower = (block.window_title or '').lower()
+            for t in event_titles:
+                if t and t.lower() != block_title_lower:
+                    parts.append(t)
+        except Exception:
+            # Never let raw-event aggregation break Stage 3.
+            pass
+
+        return ' '.join(p for p in parts if p).lower()
     @staticmethod
     def _extract_domain(url: str) -> str:
         """
@@ -3520,12 +3559,19 @@ DOMAIN_COMMON_WORDS = {
     'school', 'foundation', 'community', 'ministry', 'mission',
     'chapel', 'temple', 'synagogue', 'mosque', 'baptist', 'methodist',
     'presbyterian', 'episcopal',
-    # Generic facility / business descriptors
+    # Generic facility / location descriptors
     'center', 'centre', 'house', 'place', 'office', 'building',
-    'company', 'enterprises', 'practice', 'clinic', 'medical',
-    'dental', 'family', 'general',
+    'practice', 'clinic', 'medical', 'dental', 'family', 'general',
+    # v1.3.51: Business-type descriptors. These appear in many client
+    # names AND in unrelated content (government agency names like
+    # "Internal Revenue Service", news article titles, dialog screens).
+    # Not distinctive enough to identify a client by themselves.
+    # Example: "266 Services LLC" was matching "Internal Revenue Service"
+    # browsing because "service" alone passed the distinctive-token test.
+    'service', 'services', 'company', 'enterprises', 'group',
+    'associates', 'partners', 'solutions', 'holdings', 'consulting',
+    'inc', 'llc', 'corp', 'ltd',
 }
-
 # v1.3.23: Reject matches where the haystack has no specific content.
 # "client tracking file 2025 - Excel" has zero distinctive tokens after
 # removing generic words, so it shouldn't fire a strong match against

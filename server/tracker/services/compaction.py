@@ -750,14 +750,34 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 "source_events": source_events,
             })
 
-    # Merge into existing blocks where possible
+    # Merge into existing blocks where possible.
+    # v1.3.47: Merge key must include content_id to match the grouping key.
+    # Otherwise a freshly-grouped "Sacred Heart" block could merge into an
+    # existing "Account Temps dialog" block just because they share
+    # (app=Qbw.Exe, client_id=151). The content_id distinction would be
+    # lost — exactly the bug that caused block 11364 (St. James + Sacred
+    # Heart + dialog events all merged into one Account Temps block).
     existing_blocks = list(Block.objects.filter(user=user, day=day).order_by("start"))
 
     existing_by_app_client = {}
     for b in existing_blocks:
         app = _app_key(b)
         client_id = b.client_id or 0
-        key = f"{app}|{client_id}"
+        # Compute content_id for the existing block using its window_title/file_path/url.
+        # Note: a block has one window_title set at creation (the longest among its
+        # raw events). Using that as the content signature is approximate but matches
+        # how the block was originally bucketed.
+        existing_content_id = _content_identifier(
+            b.window_title or "",
+            b.file_path or "",
+            b.url or "",
+        )
+        existing_content_part = f"|{existing_content_id}" if existing_content_id else ""
+        # Note: we DON'T include content_bucket in the existing key because blocks
+        # don't store the bucket. New blocks computed below also omit bucket from
+        # the merge key — only (app, client, content_id). Content_bucket-based
+        # splitting already happened at the grouping stage.
+        key = f"{app}|{client_id}{existing_content_part}"
         existing_by_app_client.setdefault(key, []).append(b)
 
     created_count = 0
@@ -770,7 +790,15 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             new_start = block_data["start"]
             new_end = block_data["end"]
             new_client_id = block_data.get("current_client_id") or 0
-            key = f"{app}|{new_client_id}"
+            # v1.3.47: match the existing-block key shape — include content_id
+            # so different-file blocks don't merge into each other.
+            new_content_id = _content_identifier(
+                block_data.get("window_title") or "",
+                block_data.get("file_path") or "",
+                block_data.get("url") or "",
+            )
+            new_content_part = f"|{new_content_id}" if new_content_id else ""
+            key = f"{app}|{new_client_id}{new_content_part}"
 
             merge_target = None
             for existing in existing_by_app_client.get(key, []):

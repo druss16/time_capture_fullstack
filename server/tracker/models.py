@@ -268,6 +268,20 @@ class RawEvent(models.Model):
     # ── Context ──
     ctx = models.JSONField(default=dict, blank=True)
 
+    # ── Agent version (v1.3.49) ──
+    # Reported by the agent at event-write time. Used for fleet visibility
+    # and triage: when a class of bugs appears, we can correlate to which
+    # agent versions are affected. NULL for events from pre-v1.3.24 agents
+    # (no version field) and for events created server-side (test_meetings,
+    # enrich_demo_titles, etc).
+    agent_version = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Agent app version that produced this event (e.g. '1.3.24')",
+    )
+
     # Snapshot of the user's selected client at start_ts.
     # Captured at dwell_start time, NOT at write_event time, so AI-switcher
     # flips mid-dwell don't retroactively reattribute earlier heartbeats.

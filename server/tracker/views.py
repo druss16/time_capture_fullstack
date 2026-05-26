@@ -1269,6 +1269,9 @@ def raw_events(request):
                 # which client was active when the dwell began — that's what
                 # the AI switcher race fix relies on.
                 current_client_id=item.get("current_client_id") or current_client_id,
+                # v1.3.49: Agent version for fleet visibility. NULL when
+                # older agents (pre-v1.3.24) send events without this field.
+                agent_version=item.get("agent_version"),
             )
             created += 1
         except Exception as e:

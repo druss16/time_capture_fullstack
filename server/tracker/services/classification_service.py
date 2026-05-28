@@ -1976,6 +1976,35 @@ class ClassificationService:
 
         return True
 
+
+    @staticmethod
+    def _strip_qb_screen_bracket(title: str) -> str:
+        """
+        v1.3.55: Strip QuickBooks Desktop screen bracket from a title.
+
+        QB titles have structure:
+          "{company_file} - QuickBooks Accountant Desktop Plus 2024 - [{screen}]"
+
+        The bracket changes as the user navigates QB screens (Home, Vendor
+        Center, Customer Center: <name>, Write Checks, etc.) and contains
+        vendor/customer names that hijack client attribution.
+
+        For client identification, ONLY the company file name (pre-bracket)
+        matters. Strip everything from ' - [' onward.
+
+        Mirrors agent's _strip_qb_screen_bracket in ai_client_switcher.py.
+        Returns title unchanged if not a QB window.
+        """
+        if not title:
+            return title
+        title_lower = title.lower()
+        if 'quickbooks' not in title_lower and 'qbw' not in title_lower:
+            return title
+        bracket_pos = title.rfind(' - [')
+        if bracket_pos > 0:
+            return title[:bracket_pos]
+        return title
+
     @staticmethod
     def _build_haystack(block) -> str:
         """Combine searchable text fields into one lowercase string.
@@ -1985,35 +2014,26 @@ class ClassificationService:
         Windows username (e.g. C:\\Users\\mavops\\) would produce false matches
         against clients whose name happens to equal the OS username.
 
-        v1.3.51: Aggregate distinct titles from ALL raw events in the block,
-        not just block.window_title. Reasons:
-          - block.window_title is a snapshot from one event chosen at
-            compaction time; it can be unrepresentative
-          - When the user's activity spans many windows (e.g. 17 IRS pages,
-            or 30 QB Payroll Center clicks), each event's title is a clue
-            to the real client context
-          - A single-title haystack lets incidental word matches dominate
-            (e.g. "Internal Revenue Service" -> matched "266 Services LLC")
-          - With all event titles aggregated, the real content dominates
-            and incidental matches lose to actually-present client names
+        v1.3.51: Aggregate distinct titles from ALL raw events in the block.
+        v1.3.55: Strip QuickBooks screen brackets from EVERY title before
+        adding to the haystack. The bracket contains vendor/customer names
+        that hijack attribution when the user navigates QB Customer Center.
+        Mirrors the agent's _strip_qb_screen_bracket logic.
         """
+        primary_title = ClassificationService._strip_qb_screen_bracket(
+            block.window_title or block.title or ''
+        )
         parts = [
-            (block.window_title or block.title or ''),
+            primary_title,
             (block.url or ''),
         ]
 
-        # Clean file_path before adding it to the haystack. Same cleanup
-        # used by Stage 3 Match 2 (file_path stage); without this, title_alias
-        # matching would see the raw path and false-positive on the OS username.
         if block.file_path:
             username = _infer_username_from_path(block.file_path)
             cleaned_segments = _clean_path_segments(block.file_path, username)
             if cleaned_segments:
                 parts.append(' '.join(cleaned_segments))
 
-        # v1.3.51: Aggregate distinct event titles. Fail-safe: if the query
-        # throws or block has no raw events, skip this — haystack falls
-        # back to v1.3.50 behavior (just window_title + url + file_path).
         try:
             from tracker.models import RawEvent
             event_titles = list(
@@ -2024,20 +2044,19 @@ class ClassificationService:
                 .values_list('window_title', flat=True)
                 .distinct()
             )
-            # Only add titles NOT already in window_title to avoid duplicates
-            # (the chosen window_title is typically the longest event title,
-            # so most aliases would be subsumed; including the rest expands
-            # haystack coverage without bloating the front-of-haystack region
-            # that position-aware scoring uses).
-            block_title_lower = (block.window_title or '').lower()
+            block_title_lower = (primary_title or '').lower()
             for t in event_titles:
-                if t and t.lower() != block_title_lower:
-                    parts.append(t)
+                if not t:
+                    continue
+                # v1.3.55: strip QB bracket from each event title too
+                stripped = ClassificationService._strip_qb_screen_bracket(t)
+                if stripped and stripped.lower() != block_title_lower:
+                    parts.append(stripped)
         except Exception:
-            # Never let raw-event aggregation break Stage 3.
             pass
 
         return ' '.join(p for p in parts if p).lower()
+
     @staticmethod
     def _extract_domain(url: str) -> str:
         """
@@ -2577,7 +2596,7 @@ class ClassificationService:
             if client:
                 decision.matched_signals.append(Signal(
                     type='agent_current_client',
-                    strength=0.55,
+                    strength=0.45,
                     evidence=f"Agent had '{client.name}' selected when this activity was captured",
                     detail={
                         'client_id':   client.id,
@@ -3364,11 +3383,26 @@ class ClassificationService:
                     decision.confidence = combined
                     return decision
 
-        # Otherwise propose if we have any signal at all
-        if signals:
+        # Otherwise propose if we have any MODERATE-or-better signal.
+        # Weak-only signals (< 0.65) — typically just agent_current_client
+        # with no corroboration — don't justify proposing a client. The
+        # block goes to captured for user review instead.
+        moderate_or_better = [s for s in signals if s.strength >= 0.65]
+        if moderate_or_better:
             self._populate_classification_from_signals(decision, signals)
             decision.recommended_state = 'proposed'
-            decision.confidence = max((s.strength for s in signals), default=0.0)
+            decision.confidence = max(s.strength for s in moderate_or_better)
+            return decision
+
+        # Only weak signals exist — capture without attribution
+        if signals:
+            decision.recommended_state = 'captured'
+            decision.confidence = max(s.strength for s in signals)
+            decision.reasoning = (
+                'Weak signals only (' +
+                ', '.join(f"{s.type}@{s.strength:.2f}" for s in signals) +
+                ') — held for user review without attribution'
+            )
             return decision
 
         # Nothing — captured

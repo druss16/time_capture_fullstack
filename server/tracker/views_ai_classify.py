@@ -120,6 +120,14 @@ RULES:
 10. Confidence: clear match 0.85-0.95. Partial/ambiguous 0.50-0.75. Generic-but-staying-on-
     current 0.50-0.65. NO match → null with confidence 0.0.
 11. Generic windows with no client signal AND no current_client → null.
+12. The "additional_titles" field (when present) lists OTHER window titles
+    the user had open during this same activity block. Use them as supporting
+    evidence to identify the dominant client. If the primary title is
+    generic but additional_titles all reference the same client, match
+    that client. If additional_titles point to a different client than
+    the primary title, prefer the client that appears in MORE titles.
+    If titles are scattered across many unrelated subjects (e.g. IRS
+    research, news), this is firm-internal or non-client work → null.
 
 Return ONLY a JSON array, one object per input:
 [{{"idx":<int>,"client_id":<int|null>,"client_name":"<str|null>","confidence":<float>,"reasoning":"<brief>"}}]"""
@@ -135,6 +143,11 @@ Return ONLY a JSON array, one object per input:
             item["url"] = t["url"]
         if t.get("current_client_name"):
             item["current_client"] = t["current_client_name"]
+        # v1.3.52: multi-title context. additional_titles is a list of
+        # distinct window titles from the same block's raw events. Lets
+        # the AI reason over the full activity, not one snapshot.
+        if t.get("additional_titles"):
+            item["additional_titles"] = t["additional_titles"]
         items.append(item)
 
     user = f"Identify the client for each:\n{json.dumps(items, indent=1)}"

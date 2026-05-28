@@ -1570,15 +1570,30 @@ class ClassificationService:
 
     @staticmethod
     def _alias_is_safe(alias: str) -> bool:
-        """
-        Returns False if the alias is on the stoplist of generic words known
-        to produce false matches. Filters out 'Internal', 'Tax', 'Office', etc.
-        """
         a = alias.strip().lower()
         if not a or len(a) < 4:
             return False
         if a in SHORT_ALIAS_STOPLIST:
             return False
+        # NEW: Reject multi-word aliases that reduce to a single generic
+        # distinctive token. "ASR Systems Group" → ['systems'] is a trap.
+        # Better to refuse the alias entirely than to match it badly.
+        import re
+        normalized = re.sub(r'[^a-z\s]', ' ', a)
+        tokens = [t for t in normalized.split() if t]
+        distinctive = [
+            t for t in tokens
+            if len(t) >= 4
+            and t not in ALIAS_STOP_WORDS
+            and t not in ALIAS_GENERIC_SUFFIXES
+        ]
+        if len(tokens) > 1 and len(distinctive) <= 1:
+            # Multi-word alias with at most one distinctive token.
+            # Check that single distinctive token isn't generic.
+            if distinctive and distinctive[0] in SINGLE_TOKEN_ALIAS_BLOCKLIST:
+                return False
+            if distinctive and distinctive[0] in DOMAIN_COMMON_WORDS:
+                return False
         return True
 
     @staticmethod
@@ -1833,12 +1848,31 @@ class ClassificationService:
             if _token_matches(at, haystack_tokens, haystack_token_set, True)
         )
 
-        # Single-token alias: 1 match needed, but reject if the token is
-        # itself domain-common (e.g. an alias literally named "Church").
+
+        # NEW CODE:
         if len(alias_tokens) == 1:
-            if alias_tokens[0] in DOMAIN_COMMON_WORDS:
+            sole_token = alias_tokens[0]
+            if sole_token in DOMAIN_COMMON_WORDS:
                 return False
-            return total_matches >= 1
+            if sole_token in SINGLE_TOKEN_ALIAS_BLOCKLIST:
+                return False
+            # CRITICAL: If the ORIGINAL alias was multi-word but stop-word
+            # filtering reduced it to a single token, treat the alias as
+            # requiring contiguous match. The direct substring check at the
+            # top of this function already covers that case — by the time we
+            # reach here, the contiguous check failed, so reject.
+            #
+            # This prevents "ASR Systems Group" from matching every title
+            # containing "Systems", and "H & B Marketing" from matching every
+            # title containing "Market" (via fuzzy prefix).
+            original_word_count = len([w for w in alias_n.split() if w])
+            if original_word_count > 1:
+                return False
+            # True single-word original alias (e.g. user explicitly set
+            # alias="Smithco" for a client named "Smith Corporation").
+            # That's intentional and we trust it. But still require an
+            # exact token match — no fuzzy prefix for single-word aliases.
+            return sole_token in haystack_token_set
 
         # Multi-token alias: 2+ total matches AND >=1 distinctive match
         if total_matches < 2:
@@ -3607,6 +3641,7 @@ DOMAIN_COMMON_WORDS = {
     'national', 'regional', 'local', 'global', 'advanced', 'integrated',
     'unified', 'universal', 'modern', 'classic', 'essential',
 }
+
 # v1.3.23: Reject matches where the haystack has no specific content.
 # "client tracking file 2025 - Excel" has zero distinctive tokens after
 # removing generic words, so it shouldn't fire a strong match against
@@ -3617,6 +3652,37 @@ GENERIC_HAYSTACK_WORDS = DOMAIN_COMMON_WORDS | {
     'mode', 'excel', 'outlook', 'word', 'processing', 'managing',
     'background', 'services', 'connect', 'system', 'login',
     'document', 'untitled', 'work',
+}
+
+# Words that should never single-token-match an alias, even if they
+# survive the stop-word filter. These are common English terms that
+# appear in unrelated content all the time (news, search results,
+# product descriptions, etc).
+#
+# This blocklist is the safety net for the more important fix above
+# (rejecting single-token-survival from multi-word aliases). Even if
+# someone explicitly sets a one-word alias from this list, we refuse
+# to use it for matching.
+SINGLE_TOKEN_ALIAS_BLOCKLIST = {
+    # Business descriptors
+    'systems', 'system', 'group', 'solutions', 'services', 'service',
+    'company', 'companies', 'corporation', 'corp', 'enterprises',
+    'enterprise', 'holdings', 'partners', 'consulting', 'management',
+    'industries', 'international', 'global', 'national', 'regional',
+    'associates', 'agency', 'firm', 'office', 'studio', 'studios',
+    'works', 'team',
+    # Industry verticals
+    'marketing', 'media', 'communications', 'news', 'finance',
+    'financial', 'capital', 'investments', 'investment', 'properties',
+    'property', 'realty', 'real', 'estate', 'design', 'designs',
+    'technology', 'technologies', 'software', 'digital', 'creative',
+    # Generic descriptors that pair with everything
+    'auto', 'home', 'water', 'energy', 'health', 'medical', 'dental',
+    'legal', 'tax', 'accounting', 'audit', 'insurance', 'banking',
+    # Quality / size adjectives
+    'best', 'first', 'premier', 'select', 'standard', 'professional',
+    'modern', 'classic', 'new', 'old', 'big', 'small', 'main',
+    'central', 'general', 'family', 'community',
 }
 
 # Stop words for tokenization (mirrors agent's _STOP_WORDS).

@@ -1882,8 +1882,6 @@ class ClassificationService:
             t for t in alias_tokens if t not in DOMAIN_COMMON_WORDS
         ]
         if not distinctive_alias_tokens:
-            # Alias is entirely domain-common — direct substring above
-            # already failed, so reject. No way to disambiguate.
             return False
 
         distinctive_matches = sum(
@@ -1892,6 +1890,73 @@ class ClassificationService:
         )
 
         if distinctive_matches < 1:
+            return False
+
+        # v1.3.54: PROXIMITY CHECK. For multi-token aliases, the matched
+        # tokens must appear close together in the haystack. Without this,
+        # unrelated content with coincidental word collisions matches —
+        # e.g. "Salt City Harvest Farm" matches a haystack containing
+        # "salt additives" (token 30) AND "city water" (token 60) even
+        # though the user was researching two unrelated topics.
+        #
+        # Rule: at least 2 of the alias's distinctive tokens must appear
+        # within MAX_PROXIMITY_TOKENS of each other in the haystack. This
+        # enforces "these words appeared as a phrase or near-phrase,"
+        # not "these words happened to appear somewhere in this long
+        # document."
+        MAX_PROXIMITY_TOKENS = 4
+
+        # Find positions of each distinctive alias token in the haystack
+        positions_by_token = {}
+        for at in distinctive_alias_tokens:
+            positions = []
+            for i, ht in enumerate(haystack_tokens):
+                if ht == at:
+                    positions.append(i)
+                    continue
+                # Fuzzy prefix (5+ char shared, ht not domain-common)
+                if len(ht) < 5 or ht in DOMAIN_COMMON_WORDS:
+                    continue
+                cp = 0
+                for x, y in zip(at, ht):
+                    if x != y:
+                        break
+                    cp += 1
+                if cp >= 5:
+                    positions.append(i)
+            if positions:
+                positions_by_token[at] = positions
+
+        # Need at least 2 distinct tokens with positions
+        if len(positions_by_token) < 2:
+            # Only 1 distinctive token matched — fall back to strict requirement:
+            # require the FULL alias to appear contiguously (already failed at
+            # substring check at top of function, so reject).
+            return False
+
+        # Check if any pair of distinctive tokens is within MAX_PROXIMITY_TOKENS
+        # of each other in the haystack.
+        all_positions = sorted(
+            (pos, tok)
+            for tok, positions in positions_by_token.items()
+            for pos in positions
+        )
+
+        close_pair_found = False
+        for i in range(len(all_positions) - 1):
+            pos_a, tok_a = all_positions[i]
+            for j in range(i + 1, len(all_positions)):
+                pos_b, tok_b = all_positions[j]
+                if pos_b - pos_a > MAX_PROXIMITY_TOKENS:
+                    break  # sorted; further pairs are even farther
+                if tok_a != tok_b:
+                    # Two DIFFERENT distinctive tokens within proximity window
+                    close_pair_found = True
+                    break
+            if close_pair_found:
+                break
+
+        if not close_pair_found:
             return False
 
         # v1.3.23: Entity-class exclusion check. If the title and the

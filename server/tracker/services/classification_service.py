@@ -1904,7 +1904,7 @@ class ClassificationService:
         # enforces "these words appeared as a phrase or near-phrase,"
         # not "these words happened to appear somewhere in this long
         # document."
-        MAX_PROXIMITY_TOKENS = 4
+        MAX_PROXIMITY_TOKENS = 2
 
         # Find positions of each distinctive alias token in the haystack
         positions_by_token = {}

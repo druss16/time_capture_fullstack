@@ -429,14 +429,25 @@ class ClassificationService:
         old_category = self._extract_dominant_category(block)
         old_state = block.classification_state
 
-        # Apply suppression by setting state and bailing — don't write category data
-        if decision.is_suppressed:
-            block.classification_state = 'suppressed'
+        # v1.3.55: Captured state with no recommended client means we explicitly
+        # rejected attribution (weak signals only, no real evidence). Clear any
+        # stale agent-set client_id so the block appears as Unassigned in
+        # Daily Review. Without this, blocks where the user drifted from real
+        # client work into news/research keep the agent's stale client pick.
+        if decision.recommended_state == 'captured' and decision.client_id is None:
+            block.client_id = None
+            block.classification_state = 'captured'
             block.state_changed_at = timezone.now()
             block.state_changed_by = source
-            block.save(update_fields=[
-                'classification_state', 'state_changed_at', 'state_changed_by',
-            ])
+            block.proposed_signals = decision.signals_dicts()
+            block.proposed_reasoning = decision.reasoning or ''
+            block.proposed_client_id = None
+            block.proposed_category = ''
+            block.proposed_confidence = decision.confidence
+            block.proposed_at = timezone.now()
+            block.is_categorized = False
+            block.category_hours = {}
+            block.save(force_classifier=True)
             self._write_audit(
                 block=block, decision=decision,
                 client_before_id=old_client_id, client_after_id=None,
@@ -2589,20 +2600,86 @@ class ClassificationService:
         )
 
         # Signal A: current_client_id from the agent.
-        # The agent's selection. Treated as moderate-low (0.55) — never strong.
+        # The agent's selection. Treated as moderate-low (0.45) — never strong.
         # Skip on idle blocks: agent client is not meaningful when user is idle.
         if block.client_id and not is_idle_block:
-            client = next((c for c in self._clients if c.id == block.client_id), None)
-            if client:
-                decision.matched_signals.append(Signal(
-                    type='agent_current_client',
-                    strength=0.45,
-                    evidence=f"Agent had '{client.name}' selected when this activity was captured",
-                    detail={
-                        'client_id':   client.id,
-                        'client_name': client.name,
-                    },
-                ))
+            # v1.3.56: Browser blocks are the inheritance-bug magnet.
+            # The agent's client sticks across alt-tabs to news, music,
+            # personal browsing. Without independent corroboration from
+            # another stage, the agent's selection alone must not
+            # propose a client for a browser block.
+            #
+            # Non-browser apps (QuickBooks, Excel, UltraTax, Outlook)
+            # keep their existing behavior: the user actively opened
+            # that app, so the agent's client is meaningful.
+            app_lower = (block.app_name or '').lower()
+            BROWSER_APPS = {
+                'msedge', 'chrome', 'firefox', 'brave',
+                'safari', 'opera', 'iexplore',
+            }
+            is_browser_block = app_lower in BROWSER_APPS
+
+            if is_browser_block:
+                # Look for any signal (already on decision from earlier
+                # stages) that independently points to the same client.
+                # We accept Stage 3 (title/domain/path), Stage 4 (file
+                # path structure), Stage 6 (calendar), Stage 7 (mail),
+                # or Stage 9 (learned). We REJECT prior_block (just
+                # another form of stickiness) and ai_category (category
+                # only, no client signal).
+                CORROBORATING_TYPES = {
+                    'title_match_title_alias',
+                    'title_match_file_path',
+                    'title_match_domain',
+                    'file_path_structure',
+                    'calendar',
+                    'mail',
+                    'learned_pattern',
+                    'org_rule',
+                    'tax_software',
+                }
+                has_corroboration = any(
+                    s.proposed_client_id == block.client_id
+                    and s.type in CORROBORATING_TYPES
+                    for s in decision.matched_signals
+                )
+
+                if not has_corroboration:
+                    logger.info(
+                        f"[STAGE-8] Block {getattr(block, 'pk', '?')}: "
+                        f"suppressing agent_current_client signal — "
+                        f"browser block ({app_lower}) with no independent "
+                        f"corroboration for client_id={block.client_id}"
+                    )
+                    # Skip emitting the signal entirely. Block will fall
+                    # through to Captured or get classified by another
+                    # signal type that doesn't depend on agent stickiness.
+                else:
+                    client = next((c for c in self._clients if c.id == block.client_id), None)
+                    if client:
+                        decision.matched_signals.append(Signal(
+                            type='agent_current_client',
+                            strength=0.45,
+                            evidence=f"Agent had '{client.name}' selected when this activity was captured (corroborated by independent signal)",
+                            detail={
+                                'client_id':   client.id,
+                                'client_name': client.name,
+                                'corroborated': True,
+                            },
+                        ))
+            else:
+                # Non-browser app — agent stickiness is meaningful
+                client = next((c for c in self._clients if c.id == block.client_id), None)
+                if client:
+                    decision.matched_signals.append(Signal(
+                        type='agent_current_client',
+                        strength=0.45,
+                        evidence=f"Agent had '{client.name}' selected when this activity was captured",
+                        detail={
+                            'client_id':   client.id,
+                            'client_name': client.name,
+                        },
+                    ))
 
         # Signal B: previous HUMAN-CONFIRMED block's client.
         # Skip on idle blocks: idle is its own answer, do not chain client from
@@ -3330,10 +3407,64 @@ class ClassificationService:
         signals = self._dedupe_correlated_signals(decision.matched_signals)
         decision.matched_signals = signals  # update so downstream sees deduped list
 
-        strong = [s for s in signals if s.is_strong]
-        moderate = [s for s in signals if s.is_moderate]
+        # v1.3.56 FIX 2: Filter the strong/moderate sets to signals that
+        # actually propose a CLIENT. Category-only signals (ai_category)
+        # must not be the sole driver of a client decision — they propose
+        # a category, not a client.
+        #
+        # Category signals still flow through into the decision via
+        # _populate_classification_from_signals so the AI's category /
+        # is_billable judgment is preserved — they just don't trigger
+        # auto-commit on their own.
+        def _has_client_proposal(s):
+            return s.proposed_client_id is not None
 
-        # Auto-commit: at least one strong signal, no contradictions
+        strong = [s for s in signals if s.is_strong and _has_client_proposal(s)]
+        moderate = [s for s in signals if s.is_moderate and _has_client_proposal(s)]
+
+        # v1.3.56 FIX 3: AI non-billable verdict clears stale client
+        # attribution. When AI says "this isn't billable client work"
+        # with high confidence, and the only client-proposing signals
+        # are stickiness signals from the agent's prior selection, drop
+        # the attribution. Block becomes Captured with no client —
+        # surfaces in Daily Review as Uncategorized rather than wrongly
+        # billable to a stale client.
+        ai_nonbillable_strong = next(
+            (s for s in signals
+             if s.type == 'ai_category'
+             and s.strength >= 0.80
+             and s.detail.get('is_billable') is False),
+            None,
+        )
+        if ai_nonbillable_strong:
+            # Check if ALL client-proposing signals are stickiness-only
+            client_signals = [s for s in signals if _has_client_proposal(s)]
+            STICKINESS_TYPES = {'agent_current_client', 'prior_block'}
+            stickiness_only = (
+                len(client_signals) > 0
+                and all(s.type in STICKINESS_TYPES for s in client_signals)
+            )
+            if stickiness_only:
+                logger.info(
+                    f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                    f"AI judged non-billable @ {ai_nonbillable_strong.strength:.2f} "
+                    f"with no independent client evidence — clearing stale "
+                    f"agent attribution. AI reasoning: "
+                    f"{ai_nonbillable_strong.detail.get('ai_reasoning', '')[:120]}"
+                )
+                decision.client_id = None
+                decision.is_billable = False
+                decision.recommended_state = 'captured'
+                decision.confidence = ai_nonbillable_strong.strength
+                decision.reasoning = (
+                    f"AI judged non-billable "
+                    f"({ai_nonbillable_strong.detail.get('ai_reasoning', '')[:200]}). "
+                    f"No independent client evidence beyond agent stickiness — "
+                    f"cleared attribution and routed to Daily Review."
+                )
+                return decision
+
+        # Auto-commit: at least one strong signal (with a client proposal), no contradictions
         if strong:
             # Strong signals' proposed clients must agree with each other
             strong_client_ids = {s.proposed_client_id for s in strong if s.proposed_client_id}

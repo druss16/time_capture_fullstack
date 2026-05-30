@@ -64,17 +64,17 @@ SEED = 42                              # Deterministic randomness for reproducib
 # ===========================================================================
 STAFF = [
     # (first, last, role, billing_rate, cost_rate, target_util)
-    # Partners
-    ("Erin",     "O'Brien",      "owner",   350, 150, 0.65),
-    ("David",    "Caputo",       "owner",   325, 140, 0.62),
-    # Manager
-    ("Jessica",  "Hartwell",     "manager", 225, 100, 0.78),
-    # Seniors (Wayne, Terri match TL Wall)
-    ("Wayne",    "Vincent",      "manager", 200,  95, 0.82),
-    ("Terri",    "Mancuso",      "manager", 195,  92, 0.80),
+    # Owners
+    ("Wayne",    "Wall",         "owner",   350, 150, 0.65),
+    ("Terri",    "Wall",         "owner",   325, 140, 0.62),
+    # Managers
+    ("Erin",     "O'Brien",      "manager", 225, 100, 0.78),
+    ("David",    "Caputo",       "manager", 200,  95, 0.82),
+    ("Jessica",  "Hartwell",     "manager", 195,  92, 0.80),
+    # Seniors
     ("Marcus",   "Chen",         "member",  175,  85, 0.91),  # ← burnout risk
-    # Staff accountants (Wendy matches TL Wall)
-    ("Wendy",    "Lukasik",      "member",  160,  78, 0.78),
+    # Staff accountants
+    ("Wendy",    "Smiley",       "member",  160,  78, 0.78),
     ("Priya",    "Sharma",       "member",  155,  75, 0.76),
     ("Connor",   "MacGillis",    "member",  150,  72, 0.74),
     ("Tasha",    "Bellamy",      "member",  150,  72, 0.75),

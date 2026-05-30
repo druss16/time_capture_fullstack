@@ -55,6 +55,7 @@ from typing import List, Optional, Dict, Any
 
 from django.db import transaction
 from django.utils import timezone
+import re
 
 logger = logging.getLogger('timetracker.classification')
 
@@ -3407,15 +3408,78 @@ class ClassificationService:
         signals = self._dedupe_correlated_signals(decision.matched_signals)
         decision.matched_signals = signals  # update so downstream sees deduped list
 
+        # v1.3.57 FIX 4: Verify ai_client signals against evidence.
+        # AI inference can confidently hallucinate a client when there's
+        # no visible client identity in the input (e.g. proposing
+        # "S&A Creative" for a fullypromoted.com email page). We require
+        # either:
+        #   1) The proposed client's name appears in the block's
+        #      title/url/path (textual evidence), OR
+        #   2) Independent corroboration from a non-AI signal type
+        # If neither holds, drop the ai_client signal.
+        AI_CLIENT_CORROBORATING_TYPES = {
+            'title_match_title_alias', 'title_match_file_path',
+            'title_match_domain', 'file_path_structure',
+            'calendar', 'mail', 'learned_pattern',
+            'org_rule', 'tax_software',
+        }
+        verified_signals = []
+        for sig in signals:
+            if sig.type == 'ai_client' and sig.proposed_client_id is not None:
+                proposed_id = sig.proposed_client_id
+                client_obj = next(
+                    (c for c in self._clients if c.id == proposed_id), None
+                )
+                # Check 1: client name appears in block input
+                haystack = ' '.join([
+                    getattr(block, 'window_title', '') or '',
+                    getattr(block, 'url', '') or '',
+                    getattr(block, 'file_path', '') or '',
+                ]).lower()
+                has_textual_evidence = False
+                if client_obj:
+                    name_lower = client_obj.name.lower()
+                    # Strip corporate suffix
+                    stripped = re.sub(
+                        r'[,\s]+(inc|llc|corp|pc|pllc|plc|ltd|co|'
+                        r'incorporated|corporation|company|limited)\.?$',
+                        '', name_lower,
+                    ).strip(' .,')
+                    # Try full stripped name as substring
+                    if stripped and len(stripped) >= 4 and stripped in haystack:
+                        has_textual_evidence = True
+                    else:
+                        # Try first distinctive word (>=5 chars)
+                        words = re.findall(
+                            r'\b[a-z][a-z0-9\-&]{4,}\b',
+                            stripped or name_lower,
+                        )
+                        if words and re.search(
+                            r'\b' + re.escape(words[0]) + r'\b', haystack
+                        ):
+                            has_textual_evidence = True
+                # Check 2: independent corroboration from non-AI signal
+                has_corroboration = any(
+                    other is not sig
+                    and other.type in AI_CLIENT_CORROBORATING_TYPES
+                    and other.proposed_client_id == proposed_id
+                    for other in signals
+                )
+                if not has_textual_evidence and not has_corroboration:
+                    logger.info(
+                        f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                        f"dropping unverifiable ai_client signal proposing "
+                        f"client_id={proposed_id} "
+                        f"({client_obj.name if client_obj else 'unknown'}) — "
+                        f"name not in input, no corroborating signal"
+                    )
+                    continue  # drop this signal
+            verified_signals.append(sig)
+        signals = verified_signals
+        decision.matched_signals = signals  # update again after FIX 4
+
         # v1.3.56 FIX 2: Filter the strong/moderate sets to signals that
-        # actually propose a CLIENT. Category-only signals (ai_category)
-        # must not be the sole driver of a client decision — they propose
-        # a category, not a client.
-        #
-        # Category signals still flow through into the decision via
-        # _populate_classification_from_signals so the AI's category /
-        # is_billable judgment is preserved — they just don't trigger
-        # auto-commit on their own.
+        # actually propose a CLIENT.
         def _has_client_proposal(s):
             return s.proposed_client_id is not None
 

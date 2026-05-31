@@ -3578,6 +3578,20 @@ class ClassificationService:
                     decision.confidence = combined
                     return decision
 
+        # v1.3.59 FIX 6: Default is_billable=False when no client + no AI
+        # category signal. Must run BEFORE the strong/moderate/weak return
+        # branches so it applies to ALL classification outcomes.
+        if decision.client_id is None and decision.is_billable:
+            has_ai_category = any(
+                s.type == 'ai_category' for s in decision.matched_signals
+            )
+            if not has_ai_category:
+                logger.info(
+                    f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                    f"defaulting is_billable=False (no client, no AI category)"
+                )
+                decision.is_billable = False
+
         # Otherwise propose if we have any MODERATE-or-better signal.
         # Weak-only signals (< 0.65) — typically just agent_current_client
         # with no corroboration — don't justify proposing a client. The

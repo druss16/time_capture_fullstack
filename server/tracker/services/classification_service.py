@@ -3627,11 +3627,23 @@ class ClassificationService:
         if signals:
             decision.recommended_state = 'captured'
             decision.confidence = max(s.strength for s in signals)
-            decision.reasoning = (
-                'Weak signals only (' +
-                ', '.join(f"{s.type}@{s.strength:.2f}" for s in signals) +
-                ') — held for user review without attribution'
-            )
+
+            # v1.3.60: user-friendly reasoning when FIX 6's default is the only signal.
+            # The classifier had no real evidence — it's just defaulting to non-billable
+            # as a safe fallback. Users need to know it's a default, not a confident guess,
+            # and that they should override if the block is actually client work.
+            fix6_signals = [s for s in signals if s.type == 'fix6_default']
+            if fix6_signals and len(fix6_signals) == len(signals):
+                decision.reasoning = (
+                    'No client or work pattern identified — '
+                    'defaulting to non-billable. Override if this is client work.'
+                )
+            else:
+                decision.reasoning = (
+                    'Weak signals only (' +
+                    ', '.join(f"{s.type}@{s.strength:.2f}" for s in signals) +
+                    ') — held for user review without attribution'
+                )
             return decision
 
         # Nothing — captured

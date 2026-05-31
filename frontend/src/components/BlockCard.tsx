@@ -62,10 +62,19 @@ interface BlockCardProps {
 
 const BlockCard = ({ block, clients, categories, internalCategories, onCategorize }: BlockCardProps) => {
   const [isEditing, setIsEditing] = useState(false);
+  const topSuggestion = block.suggestions?.[0];
+  const suggestedClientObj = topSuggestion?.client
+    ? clients.find(c => c.name === topSuggestion.client)
+    : null;
+
   const [selectedClient, setSelectedClient] = useState<string>(
-    block.current_client_id?.toString() || ''
+    block.current_client_id?.toString() ||
+    suggestedClientObj?.id.toString() ||
+    ''
   );
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>(
+    topSuggestion?.category || ''
+  );
   const [notes, setNotes] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);

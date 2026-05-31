@@ -4862,7 +4862,7 @@ def get_categorization_data(request):
     if not org:
         org, _ = Organization.objects.get_or_create(name="default-org", defaults={"slug": "default-org"})
     
-    # ✅ Get industry-specific categories
+    # Get industry-specific categories
     industry_type = getattr(org, 'industry_type', 'general') or 'general'
     categories = get_categories_for_industry(industry_type)
     
@@ -4880,7 +4880,6 @@ def get_categorization_data(request):
     )
     end_local = start_local + timedelta(days=1)
     
-    # Convert to UTC
     start_utc = start_local.astimezone(dt_timezone.utc)
     end_utc = end_local.astimezone(dt_timezone.utc)
     
@@ -4895,6 +4894,20 @@ def get_categorization_data(request):
         start__lt=effective_end,
         is_categorized=False
     ).select_related('client').order_by('start')[:limit]
+
+    # Batch-fetch proposed client names so we don't N+1 inside the session loop
+    proposed_client_ids = {
+        b.proposed_client_id for b in blocks
+        if getattr(b, 'proposed_client_id', None)
+    }
+    proposed_clients_map = (
+        dict(
+            Client.objects
+            .filter(id__in=proposed_client_ids)
+            .values_list('id', 'name')
+        )
+        if proposed_client_ids else {}
+    )
     
     original_count = len(blocks)
     
@@ -4910,7 +4923,6 @@ def get_categorization_data(request):
         
         span_minutes = (last_block.end - first_block.start).total_seconds() / 60.0
         
-        # ✅ NEW: Use display formatter for clean title
         client_name = first_block.client.name if first_block.client else None
         formatted = format_block_for_display({
             'app_name': first_block.app_name or '',
@@ -4918,7 +4930,24 @@ def get_categorization_data(request):
             'url': first_block.url or '',
             'minutes': total_minutes,
         }, client_name=client_name)
-        
+
+        # ← NEW: Pull classifier proposal set by ClassificationService.apply()
+        proposed_client_id   = getattr(first_block, 'proposed_client_id', None)
+        proposed_category    = (getattr(first_block, 'proposed_category', '') or '').strip()
+        proposed_confidence  = float(getattr(first_block, 'proposed_confidence', 0.0) or 0.0)
+        proposed_reasoning   = getattr(first_block, 'proposed_reasoning', '') or ''
+        classification_state = getattr(first_block, 'classification_state', '') or 'captured'
+
+        # ← NEW: Build a suggestion if the classifier proposed anything
+        suggestions = []
+        if proposed_client_id or proposed_category:
+            suggestions.append({
+                'client':     proposed_clients_map.get(proposed_client_id, '') if proposed_client_id else '',
+                'category':   proposed_category,
+                'confidence': proposed_confidence,
+                'reasoning':  proposed_reasoning[:200],
+            })
+
         blocks_data.append({
             'id': first_block.id,
             'block_ids': block_ids,
@@ -4928,13 +4957,11 @@ def get_categorization_data(request):
             'duration_minutes': total_minutes,
             'span_minutes': round(span_minutes, 1),
             
-            # ✅ Raw data (for debugging/advanced use)
             'app_name': first_block.app_name or '',
             'window_title': first_block.window_title or '',
             'url': first_block.url or '',
             'file_path': first_block.file_path or '',
             
-            # ✅ NEW: Clean display data
             'display': {
                 'title': formatted['title'],
                 'app': formatted['app'],
@@ -4943,7 +4970,9 @@ def get_categorization_data(request):
             
             'current_client': client_name,
             'current_client_id': first_block.client.id if first_block.client else None,
-            'suggestions': [],
+            'suggestions': suggestions,                                          # ← NEW (was [])
+            'classification_state': classification_state,                        # ← NEW
+            'is_billable_suggested': getattr(first_block, 'is_billable', True),  # ← NEW
         })
     
     # Get clients

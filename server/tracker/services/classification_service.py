@@ -443,10 +443,11 @@ class ClassificationService:
             block.proposed_signals = decision.signals_dicts()
             block.proposed_reasoning = decision.reasoning or ''
             block.proposed_client_id = None
-            block.proposed_category = ''
+            block.proposed_category = decision.category or ''   
             block.proposed_confidence = decision.confidence
             block.proposed_at = timezone.now()
             block.is_categorized = False
+            block.is_billable = decision.is_billable            
             block.category_hours = {}
             block.save(force_classifier=True)
             self._write_audit(
@@ -3578,9 +3579,14 @@ class ClassificationService:
                     decision.confidence = combined
                     return decision
 
-        # v1.3.59 FIX 6: Default is_billable=False when no client + no AI
-        # category signal. Must run BEFORE the strong/moderate/weak return
-        # branches so it applies to ALL classification outcomes.
+        # v1.3.59 FIX 6 (extended v1.3.60): Default is_billable=False when
+        # no client + no AI category. Must run BEFORE the strong/moderate/weak
+        # return branches so it applies to ALL classification outcomes.
+        #
+        # v1.3.60 addition: Also set decision.category to the org's non-billable
+        # fallback so the categorize endpoint can surface a pre-filled suggestion
+        # ("Personal/Non-Billable"). Without this, captured blocks come through
+        # with empty proposed_category and the user has to pick from scratch.
         if decision.client_id is None and decision.is_billable:
             has_ai_category = any(
                 s.type == 'ai_category' for s in decision.matched_signals
@@ -3591,6 +3597,20 @@ class ClassificationService:
                     f"defaulting is_billable=False (no client, no AI category)"
                 )
                 decision.is_billable = False
+
+                # v1.3.60: also propose a category so the UI can pre-fill
+                industry = getattr(self.org, 'industry_type', None) or 'general'
+                _, non_billable_fb = FALLBACK_CATEGORIES.get(
+                    industry, FALLBACK_CATEGORIES_DEFAULT
+                )
+                if not decision.category:
+                    decision.category = non_billable_fb
+                    decision.matched_signals.append(Signal(
+                        type='fix6_default',
+                        strength=0.50,  # weak — surfaces as suggestion, not auto-commit
+                        evidence=f'No client identified; defaulting to {non_billable_fb}',
+                        detail={'category': non_billable_fb, 'is_billable': False},
+                    ))
 
         # Otherwise propose if we have any MODERATE-or-better signal.
         # Weak-only signals (< 0.65) — typically just agent_current_client

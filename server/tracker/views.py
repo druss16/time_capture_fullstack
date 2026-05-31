@@ -4838,12 +4838,91 @@ def group_into_sessions(blocks, max_gap_minutes=15, min_idle_minutes=5):
     return sessions
 
 
-# tracker/views_categorization.py
-"""
-Updated get_categorization_data endpoint with clean display formatting.
+def _heuristic_suggestion(block, user, org, clients_by_name_lower):
+    """
+    v1.3.60: Pattern-match common cases where the classifier didn't propose
+    anything useful but the right answer is obvious from the title/app.
 
-REPLACE your existing get_categorization_data function in views.py with this version.
-"""
+    Returns a dict matching the suggestions[] item shape, or None.
+
+    Patterns matched (in priority order):
+      1. Outlook + user's own email address     → Internal + Email/Communication
+      2. Browser/Acrobat + org name in title    → Internal + Billing/Admin
+      3. Browser news/sports/personal patterns  → no client + Personal/Non-Billable
+
+    The classifier's proposal (if any) takes precedence — this only fires when
+    suggestions[] is otherwise empty.
+    """
+    title = (block.window_title or '').lower()
+    app = (block.app_name or '').lower()
+    org_name_lower = (org.name or '').lower() if org else ''
+
+    # Strip "& Tax Corp", "Inc", "LLC" etc. for fuzzy org-name matching
+    org_tokens = [
+        t for t in re.findall(r'\b[a-z]{4,}\b', org_name_lower)
+        if t not in {'corp', 'inc', 'llc', 'and', 'the', 'tax', 'firm'}
+    ]
+
+    # Find an "Internal" client for this org (handles "Internal", "Internal - Tax", etc.)
+    internal_client_name = None
+    for name_lower, name_original in clients_by_name_lower.items():
+        if name_lower == 'internal' or name_lower.startswith('internal'):
+            internal_client_name = name_original
+            break
+
+    # Pattern 1: Wayne's own Outlook inbox
+    # Title format: "Inbox - <username>@<orgdomain> - Outlook"
+    user_email = (user.email or '').lower()
+    user_handle = user_email.split('@')[0] if '@' in user_email else None
+    username = user.username.lower()
+    is_outlook_app = 'outlook' in app or app == 'olk'
+
+    if is_outlook_app and 'inbox' in title:
+        # Check for user's email or username in title
+        if (user_email and user_email in title) or \
+           (user_handle and len(user_handle) >= 3 and user_handle in title) or \
+           (username and len(username) >= 3 and f'{username}@' in title):
+            if internal_client_name:
+                return {
+                    'client': internal_client_name,
+                    'category': 'Email/Communication',
+                    'confidence': 0.75,
+                    'reasoning': "User's own Outlook inbox — internal email triage",
+                }
+
+    # Pattern 2: Org name in window title (TL Wall quote, WordPress site, etc.)
+    # Match if any 4+ char distinctive org token appears in title
+    if org_tokens and internal_client_name:
+        for token in org_tokens:
+            if token in title:
+                return {
+                    'client': internal_client_name,
+                    'category': 'Billing/Admin',
+                    'confidence': 0.70,
+                    'reasoning': f"Title references '{token}' — internal firm admin",
+                }
+
+    # Pattern 3: Browser personal/news patterns
+    BROWSER_APPS = {'msedge', 'chrome', 'firefox', 'brave', 'safari', 'opera', 'iexplore'}
+    if app in BROWSER_APPS:
+        PERSONAL_PATTERNS = [
+            'fox news', 'cnn ', 'cnn.com', 'nbc news', 'cbs news', 'abc news',
+            'msnbc', 'bloomberg', 'reuters', 'yahoo finance', 'yahoo news',
+            'espn', 'sports', 'twitter.com', 'x.com/', 'facebook.com',
+            'instagram', 'reddit.com', 'tiktok', 'youtube.com',
+            'shopping', 'amazon.com', 'ebay.com',
+            'breaking news', 'latest news', 'news headlines',
+        ]
+        if any(p in title for p in PERSONAL_PATTERNS):
+            return {
+                'client': '',  # no client for personal
+                'category': 'Personal/Non-Billable',
+                'confidence': 0.75,
+                'reasoning': 'Title matches personal browsing pattern',
+            }
+
+    return None
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -4888,11 +4967,16 @@ def get_categorization_data(request):
     effective_end = min(end_utc, cutoff_time)
     
     # Get uncategorized blocks
+    # v1.3.60: Exclude suppressed blocks. The classifier already decided these
+    # are meaningless (Windows shell, blank Excel, transient dialogs, etc.) —
+    # they should never appear in the user's review pile.
     blocks = Block.objects.filter(
         user=user,
         start__gte=start_utc,
         start__lt=effective_end,
-        is_categorized=False
+        is_categorized=False,
+    ).exclude(
+        classification_state='suppressed',
     ).select_related('client').order_by('start')[:limit]
 
     # Batch-fetch proposed client names so we don't N+1 inside the session loop
@@ -4908,6 +4992,11 @@ def get_categorization_data(request):
         )
         if proposed_client_ids else {}
     )
+    # Build name-keyed lookup for heuristic suggestions
+    clients_by_name_lower = {
+        c.name.lower(): c.name
+        for c in Client.objects.filter(org=org, is_active=True)
+    }
     
     original_count = len(blocks)
     

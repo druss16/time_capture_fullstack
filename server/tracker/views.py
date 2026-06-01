@@ -1763,10 +1763,12 @@ def ai_suggestions_today(request):
     if org:
         qs = qs.filter(org=org)
 
-    all_blocks = list(qs)
+    # ✅ ADD THIS: Apply limit BEFORE converting to list
+    qs = qs[:limit]  # Slice the queryset
+    all_blocks = list(qs)  # Convert to list (already limited)
     if not all_blocks:
         return Response([])
-
+    
     # =========================================================
     # STEP 2: Split blocks into categorized vs uncategorized
     # Categorized blocks are NEVER sent to AI

@@ -4381,6 +4381,12 @@ def resolve_ai_disagreement(request, block_id):
     accept  — switch block to the proposed client (whichever flow)
     dismiss — keep current client, mark resolved
     change  — switch to a third client (specified via client_id in body)
+
+    v1.3.61: All client mutations route through ClassificationService.recommit
+    so a manual ClassificationAudit row is written. The audit row's detail
+    records {flow, resolution} — this is the highest-value ground-truth label
+    in the system (the classifier flagged a likely error; this is the user's
+    verdict on it), and the precision report reads it to score each detector.
     """
     user = get_request_user_override(request)
     if not user or not user.is_authenticated:
@@ -4396,6 +4402,7 @@ def resolve_ai_disagreement(request, block_id):
         return JsonResponse({'error': 'invalid_action'}, status=400)
 
     from tracker.models import Block, Client
+    from tracker.services.classification_service import ClassificationService
 
     # Look up by all three flags — frontend doesn't tell us which type
     try:
@@ -4437,11 +4444,16 @@ def resolve_ai_disagreement(request, block_id):
 
     old_client_id = block.client_id
 
+    # Build the recommit override based on action. override stays None for
+    # 'dismiss' (no client change), in which case we still write an audit row
+    # below to record that the user rejected the flag.
+    override = None
+
     if action == 'accept':
         if not proposed_client_id:
             return JsonResponse({'error': no_proposal_error}, status=400)
-        block.client_id = proposed_client_id
         resolution = 'accepted'
+        override = {'client_id': proposed_client_id}
         # v1.3.47: For calendar accept, also reclassify as meeting time.
         # The user is confirming "this block represents meeting time," not
         # "this foreground app is owned by the meeting's client." So bill
@@ -4451,11 +4463,14 @@ def resolve_ai_disagreement(request, block_id):
             minutes = block.minutes or 0
             hours = round(minutes / 60.0, 2) if minutes else 0.0
             meeting_category = _get_meeting_category_for_org(block.org)
-            block.category_hours = {meeting_category: hours}
+            override['category'] = meeting_category
+            override['category_hours'] = {meeting_category: hours}
             logger.info(
                 f"[CAL-ACCEPT] Block {block.pk}: reclassified to "
-                f"'{meeting_category}' ({hours}h) for {block.client.name if block.client else '?'}"
+                f"'{meeting_category}' ({hours}h) for "
+                f"{block.client.name if block.client else '?'}"
             )
+
     elif action == 'change':
         new_client_id = body.get('client_id')
         if not new_client_id:
@@ -4464,12 +4479,14 @@ def resolve_ai_disagreement(request, block_id):
             new_client = Client.objects.get(id=new_client_id, org=block.org)
         except Client.DoesNotExist:
             return JsonResponse({'error': 'client_not_found'}, status=404)
-        block.client_id = new_client.id
         resolution = 'changed_to_other'
-    else:  # dismiss
+        override = {'client_id': new_client.id}
+
+    else:  # dismiss — keep current client, just mark resolved
         resolution = 'dismissed'
 
-    # Stamp resolution on the appropriate set of fields
+    # Stamp resolution on the appropriate set of fields. Done on the in-memory
+    # instance BEFORE the service save so it persists in the same write.
     now = timezone.now()
     if flow == 'ai':
         block.ai_disagreement_resolved_at = now
@@ -4481,7 +4498,49 @@ def resolve_ai_disagreement(request, block_id):
         block.calendar_disagreement_resolved_at = now
         block.calendar_disagreement_resolution = resolution
 
-    block.save(force_classifier=True)
+    # Audit detail — the structured ground-truth label for this resolution.
+    audit_detail = {
+        'flow':          flow,
+        'resolution':    resolution,
+        'proposed_client_id': proposed_client_id,
+        'old_client_id': old_client_id,
+    }
+
+    service = ClassificationService(org=block.org, user=user)
+
+    if override is not None:
+        # accept / change — writes the manual ClassificationAudit row.
+        service.recommit(
+            block, user=user, override=override, audit_detail=audit_detail
+        )
+    else:
+        # dismiss — no client change, but still record the verdict so the
+        # report can see "user said the flag was a false alarm."
+        block.save(force_classifier=True)
+        try:
+            from tracker.models import ClassificationAudit
+            ClassificationAudit.objects.create(
+                block=block,
+                source='manual',
+                client_before_id=old_client_id,
+                client_after_id=old_client_id,   # unchanged
+                category_before=ClassificationService._extract_dominant_category(block),
+                category_after=ClassificationService._extract_dominant_category(block),
+                confidence_client=1.0,
+                confidence_category=1.0,
+                overall_confidence=1.0,
+                matched_signals=[{
+                    'type': 'user_dismiss_disagreement',
+                    'strength': 1.0,
+                    'evidence': f'User {getattr(user, "username", "?")} dismissed {flow} disagreement',
+                    'detail': audit_detail,
+                }],
+                corrected_by_user=False,   # dismiss = original stood = NOT a correction
+            )
+        except Exception as e:
+            logger.warning(f"[RESOLVE-DISAGREE] dismiss audit write failed for block {block.pk}: {e}")
+
+    block.refresh_from_db()
 
     return JsonResponse({
         'block_id': block.id,

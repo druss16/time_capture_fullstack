@@ -952,7 +952,7 @@ class ClassificationService:
         return block
 
     @transaction.atomic
-    def recommit(self, block, user, override: dict):
+    def recommit(self, block, user, override: dict, audit_detail: dict = None):
         """
         Record a user's manual client/category correction on a block — even
         if it's already committed. This is THE single path every correction
@@ -1027,7 +1027,7 @@ class ClassificationService:
                 'type': 'user_correction',
                 'strength': 1.0,
                 'evidence': f'User {getattr(user, "username", "?")} corrected client/category',
-                'detail': {k: v for k, v in override.items()},
+                'detail': {**{k: v for k, v in override.items()}, **(audit_detail or {})},
             }],
             corrected_by_user=True,
         )

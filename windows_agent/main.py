@@ -432,9 +432,10 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
     if notif_manager:
         notif_manager.set_current_client(client_id, client_name)
 
-    # 5. AI switcher
-    # 5. AI switcher — only snooze on MANUAL switches, not AI auto-switches
-    if ai_switcher and source != "ai_switcher":
+    # 5. AI switcher — only snooze on MANUAL switches, not AI auto-switches.
+    # v1.3.62: "stale_clear" source also bypasses snooze — we want AI-SWITCH
+    # to immediately re-detect any real client activity after a stale clear.
+    if ai_switcher and source not in ("ai_switcher", "stale_clear"):
         ai_switcher.on_manual_switch(client_id, client_name)
     elif ai_switcher:
         ai_switcher.set_current_client(client_id, client_name)

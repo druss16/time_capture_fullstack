@@ -384,6 +384,13 @@ DEFAULT_CONFIG = {
     "cooldown_seconds": 0,
     "manual_override_snooze_minutes": 0,
 
+    # v1.3.62: Stale-clear safety net. If no window activity affirms the
+    # cached client for this many seconds, AI-SWITCH clears the cache via
+    # set_current_client_fn(None). Defends against the widget_tracker.demote
+    # gap (widget stays in "captured" when the cache holds a client whose
+    # titles never actually appeared in user activity).
+    "client_stale_timeout_seconds": 600,
+
     "ai_timeout": 10,
     "max_ai_calls_per_hour": 60,
     "ai_debounce_seconds": 2.0,
@@ -1483,6 +1490,9 @@ class AIClientSwitcher:
         self._ai_timer: Optional[threading.Timer] = None
 
         self._current_client_id:   Optional[int] = None
+        # v1.3.62: Track time of last "affirming signal" — any window event
+        # whose title/path matches the cached client. Drives _check_stale_client().
+        self._last_affirming_signal_at: float = time.time()
         self._current_client_name: Optional[str] = None
         self._pending_switch:      Optional[dict] = None
 
@@ -1579,9 +1589,84 @@ class AIClientSwitcher:
         self._current_client_id   = client_id
         self._current_client_name = client_name
 
+    def _check_stale_client(self, title: Optional[str], file_path: Optional[str]) -> bool:
+        """
+        v1.3.62: Clear the cached client when no recent activity affirms it.
+
+        Called at the top of on_window_change. If the current title/path
+        contains the cached client's name/aliases (via LearnedRules fuzzy
+        match), updates the affirmation timer. If not, and the time since
+        last affirmation exceeds client_stale_timeout_seconds, clears the
+        cache via set_current_client_fn(None, None, "stale_clear").
+
+        Why this exists: widget_state_tracker has a demote-to-captured
+        callback that clears stale clients, BUT it only fires when the
+        tracker transitions FROM committed/proposed TO captured. If the
+        cache gets populated with a client whose titles never match (e.g.,
+        backend served a stale CurrentClient row on startup), the widget
+        tracker stays in initial "captured" state forever and the demote
+        callback never fires. Wayne/TL Wall block 39995 (2026-06-01) is
+        the canonical case.
+
+        Returns True if a stale-clear was triggered (caller can use this
+        to know cache was just modified).
+        """
+        if not self.set_current_client_fn:
+            return False
+
+        cached_id = self._current_client_id
+        if not cached_id:
+            # No cached client — keep timer rolling so we don't immediately
+            # fire as soon as a real client gets set.
+            self._last_affirming_signal_at = time.time()
+            return False
+
+        # Look up the client's name from our cached clients list so we can
+        # fuzzy-match against the title. If the name isn't findable, skip.
+        cached_name = None
+        if hasattr(self, "clients") and self.clients:
+            for c in self.clients:
+                if c.get("id") == cached_id:
+                    cached_name = c.get("name")
+                    break
+
+        if not cached_name:
+            return False
+
+        haystack = " ".join(p for p in [title or "", file_path or ""] if p).lower()
+
+        try:
+            affirms = LearnedRules._title_contains_client(haystack, cached_name)
+        except Exception:
+            affirms = False
+
+        if affirms:
+            self._last_affirming_signal_at = time.time()
+            return False
+
+        elapsed = time.time() - self._last_affirming_signal_at
+        timeout = self.config.get("client_stale_timeout_seconds", 600)
+        if elapsed >= timeout:
+            logger.info(
+                f"[STALE-CLEAR] Cached client {cached_name!r} (id={cached_id}) "
+                f"not affirmed for {int(elapsed)}s (threshold {timeout}s) — "
+                f"clearing. Defense against widget_tracker.demote gap."
+            )
+            try:
+                self.set_current_client_fn(None, None, "stale_clear")
+            except Exception as e:
+                logger.warning(f"[STALE-CLEAR] set_current_client_fn failed: {e}")
+            # Reset timer so we don't spam clears on every subsequent event
+            self._last_affirming_signal_at = time.time()
+            return True
+
+        return False
+
     def on_manual_switch(self, client_id: int, client_name: str):
         with self._lock:
             self._current_client_id   = client_id
+            # v1.3.62: Reset stale-clear timer
+            self._last_affirming_signal_at = time.time()
             self._current_client_name = client_name
             snooze_min = self.config["manual_override_snooze_minutes"]
             self._manual_override_until = time.time() + snooze_min * 60
@@ -1603,6 +1688,13 @@ class AIClientSwitcher:
           - Layer 2: no signal content → drop
           - Layer 3: stability gate → wait _STABILITY_SECONDS, then detect
         """
+        # v1.3.62: Stale-clear check FIRST. May clear self._current_client_id
+        # to None if the cached client hasn't been affirmed in 10+ min.
+        try:
+            self._check_stale_client(title, file_path)
+        except Exception as e:
+            logger.warning(f"[STALE-CLEAR] check failed: {e}")
+
         if not self.config["enabled"] or not title:
             return
 
@@ -2168,6 +2260,9 @@ class AIClientSwitcher:
                 self.set_current_client_fn(cid, cname, "ai_switcher")
 
             self._current_client_id   = cid
+            # v1.3.62: Reset stale-clear timer — a fresh switch is an
+            # affirming signal, so the countdown restarts here.
+            self._last_affirming_signal_at = time.time()
             self._current_client_name = cname
             self._last_title = ""
             self._cooldowns[cid] = time.time() + self.config["cooldown_seconds"]
@@ -2202,6 +2297,8 @@ class AIClientSwitcher:
         if self.set_current_client_fn:
             self.set_current_client_fn(client_id, client_name, "ai_switcher")
         self._current_client_id   = client_id
+        # v1.3.62: Reset stale-clear timer
+        self._last_affirming_signal_at = time.time()
         self._current_client_name = client_name
         if self.gui_menu_bar and hasattr(self.gui_menu_bar, "state"):
             self.gui_menu_bar.state.set_client(client_id, client_name)

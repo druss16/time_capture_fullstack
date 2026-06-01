@@ -677,7 +677,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     # The content_bucket dimension prevents Fox News from being merged with
     # Onvio into the same Block. See tracker/utils/content_classifier.py.
     blocks_to_create = []
-    for session in sessions:
+    for session_idx, session in enumerate(sessions):
         by_app_client: Dict[str, List] = {}
         for ev in session:
             app = _app_key(ev)
@@ -699,7 +699,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             )
             content_part = f"|{content_id}" if content_id else ""
 
-            key = f"{app}|{client_id}|{content_bucket}{content_part}"
+            key = f"s{session_idx}|{app}|{client_id}|{content_bucket}{content_part}"
             by_app_client.setdefault(key, []).append(ev)
 
         for key, app_events in by_app_client.items():
@@ -827,6 +827,27 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     if new_start >= existing.start and new_start <= existing.end:
                         merge_target = existing
                         break
+
+            if merge_target:
+                # v1.3.65: Reject merge if the resulting block would span more than
+                # 2 hours of wall-clock time. Cascading merges via the overlap check
+                # (lines 826-829) can grow a block's span far beyond a single work
+                # session — block 39995 (Wayne, TL Wall, 2026-06-01) ballooned to
+                # a 3.5 hour wall-clock span by accumulating overlap merges through
+                # an 86-minute idle gap. 2 hours is a generous ceiling for a
+                # single continuous work session; legitimate longer sessions can
+                # always split into multiple blocks.
+                MAX_BLOCK_SPAN_SECONDS = 7200  # 2 hours
+                candidate_start = min(merge_target.start, new_start)
+                candidate_end = max(merge_target.end, new_end)
+                candidate_span = (candidate_end - candidate_start).total_seconds()
+                if candidate_span > MAX_BLOCK_SPAN_SECONDS:
+                    logger.info(
+                        f"[COMPACT] Rejecting merge into block {merge_target.id}: "
+                        f"would expand span to {candidate_span/60:.1f}min (max 120min). "
+                        f"Creating new block instead."
+                    )
+                    merge_target = None
 
             if merge_target:
                 try:

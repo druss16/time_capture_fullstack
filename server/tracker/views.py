@@ -1766,9 +1766,11 @@ def ai_suggestions_today(request):
     # ✅ ADD THIS: Apply limit BEFORE converting to list
     qs = qs[:limit]  # Slice the queryset
     all_blocks = list(qs)  # Convert to list (already limited)
+    log(f"[suggestions] Total blocks today: {total_blocks}, Returning: {len(all_blocks)}, Limit: {limit}")
+
     if not all_blocks:
         return Response([])
-    
+
     # =========================================================
     # STEP 2: Split blocks into categorized vs uncategorized
     # Categorized blocks are NEVER sent to AI

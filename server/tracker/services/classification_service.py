@@ -1700,11 +1700,28 @@ class ClassificationService:
         ]
         if len(tokens) > 1 and len(distinctive) <= 1:
             # Multi-word alias with at most one distinctive token.
-            # Check that single distinctive token isn't generic.
+            # SINGLE_TOKEN_ALIAS_BLOCKLIST is the hard-reject list:
+            # tokens that must NEVER be the sole basis for matching
+            # ("services", "tax", "inc", etc.). Always rejected.
             if distinctive and distinctive[0] in SINGLE_TOKEN_ALIAS_BLOCKLIST:
                 return False
-            if distinctive and distinctive[0] in DOMAIN_COMMON_WORDS:
-                return False
+            # v1.3.64: DOMAIN_COMMON_WORDS check gated on token count.
+            # For 3+ token aliases, the verbatim phrase is unlikely to
+            # false-positive (full phrase rarely appears coincidentally
+            # in unrelated titles). _alias_matches_safely's Step 2
+            # verbatim substring match provides safety here; its
+            # token-based fallback still rejects matches that rely
+            # solely on DOMAIN_COMMON_WORDS tokens.
+            #
+            # Previous behavior killed legitimate clients like
+            # "The New School" because "school" is in DOMAIN_COMMON_WORDS,
+            # even though the full phrase is highly specific. See block
+            # 40003 (Wayne, 2026-06-01): "The New School - QuickBooks
+            # Accountant Desktop Plus 2024" had no Stage 3 attribution.
+            if len(tokens) < 3:
+                if distinctive and distinctive[0] in DOMAIN_COMMON_WORDS:
+                    return False
+        return True
         return True
 
     @staticmethod

@@ -79,7 +79,7 @@ class Command(BaseCommand):
             return
 
         # ---- Derive ----
-        name_pairs = [(c.pk, c.name) for c in clients]
+        name_pairs = [(c.pk, c.name, getattr(c, "email", "") or "") for c in clients]
         derived = derive_for_org(name_pairs)
 
         min_conf = opts["min_confidence"]

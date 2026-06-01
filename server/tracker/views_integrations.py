@@ -85,6 +85,27 @@ def get_integration(org, provider, connected_only=True):
             )
         return None, None
 
+def run_post_import_alias_derivation(org, min_confidence: float = 0.8):
+    """
+    Best-effort: derive client aliases for an org after a client import, then
+    prune known-junk tokens. Never raises — logs and swallows all errors so a
+    derivation problem cannot break the import that just succeeded.
+    """
+    try:
+        from django.core.management import call_command
+        from io import StringIO
+        out = StringIO()
+        call_command("derive_aliases", org_id=org.id,
+                     min_confidence=min_confidence, stdout=out)
+        call_command("prune_junk_aliases", org_id=org.id, stdout=out)
+        logger.info("Post-import alias derivation complete for org %s:\n%s",
+                    org.id, out.getvalue())
+        return {"ok": True, "log": out.getvalue()}
+    except Exception as e:
+        logger.warning("Post-import alias derivation failed for org %s: %s",
+                       getattr(org, "id", "?"), e, exc_info=True)
+        return None
+
 
 def _oauth_success_response(provider):
     """Standard OAuth success HTML with postMessage to parent window."""
@@ -491,22 +512,32 @@ def quickbooks_import(request):
         name_match = Client.objects.filter(org=org, name__iexact=name).first()
         if name_match:
             name_match.quickbooks_id = qb_id
-            name_match.quickbooks_realm_id = integration.realm_id  # ← add
+            name_match.quickbooks_realm_id = integration.realm_id
             name_match.imported_from = 'quickbooks'
-            name_match.save(update_fields=['quickbooks_id', 'quickbooks_realm_id', 'imported_from'])
+            update_fields = ['quickbooks_id', 'quickbooks_realm_id', 'imported_from']
+            email = customer.get('PrimaryEmailAddr', {}).get('Address', '') if customer.get('PrimaryEmailAddr') else ''
+            if email and not name_match.email:
+                name_match.email = email
+                update_fields.append('email')
+            name_match.save(update_fields=update_fields)
             imported.append({'id': name_match.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': True})
             continue
 
         try:
             client = Client.objects.create(
                 org=org, name=name, quickbooks_id=qb_id,
-                quickbooks_realm_id=integration.realm_id,  # ← add
+                quickbooks_realm_id=integration.realm_id,
                 imported_from='quickbooks', is_active=True,
+                email=(customer.get('PrimaryEmailAddr', {}).get('Address', '') if customer.get('PrimaryEmailAddr') else ''),
             )
             imported.append({'id': client.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': False})
         except Exception as e:
             logger.error(f"Failed to create client from QB {qb_id}: {e}")
             errors.append({'id': qb_id, 'name': name, 'error': str(e)})
+
+    # Auto-derive aliases for newly imported clients (best-effort, never breaks import)
+    if imported:
+        run_post_import_alias_derivation(org)
 
     return Response({
         'imported': imported, 'skipped': skipped, 'errors': errors,
@@ -1034,7 +1065,12 @@ def xero_import(request):
             name_match.xero_id = xero_id
             name_match.xero_tenant_id = integration.tenant_id
             name_match.imported_from = 'xero'
-            name_match.save(update_fields=['xero_id', 'xero_tenant_id', 'imported_from'])
+            update_fields = ['xero_id', 'xero_tenant_id', 'imported_from']
+            email = contact.get('EmailAddress', '') or ''
+            if email and not name_match.email:
+                name_match.email = email
+                update_fields.append('email')
+            name_match.save(update_fields=update_fields)
             imported.append({'id': name_match.id, 'name': name, 'xero_id': xero_id, 'linked_existing': True})
             continue
 
@@ -1043,10 +1079,15 @@ def xero_import(request):
                 org=org, name=name, xero_id=xero_id,
                 xero_tenant_id=integration.tenant_id,
                 imported_from='xero', is_active=True,
+                email=(contact.get('EmailAddress', '') or ''),
             )
             imported.append({'id': client.id, 'name': name, 'xero_id': xero_id, 'linked_existing': False})
         except Exception as e:
             errors.append({'id': cid, 'error': str(e)})
+
+    # Auto-derive aliases for newly imported clients (best-effort, never breaks import)
+    if imported:
+        run_post_import_alias_derivation(org)
 
     return Response({
         'imported': imported, 'skipped': skipped, 'errors': errors,

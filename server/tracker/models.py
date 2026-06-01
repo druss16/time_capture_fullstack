@@ -674,11 +674,18 @@ class Client(models.Model):
         help_text='Integration source this client was imported from'
     )
 
-    aliases = models.JSONField(
-    default=list,
-    blank=True,
-    help_text="Alternative names/abbreviations for AI client matching"
+    email = models.EmailField(
+        max_length=254,
+        blank=True,
+        default='',
+        help_text='Primary contact email pulled from QB/Xero. Used for domain-alias derivation.'
     )
+
+    aliases = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Alternative names/abbreviations for AI client matching"
+        )
 
     quickbooks_realm_id = models.CharField(max_length=50, blank=True, null=True)
     xero_tenant_id = models.CharField(max_length=50, blank=True, null=True)

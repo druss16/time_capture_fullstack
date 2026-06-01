@@ -314,6 +314,9 @@ class ClassificationService:
         # Sensitivity from org settings (drives auto-commit thresholds)
         self.sensitivity = getattr(org, 'ai_sensitivity', 50)
 
+        self._sandwich_enabled = getattr(org, 'sandwich_correlation_enabled', False)
+
+
     # -------------------------------------------------------------------------
     # PUBLIC API
     # -------------------------------------------------------------------------
@@ -3661,6 +3664,27 @@ class ClassificationService:
                     decision.recommended_state = 'committed'
                     decision.confidence = combined
                     return decision
+
+        # Stage Sandwich — temporal fallback attribution.
+        # Runs only when no real evidence produced a client. Slots between
+        # the moderate>=2 auto-commit check and FIX 6's non-billable default,
+        # enforcing precedence: real evidence > sandwich > safe default.
+        if decision.client_id is None and self._sandwich_enabled:
+            from tracker.services.sandwich_correlation import find_sandwich_attribution
+            sandwich_sig = find_sandwich_attribution(block, self.user, self.org)
+            if sandwich_sig and sandwich_sig.strength >= 0.65:
+                decision.matched_signals.append(sandwich_sig)
+                # Sandwich client is authoritative — set directly rather than
+                # routing through the strength-sort, which is fragile.
+                decision.client_id = sandwich_sig.proposed_client_id
+                decision.category = sandwich_sig.proposed_category or decision.category
+                decision.source = 'sandwich_correlation'
+                decision.reasoning = sandwich_sig.evidence
+                decision.recommended_state = 'proposed'   # never auto-commit a sandwich
+                decision.confidence = sandwich_sig.strength
+                decision.is_billable = sandwich_sig.detail.get('is_billable', True)
+                return decision
+            # else fall through to FIX 6 as today
 
         # v1.3.59 FIX 6 (extended v1.3.60): Default is_billable=False when
         # no client + no AI category. Must run BEFORE the strong/moderate/weak

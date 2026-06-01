@@ -3686,6 +3686,59 @@ class ClassificationService:
                 return decision
             # else fall through to FIX 6 as today
 
+        # v1.3.61 FIX 7: reject client_id when only agent stickiness attests to it.
+        #
+        # The agent attaches a "current client" to every captured event based on
+        # the user's most recent client work. When the user context-switches
+        # (e.g., briefly browses bank statements between client work blocks),
+        # the agent's stickiness leaks the previous client_id onto the new event.
+        #
+        # If the only signal proposing this client_id is `agent_current_client`
+        # (no alias match, no learned pattern, no AI client identification, no
+        # corroboration), the stickiness is unverified. Clear it and let FIX 6
+        # default the block to non-billable.
+        #
+        # Also clear any orphan `ai_category` signal — that category was predicated
+        # on the now-rejected client, so its category prediction is invalid.
+        if decision.client_id is not None:
+            attesting_signals = [
+                s for s in decision.matched_signals
+                if s.detail and s.detail.get('client_id') == decision.client_id
+            ]
+            non_stickiness_attestation = [
+                s for s in attesting_signals
+                if s.type != 'agent_current_client'
+            ]
+            stickiness_corroborated = any(
+                s.type == 'agent_current_client' and s.detail.get('corroborated')
+                for s in attesting_signals
+            )
+
+            if not non_stickiness_attestation and not stickiness_corroborated:
+                logger.info(
+                    f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                    f"FIX 7 clearing unattested client_id={decision.client_id} "
+                    f"(agent stickiness only, no corroboration)"
+                )
+                cleared_client_id = decision.client_id
+                decision.client_id = None
+
+                # Drop AI category — it was predicated on the now-cleared client
+                ai_cat_signals = [s for s in decision.matched_signals if s.type == 'ai_category']
+                if ai_cat_signals:
+                    decision.category = None
+                    decision.is_billable = True  # reset so FIX 6 logic fires correctly
+                    decision.matched_signals = [
+                        s for s in decision.matched_signals if s.type != 'ai_category'
+                    ]
+
+                decision.matched_signals.append(Signal(
+                    type='fix7_stickiness_rejected',
+                    strength=0.0,
+                    evidence=f'Rejected unattested client_id={cleared_client_id} (agent stickiness without corroboration)',
+                    detail={'rejected_client_id': cleared_client_id},
+                ))
+
         # v1.3.59 FIX 6 (extended v1.3.60): Default is_billable=False when
         # no client + no AI category. Must run BEFORE the strong/moderate/weak
         # return branches so it applies to ALL classification outcomes.

@@ -100,7 +100,7 @@ def _calculate_minutes_from_events(events_qs) -> int:
             merged.append((start, end))
 
     total_seconds = sum((end - start).total_seconds() for start, end in merged)
-    return int(total_seconds / 60)
+    return max(1, int(total_seconds / 60))
 
 
 def _calculate_minutes_for_events_list(events: list) -> int:

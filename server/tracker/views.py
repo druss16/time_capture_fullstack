@@ -5036,6 +5036,11 @@ def get_categorization_data(request):
                 'confidence': proposed_confidence,
                 'reasoning':  proposed_reasoning[:200],
             })
+        # v1.3.60: heuristic fallback for patterns the classifier doesn't propose
+        if not suggestions:
+            heuristic = _heuristic_suggestion(first_block, user, org, clients_by_name_lower)
+            if heuristic:
+                suggestions.append(heuristic)
 
         blocks_data.append({
             'id': first_block.id,
@@ -5549,32 +5554,26 @@ class BlockCategorizationViewSet(viewsets.ViewSet):
         
         data = serializer.validated_data
         
-        if 'client_id' in data and data['client_id']:
-            block.client_id = data['client_id']
+        from tracker.services.classification_service import ClassificationService
+
+        # Fields the service doesn't own — set these directly, then save
+        # via the service so the manual ClassificationAudit row gets written.
         if 'project_id' in data and data['project_id']:
             block.project_id = data['project_id']
         if 'task_type_id' in data and data['task_type_id']:
             block.task_type_id = data['task_type_id']
         if data.get('notes'):
             block.notes = data['notes']
-        
-        # Mark as categorized
-        if not block.is_categorized:
-            block.is_categorized = True
-            block.categorized_by = 'manual'
-            block.categorized_at = timezone.now()
-            # State machine
-            block.classification_state = 'committed'
-            block.state_changed_at = timezone.now()
-            block.state_changed_by = 'user'
-        else:
-            block.categorized_by = 'correction'
-            # State machine — user is correcting an existing classification
-            block.classification_state = 'committed'
-            block.state_changed_at = timezone.now()
-            block.state_changed_by = 'correction'
-        
-        block.save(force_update=True)
+
+        override = {}
+        if 'client_id' in data and data['client_id']:
+            override['client_id'] = data['client_id']
+        if 'category' in data and data.get('category'):
+            override['category'] = data['category']
+
+        service = ClassificationService(org=block.org, user=request.user)
+        service.recommit(block, user=request.user, override=override)
+        block.refresh_from_db()
         
         return Response(BlockSerializer(block).data)
     

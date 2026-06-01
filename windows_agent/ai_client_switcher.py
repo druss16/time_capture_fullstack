@@ -42,6 +42,14 @@ from tax_software_constants import (
     GENERIC_TAX_DIALOGS,
 )
 
+# _should_skip() does an exact-match membership test:
+#     title_lower in GENERIC_TAX_DIALOGS
+# That only suppresses dialogs if every entry is already lowercased. A
+# mixed-case entry in the shared mirror would silently stop suppressing
+# that dialog, leaking it into the rule engine. Normalize defensively so
+# a mirror drift can't reintroduce the bug.
+GENERIC_TAX_DIALOGS = frozenset(d.lower().strip() for d in GENERIC_TAX_DIALOGS)
+
 def _version_lt(a: str, b: str) -> bool:
     """Numeric semver compare. Returns True if a < b. Returns False
     for non-numeric strings (dev, unknown, custom) — caller must
@@ -1499,7 +1507,8 @@ class AIClientSwitcher:
 
         self.stats = {
             "regex": 0, "cache": 0, "learned": 0, "file_conv": 0,
-            "backend_ai": 0, "partial_word": 0, "acronym": 0,  # ← add this
+            "backend_ai": 0, "partial_word": 0, "acronym": 0,
+            "regex_rejected": 0, "cache_invalidated": 0, "backend_ai_rejected": 0,
             "switches": 0, "suppressed": 0, "org_rule": 0,
         }
 
@@ -1851,15 +1860,47 @@ class AIClientSwitcher:
             logger.info(f"[AI-SWITCH] _detect: regex_hit={regex_hit} cur_id={cur_id}")
             if regex_hit and regex_hit.client_id != cur_id:
                 if regex_hit.confidence >= self.config["local_confidence_threshold"]:
+                    # Resolve the stat key once.
                     if regex_hit.match_method == "acronym":
                         stat_key = "acronym"
                     elif regex_hit.match_method == "partial_word":
                         stat_key = "partial_word"
                     else:
                         stat_key = "regex"
-                    self.stats[stat_key] += 1
-                    self._queue_switch(regex_hit)
-                    return
+
+                    # For fuzzy match methods (acronym, partial_word), reject
+                    # the switch if the title clearly names a DIFFERENT active
+                    # client. Mirrors the cache-hit and backend-AI validation.
+                    # Exact/alias matches are high-precision and skip this check.
+                    if regex_hit.match_method in ("partial_word", "acronym"):
+                        contradicted_by = self._title_strongly_matches_other_client(
+                            title, exclude_client_id=regex_hit.client_id
+                        )
+                        if contradicted_by is not None:
+                            logger.warning(
+                                f"[AI-SWITCH] regex {regex_hit.match_method} REJECTED for "
+                                f"{title[:60]!r}: matched client_id={regex_hit.client_id} "
+                                f"({regex_hit.client_name!r}) but title evidence points to "
+                                f"client_id={contradicted_by}"
+                            )
+                            self.stats["regex_rejected"] = (
+                                self.stats.get("regex_rejected", 0) + 1
+                            )
+                            # Discard the rejected match so it can't resurface
+                            # as a suggestion at the bottom of _detect. The
+                            # title names a different client — this hit is wrong,
+                            # not merely low-confidence.
+                            regex_hit = None
+                            # Fall through — let learned/file_conv/tier0 try.
+                        else:
+                            self.stats[stat_key] += 1
+                            self._queue_switch(regex_hit)
+                            return
+                    else:
+                        # exact / alias — already high-precision, switch directly
+                        self.stats[stat_key] += 1
+                        self._queue_switch(regex_hit)
+                        return
 
             # Tier 1a: Pattern cache
             cached = self._cache.get(title)

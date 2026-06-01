@@ -624,12 +624,12 @@ class ClassificationService:
                     from tracker.models import Block
                     Block.objects.filter(pk=block.pk).update(
                         mail_disagrees_with_agent=False,
-                        mail_proposed_client=None,
+                        mail_proposed_client_id=None,
                         mail_proposed_confidence=None,
                         mail_disagreement_reasoning='',
                     )
                     block.mail_disagrees_with_agent = False
-                    block.mail_proposed_client = None
+                    block.mail_proposed_client_id = None
                     block.mail_proposed_confidence = None
                     block.mail_disagreement_reasoning = ''
 
@@ -736,13 +736,13 @@ class ClassificationService:
                     from tracker.models import Block
                     Block.objects.filter(pk=block.pk).update(
                         calendar_disagrees_with_agent=False,
-                        calendar_proposed_client=None,
+                        calendar_proposed_client_id=None,
                         calendar_proposed_confidence=None,
                         calendar_disagreement_reasoning='',
                         calendar_disagreement_source='',
                     )
                     block.calendar_disagrees_with_agent = False
-                    block.calendar_proposed_client = None
+                    block.calendar_proposed_client_id = None
                     block.calendar_proposed_confidence = None
                     block.calendar_disagreement_reasoning = ''
                     block.calendar_disagreement_source = ''
@@ -947,6 +947,89 @@ class ClassificationService:
                 'detail':   override or {},
             }],
             corrected_by_user=bool(override),
+        )
+
+        return block
+
+    @transaction.atomic
+    def recommit(self, block, user, override: dict):
+        """
+        Record a user's manual client/category correction on a block — even
+        if it's already committed. This is THE single path every correction
+        endpoint must call so that a ClassificationAudit row (source='manual',
+        corrected_by_user=True) is always written. That audit row is the
+        ground-truth label the precision report reads.
+
+        Unlike commit(), this does NOT raise on already-committed blocks —
+        correcting a wrong attribution on a committed block is the common case.
+
+        Args:
+            block: Block being corrected (any state)
+            user:  request.user performing the correction
+            override: {'client_id': int|None, 'category': str,
+                       'category_hours': dict, 'is_billable': bool} —
+                      any subset; absent keys keep the block's current value.
+
+        Returns:
+            Updated block.
+        """
+        from tracker.models import ClassificationAudit
+
+        old_client_id = block.client_id
+        old_category = self._extract_dominant_category(block)
+
+        # Resolve final values: override wins, else keep what's on the block.
+        if 'client_id' in override:
+            final_client_id = override['client_id']
+        else:
+            final_client_id = block.client_id
+
+        final_category = override.get('category', old_category) or ''
+        final_category_hours = override.get('category_hours')
+        if not final_category_hours and final_category:
+            hours = round((block.minutes or 0) / 60.0, 2) if block.minutes else 0.0
+            final_category_hours = {final_category: hours}
+
+        is_billable = override.get('is_billable', block.is_billable)
+
+        block.client_id = final_client_id
+        if final_category_hours is not None:
+            block.category_hours = final_category_hours
+        block.is_billable = is_billable
+        block.classification_state = 'committed'
+        block.state_changed_at = timezone.now()
+        block.state_changed_by = 'correction'
+        block.is_categorized = True
+        if not block.categorized_at:
+            block.categorized_at = timezone.now()
+        block.categorized_by = 'correction'
+
+        # A manual correction is authoritative — clear stale disagreement
+        # flags so resolved banners don't keep reappearing in Daily Review.
+        for f in ('ai_disagrees_with_agent', 'mail_disagrees_with_agent',
+                  'calendar_disagrees_with_agent'):
+            if hasattr(block, f):
+                setattr(block, f, False)
+
+        block.save(force_classifier=True)
+
+        ClassificationAudit.objects.create(
+            block=block,
+            source='manual',
+            client_before_id=old_client_id,
+            client_after_id=final_client_id,
+            category_before=old_category,
+            category_after=final_category,
+            confidence_client=1.0,
+            confidence_category=1.0,
+            overall_confidence=1.0,
+            matched_signals=[{
+                'type': 'user_correction',
+                'strength': 1.0,
+                'evidence': f'User {getattr(user, "username", "?")} corrected client/category',
+                'detail': {k: v for k, v in override.items()},
+            }],
+            corrected_by_user=True,
         )
 
         return block

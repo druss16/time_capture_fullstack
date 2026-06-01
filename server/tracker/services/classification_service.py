@@ -1686,9 +1686,6 @@ class ClassificationService:
             return False
         if a in SHORT_ALIAS_STOPLIST:
             return False
-        # NEW: Reject multi-word aliases that reduce to a single generic
-        # distinctive token. "ASR Systems Group" → ['systems'] is a trap.
-        # Better to refuse the alias entirely than to match it badly.
         import re
         normalized = re.sub(r'[^a-z\s]', ' ', a)
         tokens = [t for t in normalized.split() if t]
@@ -1699,29 +1696,32 @@ class ClassificationService:
             and t not in ALIAS_GENERIC_SUFFIXES
         ]
         if len(tokens) > 1 and len(distinctive) <= 1:
-            # Multi-word alias with at most one distinctive token.
-            # SINGLE_TOKEN_ALIAS_BLOCKLIST is the hard-reject list:
-            # tokens that must NEVER be the sole basis for matching
-            # ("services", "tax", "inc", etc.). Always rejected.
+            # Multi-word alias whose only distinctive token is in the
+            # SINGLE_TOKEN_ALIAS_BLOCKLIST is rejected outright. These are
+            # tokens that should NEVER be a sole basis for matching anything
+            # ("services", "company", "inc"...).
             if distinctive and distinctive[0] in SINGLE_TOKEN_ALIAS_BLOCKLIST:
                 return False
-            # v1.3.64: DOMAIN_COMMON_WORDS check gated on token count.
-            # For 3+ token aliases, the verbatim phrase is unlikely to
-            # false-positive (full phrase rarely appears coincidentally
-            # in unrelated titles). _alias_matches_safely's Step 2
-            # verbatim substring match provides safety here; its
-            # token-based fallback still rejects matches that rely
-            # solely on DOMAIN_COMMON_WORDS tokens.
+            # v1.3.64: Removed the DOMAIN_COMMON_WORDS check that previously
+            # lived here. It was both REDUNDANT and OVERLY AGGRESSIVE:
             #
-            # Previous behavior killed legitimate clients like
-            # "The New School" because "school" is in DOMAIN_COMMON_WORDS,
-            # even though the full phrase is highly specific. See block
-            # 40003 (Wayne, 2026-06-01): "The New School - QuickBooks
-            # Accountant Desktop Plus 2024" had no Stage 3 attribution.
-            if len(tokens) < 3:
-                if distinctive and distinctive[0] in DOMAIN_COMMON_WORDS:
-                    return False
-        return True
+            #   REDUNDANT — _alias_matches_safely already enforces this
+            #   in its token-based fallback path (require >=1 non-domain-
+            #   common distinctive match for multi-token aliases).
+            #
+            #   OVERLY AGGRESSIVE — pre-rejected legitimate verbatim phrases.
+            #   The verbatim substring match in _alias_matches_safely
+            #   (Step 2) is inherently safe — the full phrase "The New
+            #   School" won't appear in "Microsoft School Edition", so
+            #   verbatim matches via this path are high-quality.
+            #
+            # Architecturally: safety should be a property of MATCHES
+            # (alias + haystack pairs), not of aliases in isolation.
+            # _alias_is_safe shouldn't be making safety decisions at all —
+            # it should only do basic structural sanity checks. Future
+            # cleanup: consider deleting this function entirely and folding
+            # the SHORT_ALIAS_STOPLIST + SINGLE_TOKEN_ALIAS_BLOCKLIST checks
+            # into _alias_matches_safely.
         return True
 
     @staticmethod

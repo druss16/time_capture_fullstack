@@ -3117,22 +3117,47 @@ def get_current_client(request):
     """
     Get the current client for this device/user.
     Called by GUI on startup to restore state.
-    
+
+    v1.3.63: Added staleness guard. If the CurrentClient row hasn't been
+    affirmed by the agent within STALE_CURRENT_CLIENT_MINUTES, treat as
+    stale and return None. Prevents the feedback loop where an old
+    CurrentClient row (e.g. set by AI-SWITCH hours ago, never cleared
+    because widget_tracker's demote didn't fire) keeps re-poisoning the
+    agent on startup. See TL Wall block 39995 (Wayne, 2026-06-01).
+
     Returns: {
       "client_id": int | null,
       "client_name": str | null,
-      "started_at": timestamp | null
+      "started_at": timestamp | null,
+      "updated_at": timestamp | null
     }
     """
+    from django.utils import timezone
+    from datetime import timedelta
+
+    STALE_CURRENT_CLIENT_MINUTES = 30
+
     user = request.user
     device = getattr(request, "agent_device", None)
-    
+
     try:
         current = CurrentClient.objects.select_related('client').get(
             user=user,
             device_id=device.id if device else 0
         )
-        
+
+        # Staleness guard
+        if current.updated_at and (
+            timezone.now() - current.updated_at
+            > timedelta(minutes=STALE_CURRENT_CLIENT_MINUTES)
+        ):
+            return Response({
+                "client_id": None,
+                "client_name": None,
+                "started_at": None,
+                "updated_at": None,
+            })
+
         return Response({
             "client_id": current.client_id,
             "client_name": current.client.name if current.client else None,

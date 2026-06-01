@@ -341,34 +341,28 @@ def _set_cached_client(client_id, client_name):
 
 def _get_cached_client():
     """
-    Get current client from cache. If stale, refresh from backend.
-    Returns (client_id, client_name).
+    Get current client from local cache. Returns (client_id, client_name).
+
+    v1.3.63: Removed the backend-refresh-on-TTL-expiry path that previously
+    lived here. The agent is now authoritative for current_client during a
+    session. The cache is set ONLY by:
+      - _apply_client_switch (user pick, AI-SWITCH detect, tray/notif confirm)
+      - widget_tracker demote callback (clears to None after 15 min stale)
+      - Startup hydration (one-time, via run_agent's seed block ~line 2463)
+
+    Previously, write_event called this function on every event flush. When
+    the local cache TTL expired (60s), the function fetched from backend and
+    overwrote local cache. If backend had a stale CurrentClient row (e.g.,
+    set hours ago by AI-SWITCH and never cleared because widget_tracker's
+    demote didn't fire), every subsequent event got stamped with that stale
+    client_id. See TL Wall block 39995 (Wayne, 2026-06-01) for the canonical
+    case: Holly Corbett=257 stamped on 84 events spanning unrelated browsing
+    because backend kept feeding the agent its own stale value.
+
+    Backend remains write-only during sessions via set_current_client_backend.
+    Cross-device or web-UI selections are NOT propagated mid-session; users
+    on a new device must wait for the next agent startup or pick manually.
     """
-    global _cached_client_id, _cached_client_name, _cached_client_updated
-
-    now = time.time()
-    with _client_cache_lock:
-        if (now - _cached_client_updated) < _CLIENT_CACHE_TTL:
-            return _cached_client_id, _cached_client_name
-
-    # Stale — refresh from backend (only if network is up)
-    if not is_network_ok():
-        with _client_cache_lock:
-            return _cached_client_id, _cached_client_name
-
-    api_key = config.get("api_key") or API_KEY
-    if api_key and API_BASE:
-        try:
-            current = get_current_client_from_backend(API_BASE, api_key)
-            if current:
-                cid = current.get("client_id")
-                cname = current.get("client_name")
-                _set_cached_client(cid, cname)
-                return cid, cname
-        except Exception as e:
-            log(f"[CLIENT-CACHE] Backend refresh failed: {e}")
-
-    # Return stale cache rather than nothing
     with _client_cache_lock:
         return _cached_client_id, _cached_client_name
 
@@ -2013,7 +2007,12 @@ def run_agent():
                     next((c.get("name") for c in (sync.clients or []) if c.get("id") == cid), "Unknown"),
                     source="tray_menu"
                 ),
-                get_current_client=lambda: get_current_client_from_backend(api_base, api_key),
+                # v1.3.63: Tray reads from local cache during session, not backend.
+                # Agent is the source of truth.
+                get_current_client=lambda: {
+                    "client_id": _cached_client_id,
+                    "client_name": _cached_client_name,
+                },
                 repair_callback=repair_device,
                 sync=sync,
             )

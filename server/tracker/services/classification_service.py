@@ -401,6 +401,14 @@ class ClassificationService:
         # Stage 9 — Learned patterns
         self._stage_9_learned_patterns(block, decision)
 
+        # Stage 9.5 — Bracket attribution (same-day temporal context)
+        # Fires only when no earlier stage produced a moderate-or-better
+        # client signal. Catches "context work" like bank portals and brief
+        # Excel scratch that are bracketed by attributed work for one client.
+        # Strength 0.65 — strong enough to override stale agent signals,
+        # weak enough to defer to direct title evidence.
+        self._stage_9_5_bracket_attribution(block, decision)
+
         # Stage 10 — AI inference (last resort, only when nothing else fired)
         # Calls OpenAI to classify when stages 0-9 produced no signals.
         # Cost-controlled: only invoked if no Signal has strength >= 0.65.
@@ -2967,6 +2975,138 @@ class ClassificationService:
                             },
                         ))
 
+
+    def _stage_9_5_bracket_attribution(self, block, decision: ClassificationDecision):
+        """
+        Stage 9.5 — Same-day temporal bracket attribution.
+
+        When a block has no strong client signal of its own, look at neighboring
+        blocks (within ±30 min, same user, same day, not suppressed, not idle).
+        If BOTH the immediately preceding and following neighbors share the SAME
+        client, propose that client at moderate strength (0.65).
+
+        Why: "Context work" — bank portals, brief Excel scratch, Outlook checks,
+        document viewers — often has weak or no direct client evidence. But it's
+        almost always sandwiched between attributed work for a single client.
+        Using the surrounding context is far better than defaulting to
+        Personal/Non-Billable.
+
+        Strict guards:
+          1. Bracket only fires if NO existing signal already proposes a client
+             at strength >= 0.65 (don't override genuine evidence).
+          2. BOTH neighbors must exist, both must have a client, both must agree
+             on the same client. If neighbors disagree or one side is missing,
+             bracket does not fire (avoid spurious early-of-day or
+             ambiguous-context attributions).
+          3. Neighbors must be classified by a NON-BRACKET source. This prevents
+             cascading: bracket assigns A to client X, then A is used to bracket
+             B, etc. The source filter breaks the chain.
+          4. Idle, suppressed, and Internal-Tax neighbors don't count.
+
+        Signal strength 0.65: strong enough to override stale
+        agent_current_client (0.45) and the fix6_default fallback (0.50),
+        weak enough to defer to actual title evidence (0.82+).
+        """
+        from tracker.models import Block
+        from datetime import timedelta
+
+        # Guard 1: Don't fire if a real signal already proposes a client at
+        # moderate-or-better strength. Bracket is a fallback, not an override.
+        for sig in decision.matched_signals:
+            if sig.proposed_client_id and sig.strength >= 0.65:
+                return
+
+        # Need block boundaries to query neighbors
+        if not block.start or not block.end:
+            return
+
+        WINDOW = timedelta(minutes=30)
+
+        # Sources whose attribution should NOT seed bracket attribution
+        # (avoid cascading from one bracket-attributed block to another)
+        EXCLUDE_SOURCES = {'bracket_attribution', 'bracket'}
+
+        # Find immediately preceding block with a client
+        prev_block = Block.objects.filter(
+            user=block.user,
+            day=block.day,
+            end__lte=block.start,
+            end__gte=block.start - WINDOW,
+            client__isnull=False,
+            classification_state__in=('committed', 'proposed'),
+        ).exclude(
+            client__name='Internal - Tax',
+        ).exclude(
+            state_changed_by__in=EXCLUDE_SOURCES,
+        ).order_by('-end').first()
+
+        if not prev_block:
+            return  # no preceding neighbor — bail (strict mode)
+
+        # Find immediately following block with a client
+        next_block = Block.objects.filter(
+            user=block.user,
+            day=block.day,
+            start__gte=block.end,
+            start__lte=block.end + WINDOW,
+            client__isnull=False,
+            classification_state__in=('committed', 'proposed'),
+        ).exclude(
+            client__name='Internal - Tax',
+        ).exclude(
+            state_changed_by__in=EXCLUDE_SOURCES,
+        ).order_by('start').first()
+
+        if not next_block:
+            return  # no following neighbor — bail (strict mode)
+
+        # Both must agree on the same client
+        if prev_block.client_id != next_block.client_id:
+            logger.info(
+                f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
+                f"neighbors disagree — prev={prev_block.client_id} "
+                f"next={next_block.client_id} — not firing"
+            )
+            return
+
+        # All guards passed — fire the signal
+        client = next((c for c in self._clients if c.id == prev_block.client_id), None)
+        if not client:
+            return  # client not in this user's client list (shouldn't happen, but safe)
+
+        gap_before_sec = int((block.start - prev_block.end).total_seconds())
+        gap_after_sec = int((next_block.start - block.end).total_seconds())
+
+        evidence = (
+            f"Adjacent blocks attributed to '{client.name}' "
+            f"(prev block {prev_block.id} ended {gap_before_sec // 60}min before, "
+            f"next block {next_block.id} starts {gap_after_sec // 60}min after)"
+        )
+
+        logger.info(
+            f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
+            f"bracket-attributing to '{client.name}' (id={client.id}) "
+            f"via neighbors {prev_block.id} and {next_block.id}"
+        )
+
+        decision.matched_signals.append(Signal(
+            type='bracket_attribution',
+            strength=0.65,
+            evidence=evidence,
+            detail={
+                'client_id': client.id,
+                'client_name': client.name,
+                'previous_block_id': prev_block.id,
+                'next_block_id': next_block.id,
+                'gap_before_sec': gap_before_sec,
+                'gap_after_sec': gap_after_sec,
+            },
+        ))
+
+    # -------------------------------------------------------------------------
+    # STAGE 10 — AI inference (last resort, cost-controlled)
+    # -------------------------------------------------------------------------
+
     @staticmethod
     def _learned_pattern_strength(pattern) -> float:
         """
@@ -2990,9 +3130,6 @@ class ClassificationService:
 
         return round(base, 3)
 
-    # -------------------------------------------------------------------------
-    # STAGE 10 — AI inference (last resort, cost-controlled)
-    # -------------------------------------------------------------------------
 
     def _stage_10_ai_inference(self, block, decision: ClassificationDecision):
         """

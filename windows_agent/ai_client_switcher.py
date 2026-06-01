@@ -1587,6 +1587,8 @@ class AIClientSwitcher:
 
     def set_current_client(self, client_id: int, client_name: str):
         self._current_client_id   = client_id
+        # v1.3.62: Reset stale-clear timer
+        self._last_affirming_signal_at = time.time()
         self._current_client_name = client_name
 
     def _check_stale_client(self, title: Optional[str], file_path: Optional[str]) -> bool:

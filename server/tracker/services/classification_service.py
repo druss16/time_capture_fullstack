@@ -499,6 +499,18 @@ class ClassificationService:
                     # Don't write block.client_id — keep agent's choice
                 else:
                     block.client_id = decision.client_id
+            else:
+                # v1.3.61: decision says no client — clear agent's stale attribution.
+                # The classifier (FIX 7 in _finalize_decision, or any other path)
+                # determined no signal attests to the existing client_id. Drop it.
+                # Without this, phantom client_ids from agent stickiness survive
+                # into committed state — see Terri's KeyBank → BH Enterprises case.
+                if old_client_id:
+                    logger.info(
+                        f"[APPLY] Block {block.pk}: classifier cleared agent's "
+                        f"stale client_id={old_client_id} (no signal attested)"
+                    )
+                    block.client_id = None
             
             # Ensure category_hours is populated with a real category. The
             # dashboard's today_time filters out 'Idle' and 'Uncategorized'

@@ -2977,131 +2977,218 @@ class ClassificationService:
 
 
     def _stage_9_5_bracket_attribution(self, block, decision: ClassificationDecision):
-        """
-        Stage 9.5 — Same-day temporal bracket attribution.
+            """
+            Stage 9.5 — Same-day temporal bracket attribution.
 
-        When a block has no strong client signal of its own, look at neighboring
-        blocks (within ±30 min, same user, same day, not suppressed, not idle).
-        If BOTH the immediately preceding and following neighbors share the SAME
-        client, propose that client at moderate strength (0.65).
+            When a block has no strong client signal of its own, look at neighboring
+            blocks (same user, same day, not suppressed, not idle) and propose a
+            client based on the surrounding work context.
 
-        Why: "Context work" — bank portals, brief Excel scratch, Outlook checks,
-        document viewers — often has weak or no direct client evidence. But it's
-        almost always sandwiched between attributed work for a single client.
-        Using the surrounding context is far better than defaulting to
-        Personal/Non-Billable.
+            Two modes:
+              - Two-sided bracket (BOTH preceding AND following neighbor within ±30
+                min, same client) → strength 0.65
+              - One-sided bracket (only one neighbor within ±15 min) → strength 0.55
 
-        Strict guards:
-          1. Bracket only fires if NO existing signal already proposes a client
-             at strength >= 0.65 (don't override genuine evidence).
-          2. BOTH neighbors must exist, both must have a client, both must agree
-             on the same client. If neighbors disagree or one side is missing,
-             bracket does not fire (avoid spurious early-of-day or
-             ambiguous-context attributions).
-          3. Neighbors must be classified by a NON-BRACKET source. This prevents
-             cascading: bracket assigns A to client X, then A is used to bracket
-             B, etc. The source filter breaks the chain.
-          4. Idle, suppressed, and Internal-Tax neighbors don't count.
+            The asymmetric window is intentional: two-sided evidence is much
+            stronger, so we accept a wider time window. One-sided is more
+            speculative, so we tighten to 15 min — work-context "drift" beyond 15
+            min is too far to confidently extrapolate from a single neighbor.
 
-        Signal strength 0.65: strong enough to override stale
-        agent_current_client (0.45) and the fix6_default fallback (0.50),
-        weak enough to defer to actual title evidence (0.82+).
-        """
-        from tracker.models import Block
-        from datetime import timedelta
+            Why: "Context work" — bank portals, brief Excel scratch, Outlook checks,
+            document viewers — often has weak or no direct client evidence. But
+            it's usually part of a larger session for one specific client. Using
+            the surrounding context is far better than defaulting to
+            Personal/Non-Billable.
 
-        # Guard 1: Don't fire if a real signal already proposes a client at
-        # moderate-or-better strength. Bracket is a fallback, not an override.
-        for sig in decision.matched_signals:
-            if sig.proposed_client_id and sig.strength >= 0.65:
+            Strict guards:
+              1. Bracket only fires if NO existing signal already proposes a client
+                 at strength >= 0.65 (don't override genuine evidence).
+              2. Neighbors must be classified by a NON-BRACKET source — prevents
+                 cascading (A bracket-attributes B, B bracket-attributes C, etc.)
+              3. Idle, suppressed, and Internal-Tax neighbors don't count.
+              4. Two-sided requires neighbors to agree on the same client.
+
+            Signal strength tiers:
+              0.65 (two-sided): strong enough to override stale agent signals
+                                and the fix6_default fallback, weak enough to
+                                defer to direct title evidence (0.82+).
+              0.55 (one-sided): above fix6_default (0.50), still surfaces as
+                                proposed for user review. Evidence text is
+                                explicit about being single-sided.
+            """
+            from tracker.models import Block
+            from datetime import timedelta
+
+            # Guard 1: Don't fire if a real signal already proposes a client at
+            # moderate-or-better strength. Bracket is a fallback, not an override.
+            for sig in decision.matched_signals:
+                if sig.proposed_client_id and sig.strength >= 0.65:
+                    return
+
+            if not block.start or not block.end:
                 return
 
-        # Need block boundaries to query neighbors
-        if not block.start or not block.end:
-            return
+            TWO_SIDED_WINDOW = timedelta(minutes=30)
+            ONE_SIDED_WINDOW = timedelta(minutes=15)
 
-        WINDOW = timedelta(minutes=30)
+            # Sources whose attribution should NOT seed bracket attribution
+            # (prevents cascading from one bracket-attributed block to another)
+            EXCLUDE_SOURCES = {'bracket_attribution', 'bracket'}
 
-        # Sources whose attribution should NOT seed bracket attribution
-        # (avoid cascading from one bracket-attributed block to another)
-        EXCLUDE_SOURCES = {'bracket_attribution', 'bracket'}
+            def find_prev(window):
+                return Block.objects.filter(
+                    user=block.user,
+                    day=block.day,
+                    end__lte=block.start,
+                    end__gte=block.start - window,
+                    client__isnull=False,
+                    classification_state__in=('committed', 'proposed'),
+                ).exclude(
+                    client__name='Internal - Tax',
+                ).exclude(
+                    state_changed_by__in=EXCLUDE_SOURCES,
+                ).order_by('-end').first()
 
-        # Find immediately preceding block with a client
-        prev_block = Block.objects.filter(
-            user=block.user,
-            day=block.day,
-            end__lte=block.start,
-            end__gte=block.start - WINDOW,
-            client__isnull=False,
-            classification_state__in=('committed', 'proposed'),
-        ).exclude(
-            client__name='Internal - Tax',
-        ).exclude(
-            state_changed_by__in=EXCLUDE_SOURCES,
-        ).order_by('-end').first()
+            def find_next(window):
+                return Block.objects.filter(
+                    user=block.user,
+                    day=block.day,
+                    start__gte=block.end,
+                    start__lte=block.end + window,
+                    client__isnull=False,
+                    classification_state__in=('committed', 'proposed'),
+                ).exclude(
+                    client__name='Internal - Tax',
+                ).exclude(
+                    state_changed_by__in=EXCLUDE_SOURCES,
+                ).order_by('start').first()
 
-        if not prev_block:
-            return  # no preceding neighbor — bail (strict mode)
+            # ----- Try two-sided bracket first (stronger signal, wider window) -----
+            prev_wide = find_prev(TWO_SIDED_WINDOW)
+            next_wide = find_next(TWO_SIDED_WINDOW)
 
-        # Find immediately following block with a client
-        next_block = Block.objects.filter(
-            user=block.user,
-            day=block.day,
-            start__gte=block.end,
-            start__lte=block.end + WINDOW,
-            client__isnull=False,
-            classification_state__in=('committed', 'proposed'),
-        ).exclude(
-            client__name='Internal - Tax',
-        ).exclude(
-            state_changed_by__in=EXCLUDE_SOURCES,
-        ).order_by('start').first()
+            if prev_wide and next_wide and prev_wide.client_id == next_wide.client_id:
+                client = next((c for c in self._clients if c.id == prev_wide.client_id), None)
+                if not client:
+                    return
 
-        if not next_block:
-            return  # no following neighbor — bail (strict mode)
+                gap_before_min = int((block.start - prev_wide.end).total_seconds() // 60)
+                gap_after_min = int((next_wide.start - block.end).total_seconds() // 60)
 
-        # Both must agree on the same client
-        if prev_block.client_id != next_block.client_id:
+                evidence = (
+                    f"Adjacent blocks attributed to '{client.name}' "
+                    f"(prev block {prev_wide.id} ended {gap_before_min}min before, "
+                    f"next block {next_wide.id} starts {gap_after_min}min after)"
+                )
+
+                logger.info(
+                    f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
+                    f"two-sided bracket -> '{client.name}' (id={client.id}) "
+                    f"via neighbors {prev_wide.id} and {next_wide.id}"
+                )
+
+                decision.matched_signals.append(Signal(
+                    type='bracket_attribution',
+                    strength=0.65,
+                    evidence=evidence,
+                    detail={
+                        'client_id': client.id,
+                        'client_name': client.name,
+                        'mode': 'two_sided',
+                        'previous_block_id': prev_wide.id,
+                        'next_block_id': next_wide.id,
+                        'gap_before_min': gap_before_min,
+                        'gap_after_min': gap_after_min,
+                    },
+                ))
+                return
+
+            # If two-sided neighbors exist but disagree, don't fall through to
+            # one-sided — that would arbitrarily pick a side. Just bail.
+            if prev_wide and next_wide and prev_wide.client_id != next_wide.client_id:
+                logger.info(
+                    f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
+                    f"neighbors disagree (prev={prev_wide.client_id}, "
+                    f"next={next_wide.client_id}) — bracket not firing"
+                )
+                return
+
+            # ----- Two-sided didn't fire — try one-sided with tighter window -----
+            prev_tight = find_prev(ONE_SIDED_WINDOW)
+            next_tight = find_next(ONE_SIDED_WINDOW)
+
+            # Pick the closer neighbor if both exist (tighter gap = stronger evidence)
+            candidate = None
+            side = None
+            gap_min = None
+
+            if prev_tight and next_tight:
+                prev_gap = (block.start - prev_tight.end).total_seconds()
+                next_gap = (next_tight.start - block.end).total_seconds()
+                if prev_tight.client_id == next_tight.client_id:
+                    # Both within 15 min and agree — treat as a strong two-sided
+                    # fallback (rare, since two-sided wide already would have fired)
+                    candidate = prev_tight
+                    side = 'both_tight'
+                    gap_min = int(min(prev_gap, next_gap) // 60)
+                elif prev_gap <= next_gap:
+                    candidate = prev_tight
+                    side = 'prev'
+                    gap_min = int(prev_gap // 60)
+                else:
+                    candidate = next_tight
+                    side = 'next'
+                    gap_min = int(next_gap // 60)
+            elif prev_tight:
+                candidate = prev_tight
+                side = 'prev'
+                gap_min = int((block.start - prev_tight.end).total_seconds() // 60)
+            elif next_tight:
+                candidate = next_tight
+                side = 'next'
+                gap_min = int((next_tight.start - block.end).total_seconds() // 60)
+
+            if not candidate:
+                return
+
+            client = next((c for c in self._clients if c.id == candidate.client_id), None)
+            if not client:
+                return
+
+            if side == 'prev':
+                evidence = (
+                    f"Likely '{client.name}' — preceded by '{client.name}' work "
+                    f"{gap_min}min before (block {candidate.id}, no following evidence)"
+                )
+            elif side == 'next':
+                evidence = (
+                    f"Likely '{client.name}' — followed by '{client.name}' work "
+                    f"{gap_min}min after (block {candidate.id}, no preceding evidence)"
+                )
+            else:
+                evidence = (
+                    f"Adjacent blocks attributed to '{client.name}' "
+                    f"(both within {gap_min}min, block {candidate.id})"
+                )
+
             logger.info(
                 f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
-                f"neighbors disagree — prev={prev_block.client_id} "
-                f"next={next_block.client_id} — not firing"
+                f"one-sided bracket ({side}) -> '{client.name}' (id={client.id}) "
+                f"via neighbor {candidate.id} at {gap_min}min"
             )
-            return
 
-        # All guards passed — fire the signal
-        client = next((c for c in self._clients if c.id == prev_block.client_id), None)
-        if not client:
-            return  # client not in this user's client list (shouldn't happen, but safe)
-
-        gap_before_sec = int((block.start - prev_block.end).total_seconds())
-        gap_after_sec = int((next_block.start - block.end).total_seconds())
-
-        evidence = (
-            f"Adjacent blocks attributed to '{client.name}' "
-            f"(prev block {prev_block.id} ended {gap_before_sec // 60}min before, "
-            f"next block {next_block.id} starts {gap_after_sec // 60}min after)"
-        )
-
-        logger.info(
-            f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
-            f"bracket-attributing to '{client.name}' (id={client.id}) "
-            f"via neighbors {prev_block.id} and {next_block.id}"
-        )
-
-        decision.matched_signals.append(Signal(
-            type='bracket_attribution',
-            strength=0.65,
-            evidence=evidence,
-            detail={
-                'client_id': client.id,
-                'client_name': client.name,
-                'previous_block_id': prev_block.id,
-                'next_block_id': next_block.id,
-                'gap_before_sec': gap_before_sec,
-                'gap_after_sec': gap_after_sec,
-            },
-        ))
+            decision.matched_signals.append(Signal(
+                type='bracket_attribution',
+                strength=0.55,
+                evidence=evidence,
+                detail={
+                    'client_id': client.id,
+                    'client_name': client.name,
+                    'mode': f'one_sided_{side}',
+                    'neighbor_block_id': candidate.id,
+                    'gap_min': gap_min,
+                },
+            ))
 
     # -------------------------------------------------------------------------
     # STAGE 10 — AI inference (last resort, cost-controlled)

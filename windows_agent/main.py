@@ -111,21 +111,10 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
-# v1.3.53 diagnostic — write to user file since --noconsole discards stdout.
-# Remove this block after we've diagnosed the inference silent-failure.
-import os as _diag_os
-from datetime import datetime as _diag_datetime
-import traceback as _diag_traceback
-
-_INFERENCE_DIAG_PATH = _diag_os.path.expanduser("~/timetracker_inference_diag.log")
 
 def _inference_diag(msg):
-    """Write a line to the diagnostic log. Safe to call from anywhere."""
-    try:
-        with open(_INFERENCE_DIAG_PATH, "a", encoding="utf-8") as _f:
-            _f.write(f"{_diag_datetime.now().isoformat()} {msg}\n")
-    except Exception:
-        pass
+    """v1.3.54: no-op stub. Call sites retained from v1.3.53 diagnostic work."""
+    pass
 
 # v1.4.0: Confidence-graded client inference engine. Runs alongside the
 # existing state-machine cache during the rollout. The structured inference

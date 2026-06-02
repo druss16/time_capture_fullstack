@@ -237,9 +237,110 @@ def _exe_family_matches(family_key: str, exe_name: str) -> bool:
     return any(exe_low.startswith(p) for p in prefixes)
 
 
-# v1.4.0: OrgRoutingRuleEngine extracted to windows_agent/routing_rules.py
-# Re-export for backwards compatibility with any code that imports it from here.
-from routing_rules import OrgRoutingRuleEngine, get_routing_engine
+class OrgRoutingRuleEngine:
+    """
+    Evaluates per-org routing rules fetched from the backend.
+
+    Rules are fetched via sync and passed in via update_rules().
+    Call match() on every window change before running other tiers.
+    """
+
+    def __init__(self, rules: Optional[List[dict]] = None):
+        self._rules: List[dict] = []
+        self._api_base: str = ""
+        self._api_key: str = ""
+        self.update_rules(rules or [])
+
+    def set_api(self, api_base: str, api_key: str):
+        """Set API credentials for telemetry (fire_count reporting)."""
+        self._api_base = api_base
+        self._api_key = api_key
+
+    def update_rules(self, rules: List[dict]):
+        """Replace the rule set; called from sync."""
+        # Sort by priority descending so the first match wins
+        self._rules = sorted(
+            rules or [],
+            key=lambda r: r.get('priority', 0),
+            reverse=True,
+        )
+        logger.info(f"[AI-SWITCH] OrgRoutingRuleEngine: {len(self._rules)} rules loaded")
+        for r in self._rules:
+            logger.info(
+                f"  · [{r.get('priority', 0)}] {r.get('match_type')}={r.get('match_value')!r} "
+                f"→ {r.get('action')} (client={r.get('target_client_name') or 'n/a'})"
+            )
+
+    def match(self, title: str, exe: str, file_path: str) -> Optional[dict]:
+        """
+        Return the first matching rule (highest priority wins), or None.
+        Returns the raw rule dict so caller can inspect action/target/etc.
+        """
+        if not self._rules:
+            return None
+
+        for rule in self._rules:
+            if self._rule_matches(rule, title, exe, file_path):
+                logger.info(
+                    f"[AI-SWITCH] OrgRule fire: id={rule.get('id')} "
+                    f"{rule.get('match_type')}={rule.get('match_value')!r} "
+                    f"→ {rule.get('action')} "
+                    f"({rule.get('target_client_name') or 'n/a'})"
+                )
+                self._report_fire(rule.get('id'))
+                return rule
+        return None
+
+    @staticmethod
+    def _rule_matches(rule: dict, title: str, exe: str, file_path: str) -> bool:
+        mv = (rule.get('match_value') or '').lower()
+        mt = rule.get('match_type')
+        title_l = (title or '').lower()
+        exe_l = (exe or '').lower()
+        path_l = (file_path or '').lower()
+
+        if mt == 'exe':
+            return exe_l == mv or exe_l == f"{mv}.exe"
+
+        if mt == 'exe_family':
+            return _exe_family_matches(mv, exe_l)
+
+        if mt == 'title_contains':
+            return mv in title_l
+
+        if mt == 'title_regex':
+            try:
+                return bool(re.search(rule['match_value'], title or '', re.IGNORECASE))
+            except re.error:
+                return False
+
+        if mt == 'file_path_contains':
+            return mv in path_l
+
+        return False
+
+    def _report_fire(self, rule_id: Optional[int]):
+        """Fire-and-forget telemetry to the backend (non-blocking)."""
+        if not rule_id or not self._api_base or not self._api_key:
+            return
+
+        def _send():
+            try:
+                url = f"{self._api_base.rstrip('/')}/routing-rules/fire/"
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps({'rule_id': rule_id}).encode('utf-8'),
+                    method='POST',
+                )
+                req.add_header('Authorization', f'DeviceKey {self._api_key}')
+                req.add_header('Content-Type', 'application/json')
+                urllib.request.urlopen(req, timeout=3).read()
+            except Exception as e:
+                logger.debug(f"[AI-SWITCH] OrgRule fire telemetry failed: {e}")
+
+        threading.Thread(target=_send, daemon=True).start()
+
+
 # =====================================================================
 # Data Structures
 # =====================================================================
@@ -1313,8 +1414,8 @@ class AIClientSwitcher:
         self._matchers    = _build_client_matchers(clients, sensitivity)
         self._client_patterns: List[Dict] = []
 
-        # v1.4.0: singleton shared with inference engine's routing_rule_match collector
-        self._routing_engine = get_routing_engine()
+        # v1.2.95: Tier -1 routing engine
+        self._routing_engine = OrgRoutingRuleEngine()
         self._routing_engine.set_api(api_base, api_key)
 
         self._learned     = LearnedRules()

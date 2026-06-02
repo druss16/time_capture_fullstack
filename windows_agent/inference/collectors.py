@@ -74,6 +74,68 @@ def _learned_rules_match(learned_rules, title, current_client_id=None):
 # Tier 1 — Hard direct evidence (0.85-0.95)
 # =============================================================================
 
+def collect_routing_rule_evidence(ctx: WindowContext) -> List[Evidence]:
+    """
+    Tier 1 (strength 0.95): org admin routing rules. HARD rules configured
+    by org admins that force certain windows/files to specific clients.
+
+    Example: UltraTax.exe → Internal-Tax client; Slack title → suppress.
+
+    Reads from the process-wide OrgRoutingRuleEngine singleton in
+    windows_agent.routing_rules. Updates from sync flow to both this
+    collector and the legacy AIClientSwitcher path via that singleton.
+
+    Only 'route_to_client' actions become evidence. 'suppress' and
+    'never_switch_away' are state-machine actions that don't translate
+    to confidence-graded evidence; they return no evidence so other
+    collectors decide naturally.
+    """
+    try:
+        from routing_rules import get_routing_engine
+    except ImportError:
+        try:
+            from windows_agent.routing_rules import get_routing_engine
+        except ImportError:
+            return []
+
+    try:
+        engine = get_routing_engine()
+        hit = engine.match(
+            ctx.title or "",
+            ctx.exe_name or "",
+            ctx.file_path or "",
+        )
+    except Exception as e:
+        logger.debug(f"routing rule match failed: {e}")
+        return []
+
+    if not hit:
+        return []
+
+    action = hit.get('action')
+    if action != 'route_to_client':
+        return []
+
+    target_id = hit.get('target_client_id')
+    if not target_id:
+        return []
+
+    return [Evidence(
+        source='routing_rule_match',
+        strength=0.95,
+        client_id=int(target_id),
+        detail={
+            'rule_id': hit.get('id'),
+            'match_type': hit.get('match_type'),
+            'match_value': (hit.get('match_value') or '')[:80],
+            'target_client_name': hit.get('target_client_name'),
+            'action': action,
+            'priority': hit.get('priority', 0),
+        },
+        detected_at=ctx.timestamp,
+        freshness_window_seconds=900,
+    )]
+
 def collect_tax_software_evidence(
     ctx: WindowContext,
     clients: List[dict],
@@ -760,6 +822,10 @@ def collect_all_evidence(
     all_evidence: List[Evidence] = []
 
     # Tier 1
+    try:
+        all_evidence.extend(collect_routing_rule_evidence(ctx))
+    except Exception as e:
+        logger.warning(f"routing_rule collector failed: {e}", exc_info=True)
     try:
         all_evidence.extend(collect_tax_software_evidence(ctx, clients))
     except Exception as e:

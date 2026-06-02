@@ -1,39 +1,38 @@
 """
-Tracks the floating widget's classification state based on whether the
-active window's title/path/URL contains the current client's name or aliases.
+Floating widget state tracker.
 
-State machine:
-  committed     — title matched current client recently → green dot
-  proposed      — no match for N minutes → yellow dot with "?"
-  captured      — no match for N+M minutes → gray dot
+v1.4 (inference architecture):
+  The committed/proposed/captured state is now derived from the inference
+  cache's confidence level instead of a separate title-matching state machine.
+  This eliminates the duplication where AIClientSwitcher state and inference
+  confidence would fight over the widget color.
 
-Purely agent-side. No backend round-trip. Pushes state to the floating
-widget via `floating_widget.update_client(client_id, client_name, state)`.
+Mapping:
+  confidence >= 0.70 → committed (green)
+  confidence >= 0.40 → proposed (yellow)
+  confidence  < 0.40 → captured (gray)
+  no client_id       → captured (gray)
 
-Hooked into the same window-change events that the AI client switcher uses,
-so it costs nothing extra in CPU.
+The _title_matches_client static method is preserved because the inference
+engine's collectors (Tier 1: title_alias_match) use it for evidence matching.
 
-v1.3.47:
-  * Added on_demote_to_captured callback. Fires once when the tracker
-    transitions from committed/proposed → captured, passing the stale
-    client name. Main.py wires this to clear the agent's current_client
-    so subsequent events aren't misattributed to a client the user has
-    clearly moved away from. Without this hook, the widget went gray
-    visually but the agent kept emitting current_client_id=<stale> on
-    every event indefinitely (see TL Wall Terri block 11218: 165 min
-    of generic Outlook Inbox attributed entirely to Z-Loupes because
-    she opened one Z-Loupes email at the start of the session and
-    nothing ever cleared the client).
+Pre-v1.4 docstring (kept for context):
+  State machine:
+    committed     — title matched current client recently → green dot
+    proposed      — no match for N minutes → yellow dot with "?"
+    captured      — no match for N+M minutes → gray dot
+
+  v1.3.47 introduced on_demote_to_captured callback to clear stale client
+  state when widget went gray. In v1.4 this is no longer needed because
+  inference confidence decays linearly to zero over 15 min — there's no
+  "stale current_client" to clear. The callback hook is preserved as a
+  no-op for backwards compatibility.
 """
 
 import re
-import time
 from typing import Optional, List, Callable
+from urllib.parse import unquote
 
-import os
-import json
-import threading
-import time as _time
 
 def _safe_print(*args, **kwargs):
     """Print that survives a closed stdout (happens when GUI parent detaches)."""
@@ -42,192 +41,141 @@ def _safe_print(*args, **kwargs):
     except (ValueError, OSError):
         pass
 
-try:
-    import customtkinter as ctk
-    WIDGET_AVAILABLE = True
-except ImportError:
-    WIDGET_AVAILABLE = False
 
-# Time thresholds — how long without a match before downgrading state.
-COMMITTED_TO_PROPOSED_SECONDS = 300      # 5 min: brief tab-switches OK
-PROPOSED_TO_CAPTURED_SECONDS = 600 # 10 more min (15 total before gray)
+# Confidence thresholds for widget color mapping.
+COMMITTED_CONFIDENCE_THRESHOLD = 0.70  # green dot
+PROPOSED_CONFIDENCE_THRESHOLD = 0.40   # yellow dot
+# < PROPOSED_CONFIDENCE_THRESHOLD → captured (gray)
 
 
 class WidgetStateTracker:
-    """State machine for the floating widget's color indicator."""
+    """
+    v1.4: Thin wrapper around inference_cache.
+
+    The state property reads inference confidence and maps it to widget color.
+    on_window_change and tick are no-ops that simply re-read inference state.
+
+    Title-matching logic (_title_matches_client) is preserved because the
+    inference engine's title_alias_match collector uses it.
+    """
 
     def __init__(self, on_demote_to_captured: Optional[Callable[[Optional[str]], None]] = None):
-        """
-        Args:
-          on_demote_to_captured: Optional callback fired once when the state
-            transitions INTO 'captured' from committed or proposed. Receives
-            the stale client name (or None) so the caller can clear cached
-            client state and notify the backend. NOT called when the tracker
-            is initialized in 'captured' (no prior state to demote from).
-        """
-        self._state = "captured"  # committed | proposed | captured
-        self._last_match_time = 0.0
-        self._last_state_change = time.time()
-        # Cache last-seen window context so tick() can re-evaluate
-        self._last_title: Optional[str] = None
-        self._last_path: Optional[str] = None
-        self._last_url: Optional[str] = None
-        self._last_client_name: Optional[str] = None
-        self._last_aliases: List[str] = []
-        # v1.3.47: Demote-to-captured hook
         self._on_demote_to_captured = on_demote_to_captured
+        self._last_computed_state = "captured"
+        self._last_client_name: Optional[str] = None
 
     @property
     def state(self) -> str:
-        return self._state
+        return self._compute_state()
+
+    def _compute_state(self) -> str:
+        """Read inference cache and map confidence to widget state."""
+        try:
+            from inference_cache import get_current_inference
+        except ImportError:
+            try:
+                from windows_agent.inference_cache import get_current_inference
+            except ImportError:
+                return "captured"
+
+        try:
+            inf = get_current_inference()
+        except Exception:
+            return "captured"
+
+        if not inf:
+            return "captured"
+
+        client_id = inf.get("client_id")
+        confidence = inf.get("confidence", 0.0) or 0.0
+
+        if client_id is None or confidence < PROPOSED_CONFIDENCE_THRESHOLD:
+            return "captured"
+        if confidence < COMMITTED_CONFIDENCE_THRESHOLD:
+            return "proposed"
+        return "committed"
 
     def set_on_demote_to_captured(self, callback: Callable[[Optional[str]], None]) -> None:
-        """
-        Late-bind the demote callback. Useful when the tracker is created
-        as a singleton at import time but the agent's clear-client helper
-        isn't defined until main.run_agent() runs.
-        """
+        """Late-bind demote callback (preserved for backwards compatibility)."""
         self._on_demote_to_captured = callback
 
     def on_user_set_client(self, client_name: Optional[str] = None,
                            aliases: Optional[List[str]] = None):
-        """User explicitly picked a client — start fresh in committed state.
-
-        Updates the tracker's cached client name AND aliases so subsequent
-        tick() calls check against the NEW client (not the stale one from
-        before the pick). Without this, tick() would re-evaluate against
-        the previously-active client's name and immediately demote to
-        proposed/captured, making the widget appear stuck in yellow even
-        right after a manual pick.
         """
-        self._state = "committed"
-        self._last_match_time = time.time()
-        self._last_state_change = time.time()
+        User explicitly picked a client.
+
+        v1.4: state is derived from inference cache, which is updated by
+        inference_cache.set_manual_override() before this callback fires.
+        We just cache the client_name for the demote callback.
+        """
         if client_name is not None:
             self._last_client_name = client_name
-        if aliases is not None:
-            self._last_aliases = aliases
+        self._last_computed_state = self._compute_state()
 
     def on_window_change(self, window_title, file_path, url,
                          current_client_name, current_client_aliases=None):
-        # Cache for tick() re-evaluation
-        self._last_title = window_title
-        self._last_path = file_path
-        self._last_url = url
-        self._last_client_name = current_client_name
-        self._last_aliases = current_client_aliases or []
+        """
+        v1.4: no-op for state machine purposes.
 
-        # DEBUG: print what we got + match result
-        try:
-            matched = self._title_matches_client(
-                window_title, file_path, url,
-                current_client_name, self._last_aliases
-            ) if current_client_name else False
-            _safe_print(
-                f"[WIDGET-DBG] on_window_change "
-                f"client={current_client_name!r} "
-                f"matched={matched} "
-                f"title={(window_title or '')[:60]!r} "
-                f"path={(file_path or '')[:60]!r} "
-                f"url={(url or '')[:60]!r}"
-            )
-        except Exception:
-            pass
+        Inference engine has already evaluated this window and updated
+        the inference cache by the time the agent's event handler runs.
+        We just check for a captured-edge transition for the demote callback.
+        """
+        if current_client_name is not None:
+            self._last_client_name = current_client_name
 
-        if not current_client_name:
-            self._state = "captured"
-            return self._state
+        prev_state = self._last_computed_state
+        new_state = self._compute_state()
+        self._last_computed_state = new_state
 
-        if self._title_matches_client(window_title, file_path, url,
-                                      current_client_name, self._last_aliases):
-            if self._state != "committed":
-                self._state = "committed"
-                self._last_state_change = time.time()
-            self._last_match_time = time.time()
-        else:
-            self._evaluate_timed_demotion()
+        if prev_state != "captured" and new_state == "captured":
+            self._fire_demote_callback()
 
-        return self._state
+        return new_state
 
     def tick(self) -> str:
-        # Re-evaluate against last-seen context. If it still matches the
-        # current client, refresh _last_match_time so demotion never fires.
-        prev_state = self._state
-        if self._last_client_name:
-            matched = self._title_matches_client(
-                self._last_title, self._last_path, self._last_url,
-                self._last_client_name, self._last_aliases,
-            )
-            if matched:
-                if self._state != "committed":
-                    self._state = "committed"
-                    self._last_state_change = time.time()
-                self._last_match_time = time.time()
-                return self._state
-
-        self._evaluate_timed_demotion()
-
-        # Diagnostic: log when tick demotes us, with the cached values it
-        # was checking. Lets us see WHY a match failed for files/folders
-        # that obviously contain the client name.
-        if prev_state != self._state:
-            try:
-                import sys
-                print(
-                    f"[WIDGET-TRACKER] tick demoted {prev_state}→{self._state} "
-                    f"client={self._last_client_name!r} "
-                    f"title={(self._last_title or '')[:80]!r} "
-                    f"path={(self._last_path or '')[:80]!r}",
-                    file=sys.stdout, flush=True
-                )
-            except Exception:
-                pass
-
-        return self._state
-
-    def _evaluate_timed_demotion(self):
-        """Demote state based on elapsed time since last match.
-
-        v1.3.47: Fires on_demote_to_captured callback when transitioning
-        INTO 'captured' from a non-captured state. The callback is the
-        agent's hook to clear current_client_id so future events don't
-        get attributed to a client the user has clearly moved away from.
         """
-        prev_state = self._state
+        v1.4: re-evaluate state from inference cache.
 
-        if self._state == "committed":
-            elapsed = time.time() - self._last_match_time
-            if elapsed >= COMMITTED_TO_PROPOSED_SECONDS:
-                self._state = "proposed"
-                self._last_state_change = time.time()
-        elif self._state == "proposed":
-            elapsed = time.time() - self._last_match_time
-            if elapsed >= COMMITTED_TO_PROPOSED_SECONDS + PROPOSED_TO_CAPTURED_SECONDS:
-                self._state = "captured"
-                self._last_state_change = time.time()
+        Called periodically by the agent. Inference confidence decays
+        linearly to zero over 15 min, so state transitions
+        committed → proposed → captured as evidence ages.
+        """
+        prev_state = self._last_computed_state
+        new_state = self._compute_state()
+        self._last_computed_state = new_state
 
-        # v1.3.47: notify caller on demote-to-captured so the agent can
-        # clear current_client. Only fires on a real prev→captured edge,
-        # not when we were already captured.
-        if prev_state != "captured" and self._state == "captured":
-            stale_client = self._last_client_name
-            _safe_print(
-                f"[WIDGET-TRACKER] Demoted {prev_state}→captured after stale "
-                f"client {stale_client!r} (15+ min without title match). "
-                f"Firing on_demote_to_captured callback."
-            )
-            if self._on_demote_to_captured:
-                try:
-                    self._on_demote_to_captured(stale_client)
-                except Exception as e:
-                    _safe_print(
-                        f"[WIDGET-TRACKER] on_demote_to_captured callback "
-                        f"raised: {e!r}"
-                    )
+        if prev_state != "captured" and new_state == "captured":
+            self._fire_demote_callback()
 
-    # Tokens that should never count as a "distinctive" partial-word match.
-    # If a client name reduces to only these after stop-word filtering, fall
-    # back to full-name match instead of partial-word.
+        return new_state
+
+    def _fire_demote_callback(self):
+        """
+        v1.4: hook preserved for backwards compatibility.
+
+        In the old architecture, this cleared the agent's stale current_client.
+        With inference decay, current_client is the highest-confidence client
+        in the cache, which naturally drops to None as evidence ages — so
+        nothing needs to be cleared.
+
+        The hook still fires so existing callers that log demote events
+        continue to work.
+        """
+        stale = self._last_client_name
+        _safe_print(
+            f"[WIDGET-TRACKER v1.4] State demoted to captured "
+            f"(confidence dropped below {PROPOSED_CONFIDENCE_THRESHOLD}). "
+            f"Stale client: {stale!r}"
+        )
+        if self._on_demote_to_captured:
+            try:
+                self._on_demote_to_captured(stale)
+            except Exception as e:
+                _safe_print(f"[WIDGET-TRACKER v1.4] demote callback raised: {e!r}")
+
+    # ─── Title matching (preserved from v1.3 — used by inference collectors) ───
+
     _STOP_WORDS = {
         "and", "the", "for", "inc", "llc", "ltd", "corp", "co", "company",
         "group", "tax", "firm", "cpas", "cpa", "associates", "partners",
@@ -248,23 +196,15 @@ class WidgetStateTracker:
         aliases: List[str],
     ) -> bool:
         """
-        Check if any client signal appears in title, path, or URL.
+        Used by inference engine's title_alias_match collector. Preserved
+        unchanged from v1.3.
 
         Four matching modes (any one wins):
-          1. Full-name flexible match (ignores spaces/underscores/hyphens)
-             so "Smith & Co" matches "smith_co" and "smith-co.pdf".
-          2. Apostrophe-tolerant substring so "Lola's Pet Shop" matches
-             "lolas pet shop" / "lolas_pet_shop".
-          3. Partial-word match on distinctive tokens (5+ chars, not a
-             stop word) so "Lola's Pet Shop" matches "Lolas_AR_Aging.xlsx"
-             via the "lolas" token.
-          4. Acronym match ("DF" for "Dauphin & Fantacone") for filenames
-             that use the client's initials as a prefix.
+          1. Full-name flexible match
+          2. Apostrophe-tolerant substring
+          3. Partial-word match on distinctive tokens (5+ chars, not stop)
+          4. Acronym match (e.g. "DF" for "Dauphin & Fantacone")
         """
-        # Build raw + apostrophe-stripped haystacks.
-        # URL-decode each input — browser URL bars show paths like
-        # 'Dauphin%20&%20Fantacone' which would otherwise break boundary matching.
-        from urllib.parse import unquote
         raw_hay = " ".join(filter(None, [
             unquote(window_title or "").lower(),
             unquote(file_path or "").lower(),
@@ -280,7 +220,7 @@ class WidgetStateTracker:
             if len(n) < 3:
                 continue
 
-            # Mode 1: flexible full-name match against the raw haystack
+            # Mode 1: flexible full-name match
             escaped = re.escape(n.lower())
             flex = re.sub(r'[\\\s_\-\.&]+', r'[\\s_\\-.&]*', escaped)
             pattern = re.compile(
@@ -290,7 +230,7 @@ class WidgetStateTracker:
             if pattern.search(raw_hay):
                 return True
 
-            # Mode 2: apostrophe-stripped substring match
+            # Mode 2: apostrophe-stripped substring
             n_stripped = WidgetStateTracker._strip_punct(n)
             if n_stripped and n_stripped in stripped_hay:
                 return True
@@ -309,9 +249,7 @@ class WidgetStateTracker:
                 if tok_pattern.search(stripped_hay):
                     return True
 
-            # Mode 4: acronym match (e.g. "DF" matches "Dauphin & Fantacone").
-            # Build acronym from first letter of each non-stopword token >=2 chars.
-            # Acronym must be at least 2 letters and appear as its own token in the haystack.
+            # Mode 4: acronym match
             sig_tokens = [
                 t for t in tokens
                 if len(t) >= 2 and t not in WidgetStateTracker._STOP_WORDS
@@ -319,8 +257,6 @@ class WidgetStateTracker:
             if len(sig_tokens) >= 2:
                 acronym = "".join(t[0] for t in sig_tokens).lower()
                 if len(acronym) >= 2:
-                    # Match acronym as a standalone token (separator on both sides
-                    # OR followed by underscore/digit which is common in filenames)
                     acro_pattern = re.compile(
                         r'(?:^|[\s\-_/\\.,()&])' + re.escape(acronym) + r'(?:[\s\-_/\\.,()&]|$|[0-9])',
                         re.IGNORECASE,
@@ -338,18 +274,10 @@ _singleton: Optional[WidgetStateTracker] = None
 def get_widget_state_tracker(
     on_demote_to_captured: Optional[Callable[[Optional[str]], None]] = None,
 ) -> WidgetStateTracker:
-    """
-    Return the process-wide WidgetStateTracker instance.
-
-    Args:
-      on_demote_to_captured: Optional callback. Only used on first call
-        (when the singleton is created). To attach a callback later, use
-        `get_widget_state_tracker().set_on_demote_to_captured(...)`.
-    """
+    """Return the process-wide WidgetStateTracker instance."""
     global _singleton
     if _singleton is None:
         _singleton = WidgetStateTracker(on_demote_to_captured=on_demote_to_captured)
     elif on_demote_to_captured is not None and _singleton._on_demote_to_captured is None:
-        # Singleton already exists but no callback was bound — late-bind it
         _singleton.set_on_demote_to_captured(on_demote_to_captured)
     return _singleton

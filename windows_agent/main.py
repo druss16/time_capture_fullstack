@@ -111,6 +111,22 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
+# v1.3.53 diagnostic — write to user file since --noconsole discards stdout.
+# Remove this block after we've diagnosed the inference silent-failure.
+import os as _diag_os
+from datetime import datetime as _diag_datetime
+import traceback as _diag_traceback
+
+_INFERENCE_DIAG_PATH = _diag_os.path.expanduser("~/timetracker_inference_diag.log")
+
+def _inference_diag(msg):
+    """Write a line to the diagnostic log. Safe to call from anywhere."""
+    try:
+        with open(_INFERENCE_DIAG_PATH, "a", encoding="utf-8") as _f:
+            _f.write(f"{_diag_datetime.now().isoformat()} {msg}\n")
+    except Exception:
+        pass
+
 # v1.4.0: Confidence-graded client inference engine. Runs alongside the
 # existing state-machine cache during the rollout. The structured inference
 # result is attached to every outgoing RawEvent payload; the server-side
@@ -121,8 +137,11 @@ try:
         infer_client as _infer_client,
     )
     _INFERENCE_AVAILABLE = True
+    _inference_diag("startup: inference module imported OK")
 except Exception as _e:
     _INFERENCE_AVAILABLE = False
+    _inference_diag(f"startup: inference import FAILED: {type(_e).__name__}: {_e}")
+    _inference_diag("startup: traceback:\n" + _diag_traceback.format_exc())
     print(f"[INFERENCE] Module not available: {_e}", flush=True)
 
 register_hotkey = None
@@ -1623,9 +1642,11 @@ def write_event(
     inference_dict = {}
     if _INFERENCE_AVAILABLE:
         try:
+            _inference_diag("compute: starting evaluation")
             clients_for_inference = (
                 list(sync.clients) if sync and getattr(sync, "clients", None) else []
             )
+            _inference_diag(f"compute: clients_count={len(clients_for_inference)}")
             # Look up Internal-Tax client id for firm-name routing
             internal_cid = None
             for _c in clients_for_inference:
@@ -1667,7 +1688,14 @@ def write_event(
                 firm_name_patterns=None,  # TODO v1.4.1: load from org config
                 internal_client_id=internal_cid,
             )
+            _inference_diag(
+                f"compute: infer_client returned "
+                f"client_id={inference_result.client_id} "
+                f"confidence={inference_result.confidence:.2f} "
+                f"evidence_count={len(inference_result.evidence)}"
+            )
             inference_dict = inference_result.to_dict()
+            _inference_diag(f"compute: to_dict OK keys={list(inference_dict.keys())[:6]}")
 
             # v1.4.0: Push to the inference cache so the tray, widget,
             # and other consumers can read it. Single source of truth.
@@ -1692,6 +1720,10 @@ def write_event(
                 }
         except Exception as _e:
             # Never crash the event handler on inference errors
+            _inference_diag(
+                f"compute: FAILED with {type(_e).__name__}: {_e}\n"
+                + _diag_traceback.format_exc()
+            )
             print(f"[INFERENCE] Compute failed: {_e}", flush=True)
             inference_dict = {}
 

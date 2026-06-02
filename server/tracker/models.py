@@ -297,6 +297,16 @@ class RawEvent(models.Model):
         help_text="The block this event was compacted into",
     )
 
+    inference = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Agent inference output: structured client recognition result "
+            "with confidence, evidence trail, and decay metadata. Populated "
+            "by agent v1.4+. Empty dict for events from older agents."
+        ),
+    )
+
     class Meta:
         indexes = [
             models.Index(fields=["start_ts"]),

@@ -110,6 +110,20 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
+# v1.4.0: Confidence-graded client inference engine. Runs alongside the
+# existing state-machine cache during the rollout. The structured inference
+# result is attached to every outgoing RawEvent payload; the server-side
+# classifier reads it via the new RawEvent.inference field.
+try:
+    from inference import (
+        WindowContext as _InferenceWindowContext,
+        infer_client as _infer_client,
+    )
+    _INFERENCE_AVAILABLE = True
+except Exception as _e:
+    _INFERENCE_AVAILABLE = False
+    print(f"[INFERENCE] Module not available: {_e}", flush=True)
+
 register_hotkey = None
 ai_switcher = None  # Will be initialized after GUI setup
 widget_tracker = get_widget_state_tracker()  # Drives the floating widget's color/state
@@ -1526,6 +1540,58 @@ def write_event(
     except ImportError:
         _agent_version = None
 
+    # ── v1.4.0: Confidence-graded inference ──
+    # Run the new inference engine alongside the state-machine cache.
+    # Result goes in payload['inference']; server-side classifier reads
+    # this via RawEvent.inference. current_client_id stays populated
+    # for backwards-compat with older server code paths.
+    inference_dict = {}
+    if _INFERENCE_AVAILABLE:
+        try:
+            clients_for_inference = (
+                list(sync.clients) if sync and getattr(sync, "clients", None) else []
+            )
+            # Look up Internal-Tax client id for firm-name routing
+            internal_cid = None
+            for _c in clients_for_inference:
+                if (_c.get("name") or "").strip().lower() == "internal - tax":
+                    internal_cid = _c.get("id")
+                    break
+
+            # Use bundle_id as exe_name on Mac; on Windows, app_name IS the
+            # exe name (psutil.Process().name() output)
+            inference_ctx = _InferenceWindowContext(
+                title=title or "",
+                app_name=app_name or "",
+                exe_name=app_name or "",  # see comment above
+                bundle_id=bundle_id,
+                file_path=fpath,
+                url=url,
+                timestamp=datetime.fromtimestamp(start_ts, tz=timezone.utc),
+            )
+
+            # Pull learned_rules from the global AI switcher if present
+            _learned = None
+            try:
+                if 'ai_switcher' in globals() and ai_switcher is not None:
+                    _learned = getattr(ai_switcher, 'learned_rules', None)
+            except Exception:
+                _learned = None
+
+            inference_result = _infer_client(
+                ctx=inference_ctx,
+                clients=clients_for_inference,
+                learned_rules=_learned,
+                is_idle=False,  # TODO v1.4.1: wire idle_seconds threshold
+                firm_name_patterns=None,  # TODO v1.4.1: load from org config
+                internal_client_id=internal_cid,
+            )
+            inference_dict = inference_result.to_dict()
+        except Exception as _e:
+            # Never crash the event handler on inference errors
+            print(f"[INFERENCE] Compute failed: {_e}", flush=True)
+            inference_dict = {}
+
     # ── Build dual-timestamp payload ──
     payload = {
         "start_ts": start_iso,
@@ -1542,6 +1608,7 @@ def write_event(
         "current_client_id": current_client_id,
         "current_client_name": current_client_name,
         "agent_version": _agent_version,
+        "inference": inference_dict,
     }
  
     toolish, tool_reason, tool_host = looks_toolish(bundle_id, url)

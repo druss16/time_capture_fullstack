@@ -2685,6 +2685,93 @@ class ClassificationService:
             )
             return any(marker in title for marker in EMAIL_TITLE_MARKERS)
 
+    def _try_emit_inference_signal(self, block, decision: ClassificationDecision) -> bool:
+        """
+        v1.4.0: Read the agent's structured inference output (RawEvent.inference)
+        and emit an 'agent_inference' signal if confidence is above the floor.
+
+        Strategy: scan all RawEvents in this block, use the highest-confidence
+        inference among them (per design decision 3b — better accuracy at the
+        cost of a small extra scan).
+
+        Returns True if a signal was emitted; the caller should then skip the
+        legacy agent_current_client emission to avoid double-counting (since
+        the inference signal already incorporates the same underlying agent
+        observation, plus richer evidence).
+        """
+        from tracker.models import RawEvent
+
+        raw_events = RawEvent.objects.filter(block=block)
+        if not raw_events.exists():
+            return False
+
+        best_inference = None
+        best_confidence = 0.0
+        best_event_id = None
+        for ev in raw_events:
+            inf = ev.inference
+            if not inf:
+                continue
+            cid = inf.get('client_id')
+            if not cid:
+                continue
+            conf = inf.get('confidence', 0.0) or 0.0
+            if conf > best_confidence:
+                best_confidence = conf
+                best_inference = inf
+                best_event_id = ev.id
+
+        if not best_inference or best_confidence < 0.4:
+            return False
+
+        cid = best_inference['client_id']
+        client = next((c for c in self._clients if c.id == cid), None)
+        if not client:
+            logger.warning(
+                f"[STAGE-8-INF] Block {getattr(block, 'pk', '?')}: "
+                f"inference points to unknown client_id={cid}, skipping"
+            )
+            return False
+
+        # Map agent confidence to classifier signal strength.
+        # Agent's confidence already factors in evidence quality + decay, so
+        # we trust it more than the flat-0.45 legacy signal.
+        if best_confidence >= 0.85:
+            signal_strength = 0.75   # near-strong: hard direct evidence
+        elif best_confidence >= 0.60:
+            signal_strength = 0.55   # moderate: contextual evidence
+        else:
+            signal_strength = 0.35   # weak: corroborating only
+
+        evidence_sources = [
+            e.get('source', '?') for e in best_inference.get('evidence', [])
+        ]
+
+        decision.matched_signals.append(Signal(
+            type='agent_inference',
+            strength=signal_strength,
+            evidence=(
+                f"Agent inferred '{client.name}' with confidence "
+                f"{best_confidence:.2f} from {evidence_sources}"
+            ),
+            detail={
+                'client_id': client.id,
+                'client_name': client.name,
+                'inference_confidence': best_confidence,
+                'inference_evidence_sources': evidence_sources,
+                'source_event_id': best_event_id,
+            },
+        ))
+
+        logger.info(
+            f"[STAGE-8-INF] Block {getattr(block, 'pk', '?')}: "
+            f"agent_inference signal emitted client={client.name} "
+            f"confidence={best_confidence:.2f} strength={signal_strength} "
+            f"evidence={evidence_sources}"
+        )
+
+        return True
+
     # -------------------------------------------------------------------------
     # STAGE 8 — Recent context (current_client_id, prior block)
     # -------------------------------------------------------------------------
@@ -2710,6 +2797,13 @@ class ClassificationService:
         """
         from tracker.models import Block
 
+        # v1.4.0: New confidence-graded inference path. If the block's
+        # RawEvents have structured inference data (post-v1.4.0 agents),
+        # emit a single 'agent_inference' signal at strength derived from
+        # the agent's reported confidence. Legacy agent_current_client
+        # emission is skipped to avoid double-counting.
+        inference_signal_fired = self._try_emit_inference_signal(block, decision)
+
         # Determine if this is an "idle" block — these should not receive
         # prior_block signals because the user wasn't working on anything.
         title_lower = (block.window_title or block.title or '').strip().lower()
@@ -2727,7 +2821,9 @@ class ClassificationService:
         # Signal A: current_client_id from the agent.
         # The agent's selection. Treated as moderate-low (0.45) — never strong.
         # Skip on idle blocks: agent client is not meaningful when user is idle.
-        if block.client_id and not is_idle_block:
+        # v1.4.0: Skip if inference signal already fired — avoids double-counting
+        # the same underlying agent observation.
+        if block.client_id and not is_idle_block and not inference_signal_fired:
             # v1.3.56: Browser blocks are the inheritance-bug magnet.
             # The agent's client sticks across alt-tabs to news, music,
             # personal browsing. Without independent corroboration from

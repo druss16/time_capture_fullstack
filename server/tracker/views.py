@@ -1272,6 +1272,9 @@ def raw_events(request):
                 # v1.3.49: Agent version for fleet visibility. NULL when
                 # older agents (pre-v1.3.24) send events without this field.
                 agent_version=item.get("agent_version"),
+                # v1.4.0: Confidence-graded inference result. Empty dict for
+                # events from pre-v1.4.0 agents — backwards compatible.
+                inference=item.get("inference", {}) or {},
             )
             created += 1
         except Exception as e:

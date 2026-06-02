@@ -289,6 +289,8 @@ jobs:
             --hidden-import=tax_software_constants `
             --hidden-import=explorer_watcher `
             --hidden-import=ai_client_switcher `
+            --hidden-import=inference_cache `
+            --collect-all inference `
             --add-data "timetracker_gui.py;." `
             --add-data "mdm_deploy.py;." `
             --add-data "version.py;." `
@@ -296,6 +298,8 @@ jobs:
             --add-data "tax_software_constants.py;." `
             --add-data "explorer_watcher.py;." `
             --add-data "ai_client_switcher.py;." `
+            --add-data "inference_cache.py;." `
+            --add-data "inference;inference" `
             --add-data "timetracker.ico;." `
             main.py
 

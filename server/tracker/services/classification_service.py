@@ -2981,18 +2981,22 @@ class ClassificationService:
             Stage 9.5 — Same-day temporal bracket attribution.
 
             When a block has no strong client signal of its own, look at neighboring
-            blocks (same user, same day, not suppressed, not idle) and propose a
-            client based on the surrounding work context.
+            and overlapping blocks (same user, same day, not suppressed, not idle)
+            and propose a client based on surrounding work context.
 
-            Two modes:
+            Three modes (tried in order):
               - Two-sided bracket (BOTH preceding AND following neighbor within ±30
                 min, same client) → strength 0.65
               - One-sided bracket (only one neighbor within ±15 min) → strength 0.55
+              - Overlap (another client's block STARTS inside this block's wall-clock
+                range, exactly one unique client overlaps) → strength 0.55
 
-            The asymmetric window is intentional: two-sided evidence is much
-            stronger, so we accept a wider time window. One-sided is more
-            speculative, so we tighten to 15 min — work-context "drift" beyond 15
-            min is too far to confidently extrapolate from a single neighbor.
+            The asymmetric windows are intentional. Two-sided evidence is much
+            stronger so it accepts a wider time window. One-sided is more
+            speculative so it tightens to 15 min. Overlap catches the case
+            where a long wall-clock-span block (e.g., a 90-min bank-portal
+            session) had other client work happening DURING it — strong
+            evidence that the target block belongs to that overlapping client.
 
             Why: "Context work" — bank portals, brief Excel scratch, Outlook checks,
             document viewers — often has weak or no direct client evidence. But
@@ -3007,14 +3011,16 @@ class ClassificationService:
                  cascading (A bracket-attributes B, B bracket-attributes C, etc.)
               3. Idle, suppressed, and Internal-Tax neighbors don't count.
               4. Two-sided requires neighbors to agree on the same client.
+              5. Overlap fires only if exactly ONE unique client overlaps; multiple
+                 different overlapping clients is ambiguous, don't guess.
 
             Signal strength tiers:
               0.65 (two-sided): strong enough to override stale agent signals
                                 and the fix6_default fallback, weak enough to
                                 defer to direct title evidence (0.82+).
-              0.55 (one-sided): above fix6_default (0.50), still surfaces as
-                                proposed for user review. Evidence text is
-                                explicit about being single-sided.
+              0.55 (one-sided or overlap): above fix6_default (0.50), surfaces
+                                as proposed for user review. Evidence text is
+                                explicit about which mode fired.
             """
             from tracker.models import Block
             from datetime import timedelta
@@ -3063,7 +3069,7 @@ class ClassificationService:
                     state_changed_by__in=EXCLUDE_SOURCES,
                 ).order_by('start').first()
 
-            # ----- Try two-sided bracket first (stronger signal, wider window) -----
+            # ----- Mode 1: Two-sided bracket (stronger signal, wider window) -----
             prev_wide = find_prev(TWO_SIDED_WINDOW)
             next_wide = find_next(TWO_SIDED_WINDOW)
 
@@ -3089,7 +3095,7 @@ class ClassificationService:
 
                 decision.matched_signals.append(Signal(
                     type='bracket_attribution',
-                    strength=0.65,
+                    strength=0.70,
                     evidence=evidence,
                     detail={
                         'client_id': client.id,
@@ -3108,16 +3114,15 @@ class ClassificationService:
             if prev_wide and next_wide and prev_wide.client_id != next_wide.client_id:
                 logger.info(
                     f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
-                    f"neighbors disagree (prev={prev_wide.client_id}, "
+                    f"two-sided neighbors disagree (prev={prev_wide.client_id}, "
                     f"next={next_wide.client_id}) — bracket not firing"
                 )
                 return
 
-            # ----- Two-sided didn't fire — try one-sided with tighter window -----
+            # ----- Mode 2: One-sided bracket (tighter window, weaker signal) -----
             prev_tight = find_prev(ONE_SIDED_WINDOW)
             next_tight = find_next(ONE_SIDED_WINDOW)
 
-            # Pick the closer neighbor if both exist (tighter gap = stronger evidence)
             candidate = None
             side = None
             gap_min = None
@@ -3126,8 +3131,6 @@ class ClassificationService:
                 prev_gap = (block.start - prev_tight.end).total_seconds()
                 next_gap = (next_tight.start - block.end).total_seconds()
                 if prev_tight.client_id == next_tight.client_id:
-                    # Both within 15 min and agree — treat as a strong two-sided
-                    # fallback (rare, since two-sided wide already would have fired)
                     candidate = prev_tight
                     side = 'both_tight'
                     gap_min = int(min(prev_gap, next_gap) // 60)
@@ -3148,47 +3151,112 @@ class ClassificationService:
                 side = 'next'
                 gap_min = int((next_tight.start - block.end).total_seconds() // 60)
 
-            if not candidate:
+            if candidate:
+                client = next((c for c in self._clients if c.id == candidate.client_id), None)
+                if not client:
+                    return
+
+                if side == 'prev':
+                    evidence = (
+                        f"Likely '{client.name}' — preceded by '{client.name}' work "
+                        f"{gap_min}min before (block {candidate.id}, no following evidence)"
+                    )
+                elif side == 'next':
+                    evidence = (
+                        f"Likely '{client.name}' — followed by '{client.name}' work "
+                        f"{gap_min}min after (block {candidate.id}, no preceding evidence)"
+                    )
+                else:
+                    evidence = (
+                        f"Adjacent blocks attributed to '{client.name}' "
+                        f"(both within {gap_min}min, block {candidate.id})"
+                    )
+
+                logger.info(
+                    f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
+                    f"one-sided bracket ({side}) -> '{client.name}' (id={client.id}) "
+                    f"via neighbor {candidate.id} at {gap_min}min"
+                )
+
+                decision.matched_signals.append(Signal(
+                    type='bracket_attribution',
+                    strength=0.65,
+                    evidence=evidence,
+                    detail={
+                        'client_id': client.id,
+                        'client_name': client.name,
+                        'mode': f'one_sided_{side}',
+                        'neighbor_block_id': candidate.id,
+                        'gap_min': gap_min,
+                    },
+                ))
                 return
 
-            client = next((c for c in self._clients if c.id == candidate.client_id), None)
-            if not client:
-                return
-
-            if side == 'prev':
-                evidence = (
-                    f"Likely '{client.name}' — preceded by '{client.name}' work "
-                    f"{gap_min}min before (block {candidate.id}, no following evidence)"
-                )
-            elif side == 'next':
-                evidence = (
-                    f"Likely '{client.name}' — followed by '{client.name}' work "
-                    f"{gap_min}min after (block {candidate.id}, no preceding evidence)"
-                )
-            else:
-                evidence = (
-                    f"Adjacent blocks attributed to '{client.name}' "
-                    f"(both within {gap_min}min, block {candidate.id})"
-                )
-
-            logger.info(
-                f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
-                f"one-sided bracket ({side}) -> '{client.name}' (id={client.id}) "
-                f"via neighbor {candidate.id} at {gap_min}min"
+            # ----- Mode 3: Overlap (other client work happened DURING this block) -----
+            # A block can have a wide wall-clock span (start..end) even when its
+            # actual foreground duration is small. Other client work that happened
+            # DURING this span is strong evidence that the target block belongs
+            # to that client. Common case: a long bank-portal session where the
+            # user is also editing client files in another app.
+            overlap_qs = Block.objects.filter(
+                user=block.user,
+                day=block.day,
+                start__gt=block.start,
+                start__lt=block.end,
+                client__isnull=False,
+                classification_state__in=('committed', 'proposed'),
+            ).exclude(
+                id=block.id,
+            ).exclude(
+                client__name='Internal - Tax',
+            ).exclude(
+                state_changed_by__in=EXCLUDE_SOURCES,
             )
 
-            decision.matched_signals.append(Signal(
-                type='bracket_attribution',
-                strength=0.55,
-                evidence=evidence,
-                detail={
-                    'client_id': client.id,
-                    'client_name': client.name,
-                    'mode': f'one_sided_{side}',
-                    'neighbor_block_id': candidate.id,
-                    'gap_min': gap_min,
-                },
-            ))
+            overlapping_client_ids = set(overlap_qs.values_list('client_id', flat=True))
+
+            if len(overlapping_client_ids) == 1:
+                overlap_client_id = overlapping_client_ids.pop()
+                client = next((c for c in self._clients if c.id == overlap_client_id), None)
+                if not client:
+                    return
+
+                overlapping_blocks = list(overlap_qs)
+                sample_block = overlapping_blocks[0]
+                other_count = len(overlapping_blocks) - 1
+                extra = f" (+{other_count} more)" if other_count > 0 else ""
+
+                evidence = (
+                    f"Likely '{client.name}' — '{client.name}' work happened "
+                    f"during this block (block {sample_block.id}{extra}, all "
+                    f"overlapping work is for one client)"
+                )
+
+                logger.info(
+                    f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
+                    f"overlap-bracket -> '{client.name}' (id={client.id}) "
+                    f"via {len(overlapping_blocks)} block(s) starting inside target range"
+                )
+
+                decision.matched_signals.append(Signal(
+                    type='bracket_attribution',
+                    strength=0.65,
+                    evidence=evidence,
+                    detail={
+                        'client_id': client.id,
+                        'client_name': client.name,
+                        'mode': 'overlap',
+                        'overlapping_block_ids': [b.id for b in overlapping_blocks],
+                        'overlapping_block_count': len(overlapping_blocks),
+                    },
+                ))
+                return
+
+            if len(overlapping_client_ids) > 1:
+                logger.info(
+                    f"[STAGE-9.5-BRACKET] Block {getattr(block, 'pk', '?')}: "
+                    f"overlap ambiguous (clients: {overlapping_client_ids}) — not firing"
+                )
 
     # -------------------------------------------------------------------------
     # STAGE 10 — AI inference (last resort, cost-controlled)

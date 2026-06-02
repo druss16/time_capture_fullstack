@@ -130,6 +130,12 @@ widget_tracker = get_widget_state_tracker()  # Drives the floating widget's colo
 # Single instance lock — named mutex held for entire process lifetime
 _lock_mutex = None
 
+# v1.4.0: Last computed inference result, set by the event handler on every
+# window change. Tray UI reads this (with decay applied) to show real-time
+# client + confidence. Replaces the binary _get_cached_client() in the tray.
+_last_inference_lock = threading.Lock()
+_last_inference: Optional[dict] = None  # InferenceResult.to_dict() shape
+
 # ---------------- Check Active Subscriptions ----------------
 # Near top with other globals
 _subscription_active = True
@@ -170,6 +176,51 @@ def show_subscription_inactive_notification():
         root.destroy()
     except Exception as e:
         log(f"[SUB] Could not show dialog: {e}")
+
+
+# ---------------- Get Current Inference ----------------
+def _get_current_inference() -> Optional[dict]:
+    """
+    Return the most recent inference result with decay applied.
+    Returns None if no inference has been computed yet, or if confidence
+    has decayed below the action floor (0.4).
+
+    Tray UI calls this on every refresh to show real-time confidence.
+    """
+    from inference import apply_decay_to_inference, InferenceResult
+    from datetime import datetime, timezone
+
+    with _last_inference_lock:
+        if not _last_inference:
+            return None
+        # Reconstruct minimal InferenceResult for decay calculation
+        last_at_str = _last_inference.get('last_affirming_signal_at')
+        if not last_at_str:
+            return None
+        try:
+            last_at = datetime.fromisoformat(last_at_str)
+        except Exception:
+            return None
+
+        # Build a synthetic InferenceResult for decay
+        synthetic = InferenceResult(
+            client_id=_last_inference.get('client_id'),
+            confidence=_last_inference.get('confidence', 0.0),
+            last_affirming_signal_at=last_at,
+            evidence=[],  # not needed for decay
+        )
+        decayed = apply_decay_to_inference(synthetic)
+        if decayed.is_stale or not decayed.has_client:
+            return None
+        return {
+            'client_id': decayed.client_id,
+            'confidence': decayed.confidence,
+            'client_name': _last_inference.get('client_name'),  # cached at compute time
+            'evidence_sources': [
+                e.get('source') for e in _last_inference.get('evidence', [])
+            ],
+            'last_affirming_signal_at': last_at_str,
+        }
 
 
 # ---------------- Config ----------------
@@ -344,41 +395,54 @@ _client_cache_lock = threading.Lock()
 
 
 def _set_cached_client(client_id, client_name):
-    """Update the local client cache."""
-    global _cached_client_id, _cached_client_name, _cached_client_updated
+    """
+    v1.4.0: Setting "current client" externally now creates a manual
+    override in the inference engine. The override is Tier 1 evidence
+    at strength 0.85, decays via standard 15-min linear decay.
+
+    The old module-level cache (_cached_client_id, _cached_client_name)
+    is no longer authoritative. We leave the legacy variable writes in
+    place for any code that might inspect them directly, but they no
+    longer drive client attribution.
+    """
+    from inference_cache import set_manual_override, clear_manual_override
+
+    # New path: inference engine
+    if client_id is None:
+        clear_manual_override()
+    else:
+        set_manual_override(client_id, client_name)
+
+    # Legacy path: keep the old cache vars in sync for any direct readers.
+    # These vars are no longer authoritative but some debug/log paths may
+    # still inspect them.
+    global _cached_client_id, _cached_client_name
     with _client_cache_lock:
         _cached_client_id = client_id
         _cached_client_name = client_name
-        _cached_client_updated = time.time()
         log(f"[CLIENT-CACHE] Set: {client_name} (id={client_id})")
 
 
 def _get_cached_client():
     """
-    Get current client from local cache. Returns (client_id, client_name).
+    v1.4.0: Authoritative read from inference_cache. The old state-machine
+    cache vars (_cached_client_id, _cached_client_name) are no longer
+    consulted — they may be stale (e.g., set hours ago when user worked
+    on Holly Corbett, never cleared because old demote callback was wonky).
 
-    v1.3.63: Removed the backend-refresh-on-TTL-expiry path that previously
-    lived here. The agent is now authoritative for current_client during a
-    session. The cache is set ONLY by:
-      - _apply_client_switch (user pick, AI-SWITCH detect, tray/notif confirm)
-      - widget_tracker demote callback (clears to None after 15 min stale)
-      - Startup hydration (one-time, via run_agent's seed block ~line 2463)
+    Inference cache handles staleness correctly via linear decay: after 15
+    minutes of no affirming evidence, confidence drops below the floor and
+    this returns (None, None) automatically.
 
-    Previously, write_event called this function on every event flush. When
-    the local cache TTL expired (60s), the function fetched from backend and
-    overwrote local cache. If backend had a stale CurrentClient row (e.g.,
-    set hours ago by AI-SWITCH and never cleared because widget_tracker's
-    demote didn't fire), every subsequent event got stamped with that stale
-    client_id. See TL Wall block 39995 (Wayne, 2026-06-01) for the canonical
-    case: Holly Corbett=257 stamped on 84 events spanning unrelated browsing
-    because backend kept feeding the agent its own stale value.
-
-    Backend remains write-only during sessions via set_current_client_backend.
-    Cross-device or web-UI selections are NOT propagated mid-session; users
-    on a new device must wait for the next agent startup or pick manually.
+    See TL Wall block 39995 (Wayne, 2026-06-01) for the canonical case
+    that motivated this architecture: 84 events stamped with stale
+    Holly Corbett because the old cache had no decay.
     """
-    with _client_cache_lock:
-        return _cached_client_id, _cached_client_name
+    from inference_cache import get_current_inference
+    inf = get_current_inference()
+    if inf:
+        return (inf.get('client_id'), inf.get('client_name'))
+    return (None, None)
 
 
 def _apply_client_switch(client_id: int, client_name: str, source: str = "unknown"):
@@ -1516,8 +1580,11 @@ def write_event(
         (start_iso, app_name, bundle_id, title or "", url, fpath, user, hostname),
     )
     conn.commit()
- 
-    # ── Client resolution: override wins, else fall back to live cache ──
+
+    # ── Client resolution: override wins, else read from inference cache ──
+    # v1.4.0: This is the rip-out. _get_cached_client() (the old state
+    # machine cache) is no longer consulted. The inference engine's cache
+    # is the single source of truth for "what client is the user on".
     if client_override is not None:
         current_client_id = client_override
         # Look up the name for logging only; backend will resolve from id
@@ -1526,7 +1593,14 @@ def write_event(
             obj = next((c for c in sync.clients if c.get("id") == client_override), None)
             current_client_name = obj.get("name") if obj else None
     else:
-        current_client_id, current_client_name = _get_cached_client()
+        from inference_cache import get_current_inference as _gci_inline
+        _inf = _gci_inline()
+        if _inf:
+            current_client_id = _inf.get('client_id')
+            current_client_name = _inf.get('client_name')
+        else:
+            current_client_id = None
+            current_client_name = None
  
     if notif_manager:
         notif_manager.set_current_client(current_client_id, current_client_name)
@@ -1560,6 +1634,11 @@ def write_event(
 
             # Use bundle_id as exe_name on Mac; on Windows, app_name IS the
             # exe name (psutil.Process().name() output)
+            # v1.4.0: Pull manual override from the inference cache —
+            # becomes Tier 1 evidence at strength 0.85 in this evaluation
+            from inference_cache import get_manual_override as _get_override
+            _override = _get_override()
+
             inference_ctx = _InferenceWindowContext(
                 title=title or "",
                 app_name=app_name or "",
@@ -1568,6 +1647,7 @@ def write_event(
                 file_path=fpath,
                 url=url,
                 timestamp=datetime.fromtimestamp(start_ts, tz=timezone.utc),
+                manual_override=_override,
             )
 
             # Pull learned_rules from the global AI switcher if present
@@ -1587,6 +1667,28 @@ def write_event(
                 internal_client_id=internal_cid,
             )
             inference_dict = inference_result.to_dict()
+
+            # v1.4.0: Push to the inference cache so the tray, widget,
+            # and other consumers can read it. Single source of truth.
+            from inference_cache import update_inference_cache as _update_cache
+            _client_name_lookup = None
+            if inference_result.client_id:
+                _client_name_lookup = next(
+                    (c.get('name') for c in clients_for_inference
+                     if c.get('id') == inference_result.client_id),
+                    None,
+                )
+            _update_cache(inference_dict, _client_name_lookup)
+            # v1.4.0: Cache for tray UI to read
+            with _last_inference_lock:
+                _last_inference = {
+                    **inference_dict,
+                    'client_name': (
+                        next((c.get('name') for c in clients_for_inference
+                              if c.get('id') == inference_result.client_id), None)
+                        if inference_result.client_id else None
+                    ),
+                }
         except Exception as _e:
             # Never crash the event handler on inference errors
             print(f"[INFERENCE] Compute failed: {_e}", flush=True)

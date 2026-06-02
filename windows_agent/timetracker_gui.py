@@ -22,6 +22,7 @@ import time as _time
 import ctypes
 from datetime import datetime
 from typing import Optional, List, Dict, Callable
+import threading
 
 def _safe_print(*args, **kwargs):
     """Print that survives a closed stdout."""
@@ -269,39 +270,60 @@ class GUIState:
     """Manages GUI state"""
     
     def __init__(self):
-        self.current_client_id: Optional[int] = None
-        self.current_client_name: str = "No Client"
-        # Classification state from /api/agent/widget-state/, polled by main.py.
-        # Drives the floating widget's color: committed=green, proposed=yellow,
-        # captured=gray, no_client=red.
+        # v1.4.0: current_client_id and current_client_name are now PROPERTIES
+        # backed by inference_cache (the new single source of truth). No more
+        # persisted state file — the agent re-evaluates from fresh evidence on
+        # every restart, which is the whole point of the inference-engine
+        # architecture.
+        #
+        # current_widget_state is left as a stored field for backwards compat
+        # (the /api/agent/widget-state/ poller in main.py still writes here),
+        # but the floating widget should be reading inference_cache directly
+        # by Phase 4. Once that's done this field becomes vestigial.
         self.current_widget_state: str = "no_client"
-        self.load()
-    
+
+    @property
+    def current_client_id(self) -> Optional[int]:
+        from inference_cache import get_current_inference
+        inf = get_current_inference()
+        return inf.get('client_id') if inf else None
+
+    @property
+    def current_client_name(self) -> str:
+        from inference_cache import get_current_inference
+        inf = get_current_inference()
+        if not inf or not inf.get('client_id'):
+            return "No Client"
+        return inf.get('client_name') or "No Client"
+
+    @property
+    def current_confidence(self) -> float:
+        """v1.4.0: Expose confidence so tray/widget can show graded indicators."""
+        from inference_cache import get_current_inference
+        inf = get_current_inference()
+        return (inf.get('confidence', 0.0) or 0.0) if inf else 0.0
+
     def load(self):
-        if os.path.exists(GUI_STATE_FILE):
-            try:
-                with open(GUI_STATE_FILE, 'r') as f:
-                    data = json.load(f)
-                    self.current_client_id = data.get("current_client_id")
-                    self.current_client_name = data.get("current_client_name", "No Client")
-            except Exception:
-                pass
-    
+        """No-op in v1.4.0. State is no longer persisted across restarts."""
+        pass
+
     def save(self):
-        try:
-            os.makedirs(os.path.dirname(GUI_STATE_FILE), exist_ok=True)
-            with open(GUI_STATE_FILE, 'w') as f:
-                json.dump({
-                    "current_client_id": self.current_client_id,
-                    "current_client_name": self.current_client_name,
-                }, f, indent=2)
-        except Exception as e:
-            print(f"[GUI] Failed to save state: {e}")
-    
+        """No-op in v1.4.0. State is derived, not stored."""
+        pass
+
     def set_client(self, client_id: Optional[int], client_name: str):
-        self.current_client_id = client_id
-        self.current_client_name = client_name
-        self.save()
+        """
+        Manual client pick — write to inference_cache as a manual_override.
+        The next event evaluation picks it up as Tier 1 evidence at strength
+        0.85, with standard 15-min linear decay.
+        """
+        from inference_cache import set_manual_override, clear_manual_override
+        if client_id is None or client_id == 0:
+            clear_manual_override()
+            print(f"[GUI] Manual override cleared")
+        else:
+            set_manual_override(client_id, client_name)
+            print(f"[GUI] Manual override set: {client_name} (id={client_id})")
 
 
 # ============================================================
@@ -1348,6 +1370,37 @@ class TimeTrackerSystemTray:
         # Update floating widget
         if self.floating_widget:
             self.floating_widget.update_client(client_id, client_name)
+
+    def _tooltip_refresh_loop(self):
+        """v1.4.0: Periodically refresh the tray tooltip from inference cache."""
+        from inference_cache import get_current_inference
+        while not self._tooltip_refresher_stop.is_set():
+            try:
+                inf = get_current_inference()
+                if inf and inf.get('client_id'):
+                    name = inf.get('client_name', 'Unknown')
+                    conf = inf.get('confidence', 0.0)
+                    if conf >= 0.85:
+                        dot = "●"  # high confidence
+                    elif conf >= 0.60:
+                        dot = "◐"  # moderate
+                    else:
+                        dot = "○"  # low / corroborating only
+                    label = f"{name} {dot}"
+                else:
+                    label = "No Client"
+
+                if self.user_name:
+                    tooltip = f"TimeTracker ({self.user_name}) - {label}"
+                else:
+                    tooltip = f"TimeTracker - {label}"
+
+                if self.icon and self.icon.title != tooltip:
+                    self.icon.title = tooltip
+            except Exception as e:
+                # Never let the refresher kill itself
+                print(f"[GUI] Tooltip refresh error: {e}")
+            self._tooltip_refresher_stop.wait(5.0)
     
     def _on_today_time(self):
         """Show today's time window"""
@@ -1385,6 +1438,17 @@ class TimeTrackerSystemTray:
             tooltip,
             menu=pystray.Menu(self._build_menu_items)
         )
+
+        # v1.4.0: Tooltip refresher. pystray's tooltip is static after icon
+        # creation, so we periodically re-read inference_cache and update
+        # self.icon.title to reflect the current client + confidence.
+        self._tooltip_refresher_stop = threading.Event()
+        self._tooltip_refresher_thread = threading.Thread(
+            target=self._tooltip_refresh_loop,
+            daemon=True,
+            name="TrayTooltipRefresher",
+        )
+        self._tooltip_refresher_thread.start()
         
         # Try floating widget first (runs in its own mainloop)
         widget_created = False

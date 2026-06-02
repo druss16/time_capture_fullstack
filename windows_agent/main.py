@@ -15,6 +15,7 @@ Features:
 - Error logging and remote error reporting
 - Watchdog thread for crash recovery
 - Sleep/wake recovery with automatic reconnection
+- Testing
 """
 
 import os

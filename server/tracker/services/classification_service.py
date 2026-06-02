@@ -3095,7 +3095,7 @@ class ClassificationService:
 
                 decision.matched_signals.append(Signal(
                     type='bracket_attribution',
-                    strength=0.65,
+                    strength=0.55,
                     evidence=evidence,
                     detail={
                         'client_id': client.id,

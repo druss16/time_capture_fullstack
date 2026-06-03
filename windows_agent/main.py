@@ -201,8 +201,19 @@ def _compute_window_inference_snapshot(app_name, title, url, fpath, bundle_id=No
             internal_client_id=internal_cid,
         )
 
-        _client_name_lookup = {c.get('id'): c.get('name') for c in clients_for_inference}
-        _update_cache(result.to_dict(), _client_name_lookup)
+        # v1.4.2.1: resolve client_name from inference result's client_id.
+        # update_inference_cache expects (inference_dict, client_name:str|None),
+        # NOT a lookup dict.
+        result_dict = result.to_dict()
+        cid = result_dict.get('client_id')
+        client_name = None
+        if cid is not None:
+            for c in clients_for_inference:
+                if c.get('id') == cid:
+                    client_name = c.get('name')
+                    break
+
+        _update_cache(result_dict, client_name)
     except Exception as e:
         try:
             log(f"[INFERENCE] snapshot compute failed: {e}")

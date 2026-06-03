@@ -28,9 +28,13 @@ logger = logging.getLogger("timetracker.inference.collectors")
 # =============================================================================
 
 def _strip_qb(title: str) -> str:
-    """Lazy import to avoid circular dependency at module load."""
+    """Lazy import to avoid circular dependency at module load.
+    v1.4.1: try bundle path first, fall back to dev path."""
     try:
-        from windows_agent.ai_client_switcher import _strip_qb_screen_bracket
+        try:
+            from ai_client_switcher import _strip_qb_screen_bracket
+        except ImportError:
+            from windows_agent.ai_client_switcher import _strip_qb_screen_bracket
         return _strip_qb_screen_bracket(title)
     except Exception:
         return title
@@ -38,9 +42,13 @@ def _strip_qb(title: str) -> str:
 
 def _cpa_file_match_safe(title: str, clients: list,
                          current_client_id: Optional[int] = None) -> Any:
-    """Lazy import wrapper for _cpa_file_match."""
+    """Lazy import wrapper for _cpa_file_match.
+    v1.4.1: try bundle path first, fall back to dev path."""
     try:
-        from windows_agent.ai_client_switcher import _cpa_file_match
+        try:
+            from ai_client_switcher import _cpa_file_match
+        except ImportError:
+            from windows_agent.ai_client_switcher import _cpa_file_match
         return _cpa_file_match(title, clients, current_client_id)
     except Exception as e:
         logger.debug(f"_cpa_file_match failed: {e}")
@@ -48,9 +56,13 @@ def _cpa_file_match_safe(title: str, clients: list,
 
 
 def _widget_title_matches(title, file_path, url, client_name, aliases) -> bool:
-    """Lazy import wrapper for WidgetStateTracker._title_matches_client."""
+    """Lazy import wrapper for WidgetStateTracker._title_matches_client.
+    v1.4.1: try bundle path first, fall back to dev path."""
     try:
-        from windows_agent.widget_state_tracker import WidgetStateTracker
+        try:
+            from widget_state_tracker import WidgetStateTracker
+        except ImportError:
+            from windows_agent.widget_state_tracker import WidgetStateTracker
         return WidgetStateTracker._title_matches_client(
             title, file_path, url, client_name, aliases
         )
@@ -155,11 +167,18 @@ def collect_tax_software_evidence(
         return []
 
     try:
-        from windows_agent.tax_software_constants import (
-            TAX_SOFTWARE_RETURN_PATTERN,
-            TAX_SOFTWARE_TAXWISE_PATTERN,
-            GENERIC_TAX_DIALOGS,
-        )
+        try:
+            from tax_software_constants import (
+                TAX_SOFTWARE_RETURN_PATTERN,
+                TAX_SOFTWARE_TAXWISE_PATTERN,
+                GENERIC_TAX_DIALOGS,
+            )
+        except ImportError:
+            from windows_agent.tax_software_constants import (
+                TAX_SOFTWARE_RETURN_PATTERN,
+                TAX_SOFTWARE_TAXWISE_PATTERN,
+                GENERIC_TAX_DIALOGS,
+            )
     except Exception as e:
         logger.debug(f"tax_software_constants not available: {e}")
         return []

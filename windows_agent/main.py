@@ -133,6 +133,82 @@ except Exception as _e:
     _inference_diag("startup: traceback:\n" + _diag_traceback.format_exc())
     print(f"[INFERENCE] Module not available: {_e}", flush=True)
 
+def _compute_window_inference_snapshot(app_name, title, url, fpath, bundle_id=None):
+    """v1.4.2: Quick inference snapshot at window-change time.
+
+    The full inference compute lives inside the event-emit path
+    (_emit_current_dwell). That runs at dwell-emit time — window change
+    for the OLD window, or heartbeat (~60s) for the current window.
+
+    This helper runs inference for the CURRENT window at window-change
+    time so the inference cache reflects the new window IMMEDIATELY.
+    Widget reads cache via widget_tracker → correct client within 1-2
+    sec on next tracking-loop poll, instead of waiting up to 60 sec
+    for the next heartbeat.
+
+    Duplicates compute logic from _emit_current_dwell intentionally —
+    inference is cheap (~10ms) and avoiding a refactor of the event-emit
+    path is worth the duplication. Both paths update the same cache via
+    update_inference_cache(); last write wins; manual_user_override is
+    preserved via get_manual_override() being read into the context.
+    """
+    if not _INFERENCE_AVAILABLE:
+        return
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        from inference_cache import (
+            get_manual_override as _get_override,
+            update_inference_cache as _update_cache,
+        )
+
+        clients_for_inference = (
+            list(sync.clients) if sync and getattr(sync, "clients", None) else []
+        )
+
+        # Look up Internal-Tax client id for firm-name routing
+        internal_cid = None
+        for _c in clients_for_inference:
+            if (_c.get("name") or "").strip().lower() == "internal - tax":
+                internal_cid = _c.get("id")
+                break
+
+        _override = _get_override()
+
+        inference_ctx = _InferenceWindowContext(
+            title=title or "",
+            app_name=app_name or "",
+            exe_name=app_name or "",
+            bundle_id=bundle_id,
+            file_path=fpath,
+            url=url,
+            timestamp=_dt.now(_tz.utc),
+            manual_override=_override,
+        )
+
+        _learned = None
+        try:
+            if 'ai_switcher' in globals() and ai_switcher is not None:
+                _learned = getattr(ai_switcher, 'learned_rules', None)
+        except Exception:
+            pass
+
+        result = _infer_client(
+            ctx=inference_ctx,
+            clients=clients_for_inference,
+            learned_rules=_learned,
+            is_idle=False,
+            firm_name_patterns=None,
+            internal_client_id=internal_cid,
+        )
+
+        _client_name_lookup = {c.get('id'): c.get('name') for c in clients_for_inference}
+        _update_cache(result.to_dict(), _client_name_lookup)
+    except Exception as e:
+        try:
+            log(f"[INFERENCE] snapshot compute failed: {e}")
+        except Exception:
+            pass
+
 register_hotkey = None
 ai_switcher = None  # Will be initialized after GUI setup
 widget_tracker = get_widget_state_tracker()  # Drives the floating widget's color/state
@@ -3029,6 +3105,10 @@ def run_agent():
                                         _emit_current_dwell(now_loop)
                                     _start_new_dwell(sig, now_loop)
                                     record_window_change()
+                                    # v1.4.2: snapshot inference for NEW window
+                                    _compute_window_inference_snapshot(
+                                        app_name, window_title, url, fpath
+                                    )
                                     if ai_switcher:
                                         ai_switcher.on_window_change(
                                             app_name, exe_name, window_title, url, fpath
@@ -3165,6 +3245,12 @@ def run_agent():
                             _start_new_dwell(sig, now_loop)
                             log(f"[FOCUS] {app_name} • {window_title or '(no title)'}")
                             record_window_change()
+                            # v1.4.2: snapshot inference for NEW window so widget
+                            # renders correct client within 1-2 sec instead of
+                            # waiting for the heartbeat (~60 sec).
+                            _compute_window_inference_snapshot(
+                                app_name, window_title, url, fpath
+                            )
                             if ai_switcher:
                                 ai_switcher.on_window_change(app_name, exe_name, window_title, url, fpath)
                             if widget_tracker and gui_menu_bar and hasattr(gui_menu_bar, "state"):

@@ -69,7 +69,20 @@ class WidgetStateTracker:
         return self._compute_state()
 
     def _compute_state(self) -> str:
-        """Read inference cache and map confidence to widget state."""
+        """Read inference cache and map confidence to widget state.
+
+        v1.4.4: Hysteresis. Once committed, stay committed until confidence
+        falls below the captured threshold. Without this, decay between
+        heartbeats (~60s) causes flicker: committed → proposed → committed
+        while the user is on the same client window. Linear decay over
+        15 min would push confidence through the 0.70 threshold ~3 min in,
+        but the next heartbeat refreshes it — making 'proposed' a transient
+        state that briefly flashes between heartbeats.
+
+        With hysteresis: committed sticks until confidence drops below
+        0.40 (which only happens after ~8 min of NO new inference, i.e.
+        the user has clearly left the client context).
+        """
         try:
             from inference_cache import get_current_inference
         except ImportError:
@@ -91,6 +104,14 @@ class WidgetStateTracker:
 
         if client_id is None or confidence < PROPOSED_CONFIDENCE_THRESHOLD:
             return "captured"
+
+        # Hysteresis: once committed, stay committed until confidence
+        # drops below the captured threshold. Prevents flicker during
+        # normal decay between heartbeats.
+        if self._last_computed_state == "committed":
+            return "committed"
+
+        # Fresh transition (captured → proposed or → committed):
         if confidence < COMMITTED_CONFIDENCE_THRESHOLD:
             return "proposed"
         return "committed"

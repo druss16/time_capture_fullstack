@@ -477,6 +477,23 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
     # 2. Local cache (so write_event picks it up immediately)
     _set_cached_client(client_id, client_name)
 
+    # v1.4.3: Update inference cache FIRST. Step 3's GUI update reads
+    # widget_tracker.state which computes from the cache; previously the
+    # cache was updated at step 4.5 AFTER the GUI, so the floating widget
+    # showed stale state for up to ~1 minute until the next event capture.
+    if source not in ("ai_switcher", "stale_clear"):
+        try:
+            try:
+                from inference_cache import set_manual_override as _set_override
+            except ImportError:
+                from windows_agent.inference_cache import set_manual_override as _set_override
+            _set_override(client_id, client_name)
+        except Exception as e:
+            try:
+                log(f"[INFERENCE] Manual override push failed: {e}")
+            except Exception:
+                pass
+
     # 3. GUI update (tray tooltip, floating widget, state, menu checkmarks)
     if gui_menu_bar:
         # Update state directly — do NOT call _switch_client (creates callback loop)
@@ -519,22 +536,6 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
     if notif_manager:
         notif_manager.set_current_client(client_id, client_name)
 
-    # v1.4.1: User picks must flow into the inference cache so the widget
-    # and tray reflect immediately. Without this, the manual switch only
-    # updates AIClientSwitcher's internal state — which nothing else reads
-    # in the v1.4.0 architecture.
-    if source not in ("ai_switcher", "stale_clear"):
-        try:
-            try:
-                from inference_cache import set_manual_override as _set_override
-            except ImportError:
-                from windows_agent.inference_cache import set_manual_override as _set_override
-            _set_override(client_id, client_name)
-        except Exception as e:
-            try:
-                log(f"[INFERENCE] Manual override push failed: {e}")
-            except Exception:
-                pass
 
     # 5. AI switcher — only snooze on MANUAL switches, not AI auto-switches.
     # v1.3.62: "stale_clear" source also bypasses snooze — we want AI-SWITCH

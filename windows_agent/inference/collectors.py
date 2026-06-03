@@ -70,6 +70,67 @@ def _widget_title_matches(title, file_path, url, client_name, aliases) -> bool:
         logger.debug(f"widget title match failed: {e}")
         return False
 
+# v1.4.2: System path segments that must never match client names.
+# Without this filter, file paths like C:\Users\<windows-username>\...
+# falsely match when the Windows username happens to equal a client name.
+_SYSTEM_PATH_SEGMENTS_BLOCKLIST = {
+    'appdata', 'localappdata', 'local', 'roaming',
+    'temp', 'tmp', 'cache', 'packages',
+    'programfiles', 'programfilesx86', 'programdata',
+    'program files', 'program files (x86)',
+    'windows', 'system32', 'syswow64',
+    'public', 'default',
+    'ac', 'oice_16',  # Office Protected View internals
+    'recycle.bin', '$recycle.bin', 'system volume information',
+}
+
+
+def _filter_path_segments(file_path: str) -> List[str]:
+    """
+    v1.4.2: Return path segments suitable for client matching.
+    Strips drive letters, the user's home directory (immediate child of
+    \\Users\\), and common system folders. This prevents false positives
+    where a Windows username (e.g. 'mavops') collides with a client name.
+    """
+    if not file_path:
+        return []
+    normalized = file_path.replace('\\', '/')
+    raw_segments = [s.strip() for s in normalized.split('/') if s.strip()]
+
+    filtered = []
+    skip_next = False
+    for seg in raw_segments:
+        seg_lower = seg.lower()
+
+        # Skip drive letters (c:, d:, etc.)
+        if re.match(r'^[a-z]:$', seg_lower):
+            continue
+
+        # If previous was "Users", skip this one (it's the Windows username)
+        if skip_next:
+            skip_next = False
+            continue
+
+        # If this is "Users", mark next segment to skip
+        if seg_lower == 'users':
+            skip_next = True
+            continue
+
+        # Skip common system folders + Office Protected View internals
+        seg_compact = re.sub(r'[\s\-_,.&]+', '', seg_lower)
+        if seg_compact in _SYSTEM_PATH_SEGMENTS_BLOCKLIST or seg_lower in _SYSTEM_PATH_SEGMENTS_BLOCKLIST:
+            continue
+
+        # Skip random hex/GUID-like segments (Office Protected View
+        # generates folders like 'oice_16_974fa576_32c1d314_15fb')
+        if re.match(r'^[0-9a-f]{8}[-_]', seg_lower):
+            continue
+        if re.search(r'\{[0-9a-f-]{20,}\}', seg_lower):
+            continue
+
+        filtered.append(seg_lower)
+
+    return filtered
 
 def _learned_rules_match(learned_rules, title, current_client_id=None):
     """Lazy wrapper for LearnedRules.match."""
@@ -331,8 +392,12 @@ def collect_file_path_evidence(
     # Mechanism 2: Folder-segment match
     # Walk path segments looking for one that matches a client name.
     # Folder structure is curated by the firm, so this is high signal.
-    path_normalized = ctx.file_path.replace("\\", "/")
-    segments = [s.strip().lower() for s in path_normalized.split("/") if s.strip()]
+    # v1.4.2: Filter system path segments (Users\<username>, AppData,
+    # Temp, Packages, etc.) to prevent false matches where a Windows
+    # username collides with a client name.
+    segments = _filter_path_segments(ctx.file_path)
+    if not segments:
+        return evidence_list
     for client in clients:
         client_name = (client.get("name") or "").strip()
         client_id = client.get("id")
@@ -342,11 +407,13 @@ def collect_file_path_evidence(
             continue  # already matched via mechanism 1
 
         cn_lower = client_name.lower()
-        # Compress whitespace/punctuation for folder-segment matching
-        cn_compact = re.sub(r'[\s\-_,.&]+', '', cn_lower)
+        # v1.4.2: Compress whitespace/punctuation INCLUDING apostrophes
+        # (both straight and curly) so "Lola's Pet Shop" matches the folder
+        # name "lolas pet shop" / "Lolas_Pet_Shop".
+        cn_compact = re.sub(r"[\s\-_,.&'\"\u2018\u2019]+", '', cn_lower)
 
         for seg in segments:
-            seg_compact = re.sub(r'[\s\-_,.&]+', '', seg)
+            seg_compact = re.sub(r"[\s\-_,.&'\"\u2018\u2019]+", '', seg)
             if not seg_compact or len(seg_compact) < 4:
                 continue
             if cn_compact == seg_compact or cn_compact in seg_compact or seg_compact in cn_compact:
@@ -390,8 +457,13 @@ def collect_title_alias_evidence(
             continue
         aliases = client.get("aliases") or []
 
+        # v1.4.2: title_alias collector only checks the window title.
+        # file_path has its own dedicated collector (file_path_client_folder);
+        # url has its own (url_domain_match). Including them here caused
+        # double-attribution when path segments like Windows usernames
+        # collided with client names.
         if _widget_title_matches(
-            ctx.title, ctx.file_path, ctx.url, client_name, aliases
+            ctx.title, None, None, client_name, aliases
         ):
             matches.append(Evidence(
                 source="title_alias_match",

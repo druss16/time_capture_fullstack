@@ -102,15 +102,20 @@ class WidgetStateTracker:
     def on_user_set_client(self, client_name: Optional[str] = None,
                            aliases: Optional[List[str]] = None):
         """
-        User explicitly picked a client.
+        User explicitly picked a client. Force state to 'committed' since
+        the user made an explicit choice — independent of what the inference
+        cache currently shows. The cache may or may not have been updated
+        yet in the same call chain; either way a manual pick should always
+        render the widget as committed (green) immediately.
 
-        v1.4: state is derived from inference cache, which is updated by
-        inference_cache.set_manual_override() before this callback fires.
-        We just cache the client_name for the demote callback.
+        v1.4.3: Defensive against the stale-state race that caused
+        floating widget to show captured for ~1 minute after a manual
+        pick (cache was updated AFTER the widget refresh in main.py
+        pre-v1.4.3).
         """
         if client_name is not None:
             self._last_client_name = client_name
-        self._last_computed_state = self._compute_state()
+        self._last_computed_state = "committed"
 
     def on_window_change(self, window_title, file_path, url,
                          current_client_name, current_client_aliases=None):

@@ -258,9 +258,16 @@ def collect_tax_software_evidence(
     # We matched a return-open pattern. Now figure out which taxpayer.
     # The bracketed/colon-separated part contains the taxpayer name.
     # Example: "1040 [SMITH JOHN A]" → extract "SMITH JOHN A"
-    bracket_match = re.search(r'\[([^\]]+)\]', ctx.title)
+    #
+    # v1.4.5: Windows truncates titles at ~255 chars. UltraTax format is
+    # "[SSN LASTNAME, FIRST M & SPOUSE]" and the closing ] gets cut off
+    # in long titles. Match through end-of-string when ] is missing, and
+    # strip the optional SSN/EIN prefix that UltraTax includes.
+    bracket_match = re.search(r'\[([^\]]+?)(?:\]|$)', ctx.title)
     if bracket_match:
         taxpayer_text = bracket_match.group(1).strip()
+        # UltraTax includes "[SSN LASTNAME, ...]" — strip leading digits
+        taxpayer_text = re.sub(r'^\d[\d\-]*\s+', '', taxpayer_text)
     else:
         # TaxWise: "1040 In SMITH J"
         in_match = re.search(r'(?:In|Individual)\s*:?\s*([A-Z][A-Z\s,]+)', ctx.title)

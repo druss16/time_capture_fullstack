@@ -790,9 +790,35 @@ def create_floating_widget(tray_controller):
                 print(f"[WIDGET] Failed to open picker: {e}")
 
     def get_client():
+        # v1.4.5: Read sticky-aware display values from widget_state_tracker.
+        # The tracker maintains the last committed client for 5 min after the
+        # user leaves the recognized context (sticky green), then 5 more min
+        # in yellow ? (Phase 2 will add confirmation buttons), then captured.
+        # Idle ≥ MOUSE_IDLE_PAUSE_S clears sticky (no auto-restore on resume).
+        try:
+            from widget_state_tracker import get_widget_state_tracker as _get_tracker
+        except ImportError:
+            try:
+                from windows_agent.widget_state_tracker import get_widget_state_tracker as _get_tracker
+            except ImportError:
+                _get_tracker = None
+
+        if _get_tracker is not None:
+            try:
+                tracker = _get_tracker()
+                # Reading .state runs the sticky state machine; the
+                # displayed_* properties are sticky-aware.
+                state = tracker.state
+                return {
+                    "client_id":   tracker.displayed_client_id,
+                    "client_name": tracker.displayed_client_name or "No Client",
+                    "state":       state,
+                }
+            except Exception as e:
+                print(f"[WIDGET] get_client tracker error: {e}")
+
+        # Fallback only if tracker can't be imported (extremely unlikely)
         if hasattr(tray_controller, 'state'):
-            # tray_controller.state.current_widget_state is set by main.py's poll loop
-            # from the /api/agent/widget-state/ endpoint
             return {
                 "client_id":   tray_controller.state.current_client_id,
                 "client_name": tray_controller.state.current_client_name,

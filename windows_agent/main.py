@@ -598,7 +598,11 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
                 )
                 if client_obj:
                     aliases = client_obj.get("aliases") or []
-            widget_tracker.on_user_set_client(client_name, aliases)
+            widget_tracker.on_user_set_client(
+                client_name=client_name,
+                aliases=aliases,
+                client_id=client_id,
+            )
             if hasattr(gui_menu_bar, 'state'):
                 gui_menu_bar.state.current_widget_state = widget_tracker.state
         # Update floating widget. State is 'committed' (green) since user
@@ -3152,7 +3156,17 @@ def run_agent():
                                         notif_manager.on_idle_start()
                                     except Exception as e:
                                         log(f"[TRACKING] notif on_idle_start error: {e}", "warning")
-     
+
+                                # v1.4.5: Clear sticky widget state on idle entry.
+                                # User idle ≥ MOUSE_IDLE_PAUSE_S (default 10 min) →
+                                # no auto-restore on resume. They must hit a recognized
+                                # client window before sticky kicks back in.
+                                if widget_tracker:
+                                    try:
+                                        widget_tracker.on_idle()
+                                    except Exception as e:
+                                        log(f"[TRACKING] widget_tracker.on_idle error: {e}", "warning")
+
                                 now_loop = time.time()
                                 if current_sig and current_sig != IDLE_SIG and last_emit_ts:
                                     if force_idle:

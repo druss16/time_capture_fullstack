@@ -799,6 +799,26 @@ class FloatingClientWidget:
         is_transition = prev_state != new_state
         self._rendered_state = new_state
 
+        # v1.5.3: Force-show widget when transitioning to proposed.
+        # If user × closed during committed state, the sticky timer
+        # keeps running — but they'd never see the "Still working on X?"
+        # prompt without us restoring visibility. The confirmation UI
+        # has no value if invisible.
+        if (is_transition
+                and new_state == "proposed"
+                and not getattr(self, 'is_visible', True)):
+            self.is_visible = True
+            try:
+                self._save_state()
+            except Exception:
+                pass
+            try:
+                self.root.deiconify()
+                self.root.attributes('-topmost', True)
+                self.root.lift()
+            except Exception as e:
+                print(f"[WIDGET] proposed restore-show failed: {e}")
+
         # Yellow / gray want attention — force pill open if we're a dot.
         # Always re-evaluate (even on steady-state polls) since a stuck dot
         # in proposed/captured state is a UX bug.

@@ -819,6 +819,31 @@ class FloatingClientWidget:
             except Exception as e:
                 print(f"[WIDGET] proposed restore-show failed: {e}")
 
+        # v1.5.4: Client switch — flash the new client name and collapse back.
+        # Fires when client_id changes (e.g. mavops → Lola's Pet Shop) while
+        # state is committed, whether widget is currently a dot or pill. Same
+        # expand → flash → settle → collapse choreography as manual picks.
+        prev_client_id = getattr(self, '_rendered_client_id', None)
+        new_client_id = self.current_client_id
+        self._rendered_client_id = new_client_id
+
+        if (new_state == "committed"
+                and new_client_id is not None
+                and prev_client_id != new_client_id):
+            self._cancel_collapse()
+            self._cancel_flash()
+            if self._mode == "dot":
+                self._expand_to_pill()
+            else:
+                self._build_pill_ui()
+            self._apply_opacity(PILL_OPACITY_FLASH)
+            self._flash_after_id = self.root.after(
+                FLASH_DURATION_MS,
+                lambda: self._apply_opacity(PILL_OPACITY),
+            )
+            self._schedule_collapse(delay_ms=SWITCH_HOLD_MS)
+            return
+
         # Yellow / gray want attention — force pill open if we're a dot.
         # Always re-evaluate (even on steady-state polls) since a stuck dot
         # in proposed/captured state is a UX bug.

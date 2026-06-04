@@ -284,6 +284,58 @@ class FloatingClientWidget:
     # ------------------------------------------------------------------
     # PILL UI (hover-expanded state)
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # v1.5.0 — Confirmation handlers for proposed-state buttons
+    # ------------------------------------------------------------------
+    def _on_confirm_continue(self):
+        """User clicked ✓ — confirm still on this client.
+        Resets sticky 5-min timer via widget_tracker.confirm_continue().
+        """
+        try:
+            from widget_state_tracker import get_widget_state_tracker as _get_tracker
+        except ImportError:
+            try:
+                from windows_agent.widget_state_tracker import get_widget_state_tracker as _get_tracker
+            except ImportError:
+                _get_tracker = None
+        if _get_tracker is None:
+            return
+        try:
+            tracker = _get_tracker()
+            tracker.confirm_continue()
+            self.current_state = tracker.state
+            self.current_client_id = tracker.displayed_client_id
+            self.current_client_name = tracker.displayed_client_name or "No Client"
+            if self._root_alive():
+                self.root.after(0, self._refresh_current_view)
+        except Exception as e:
+            print(f"[WIDGET] confirm_continue error: {e}")
+
+    def _on_confirm_deny(self):
+        """User clicked ✗ — deny, clear sticky, go to captured.
+        Calls widget_tracker.confirm_deny() which clears sticky state and
+        prevents auto-restore until a new recognized client window is detected.
+        """
+        try:
+            from widget_state_tracker import get_widget_state_tracker as _get_tracker
+        except ImportError:
+            try:
+                from windows_agent.widget_state_tracker import get_widget_state_tracker as _get_tracker
+            except ImportError:
+                _get_tracker = None
+        if _get_tracker is None:
+            return
+        try:
+            tracker = _get_tracker()
+            tracker.confirm_deny()
+            self.current_state = "captured"
+            self.current_client_id = None
+            self.current_client_name = "No Client"
+            if self._root_alive():
+                self.root.after(0, self._refresh_current_view)
+        except Exception as e:
+            print(f"[WIDGET] confirm_deny error: {e}")
+
     def _build_pill_ui(self):
         """Full pill widget — same design as before, just rebuilt on demand."""
         for child in self.root.winfo_children():
@@ -341,6 +393,38 @@ class FloatingClientWidget:
         self.close_btn.bind("<Leave>",
                             lambda e: self.close_btn.configure(text_color=COLORS["text_muted"]))
         self.close_btn.bind("<Button-1>", lambda e: self._hide())
+
+        # v1.5.0: Confirmation buttons rendered only in proposed state.
+        # ✓ confirms still on this client (resets sticky 5-min timer)
+        # ✗ denies (clears sticky, goes to captured immediately)
+        if self.current_state == "proposed":
+            self.deny_btn = ctk.CTkLabel(
+                self.content,
+                text="✗",
+                font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+                text_color=COLORS["no_client"],
+                width=18,
+                cursor="hand2",
+            )
+            self.deny_btn.pack(side="right", padx=(0, 4))
+            self.deny_btn.bind("<Button-1>", lambda e: self._on_confirm_deny())
+
+            self.confirm_btn = ctk.CTkLabel(
+                self.content,
+                text="✓",
+                font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+                text_color="#16A34A",  # green-600
+                width=18,
+                cursor="hand2",
+            )
+            self.confirm_btn.pack(side="right", padx=(0, 4))
+            self.confirm_btn.bind("<Button-1>", lambda e: self._on_confirm_continue())
+
+            # Hover handlers so the pill doesn't accidentally collapse
+            # while user is choosing.
+            for btn in (self.confirm_btn, self.deny_btn):
+                btn.bind("<Enter>", self._on_enter, add="+")
+                btn.bind("<Leave>", self._on_leave, add="+")
 
         for w in (self.container, self.content, self.icon_label, self.client_label):
             w.bind("<ButtonPress-1>", self._on_press)
@@ -667,6 +751,26 @@ class FloatingClientWidget:
             self._cancel_collapse()
             self._expand_to_pill()
             return
+
+        # v1.5.0: Pill-mode transitions to proposed or captured.
+        # Without this rebuild, the poller never calls _build_pill_ui when
+        # state changes while pill is open — yellow ? + confirmation buttons
+        # would never appear when transitioning from green committed.
+        if is_transition and self._mode == "pill":
+            if new_state == "proposed":
+                # committed → proposed: rebuild with yellow + ✓/✗ buttons.
+                # Stay open (no auto-collapse) — user needs to see and click.
+                self._cancel_collapse()
+                self._cancel_flash()
+                self._build_pill_ui()
+                return
+            if new_state == "captured":
+                # proposed → captured (timeout or ✗ click): rebuild gray
+                # without buttons, then collapse to dot.
+                self._cancel_flash()
+                self._build_pill_ui()
+                self._schedule_collapse(delay_ms=SWITCH_HOLD_MS)
+                return
 
         # Green TRANSITION while pill is open — flash + schedule collapse.
         # Steady-state green polls (prev == new == committed) must NOT

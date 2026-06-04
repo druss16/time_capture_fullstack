@@ -64,7 +64,7 @@ DOT_OPACITY_IDLE = 0.55
 DOT_OPACITY_NO_CLIENT = 0.95   # red dot stays bright so people notice
 
 # --- Pill mode (hover) ---
-PILL_WIDTH = 200
+PILL_WIDTH = 320
 PILL_HEIGHT = 36
 PILL_OPACITY = 0.98
 PILL_OPACITY_FLASH = 1.0       # brief flash on client switch
@@ -287,9 +287,12 @@ class FloatingClientWidget:
     # ------------------------------------------------------------------
     # v1.5.0 — Confirmation handlers for proposed-state buttons
     # ------------------------------------------------------------------
-    def _on_confirm_continue(self):
+    def _on_confirm_continue(self, event=None):
         """User clicked ✓ — confirm still on this client.
         Resets sticky 5-min timer via widget_tracker.confirm_continue().
+        v1.5.1: accepts event arg + returns 'break' to stop propagation
+        to parent widgets (which would otherwise fire the click handler
+        and open the client picker).
         """
         try:
             from widget_state_tracker import get_widget_state_tracker as _get_tracker
@@ -299,7 +302,7 @@ class FloatingClientWidget:
             except ImportError:
                 _get_tracker = None
         if _get_tracker is None:
-            return
+            return "break"
         try:
             tracker = _get_tracker()
             tracker.confirm_continue()
@@ -310,11 +313,14 @@ class FloatingClientWidget:
                 self.root.after(0, self._refresh_current_view)
         except Exception as e:
             print(f"[WIDGET] confirm_continue error: {e}")
+        return "break"
 
-    def _on_confirm_deny(self):
+    def _on_confirm_deny(self, event=None):
         """User clicked ✗ — deny, clear sticky, go to captured.
         Calls widget_tracker.confirm_deny() which clears sticky state and
         prevents auto-restore until a new recognized client window is detected.
+        v1.5.1: accepts event arg + returns 'break' to stop propagation
+        to parent widgets (which would otherwise open the client picker).
         """
         try:
             from widget_state_tracker import get_widget_state_tracker as _get_tracker
@@ -324,7 +330,7 @@ class FloatingClientWidget:
             except ImportError:
                 _get_tracker = None
         if _get_tracker is None:
-            return
+            return "break"
         try:
             tracker = _get_tracker()
             tracker.confirm_deny()
@@ -335,6 +341,7 @@ class FloatingClientWidget:
                 self.root.after(0, self._refresh_current_view)
         except Exception as e:
             print(f"[WIDGET] confirm_deny error: {e}")
+        return "break"
 
     def _build_pill_ui(self):
         """Full pill widget — same design as before, just rebuilt on demand."""
@@ -369,9 +376,19 @@ class FloatingClientWidget:
         )
         self.icon_label.pack(side="left", padx=(8, 6))
 
+        # v1.5.2: In proposed state, prompt the user explicitly with
+        # "Still working on <client>?" rather than the bare name.
+        # The ✓/✗ buttons next to it make the question actionable.
+        if (self.current_state == "proposed"
+                and self.current_client_name
+                and self.current_client_name != "No Client"):
+            pill_text = f"Still working on {self.current_client_name}?"
+        else:
+            pill_text = self._display_name()
+
         self.client_label = ctk.CTkLabel(
             self.content,
-            text=self._display_name(),
+            text=pill_text,
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color=text_color,
             anchor="w",
@@ -393,6 +410,7 @@ class FloatingClientWidget:
         self.close_btn.bind("<Leave>",
                             lambda e: self.close_btn.configure(text_color=COLORS["text_muted"]))
         self.close_btn.bind("<Button-1>", lambda e: self._hide())
+        self.close_btn.bind("<Double-Button-1>", lambda e: "break")
 
         # v1.5.0: Confirmation buttons rendered only in proposed state.
         # ✓ confirms still on this client (resets sticky 5-min timer)
@@ -407,7 +425,8 @@ class FloatingClientWidget:
                 cursor="hand2",
             )
             self.deny_btn.pack(side="right", padx=(0, 4))
-            self.deny_btn.bind("<Button-1>", lambda e: self._on_confirm_deny())
+            self.deny_btn.bind("<Button-1>", self._on_confirm_deny)
+            self.deny_btn.bind("<Double-Button-1>", lambda e: "break")
 
             self.confirm_btn = ctk.CTkLabel(
                 self.content,
@@ -418,7 +437,8 @@ class FloatingClientWidget:
                 cursor="hand2",
             )
             self.confirm_btn.pack(side="right", padx=(0, 4))
-            self.confirm_btn.bind("<Button-1>", lambda e: self._on_confirm_continue())
+            self.confirm_btn.bind("<Button-1>", self._on_confirm_continue)
+            self.confirm_btn.bind("<Double-Button-1>", lambda e: "break")
 
             # Hover handlers so the pill doesn't accidentally collapse
             # while user is choosing.
@@ -430,6 +450,7 @@ class FloatingClientWidget:
             w.bind("<ButtonPress-1>", self._on_press)
             w.bind("<B1-Motion>", self._on_drag)
             w.bind("<ButtonRelease-1>", self._on_release)
+            w.bind("<Double-Button-1>", self._on_double_click)
             w.bind("<Button-3>", lambda e: self._hide())
 
         for w in (self.root, self.container, self.content,
@@ -584,14 +605,25 @@ class FloatingClientWidget:
             self._drag_started = False
             return
 
-        # No drag — treat as click
+        # No drag — treat as click.
+        # v1.5.1: Removed single-click → picker. Picker now opens via
+        # <Double-Button-1> binding to avoid accidental opens while
+        # dragging or clicking ✓/✗/× buttons. Dot single-click still
+        # expands to pill (matches "show me state" expectation).
         if self._mode == "dot":
             self._expand_to_pill()
-        elif self.on_click:
+
+    def _on_double_click(self, event=None):
+        """v1.5.1: Picker opens via double-click only.
+        Avoids accidental opens when user drags the widget or clicks
+        any of the inline buttons (✓ ✗ ×).
+        """
+        if self.on_click:
             try:
                 self.on_click()
             except Exception as e:
                 print(f"[WIDGET] on_click error: {e}")
+        return "break"
 
     # ------------------------------------------------------------------
     # Show / hide

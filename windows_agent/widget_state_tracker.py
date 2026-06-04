@@ -98,12 +98,19 @@ class WidgetStateTracker:
         cid = inf.get("client_id") if inf else None
         conf = (inf.get("confidence", 0.0) if inf else 0.0) or 0.0
 
-        # Path 1: Strong current inference — instant switch or refresh
+        # Path 1: Strong current inference → instant switch (or refresh)
         if cid is not None and conf >= PROPOSED_CONFIDENCE_THRESHOLD:
             if cid != self._last_committed_client_id:
                 # New recognized client → reset
                 self._last_committed_client_id = cid
-                # name updated via on_window_change
+            # v1.5.1: pull name directly from inference dict
+            # (get_current_inference includes 'client_name' field per
+            # inference_cache.py line 109). This makes Path 1 self-
+            # contained — no longer depends on on_window_change being
+            # called with current_client_name to set the sticky name.
+            inf_name = inf.get('client_name') if inf else None
+            if inf_name:
+                self._last_committed_client_name = inf_name
             self._unrecognized_since = None
             self._user_denied = False
             return "committed"

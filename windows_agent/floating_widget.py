@@ -64,7 +64,8 @@ DOT_OPACITY_IDLE = 0.55
 DOT_OPACITY_NO_CLIENT = 0.95   # red dot stays bright so people notice
 
 # --- Pill mode (hover) ---
-PILL_WIDTH = 320
+PILL_WIDTH = 200
+PROPOSED_PILL_WIDTH = 320   # v1.5.2: wider pill ONLY for "Still working on <client>?" prompt
 PILL_HEIGHT = 36
 PILL_OPACITY = 0.98
 PILL_OPACITY_FLASH = 1.0       # brief flash on client switch
@@ -287,6 +288,18 @@ class FloatingClientWidget:
     # ------------------------------------------------------------------
     # v1.5.0 — Confirmation handlers for proposed-state buttons
     # ------------------------------------------------------------------
+    def _current_pill_width(self) -> int:
+        """v1.5.2: Pill widens only for proposed state to fit the prompt.
+        Returns PROPOSED_PILL_WIDTH (320) when state is 'proposed',
+        else PILL_WIDTH (200) for committed/captured.
+        """
+        if getattr(self, 'current_state', None) == "proposed":
+            return PROPOSED_PILL_WIDTH
+        return PILL_WIDTH
+
+    # ------------------------------------------------------------------
+    # v1.5.0 — Confirmation handlers for proposed-state buttons
+    # ------------------------------------------------------------------
     def _on_confirm_continue(self, event=None):
         """User clicked ✓ — confirm still on this client.
         Resets sticky 5-min timer via widget_tracker.confirm_continue().
@@ -345,6 +358,16 @@ class FloatingClientWidget:
 
     def _build_pill_ui(self):
         """Full pill widget — same design as before, just rebuilt on demand."""
+        # v1.5.2: Resize root to match current state width (wider for proposed).
+        try:
+            cur_x = self.root.winfo_x()
+            cur_y = self.root.winfo_y()
+            self.root.geometry(
+                f"{self._current_pill_width()}x{PILL_HEIGHT}+{cur_x}+{cur_y}"
+            )
+        except Exception:
+            pass
+
         for child in self.root.winfo_children():
             child.destroy()
 
@@ -474,16 +497,16 @@ class FloatingClientWidget:
             # prevents pill from "shooting out left" on right-side dots
             dot_right = current_x + DOT_SIZE
             if dot_right > screen_w - 100:
-                new_x = dot_right - PILL_WIDTH
+                new_x = dot_right - self._current_pill_width()
             else:
                 new_x = current_x
 
-            new_x = max(0, min(new_x, screen_w - PILL_WIDTH))
+            new_x = max(0, min(new_x, screen_w - self._current_pill_width()))
         except Exception:
             new_x = current_x
 
         self._mode = "pill"
-        self.root.geometry(f"{PILL_WIDTH}x{PILL_HEIGHT}+{new_x}+{current_y}")
+        self.root.geometry(f"{self._current_pill_width()}x{PILL_HEIGHT}+{new_x}+{current_y}")
         self._build_pill_ui()
         self._apply_opacity(PILL_OPACITY)
 
@@ -501,7 +524,7 @@ class FloatingClientWidget:
             current_y = self.root.winfo_y()
             screen_w = self.root.winfo_screenwidth()
 
-            pill_right = current_x + PILL_WIDTH
+            pill_right = current_x + self._current_pill_width()
             if pill_right > screen_w - 100:
                 new_x = pill_right - DOT_SIZE
             else:
@@ -584,7 +607,7 @@ class FloatingClientWidget:
                 self._drag_started = True
 
         if self._drag_started:
-            w = PILL_WIDTH if self._mode == "pill" else DOT_SIZE
+            w = self._current_pill_width() if self._mode == "pill" else DOT_SIZE
             h = PILL_HEIGHT if self._mode == "pill" else DOT_SIZE
             new_x = event.x_root - self._drag_offset_x
             new_y = event.y_root - self._drag_offset_y
@@ -593,7 +616,7 @@ class FloatingClientWidget:
     def _on_release(self, event):
         if self._drag_started:
             try:
-                w = PILL_WIDTH if self._mode == "pill" else DOT_SIZE
+                w = self._current_pill_width() if self._mode == "pill" else DOT_SIZE
                 h = PILL_HEIGHT if self._mode == "pill" else DOT_SIZE
                 x = self.root.winfo_x()
                 y = self.root.winfo_y()

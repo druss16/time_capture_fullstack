@@ -1769,9 +1769,22 @@ def ai_suggestions_today(request):
     # ✅ ADD THIS: Apply limit BEFORE converting to list
     qs = qs[:limit]  # Slice the queryset
     all_blocks = list(qs)  # Convert to list (already limited)
+    # Get user's organization from membership
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related('organization').first()
+
+    if not membership:
+        return Response(
+            {"ok": False, "error": "User has no organization"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    organization = membership.organization
+
     # Count total blocks before filtering
     total_blocks = Block.objects.filter(
-        organization=request.org,
+        organization=organization,
         date=today_date
     ).count()
 

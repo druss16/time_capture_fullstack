@@ -1,4 +1,5 @@
 // Login.tsx - Clean redesign, left panel trimmed to breathe
+// UPDATED: Added CSRF token fetching on mount + sending token in POST request
 import { useEffect, useState, useRef } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
 import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
@@ -21,27 +22,74 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showPw, setShowPw] = useState(false);
+  
+  // NEW: CSRF token state
+  const [csrfToken, setCsrfToken] = useState<string | null>(null);
+  const [csrfReady, setCsrfReady] = useState(false);
+  
   const hasChecked = useRef(false);
 
+  // NEW: Fetch CSRF token on mount
   useEffect(() => {
-    if (hasChecked.current) return;
+    fetchCsrfToken();
+  }, []);
+
+  const fetchCsrfToken = async () => {
+    try {
+      setCsrfReady(false);
+      const res = await safeFetchJson<{ ok: boolean; csrfToken?: string }>(
+        API_ENDPOINTS.authLogin,
+        { method: "GET", credentials: "include" }
+      );
+      
+      if (res?.ok && res.csrfToken) {
+        setCsrfToken(res.csrfToken);
+        setCsrfReady(true);
+      } else {
+        throw new Error("Failed to get CSRF token");
+      }
+    } catch (e) {
+      console.warn("CSRF token fetch failed, retrying...", e);
+      // Retry after 1 second
+      setTimeout(fetchCsrfToken, 1000);
+    }
+  };
+
+  // Check if already authenticated (only after CSRF is ready)
+  useEffect(() => {
+    if (!csrfReady || hasChecked.current) return;
     hasChecked.current = true;
     safeFetchJson<{ is_authenticated?: boolean }>(API_ENDPOINTS.whoami, {
       credentials: "include",
     })
       .then(j => { if (j?.is_authenticated === true) nav(next, { replace: true }); })
       .catch(() => {});
-  }, []);
+  }, [csrfReady]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    
+    // NEW: Guard - wait for CSRF token
+    if (!csrfToken) {
+      setErr("Security token not ready. Please wait a moment...");
+      return;
+    }
+
     setBusy(true);
     setErr(null);
     try {
       const res = await safeFetchJson<{
         ok: boolean; error?: string; token?: string;
         user?: { id: number; username: string; email: string };
-      }>(API_ENDPOINTS.authLogin, { method: "POST", body: JSON.stringify(form) });
+      }>(API_ENDPOINTS.authLogin, {
+        method: "POST",
+        // NEW: Include CSRF token in headers
+        headers: {
+          "X-CSRFToken": csrfToken,
+        },
+        credentials: "include",
+        body: JSON.stringify(form),
+      });
 
       if (!res?.ok) throw new Error(res?.error || "Login failed");
       if (!res.token) throw new Error("No token received from server");
@@ -52,7 +100,15 @@ export default function Login() {
       if (!who?.is_authenticated) throw new Error("Authentication verification failed");
       nav(next, { replace: true });
     } catch (e: any) {
-      setErr(e?.message || "Login failed");
+      // NEW: If CSRF token expired, refresh it
+      if (e?.message?.includes("403")) {
+        setErr("Session expired. Refreshing...");
+        setCsrfToken(null);
+        setCsrfReady(false);
+        setTimeout(fetchCsrfToken, 500);
+      } else {
+        setErr(e?.message || "Login failed");
+      }
       localStorage.removeItem("auth_token");
     } finally {
       setBusy(false);
@@ -152,6 +208,13 @@ export default function Login() {
             <p className="text-sm text-muted-foreground mt-1">Sign in to continue to your dashboard</p>
           </div>
 
+          {/* NEW: Show status while CSRF token loads */}
+          {!csrfReady && (
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-sm">
+              Initializing secure login...
+            </div>
+          )}
+
           {err && (
             <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm">
               {err}
@@ -165,7 +228,7 @@ export default function Login() {
                 type="text"
                 name="username"
                 autoComplete="username"
-                disabled={busy}
+                disabled={busy || !csrfReady}
                 value={form.username}
                 onChange={e => setForm({ ...form, username: e.target.value })}
                 className="w-full px-4 py-3.5 rounded-xl bg-muted/50 border border-border/50 text-foreground placeholder:text-muted-foreground/50 text-sm transition-all focus:bg-card focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none disabled:opacity-50"
@@ -181,7 +244,7 @@ export default function Login() {
                   type={showPw ? "text" : "password"}
                   name="password"
                   autoComplete="current-password"
-                  disabled={busy}
+                  disabled={busy || !csrfReady}
                   value={form.password}
                   onChange={e => setForm({ ...form, password: e.target.value })}
                   className="w-full px-4 py-3.5 pr-12 rounded-xl bg-muted/50 border border-border/50 text-foreground placeholder:text-muted-foreground/50 text-sm transition-all focus:bg-card focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none disabled:opacity-50"
@@ -200,13 +263,18 @@ export default function Login() {
 
             <button
               type="submit"
-              disabled={busy}
+              disabled={busy || !csrfReady}
               className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-primary text-white text-sm font-semibold shadow-lg shadow-primary/20 hover:bg-primary/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-2"
             >
               {busy ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   Signing in...
+                </>
+              ) : !csrfReady ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                  Loading...
                 </>
               ) : (
                 <>Sign in <ArrowRight className="w-4 h-4" /></>

@@ -28,7 +28,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import localtime
 from django.views.decorators.csrf import csrf_exempt  # only if used
 from django.views.decorators.http import require_http_methods
-
+from django.middleware.csrf import get_token
 
 
 
@@ -2748,7 +2748,7 @@ import secrets
 import secrets
 from datetime import timedelta
 
-@api_view(["POST"])
+@api_view(["GET", "POST"])
 @permission_classes([AllowAny])
 def auth_login(request):
     """JSON login endpoint - accepts username OR email."""

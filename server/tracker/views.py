@@ -1772,7 +1772,7 @@ def ai_suggestions_today(request):
     qs = qs[:limit]  # Slice the queryset
     all_blocks = list(qs)  # Convert to list (already limited)
     # Log what we're returning
-    log(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}")
+    log.info(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}")
 
     if not all_blocks:
         return Response([])

@@ -1750,8 +1750,7 @@ def ai_suggestions_today(request):
     org = get_request_org_override(request)
 
     import logging
-    log = logging.getLogger(__name__)
-
+    
     # =========================================================
     # STEP 1: Compact any new unlinked events into blocks
     # This only processes events where block__isnull=True

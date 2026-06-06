@@ -1752,11 +1752,6 @@ def ai_suggestions_today(request):
     import logging
     log = logging.getLogger(__name__)
 
-    # Before calling OpenAI:
-    log.info(f"[OpenAI-Usage] Blocks needing AI: {len(blocks_needing_ai)}")
-    log.info(f"[OpenAI-Usage] Already categorized: {len(already_categorized)}")
-
-
     # =========================================================
     # STEP 1: Compact any new unlinked events into blocks
     # This only processes events where block__isnull=True
@@ -1796,6 +1791,10 @@ def ai_suggestions_today(request):
             blocks_needing_ai.append(b)
 
     log(f"[AI] {len(already_categorized)} categorized (LOCKED), {len(blocks_needing_ai)} need classification")
+
+    # Before calling OpenAI:
+    log.info(f"[OpenAI-Usage] Blocks needing AI: {len(blocks_needing_ai)}")
+    log.info(f"[OpenAI-Usage] Already categorized: {len(already_categorized)}")
 
 
     # All orgs use the ClassificationService pipeline.

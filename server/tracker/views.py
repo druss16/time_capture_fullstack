@@ -2748,10 +2748,27 @@ import secrets
 import secrets
 from datetime import timedelta
 
-@api_view(["GET", "POST"])
+import secrets
+from datetime import timedelta
+from django.middleware.csrf import get_token
+
+@api_view(["GET", "POST"])  # Add GET method
 @permission_classes([AllowAny])
 def auth_login(request):
-    """JSON login endpoint - accepts username OR email."""
+    """
+    GET: Returns CSRF token for login form (prevents 403 on first login attempt)
+    POST: JSON login endpoint - accepts username OR email.
+    """
+    
+    # Handle GET - return CSRF token
+    if request.method == 'GET':
+        csrf_token = get_token(request)
+        return Response({
+            "ok": True,
+            "csrfToken": csrf_token,
+        }, status=status.HTTP_200_OK)
+    
+    # Handle POST - login
     data = request.data or {}
     username_or_email = (data.get("username") or data.get("email") or "").strip()
     password = data.get("password") or ""

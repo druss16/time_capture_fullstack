@@ -1771,7 +1771,7 @@ def ai_suggestions_today(request):
     qs = qs[:limit]  # Slice the queryset
     all_blocks = list(qs)  # Convert to list (already limited)
     # Log what we're returning
-    log.info(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}")
+    log(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}")
 
     if not all_blocks:
         return Response([])
@@ -1792,8 +1792,8 @@ def ai_suggestions_today(request):
     log(f"[AI] {len(already_categorized)} categorized (LOCKED), {len(blocks_needing_ai)} need classification")
 
     # Before calling OpenAI:
-    log.info(f"[OpenAI-Usage] Blocks needing AI: {len(blocks_needing_ai)}")
-    log.info(f"[OpenAI-Usage] Already categorized: {len(already_categorized)}")
+    log(f"[OpenAI-Usage] Blocks needing AI: {len(blocks_needing_ai)}")
+    log(f"[OpenAI-Usage] Already categorized: {len(already_categorized)}")
 
 
     # All orgs use the ClassificationService pipeline.

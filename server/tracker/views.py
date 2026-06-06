@@ -1769,6 +1769,12 @@ def ai_suggestions_today(request):
     # ✅ ADD THIS: Apply limit BEFORE converting to list
     qs = qs[:limit]  # Slice the queryset
     all_blocks = list(qs)  # Convert to list (already limited)
+    # Count total blocks before filtering
+    total_blocks = Block.objects.filter(
+        organization=request.org,
+        date=today_date
+    ).count()
+
     log(f"[suggestions] Total blocks today: {total_blocks}, Returning: {len(all_blocks)}, Limit: {limit}")
 
     if not all_blocks:

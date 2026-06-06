@@ -1749,6 +1749,13 @@ def ai_suggestions_today(request):
 
     org = get_request_org_override(request)
 
+    import logging
+    log = logging.getLogger(__name__)
+
+    # Before calling OpenAI:
+    log.info(f"[OpenAI-Usage] Blocks needing AI: {len(blocks_needing_ai)}")
+    log.info(f"[OpenAI-Usage] Already categorized: {len(already_categorized)}")
+
 
     # =========================================================
     # STEP 1: Compact any new unlinked events into blocks

@@ -1737,13 +1737,24 @@ def _batch_ai_classify(blocks_for_ai, service, org, user):
         return
 
     # Build batch request
+    def _sanitize_for_openai(text):
+        """Escape quotes and special chars so OpenAI JSON doesn't break."""
+        if not text:
+            return text
+        text = text.replace('\\', '\\\\')
+        text = text.replace('"', '\\"')
+        text = text.replace('\n', ' ')
+        text = text.replace('\r', ' ')
+        return text[:500]
+
+    # Build batch request
     titles_batch = []
     for b in blocks_for_ai:
         titles_batch.append({
-            'title':     b.window_title or b.title or '',
-            'app_name':  getattr(b, 'app_name', '') or '',
-            'file_path': getattr(b, 'file_path', '') or '',
-            'url':       getattr(b, 'url', '') or '',
+            'title':     _sanitize_for_openai(b.window_title or b.title or ''),
+            'app_name':  _sanitize_for_openai(getattr(b, 'app_name', '') or ''),
+            'file_path': _sanitize_for_openai(getattr(b, 'file_path', '') or ''),
+            'url':       _sanitize_for_openai(getattr(b, 'url', '') or ''),
         })
 
     # Get clients list for OpenAI context

@@ -214,7 +214,28 @@ def _call_openai(titles: list, clients: list) -> list:
     # JSON mode shouldn't wrap in markdown but defensive parse
     raw = re.sub(r'^```(?:json)?\s*', '', raw)
     raw = re.sub(r'\s*```$', '', raw)
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        # Log context around the error for debugging
+        error_context = raw[max(0, e.pos-100):min(len(raw), e.pos+100)]
+        logger.error(
+            f"[OPENAI-JSON] Parse failed at char {e.pos}: ...{error_context}..."
+        )
+        
+        # Try to extract valid JSON array from malformed response
+        import re
+        json_match = re.search(r'\[.*\]', raw, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(0))
+                logger.info("[OPENAI-JSON] Recovered valid JSON from response")
+            except:
+                logger.error("[OPENAI-JSON] Recovery failed, re-raising")
+                raise
+        else:
+            # No valid JSON array found — re-raise original error
+            raise
 
     # Extract results list. JSON mode requires an object so we wrap in
     # {"results": [...]}. Accept either shape for safety.

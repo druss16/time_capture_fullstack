@@ -299,18 +299,27 @@ class WidgetStateTracker:
             if n_stripped and n_stripped in stripped_hay:
                 return True
 
+            # Mode 3: partial-word match on distinctive tokens
             tokens = re.split(r'[\s_\-.,&/\\\']+', n_stripped)
             distinctive = [
                 t for t in tokens
                 if len(t) >= 5 and t not in WidgetStateTracker._STOP_WORDS
             ]
-            for tok in distinctive:
-                tok_pattern = re.compile(
-                    r'(?:^|[\s\-_/\\.,()&])' + re.escape(tok) + r'(?:[\s\-_/\\.,()&]|$|[a-z0-9])',
-                    re.IGNORECASE,
-                )
-                if tok_pattern.search(stripped_hay):
-                    return True
+            # v1.5.8: For multi-token client names, Mode 3 partial-word
+            # match on a SINGLE distinctive token is too weak — it causes
+            # "James" alone to match "James H Michel Estate" and beat the
+            # legitimate "St. James Church" match. If the client name has
+            # 2+ distinctive tokens, require Mode 1 or 2 (full/substring),
+            # not a single-token partial match. For single-token client
+            # names (like "Bousselot"), Mode 3 is still appropriate.
+            if len(distinctive) <= 1:
+                for tok in distinctive:
+                    tok_pattern = re.compile(
+                        r'(?:^|[\s\-_/\\.,()&])' + re.escape(tok) + r'(?:[\s\-_/\\.,()&]|$)',
+                        re.IGNORECASE,
+                    )
+                    if tok_pattern.search(stripped_hay):
+                        return True
 
             sig_tokens = [
                 t for t in tokens
@@ -319,8 +328,10 @@ class WidgetStateTracker:
             if len(sig_tokens) >= 2:
                 acronym = "".join(t[0] for t in sig_tokens).lower()
                 if len(acronym) >= 3:
+                    # v1.5.7: tighten trailing boundary same as Mode 3.
+                    # No letter or digit can follow the acronym.
                     acro_pattern = re.compile(
-                        r'(?:^|[\s\-_/\\.,()&])' + re.escape(acronym) + r'(?:[\s\-_/\\.,()&]|$|[0-9])',
+                        r'(?:^|[\s\-_/\\.,()&])' + re.escape(acronym) + r'(?:[\s\-_/\\.,()&]|$)',
                         re.IGNORECASE,
                     )
                     if acro_pattern.search(stripped_hay):

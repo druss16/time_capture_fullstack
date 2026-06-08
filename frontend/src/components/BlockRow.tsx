@@ -234,14 +234,16 @@ const BlockRow = ({
       >
         {/* Checkbox */}
         <div
-          onClick={handleCheckboxClick}
-          className="flex-shrink-0 cursor-pointer"
+          className="flex-shrink-0 cursor-pointer p-1 -m-1"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect(block.id, e.shiftKey);
+          }}
         >
           <input
             type="checkbox"
             checked={isSelected}
             onChange={() => {}}
-            onClick={(e) => e.stopPropagation()}
             className="
               w-4 h-4 rounded border-2 border-border
               text-primary focus:ring-primary focus:ring-2 focus:ring-offset-0
@@ -249,7 +251,6 @@ const BlockRow = ({
             "
           />
         </div>
-
         {/* Expand chevron */}
         <div className="flex-shrink-0 text-muted-foreground">
           {expanded ? (

@@ -1090,7 +1090,7 @@ class ClassificationService:
         if self._context_loaded:
             return
 
-        from tracker.models import Client, ClientPattern, OrgRoutingRule
+        from tracker.models import Client, ClientPattern, OrgRoutingRule, UserWorkPattern
 
         self._clients = list(
             Client.objects.filter(org=self.org, is_active=True)
@@ -1112,6 +1112,32 @@ class ClassificationService:
             .select_related('target_client')
             .order_by('-priority', 'id')
         )
+
+        # ✅ STAGE 9: Load learned patterns once, grouped by type
+        # This eliminates 141+ DB queries (47 blocks × 3 pattern queries per block)
+        self._learned_patterns_by_type = {
+            'window_title_prefix': list(
+                UserWorkPattern.objects.filter(
+                    user=self.user,
+                    org=self.org,
+                    pattern_type='window_title_prefix',
+                )[:500].select_related('client')
+            ),
+            'file_path': list(
+                UserWorkPattern.objects.filter(
+                    user=self.user,
+                    org=self.org,
+                    pattern_type__in=['file_path', 'client_folder'],
+                )[:500].select_related('client')
+            ),
+            'domain': list(
+                UserWorkPattern.objects.filter(
+                    user=self.user,
+                    org=self.org,
+                    pattern_type='domain',
+                )[:500].select_related('client')
+            ),
+        }
 
         self._context_loaded = True
 
@@ -2962,25 +2988,20 @@ class ClassificationService:
 
     def _stage_9_learned_patterns(self, block, decision: ClassificationDecision):
         """
-        Query UserWorkPattern for matches. v1.2.96 hardening:
+        Query UserWorkPattern for matches. v1.2.96 hardening + v1.3.70 optimization:
+          - Patterns pre-loaded in _ensure_context_loaded (single DB call per type)
           - Patterns with total_predictions < 5 produce weak signals (≤0.5)
           - Email-domain patterns require client name in title
           - Confidence weighted by occurrence_count
         """
-        from tracker.models import UserWorkPattern
-
         title = (block.window_title or block.title or '').strip()
         file_path = (block.file_path or '').strip()
         url = (block.url or '').strip()
 
-        # Title prefix patterns
+        # Title prefix patterns — use pre-loaded list
         if title:
             title_lower = title.lower()
-            patterns = UserWorkPattern.objects.filter(
-                user=self.user,
-                org=self.org,
-                pattern_type='window_title_prefix',
-            ).select_related('client')[:500]
+            patterns = self._learned_patterns_by_type.get('window_title_prefix', [])
 
             for pattern in patterns:
                 if not pattern.client:
@@ -3013,14 +3034,10 @@ class ClassificationService:
                         },
                     ))
 
-        # File path patterns
+        # File path patterns — use pre-loaded list
         if file_path:
             file_path_lower = file_path.lower()
-            patterns = UserWorkPattern.objects.filter(
-                user=self.user,
-                org=self.org,
-                pattern_type__in=['file_path', 'client_folder'],
-            ).select_related('client')[:500]
+            patterns = self._learned_patterns_by_type.get('file_path', [])
 
             for pattern in patterns:
                 if not pattern.client:
@@ -3040,7 +3057,7 @@ class ClassificationService:
                         },
                     ))
 
-        # URL domain patterns
+        # URL domain patterns — use pre-loaded list
         if url:
             from urllib.parse import urlparse
             try:
@@ -3049,11 +3066,7 @@ class ClassificationService:
                 domain = ''
 
             if domain:
-                patterns = UserWorkPattern.objects.filter(
-                    user=self.user,
-                    org=self.org,
-                    pattern_type='domain',
-                ).select_related('client')[:500]
+                patterns = self._learned_patterns_by_type.get('domain', [])
 
                 for pattern in patterns:
                     if not pattern.client:

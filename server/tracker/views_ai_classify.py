@@ -196,10 +196,16 @@ def _call_openai(titles: list, clients: list) -> list:
         "response_format": {"type": "json_object"},
     }
 
-    req = urllib.request.Request(...)
-    req.add_header("Authorization", f"Bearer {OPENAI_API_KEY}")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("openai-beta", "prompt-caching-20240604")
+    payload_json = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=payload_json,
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+            "openai-beta": "prompt-caching-20240604",
+        }
+    )
 
     with urllib.request.urlopen(req, timeout=12) as resp:
         data = json.loads(resp.read())

@@ -1529,17 +1529,16 @@ def _ai_suggestions_via_classification_service(
     already_categorized,
 ):
     """
-    ClassificationService-based path with BATCHED OpenAI calls.
+    ClassificationService-based path with ASYNC Stage 10.
     
     Two-phase approach:
-      Phase 1: Classify all blocks WITHOUT Stage 10 (skip_ai=True)
-               → Stages 0-9 run in parallel, no API calls yet
-      Phase 2: Collect blocks still in 'captured' state (no strong signals)
-               → Batch ALL their AI classifications into ONE OpenAI request
-               → Map results back and apply
+      Phase 1 (SYNC): Classify all blocks via Stages 0-9 (~1-2s)
+               → Runs in request thread, returns immediately
+      Phase 2 (ASYNC): Queue Stage 10 (OpenAI) to Celery background worker
+               → Runs in background, doesn't block response
     
-    This reduces 47 individual API calls to 1 batched call.
-    Same quality, MUCH faster (99s → 5-10s), MUCH cheaper.
+    User sees Stages 0-9 results instantly. AI results appear as they complete.
+    Frontend can re-poll in 30s to get updated AI classifications.
     """
     from rest_framework.response import Response
     from tracker.services.classification_service import ClassificationService
@@ -1599,41 +1598,62 @@ def _ai_suggestions_via_classification_service(
     pipeline_out = []
 
     # ──────────────────────────────────────────────────────────────────────
-    # PHASE 1: Classify all blocks WITHOUT Stage 10
-    # Stages 0-9 run locally (very fast), no API calls
+    # PHASE 1 (SYNC): Classify via Stages 0-9 (NO OpenAI)
+    # This is fast (~1-2s for 40 blocks) and doesn't require network I/O
     # ──────────────────────────────────────────────────────────────────────
+    logger.info(f"[PHASE1] Starting synchronous classification (Stages 0-9) for {len(blocks_needing_ai)} blocks")
+    
     for b in blocks_needing_ai:
         current_state = getattr(b, 'classification_state', None)
         needs_classify = current_state in (None, '', 'captured')
 
         if needs_classify:
             try:
-                # skip_ai=True → Stages 0-9 only, Stage 10 deferred
+                # skip_ai=True → Stages 0-9 only, Stage 10 deferred to async task
                 decision = service.classify(b, skip_ai=True)
                 service.apply(b, decision)
                 b.refresh_from_db()
             except Exception as e:
-                logger.error(f"[CLASSIFY-PHASE1] Failed on block {b.id}: {e}", exc_info=True)
+                logger.error(f"[PHASE1] Failed on block {b.id}: {e}", exc_info=True)
                 continue
 
+    logger.info(f"[PHASE1] ✅ Synchronous classification complete")
+
     # ──────────────────────────────────────────────────────────────────────
-    # PHASE 2: Batch OpenAI calls for blocks still in 'captured' state
-    # These blocks have no strong signals from Stages 0-9
+    # PHASE 2 (ASYNC): Queue Stage 10 (OpenAI) to Celery
+    # This doesn't block the response. User sees Phase 1 results instantly.
+    # AI results appear in background, updates appear on next poll/refresh.
     # ──────────────────────────────────────────────────────────────────────
     blocks_for_ai = [
         b for b in blocks_needing_ai
         if b.classification_state == 'captured'
-        and not getattr(b, 'proposed_client_id', None)  # no proposal yet
+        and not getattr(b, 'proposed_client_id', None)
     ]
 
     if blocks_for_ai:
-        logger.info(f"[PHASE2-BATCH] Batching {len(blocks_for_ai)} blocks into 1 OpenAI call")
-        _batch_ai_classify(blocks_for_ai, service, org, user)
+        try:
+            from tracker.tasks import batch_ai_classify_async
+            
+            block_ids = [b.id for b in blocks_for_ai]
+            logger.info(f"[PHASE2-QUEUE] Queueing {len(block_ids)} blocks for async AI classification")
+            
+            # Queue to Celery (doesn't wait for response)
+            task = batch_ai_classify_async.delay(
+                block_ids=block_ids,
+                org_id=org.id,
+                user_id=user.id if user else None,
+            )
+            
+            logger.info(f"[PHASE2-QUEUE] ✅ Queued task {task.id} to Celery (will run in background)")
+            
+        except Exception as e:
+            logger.warning(f"[PHASE2-QUEUE] Failed to queue async task: {e} (Stage 10 will be skipped)")
+            # If Celery fails, just continue — user still gets Phase 1 results
     else:
-        logger.info("[PHASE2-BATCH] No blocks need AI (all covered by Stages 0-9)")
+        logger.info("[PHASE2-QUEUE] No blocks need AI (all covered by Stages 0-9)")
 
     # ──────────────────────────────────────────────────────────────────────
-    # PHASE 3: Format response (same as before)
+    # FORMAT RESPONSE (same as before)
     # ──────────────────────────────────────────────────────────────────────
     for b in blocks_needing_ai:
         # Q1: Filter out suppressed blocks entirely
@@ -1665,12 +1685,12 @@ def _ai_suggestions_via_classification_service(
             reasoning     = getattr(b, 'proposed_reasoning', '') or 'Proposed — needs review'
             auto_saved    = False
         else:
-            # captured (no strong signals even after AI)
+            # captured (no strong signals from Stages 0-9, AI pending)
             client_name  = getattr(getattr(b, 'client', None), 'name', None)
             categories   = {}
             confidence   = 0.0
             needs_review = True
-            reasoning    = "No classification signals matched"
+            reasoning    = "Awaiting AI classification (Stage 10 in progress)"
             auto_saved   = False
 
         formatted = format_block_for_display({
@@ -1710,13 +1730,14 @@ def _ai_suggestions_via_classification_service(
 
     # Merge pipeline output with already-categorized blocks
     out = pipeline_out + [_format_locked(b) for b in already_categorized]
+    
     logger.info(
-        f"[CLASSIFY-BATCH] org={org.id} returned {len(pipeline_out)} pipeline + "
-        f"{len(already_categorized)} locked = {len(out)} total blocks"
+        f"[RESPONSE] org={org.id} returning {len(pipeline_out)} pipeline (Phase 1 complete) + "
+        f"{len(already_categorized)} locked = {len(out)} total blocks "
+        f"(Stage 10 AI queued to background)"
     )
 
     return Response(out)
-
 
 def _batch_ai_classify(blocks_for_ai, service, org, user):
     """

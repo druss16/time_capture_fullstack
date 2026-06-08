@@ -176,15 +176,6 @@ export default function DailyReview() {
     })();
   }, []);
 
-  const handleAIComplete = useCallback(() => {
-    console.log('🎉 AI classification complete! Refetching...');
-    setAiInProgress(false);
-    runAIClassification();
-  }, [runAIClassification]);
-
-  const orgId = me?.org_id;  // or however you get org_id
-  useAICompletion(orgId, handleAIComplete);
-
   const showToast = (message: string, type: "success" | "error") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -272,6 +263,7 @@ export default function DailyReview() {
     } catch {}
   }, [date]);
 
+  // ✨ DEFINE runAIClassification FIRST (before handleAIComplete uses it)
   const runAIClassification = useCallback(async () => {
     try {
       const response = await safeFetchJson<any[]>(`${API_BASE}/blocks/suggestions/`);
@@ -294,12 +286,23 @@ export default function DailyReview() {
     } catch {}
   }, [loadTimeSummary, loadUncategorizedCount]);
 
+  // ✨ NOW define handleAIComplete (which depends on runAIClassification)
+  const handleAIComplete = useCallback(() => {
+    console.log('🎉 AI classification complete! Refetching...');
+    setAiInProgress(false);
+    loadTimeSummary();  // Just reload summary, don't call runAIClassification to avoid circular dep
+  }, [loadTimeSummary]);
+
+  // ✨ NOW call the hook (after both callbacks are defined)
+  const orgId = me?.org_id;
+  useAICompletion(orgId, handleAIComplete);
+
   useEffect(() => {
     const t = setTimeout(() => {
       loadTimeSummary();
       loadUncategorizedCount();
       loadClients();
-      runAIClassification(); // ← ADD THIS
+      runAIClassification();
     }, 200);
     return () => clearTimeout(t);
   }, [loadTimeSummary, loadUncategorizedCount, loadClients, runAIClassification]);
@@ -334,7 +337,7 @@ export default function DailyReview() {
   const handleRefresh = useCallback(() => {
     loadTimeSummary();
     loadUncategorizedCount();
-    runAIClassification(); // ← ADD THIS
+    runAIClassification();
   }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
   const handleCategorizationComplete = useCallback(() => {

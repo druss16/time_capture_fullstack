@@ -1589,13 +1589,7 @@ def batch_ai_classify_async(self, block_ids, org_id, user_id=None):
     """
     Background task: Classify blocks via Stage 10 (OpenAI).
     
-    Runs in Celery worker (doesn't block web request). When finished,
-    blocks are updated with ai_client_batch / ai_category_batch signals.
-    
-    Args:
-        block_ids: List of Block.id to classify
-        org_id: Organization.id
-        user_id: User.id (optional, for shared orgs)
+    Emits WebSocket event when complete so frontend refreshes in real-time.
     """
     from django.contrib.auth import get_user_model
     from tracker.models import Organization, Block
@@ -1607,10 +1601,10 @@ def batch_ai_classify_async(self, block_ids, org_id, user_id=None):
         org = Organization.objects.get(id=org_id)
         user = User.objects.get(id=user_id) if user_id else None
         
-        # Fetch blocks that still need AI (may have been classified manually in the meantime)
+        # Fetch blocks that still need AI
         blocks = list(Block.objects.filter(
             id__in=block_ids,
-            classification_state='captured'  # Only AI unresolved blocks
+            classification_state='captured'
         ))
         
         if not blocks:
@@ -1620,17 +1614,32 @@ def batch_ai_classify_async(self, block_ids, org_id, user_id=None):
         logger.info(f"[ASYNC-AI] Starting background classification for {len(blocks)} blocks (org={org_id})")
         
         service = ClassificationService(org=org, user=user)
-        
-        # Import here to avoid circular import
         from tracker.views import _batch_ai_classify
-        
         _batch_ai_classify(blocks, service, org, user)
         
         logger.info(f"[ASYNC-AI] ✅ Completed background classification for {len(blocks)} blocks")
+        
+        # ✨ NEW: Emit WebSocket event to notify frontend
+        try:
+            from django_eventstream import send_event
+            
+            send_event(
+                f'org_{org_id}_ai_ready',
+                {
+                    'status': 'complete',
+                    'org_id': org_id,
+                    'user_id': user_id,
+                    'block_ids': block_ids,
+                    'blocks_processed': len(blocks),
+                    'timestamp': str(timezone.now()),
+                }
+            )
+            logger.info(f"[ASYNC-AI] ✅ WebSocket event emitted to org_{org_id}_ai_ready")
+        except Exception as e:
+            logger.warning(f"[ASYNC-AI] Failed to emit WebSocket event: {e}")
+        
         return {'status': 'success', 'blocks_processed': len(blocks)}
         
     except Exception as e:
         logger.error(f"[ASYNC-AI] ❌ Failed: {e}", exc_info=True)
-        
-        # Retry with exponential backoff
         raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))

@@ -3,6 +3,7 @@ from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt  # ← Add this
 from django.views.generic import TemplateView
 from tracker import views as tracker_views
+from rest_framework.routers import DefaultRouter
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -23,4 +24,5 @@ urlpatterns = [
     path('privacy/', TemplateView.as_view(template_name='legal/privacy.html'), name='privacy'),
     path('api/deploy/', include('tracker.urls_deployment')),
     path('api/mobile/', include('mobile.urls')),  # ← add this
+    path('api/events/', include('django_eventstream.urls'), name='events'),
 ]

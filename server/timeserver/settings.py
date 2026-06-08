@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "django_celery_results",
     "django_celery_beat",
     "mobile",
+    'django_eventstream',
 ]
 
 SITE_ID = 1
@@ -85,6 +86,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    'django_eventstream.middleware.EventMiddleware',
 ]
 
 # -----------------------------------------------------

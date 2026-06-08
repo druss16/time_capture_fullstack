@@ -24,6 +24,8 @@ import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
 import { useSearchParams } from "react-router-dom";
 import CategorySummary from "@/components/CategorySummary";
+import { useAICompletion } from "@/hooks/useAICompletion";
+
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api")
@@ -160,6 +162,7 @@ export default function DailyReview() {
     date: todayIso(),
   });
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
+  const [aiInProgress, setAiInProgress] = useState(false);
 
 
 
@@ -172,6 +175,15 @@ export default function DailyReview() {
       try { await primeCsrf(API_BASE); } catch {}
     })();
   }, []);
+
+  const handleAIComplete = useCallback(() => {
+    console.log('🎉 AI classification complete! Refetching...');
+    setAiInProgress(false);
+    runAIClassification();
+  }, [runAIClassification]);
+
+  const orgId = me?.org_id;  // or however you get org_id
+  useAICompletion(orgId, handleAIComplete);
 
   const showToast = (message: string, type: "success" | "error") => {
     setToast({ message, type });
@@ -264,9 +276,20 @@ export default function DailyReview() {
     try {
       const response = await safeFetchJson<any[]>(`${API_BASE}/blocks/suggestions/`);
       if (Array.isArray(response)) {
-        setAiSuggestions(response);  // ← ADD THIS
+        setAiSuggestions(response);
+        
+        // ✨ NEW: Check if AI was queued
+        const hasQueuedAI = response.some(r => r.ai_suggestion?.needs_review);
+        if (hasQueuedAI) {
+          setAiInProgress(true);
+          console.log('⏳ AI queued to background...');
+        }
+        
         const autoSaved = response.filter((r) => r.ai_suggestion?.auto_saved).length;
-        if (autoSaved > 0) { loadTimeSummary(); loadUncategorizedCount(); }
+        if (autoSaved > 0) { 
+          loadTimeSummary(); 
+          loadUncategorizedCount(); 
+        }
       }
     } catch {}
   }, [loadTimeSummary, loadUncategorizedCount]);
@@ -449,6 +472,15 @@ export default function DailyReview() {
         {err && (
           <div className="mb-4 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm font-medium">
             {err}
+          </div>
+        )}
+
+        {aiInProgress && (
+          <div className="mb-4 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
+            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+            <span className="text-blue-700 text-sm font-semibold">
+              🤖 AI classification in progress... Results will appear automatically
+            </span>
           </div>
         )}
 

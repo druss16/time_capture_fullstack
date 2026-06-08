@@ -2980,7 +2980,7 @@ class ClassificationService:
                 user=self.user,
                 org=self.org,
                 pattern_type='window_title_prefix',
-            ).select_related('client')
+            ).select_related('client')[:500]
 
             for pattern in patterns:
                 if not pattern.client:
@@ -3020,7 +3020,7 @@ class ClassificationService:
                 user=self.user,
                 org=self.org,
                 pattern_type__in=['file_path', 'client_folder'],
-            ).select_related('client')
+            ).select_related('client')[:500]
 
             for pattern in patterns:
                 if not pattern.client:
@@ -3053,7 +3053,7 @@ class ClassificationService:
                     user=self.user,
                     org=self.org,
                     pattern_type='domain',
-                ).select_related('client')
+                ).select_related('client')[:500]
 
                 for pattern in patterns:
                     if not pattern.client:

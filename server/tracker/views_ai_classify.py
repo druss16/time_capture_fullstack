@@ -342,10 +342,11 @@ def _get_org_clients(org):
     from .models import Client
     from django.db.models import Count
     
+    # IMPORTANT: Limit to 100 clients BEFORE annotating to avoid expensive COUNT queries
     clients = Client.objects.filter(
         org=org, is_active=True
-    ).annotate(
-        usage_count=Count('block')  # or however you track usage
+    )[:100].annotate(
+        usage_count=Count('block')
     ).values("id", "name", "aliases", "usage_count")
     
     return [

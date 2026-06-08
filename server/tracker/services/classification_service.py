@@ -2762,12 +2762,15 @@ class ClassificationService:
         # Map agent confidence to classifier signal strength.
         # Agent's confidence already factors in evidence quality + decay, so
         # we trust it more than the flat-0.45 legacy signal.
+        # NEW (FIXED):
         if best_confidence >= 0.85:
-            signal_strength = 0.75   # near-strong: hard direct evidence
+            signal_strength = 0.85   # strong
+        elif best_confidence >= 0.70:
+            signal_strength = 0.75   # moderate-strong
         elif best_confidence >= 0.60:
-            signal_strength = 0.55   # moderate: contextual evidence
+            signal_strength = 0.65   # moderate (now passes!)
         else:
-            signal_strength = 0.35   # weak: corroborating only
+            signal_strength = 0.45   # weak
 
         evidence_sources = [
             e.get('source', '?') for e in best_inference.get('evidence', [])

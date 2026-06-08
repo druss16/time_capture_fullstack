@@ -178,6 +178,9 @@ def _call_openai(titles: list, clients: list) -> list:
     None where validation fails.
     """
     import urllib.request
+    import re
+    import json
+    import logging
 
     system, user = _build_prompt(titles, clients)
 

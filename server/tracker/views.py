@@ -1720,10 +1720,10 @@ def _ai_suggestions_via_classification_service(
 
 def _batch_ai_classify(blocks_for_ai, service, org, user):
     """
-    Batch OpenAI classification for multiple blocks.
+    Batch OpenAI classification for multiple blocks in chunks.
     
-    Calls OpenAI ONCE with all blocks' context, maps results back,
-    applies to blocks via ClassificationService.
+    Instead of one huge request (42 blocks), split into smaller batches (10 per request).
+    This keeps OpenAI response time fast (5-8s per batch) instead of slow (20s+ for 42).
     """
     import logging
     from tracker.services.classification_service import ClassificationDecision, Signal
@@ -1731,12 +1731,11 @@ def _batch_ai_classify(blocks_for_ai, service, org, user):
     logger = logging.getLogger('timetracker.classification')
     
     try:
-        from tracker.views_ai_classify import _call_openai, _get_org_clients
+        from tracker.views_ai_classify import _call_openai
     except ImportError:
         logger.warning('views_ai_classify not available — skipping batch AI')
         return
 
-    # Build batch request
     def _sanitize_for_openai(text):
         """Escape quotes and special chars so OpenAI JSON doesn't break."""
         if not text:
@@ -1747,17 +1746,7 @@ def _batch_ai_classify(blocks_for_ai, service, org, user):
         text = text.replace('\r', ' ')
         return text[:500]
 
-    # Build batch request
-    titles_batch = []
-    for b in blocks_for_ai:
-        titles_batch.append({
-            'title':     _sanitize_for_openai(b.window_title or b.title or ''),
-            'app_name':  _sanitize_for_openai(getattr(b, 'app_name', '') or ''),
-            'file_path': _sanitize_for_openai(getattr(b, 'file_path', '') or ''),
-            'url':       _sanitize_for_openai(getattr(b, 'url', '') or ''),
-        })
-
-    # Get clients list for OpenAI context
+    # Get clients list for OpenAI context (reuse for all batches)
     try:
         clients_payload = [
             {'id': c.id, 'name': c.name, 'aliases': c.aliases or []}
@@ -1767,87 +1756,107 @@ def _batch_ai_classify(blocks_for_ai, service, org, user):
         logger.warning(f"Failed to build clients payload for batch AI: {e}")
         return
 
-    # Call OpenAI ONCE
-    logger.info(f"[BATCH-AI] Calling OpenAI for {len(blocks_for_ai)} blocks (1 request)")
-    try:
-        import time
-        t_start = time.monotonic()
-        results = _call_openai(titles_batch, clients_payload)
-        processing_ms = int((time.monotonic() - t_start) * 1000)
-        logger.info(f"[BATCH-AI] OpenAI returned {len(results) if results else 0} results in {processing_ms}ms")
-    except Exception as e:
-        logger.error(f"[BATCH-AI] OpenAI call failed: {e}", exc_info=True)
-        return
+    # Split blocks into smaller chunks for faster OpenAI responses
+    BATCH_SIZE = 10
+    chunks = [blocks_for_ai[i:i+BATCH_SIZE] for i in range(0, len(blocks_for_ai), BATCH_SIZE)]
+    logger.info(f"[BATCH-AI] Processing {len(blocks_for_ai)} blocks in {len(chunks)} batches of ~{BATCH_SIZE}")
 
-    if not results or len(results) != len(blocks_for_ai):
-        logger.warning(f"[BATCH-AI] Result count mismatch: got {len(results) if results else 0}, expected {len(blocks_for_ai)}")
-        return
+    total_applied = 0
+    
+    for chunk_idx, chunk in enumerate(chunks):
+        logger.info(f"[BATCH-AI] Batch {chunk_idx+1}/{len(chunks)}: {len(chunk)} blocks")
 
-    # Map results back to blocks and apply
-    for block, result in zip(blocks_for_ai, results):
-        if not result:
+        # Build titles_batch for this chunk (with sanitization)
+        titles_batch = []
+        for b in chunk:
+            titles_batch.append({
+                'title':     _sanitize_for_openai(b.window_title or b.title or ''),
+                'app_name':  _sanitize_for_openai(getattr(b, 'app_name', '') or ''),
+                'file_path': _sanitize_for_openai(getattr(b, 'file_path', '') or ''),
+                'url':       _sanitize_for_openai(getattr(b, 'url', '') or ''),
+            })
+
+        # Call OpenAI for this batch
+        try:
+            import time
+            t_start = time.monotonic()
+            results = _call_openai(titles_batch, clients_payload)
+            processing_ms = int((time.monotonic() - t_start) * 1000)
+            logger.info(f"[BATCH-AI] Batch {chunk_idx+1}: OpenAI returned {len(results) if results else 0} results in {processing_ms}ms")
+        except Exception as e:
+            logger.error(f"[BATCH-AI] Batch {chunk_idx+1} failed: {e}", exc_info=True)
             continue
 
-        try:
-            # Build a synthetic decision from OpenAI result
-            client_id = result.get('client_id')
-            category = result.get('category', '')
-            confidence = float(result.get('confidence', 0.0))
-            is_billable = result.get('is_billable', True)
+        if not results or len(results) != len(chunk):
+            logger.warning(f"[BATCH-AI] Batch {chunk_idx+1}: Result count mismatch (got {len(results) if results else 0}, expected {len(chunk)})")
+            continue
 
-            decision = ClassificationDecision(
-                client_id=client_id,
-                category=category,
-                confidence=confidence,
-                is_billable=is_billable,
-                source='ai_batch',
-                reasoning=result.get('reasoning', ''),
-            )
+        # Map results back to blocks in this chunk and apply
+        for block, result in zip(chunk, results):
+            if not result:
+                continue
 
-            # Add a signal for traceability
-            if client_id:
-                client_obj = next(
-                    (c for c in service._clients if c.id == client_id), None
+            try:
+                # Build a synthetic decision from OpenAI result
+                client_id = result.get('client_id')
+                category = result.get('category', '')
+                confidence = float(result.get('confidence', 0.0))
+                is_billable = result.get('is_billable', True)
+
+                decision = ClassificationDecision(
+                    client_id=client_id,
+                    category=category,
+                    confidence=confidence,
+                    is_billable=is_billable,
+                    source='ai_batch',
+                    reasoning=result.get('reasoning', ''),
                 )
-                if client_obj:
+
+                # Add signals for traceability
+                if client_id:
+                    client_obj = next(
+                        (c for c in service._clients if c.id == client_id), None
+                    )
+                    if client_obj:
+                        decision.matched_signals.append(Signal(
+                            type='ai_client_batch',
+                            strength=min(0.95, confidence),
+                            evidence=f"AI batch: {client_obj.name} ({confidence:.2f})",
+                            detail={
+                                'client_id': client_id,
+                                'client_name': client_obj.name,
+                                'ai_confidence': confidence,
+                                'batch_classified': True,
+                            },
+                        ))
+                
+                if category:
                     decision.matched_signals.append(Signal(
-                        type='ai_client_batch',
-                        strength=min(0.95, confidence),
-                        evidence=f"AI batch classification: {client_obj.name} (confidence {confidence:.2f})",
+                        type='ai_category_batch',
+                        strength=min(0.85, confidence),
+                        evidence=f"AI category: {category}",
                         detail={
-                            'client_id': client_id,
-                            'client_name': client_obj.name,
-                            'ai_confidence': confidence,
+                            'category': category,
+                            'is_billable': is_billable,
                             'batch_classified': True,
                         },
                     ))
-            
-            if category:
-                decision.matched_signals.append(Signal(
-                    type='ai_category_batch',
-                    strength=min(0.85, confidence),
-                    evidence=f"AI batch category: {category}",
-                    detail={
-                        'category': category,
-                        'is_billable': is_billable,
-                        'batch_classified': True,
-                    },
-                ))
 
-            # Finalize and apply
-            decision = service._finalize_decision(decision, block)
-            service.apply(block, decision, source='ai_batch')
-            block.refresh_from_db()
+                # Finalize and apply
+                decision = service._finalize_decision(decision, block)
+                service.apply(block, decision, source='ai_batch')
+                block.refresh_from_db()
+                total_applied += 1
 
-            logger.info(
-                f"[BATCH-AI] Block {block.id}: "
-                f"client={client_id} category={category} confidence={confidence:.2f} "
-                f"→ state={block.classification_state}"
-            )
+                logger.debug(
+                    f"[BATCH-AI] Block {block.id}: client={client_id} → {block.classification_state}"
+                )
 
-        except Exception as e:
-            logger.error(f"[BATCH-AI] Failed to apply result to block {block.id}: {e}", exc_info=True)
-            continue
+            except Exception as e:
+                logger.error(f"[BATCH-AI] Failed to apply block {block.id}: {e}", exc_info=True)
+                continue
+
+    logger.info(f"[BATCH-AI] Completed: {total_applied}/{len(blocks_for_ai)} blocks classified")
  
 
 # tracker/views.py - COMPLETE ai_suggestions_today function

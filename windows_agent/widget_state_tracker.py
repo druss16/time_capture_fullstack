@@ -305,14 +305,21 @@ class WidgetStateTracker:
                 t for t in tokens
                 if len(t) >= 5 and t not in WidgetStateTracker._STOP_WORDS
             ]
-            # v1.5.8: For multi-token client names, Mode 3 partial-word
-            # match on a SINGLE distinctive token is too weak — it causes
-            # "James" alone to match "James H Michel Estate" and beat the
-            # legitimate "St. James Church" match. If the client name has
-            # 2+ distinctive tokens, require Mode 1 or 2 (full/substring),
-            # not a single-token partial match. For single-token client
-            # names (like "Bousselot"), Mode 3 is still appropriate.
-            if len(distinctive) <= 1:
+            # v1.5.9: Mode 3 fires only when the client name reduces to
+            # a single MEANINGFUL token (>= 3 chars, non-stopword), not
+            # just a single distinctive (>= 5 chars) token. v1.5.8's
+            # distinctive-only gate was fooled by possessive-s:
+            # "St. Mary's of the Lake" tokenizes to ['st','marys','of',
+            # 'the','lake'] where only 'marys' (5) crosses the distinctive
+            # threshold, falsely promoting a 5-token name to single-token
+            # status. Counting all 3+ char non-stopword tokens (here
+            # ['marys','lake']) correctly identifies it as multi-token.
+            # Surname-only clients like "Bousselot" still match via Mode 3.
+            meaningful_tokens = [
+                t for t in tokens
+                if len(t) >= 3 and t not in WidgetStateTracker._STOP_WORDS
+            ]
+            if len(meaningful_tokens) <= 1:
                 for tok in distinctive:
                     tok_pattern = re.compile(
                         r'(?:^|[\s\-_/\\.,()&])' + re.escape(tok) + r'(?:[\s\-_/\\.,()&]|$)',

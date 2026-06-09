@@ -104,6 +104,16 @@ class Organization(models.Model):
         help_text="Enable Stage 6 (calendar event overlap) in classifier",
     )
 
+    route_individual_returns_to_internal_tax = models.BooleanField(
+        default=False,
+        help_text=(
+            "When True, Stage 2 routes individual tax returns (1040, 1041) to "
+            "this org's 'Internal - Tax' client instead of leaving them unassigned. "
+            "Enable for firms that bill individual returns as internal firm time. "
+            "Disable for firms that handle taxpayer billing separately."
+        ),
+    )
+
     disable_mail_integration = models.BooleanField(
         default=False,
         help_text='Master switch — disables mail OAuth/sync/classifier for the whole org.',

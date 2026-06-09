@@ -1514,8 +1514,15 @@ class ClassificationService:
                 return True
             # Business return but no client match — fall through to individual bucket
 
-        # Individual return — populate taxpayer bucket fields, no client
-        decision.client_id = None
+        # Individual return — populate taxpayer bucket fields.
+        # Per org config: optionally route to firm's Internal-Tax client
+        # so the time is automatically billable. Default behavior is to
+        # leave client_id=None and let the user route manually via the
+        # Daily Review queue.
+        if getattr(self.org, 'route_individual_returns_to_internal_tax', False):
+            decision.client_id = self._get_internal_tax_client_id()
+        else:
+            decision.client_id = None
         decision.category = category
         decision.category_hours = category_hours
         decision.confidence = 0.95  # Very strong — tax software + open return = certain
@@ -1592,6 +1599,23 @@ class ClassificationService:
                     return client
 
         return None
+
+    def _get_internal_tax_client_id(self):
+        """Find this org's 'Internal - Tax' client ID. Cached per-service.
+        
+        Used by Stage 2 to route individual tax returns when the org has
+        enabled route_individual_returns_to_internal_tax. Returns None
+        if no Internal-Tax client exists for this org (caller falls back
+        to leaving client_id=None — same as the feature-off path).
+        """
+        if hasattr(self, '_internal_tax_client_id'):
+            return self._internal_tax_client_id
+        internal_tax = next(
+            (c for c in self._clients if c.name.lower().strip() == 'internal - tax'),
+            None
+        )
+        self._internal_tax_client_id = internal_tax.id if internal_tax else None
+        return self._internal_tax_client_id
 
     # -------------------------------------------------------------------------
     # STAGE 3 — Deterministic title / domain / path match

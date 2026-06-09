@@ -46,6 +46,7 @@ Other stages are stubbed as TODO and will be implemented in subsequent sessions.
 """
 
 from __future__ import annotations
+from tracker.services.pattern_learning import LEARNED_PATTERN_BLACKLIST
 
 import logging
 from dataclasses import dataclass, field
@@ -3017,6 +3018,20 @@ class ClassificationService:
                 if key_lower in STOP_WORDS:
                     continue
 
+                # v1.6.0 hardening: refuse signals from statistically
+                # unreliable patterns. Three filters:
+                #  - occurrence_count < 3 → too few samples to be evidence
+                #  - total_predictions > 0 AND correct_predictions == 0 →
+                #    empirically wrong, never confirmed correct
+                #  - blacklisted generic key ("desktop", "outlook") →
+                #    matches thousands of unrelated titles, pure noise
+                if pattern.occurrence_count < 3:
+                    continue
+                if pattern.total_predictions > 0 and pattern.correct_predictions == 0:
+                    continue
+                if key_lower in LEARNED_PATTERN_BLACKLIST:
+                    continue
+
                 if key_lower in title_lower:
                     strength = self._learned_pattern_strength(pattern)
                     decision.matched_signals.append(Signal(
@@ -3045,7 +3060,15 @@ class ClassificationService:
             for pattern in patterns:
                 if not pattern.client:
                     continue
-                if pattern.pattern_key.lower() in file_path_lower:
+                key_lower = pattern.pattern_key.lower()
+                # v1.6.0 hardening: same quality gate as title-prefix patterns
+                if pattern.occurrence_count < 3:
+                    continue
+                if pattern.total_predictions > 0 and pattern.correct_predictions == 0:
+                    continue
+                if key_lower in LEARNED_PATTERN_BLACKLIST:
+                    continue
+                if key_lower in file_path_lower:
                     strength = self._learned_pattern_strength(pattern)
                     decision.matched_signals.append(Signal(
                         type='learned_pattern',

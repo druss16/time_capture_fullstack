@@ -20,6 +20,27 @@ from django.db.models import Q, Count, Avg
 from django.utils import timezone
 
 import logging
+
+
+# v1.6.0: Generic title fragments that should NEVER function as learned
+# client-attribution patterns. These appear in thousands of unrelated titles
+# (every QuickBooks window says "Desktop", every Outlook window says "Inbox")
+# and produce only noise. Both pattern creation (this module) and Stage 9
+# signal emission (classification_service.py) reject keys in this set.
+LEARNED_PATTERN_BLACKLIST = {
+    # App names — these are tools, not clients
+    'desktop', 'outlook', 'excel', 'word', 'quickbooks', 'qbw',
+    'chrome', 'edge', 'firefox', 'browser', 'msedge',
+    # Generic window/tab states
+    'new tab', 'this pc', 'search', 'home', 'inbox',
+    'progress', 'untitled', 'document', 'about:blank',
+    # Office/cloud platforms — could belong to any client
+    'sharepoint', 'onedrive', 'teams',
+    # Generic file types / OCR'd document fragments
+    'pdf', 'jpg', 'png', 'img', 'scan', 'doc',
+}
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -330,6 +351,18 @@ class PatternLearningService:
         corrected_count = 0
         
         for pattern_data in all_patterns:
+            # v1.6.0 hardening: reject low-quality keys before they pollute
+            # UserWorkPattern. Generic words like "desktop" or "outlook"
+            # appear in thousands of unrelated client titles and corrupt
+            # Stage 9 classification. Short keys (< 8 chars) are almost
+            # always too generic to be client-specific.
+            key_lower = (pattern_data.get('key') or '').lower().strip()
+            if not key_lower:
+                continue
+            if len(key_lower) < 8:
+                continue
+            if key_lower in LEARNED_PATTERN_BLACKLIST:
+                continue
             try:
                 pattern, created = UserWorkPattern.objects.get_or_create(
                     user=user,

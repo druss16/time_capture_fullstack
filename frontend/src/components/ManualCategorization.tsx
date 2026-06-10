@@ -156,6 +156,12 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
   // Bulk action state
   const [bulkSaving, setBulkSaving] = useState(false);
 
+  // Filter out short blocks (< 2 min) from the unassigned queue by default.
+  // These are typically alt-tab noise (brief focus, app switching) rather than
+  // real billable work. User can untoggle to see them.
+  const [hideShortBlocks, setHideShortBlocks] = useState(true);
+  const SHORT_BLOCK_THRESHOLD_MINUTES = 2;
+
   const fetchCategorizationData = useCallback(async () => {
     try {
       setLoading(true);
@@ -270,13 +276,28 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
     [blocks],
   );
 
+  // Visible blocks after short-block filter applied.
+  // Used for both rendering AND bulk-select so users can't accidentally
+  // bulk-action hidden blocks they can't see.
+  const visibleBlocks = useMemo(
+    () =>
+      hideShortBlocks
+        ? blocks.filter((b) => (b.duration_minutes ?? 0) >= SHORT_BLOCK_THRESHOLD_MINUTES)
+        : blocks,
+    [blocks, hideShortBlocks],
+  );
+  const hiddenBlockCount = blocks.length - visibleBlocks.length;
+
   const handleSelectAll = useCallback(() => {
-    if (selectedIds.size === blocks.length) {
+    // Toggle based on visibleBlocks (what user can see), not raw blocks.
+    // With the short-block filter active, blocks.length > visibleBlocks.length,
+    // so checking against blocks.length would make toggle-off impossible.
+    if (selectedIds.size === visibleBlocks.length && visibleBlocks.length > 0) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(blocks.map((b) => b.id)));
+      setSelectedIds(new Set(visibleBlocks.map((b) => b.id)));
     }
-  }, [blocks, selectedIds]);
+  }, [selectedIds, visibleBlocks]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedIds(new Set());
@@ -501,7 +522,27 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
         </div>
       ) : (
         <div className="space-y-1.5">
-          {blocks.map((block) => (
+          {/* Short-block filter toggle */}
+          <div className="flex items-center justify-between mb-2 px-1 text-xs">
+            <label className="flex items-center gap-2 text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={hideShortBlocks}
+                onChange={(e) => setHideShortBlocks(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Hide short blocks (under {SHORT_BLOCK_THRESHOLD_MINUTES} min)
+            </label>
+            {hiddenBlockCount > 0 && hideShortBlocks && (
+              <button
+                onClick={() => setHideShortBlocks(false)}
+                className="text-blue-600 hover:underline"
+              >
+                Show {hiddenBlockCount} hidden
+              </button>
+            )}
+          </div>
+          {visibleBlocks.map((block) => (
             <BlockRow
               key={block.id}
               block={block}

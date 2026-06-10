@@ -42,7 +42,7 @@ from typing import Optional
 
 EXE_FAMILIES = {
     'taxwise':     ['utw', 'taxwise', 'tww'],
-    'ultratax':    ['uts', 'ultratax', 'utw'],
+    'ultratax':    ['uts', 'ultratax', 'utw', 'utp'],
     'lacerte':     ['lacerte', 'lacertepro'],
     'proseries':   ['proseries', 'ps'],
     'drake':       ['drake'],

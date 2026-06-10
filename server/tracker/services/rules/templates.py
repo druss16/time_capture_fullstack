@@ -119,7 +119,7 @@ RULE_TEMPLATES = {
         'label': 'Route to client by app family',
         'emoji': '➡️',
         'category': 'routing',
-        'runs_at': 'agent',
+        'runs_at': 'both',
         'description': 'Switch to a specific client when this app is focused.',
         'example': 'TaxWise → Internal - Tax',
         'fixed': {
@@ -151,7 +151,7 @@ RULE_TEMPLATES = {
         'label': 'Route to client by folder path',
         'emoji': '➡️',
         'category': 'routing',
-        'runs_at': 'agent',
+        'runs_at': 'both',
         'description': 'Switch to a specific client when a file from this folder is open.',
         'example': '/Clients/Varacchi/ → Varacchi',
         'fixed': {

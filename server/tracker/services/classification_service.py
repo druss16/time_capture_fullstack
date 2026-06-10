@@ -30,7 +30,7 @@ PUBLIC API:
 
 PIPELINE (see design doc §4 for full details):
     Stage 0  — Suppress generic/dialog windows
-    Stage 1  — Org routing rules (runs_at='classifier')
+    Stage 1  — Org routing rules (runs_at='classifier' or 'both')
     Stage 2  — Tax software extraction (UltraTax/TaxWise)
     Stage 3  — Deterministic title match (alias/code/name)
     Stage 4  — File path match (depth-aware)
@@ -1108,7 +1108,7 @@ class ClassificationService:
             OrgRoutingRule.objects.filter(
                 org=self.org,
                 enabled=True,
-                runs_at='classifier',
+                runs_at__in=['classifier', 'both'],
             )
             .select_related('target_client')
             .order_by('-priority', 'id')
@@ -1257,7 +1257,7 @@ class ClassificationService:
         Returns True if a terminal rule fired (rule short-circuits remaining stages).
 
         Uses the existing dormant ClassifierRuleEngine. Rules are loaded with
-        runs_at='classifier' filter in _ensure_context_loaded.
+        runs_at__in=['classifier', 'both'] filter in _ensure_context_loaded.
         """
         if not self._classifier_rules:
             return False

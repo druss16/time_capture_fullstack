@@ -2119,6 +2119,7 @@ class OrgRoutingRule(models.Model):
     RUNS_AT_CHOICES = [
         ('agent', 'Agent (live, on-device)'),
         ('classifier', 'Classifier (server, real-time)'),
+        ('both', 'Agent + Classifier (default for routing rules)'),
         ('compaction', 'Compaction (server, hourly)'),
         ('post_save', 'Post-save (server, after write)'),
     ]

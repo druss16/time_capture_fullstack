@@ -175,6 +175,7 @@ class Command(BaseCommand):
                         action=rule_data['action'],
                         target_client=target_client,
                         priority=rule_data.get('priority', 300),
+                        runs_at='both',
                         description=rule_data.get('description', ''),
                         is_default=True,
                         enabled=True,

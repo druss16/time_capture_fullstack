@@ -36,6 +36,17 @@ const API_BASE = RAW_BASE.endsWith('/api')
   ? RAW_BASE
   : `${RAW_BASE.replace(/\/+$/, '')}/api`;
 
+// Format a duration in minutes as "1h 23m" or "47m". Mirrors the pattern
+// used in TimesheetDetailDrawer / IndividualReturnsSection — consider
+// consolidating into lib/utils/formatting.ts in a future cleanup.
+const formatMins = (mins: number): string => {
+  const m = Math.max(0, Math.round(mins));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const remainder = m % 60;
+  return remainder === 0 ? `${h}h` : `${h}h ${remainder}m`;
+};
+
 const INTERNAL_CATEGORIES = [
   'Idle',
   'Personal/Non-Billable',
@@ -369,7 +380,7 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
     }
   }, [selectedIds, fetchCategorizationData]);
 
-  const totalHours = stats ? (stats.total_minutes / 60).toFixed(1) : '0.0';
+  const totalMinutes = stats?.total_minutes ?? 0;
 
   useEffect(() => {
     fetchCategorizationData();
@@ -444,7 +455,7 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
                 {blocks.length} block{blocks.length !== 1 ? 's' : ''} to review
               </div>
               <div className="text-xs text-muted-foreground">
-                {totalHours}h total
+                {formatMins(totalMinutes)} total
                 {stats?.original_block_count &&
                   stats.original_block_count > blocks.length && (
                     <span className="ml-1">

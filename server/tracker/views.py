@@ -1966,7 +1966,7 @@ def ai_suggestions_today(request):
 
     qs = qs[:limit]
     all_blocks = list(qs)
-    log(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}, got_lock: {got_lock}")
+    log(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}")
 
     if not all_blocks:
         return Response([])

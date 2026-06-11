@@ -303,6 +303,34 @@ def _call_openai(titles: list, clients: list) -> list:
             output.append(None)
             continue
 
+        # Validation 1.5: verify the ID binding against ground truth.
+        # Models mis-copy numeric IDs from long lists — the evidence is
+        # usually right while the ID is wrong. Never trust the ID alone.
+        claimed = next((c for c in clients if c["id"] == client_id), None)
+        haystack = " ".join([
+            titles[i].get('title', '') or '',
+            titles[i].get('app_name', '') or '',
+            titles[i].get('file_path', '') or '',
+        ]).lower()
+
+        def _names_in_haystack(c):
+            names = [c.get('name') or ''] + list(c.get('aliases') or [])
+            return any(n and len(n) >= 4 and n.lower() in haystack for n in names)
+
+        if not claimed or not _names_in_haystack(claimed):
+            # ID is mis-bound. Rescue: find clients whose real name appears in input.
+            candidates = [c for c in clients if _names_in_haystack(c)]
+            if len(candidates) == 1:
+                client_id = candidates[0]['id']
+                r['client_id'] = client_id
+                r['client_name'] = candidates[0]['name']
+                logger.info(f"[AI-VALIDATE] re-bound mis-copied id → {candidates[0]['name']} ({client_id})")
+            else:
+                logger.info(f"[AI-VALIDATE] dropping mis-bound client_id={client_id} "
+                            f"({len(candidates)} name candidates)")
+                output.append(None)
+                continue
+
         # Validation 2: evidence_quote must be present and non-empty
         evidence_quote = (r.get("evidence_quote") or "").strip()
         if not evidence_quote:

@@ -4147,6 +4147,24 @@ class ClassificationService:
                 detail={'category': billable_fb, 'is_billable': True},
             ))
 
+        # Otherwise propose if we have any MODERATE-or-better signal.
+        # Weak-only signals (< 0.65) — typically just agent_current_client
+        # with no corroboration — don't justify proposing a client. The
+        # block goes to captured for user review instead.
+        moderate_or_better = [s for s in signals if s.strength >= 0.65]
+        if moderate_or_better:
+            self._populate_classification_from_signals(decision, signals)
+            decision.recommended_state = 'proposed'
+            decision.confidence = max(s.strength for s in moderate_or_better)
+            return decision
+
+        # Only weak signals exist — capture without attribution
+        if signals:
+            decision.recommended_state = 'captured'
+            decision.confidence = max(s.strength for s in signals)
+
+        return decision
+
     @staticmethod
     def _has_contradicting_signal(signals: list, chosen_client_id: int) -> bool:
         """

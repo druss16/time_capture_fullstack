@@ -1521,32 +1521,38 @@ def label_block(request):
     })
 
 
+# Replace your ENTIRE existing _ai_suggestions_via_classification_service
+# function with this version. Changes from your original are marked with # ✨ CHANGED
+
 def _ai_suggestions_via_classification_service(
     request,
     org,
     all_blocks,
     blocks_needing_ai,
     already_categorized,
+    do_processing=True,   # ✨ CHANGED: new param — False means another request holds the lock
+    lock_key=None,        # ✨ CHANGED: new param — lock to release when processing finishes
 ):
     """
     ClassificationService-based path with ASYNC Stage 10.
-    
+
     Two-phase approach:
       Phase 1 (SYNC): Classify all blocks via Stages 0-9 (~1-2s)
                → Runs in request thread, returns immediately
       Phase 2 (ASYNC): Queue Stage 10 (OpenAI) to Celery background worker
                → Runs in background, doesn't block response
-    
-    User sees Stages 0-9 results instantly. AI results appear as they complete.
-    Frontend can re-poll in 30s to get updated AI classifications.
+
+    ✨ CHANGED: Phases 1+2 only run when do_processing=True (the request that
+    won the cache lock). Concurrent requests skip straight to formatting and
+    return current state instantly — no more lock convoy on page load.
     """
     from rest_framework.response import Response
     from tracker.services.classification_service import ClassificationService
     from tracker.utils.display_names import format_block_for_display
     import logging
-    
+
     logger = logging.getLogger('timetracker.classification')
-    
+
     user = request.user if request.user.is_authenticated else None
     if hasattr(request, 'GET') and request.GET.get('user'):
         try:
@@ -1597,63 +1603,70 @@ def _ai_suggestions_via_classification_service(
     service = ClassificationService(org=org, user=user)
     pipeline_out = []
 
-    # ──────────────────────────────────────────────────────────────────────
-    # PHASE 1 (SYNC): Classify via Stages 0-9 (NO OpenAI)
-    # This is fast (~1-2s for 40 blocks) and doesn't require network I/O
-    # ──────────────────────────────────────────────────────────────────────
-    logger.info(f"[PHASE1] Starting synchronous classification (Stages 0-9) for {len(blocks_needing_ai)} blocks")
-    
-    for b in blocks_needing_ai:
-        current_state = getattr(b, 'classification_state', None)
-        needs_classify = current_state in (None, '', 'captured')
+    # ✨ CHANGED: Phases 1+2 wrapped in try/finally and gated on do_processing.
+    # The finally block guarantees the lock is released even if a phase crashes.
+    try:
+        if do_processing:
+            # ──────────────────────────────────────────────────────────────
+            # PHASE 1 (SYNC): Classify via Stages 0-9 (NO OpenAI)
+            # ──────────────────────────────────────────────────────────────
+            logger.info(f"[PHASE1] Starting synchronous classification (Stages 0-9) for {len(blocks_needing_ai)} blocks")
 
-        if needs_classify:
-            try:
-                # skip_ai=True → Stages 0-9 only, Stage 10 deferred to async task
-                decision = service.classify(b, skip_ai=True)
-                service.apply(b, decision)
-                b.refresh_from_db()
-            except Exception as e:
-                logger.error(f"[PHASE1] Failed on block {b.id}: {e}", exc_info=True)
-                continue
+            for b in blocks_needing_ai:
+                current_state = getattr(b, 'classification_state', None)
+                needs_classify = current_state in (None, '', 'captured')
 
-    logger.info(f"[PHASE1] ✅ Synchronous classification complete")
+                if needs_classify:
+                    try:
+                        # skip_ai=True → Stages 0-9 only, Stage 10 deferred to async task
+                        decision = service.classify(b, skip_ai=True)
+                        service.apply(b, decision)
+                        b.refresh_from_db()
+                    except Exception as e:
+                        logger.error(f"[PHASE1] Failed on block {b.id}: {e}", exc_info=True)
+                        continue
+
+            logger.info(f"[PHASE1] ✅ Synchronous classification complete")
+
+            # ──────────────────────────────────────────────────────────────
+            # PHASE 2 (ASYNC): Queue Stage 10 (OpenAI) to Celery
+            # ──────────────────────────────────────────────────────────────
+            blocks_for_ai = [
+                b for b in blocks_needing_ai
+                if b.classification_state == 'captured'
+                and not getattr(b, 'proposed_client_id', None)
+            ]
+
+            if blocks_for_ai:
+                try:
+                    from tracker.tasks import batch_ai_classify_async
+
+                    block_ids = [b.id for b in blocks_for_ai]
+                    logger.info(f"[PHASE2-QUEUE] Queueing {len(block_ids)} blocks for async AI classification")
+
+                    task = batch_ai_classify_async.delay(
+                        block_ids=block_ids,
+                        org_id=org.id,
+                        user_id=user.id if user else None,
+                    )
+
+                    logger.info(f"[PHASE2-QUEUE] ✅ Queued task {task.id} to Celery (will run in background)")
+
+                except Exception as e:
+                    logger.warning(f"[PHASE2-QUEUE] Failed to queue async task: {e} (Stage 10 will be skipped)")
+            else:
+                logger.info("[PHASE2-QUEUE] No blocks need AI (all covered by Stages 0-9)")
+        else:
+            # ✨ CHANGED: another concurrent request is doing the heavy work
+            logger.info("[PHASE1/2] Skipped — another request holds the processing lock")
+    finally:
+        # ✨ CHANGED: always release the lock if we hold it
+        if lock_key:
+            from django.core.cache import cache
+            cache.delete(lock_key)
 
     # ──────────────────────────────────────────────────────────────────────
-    # PHASE 2 (ASYNC): Queue Stage 10 (OpenAI) to Celery
-    # This doesn't block the response. User sees Phase 1 results instantly.
-    # AI results appear in background, updates appear on next poll/refresh.
-    # ──────────────────────────────────────────────────────────────────────
-    blocks_for_ai = [
-        b for b in blocks_needing_ai
-        if b.classification_state == 'captured'
-        and not getattr(b, 'proposed_client_id', None)
-    ]
-
-    if blocks_for_ai:
-        try:
-            from tracker.tasks import batch_ai_classify_async
-            
-            block_ids = [b.id for b in blocks_for_ai]
-            logger.info(f"[PHASE2-QUEUE] Queueing {len(block_ids)} blocks for async AI classification")
-            
-            # Queue to Celery (doesn't wait for response)
-            task = batch_ai_classify_async.delay(
-                block_ids=block_ids,
-                org_id=org.id,
-                user_id=user.id if user else None,
-            )
-            
-            logger.info(f"[PHASE2-QUEUE] ✅ Queued task {task.id} to Celery (will run in background)")
-            
-        except Exception as e:
-            logger.warning(f"[PHASE2-QUEUE] Failed to queue async task: {e} (Stage 10 will be skipped)")
-            # If Celery fails, just continue — user still gets Phase 1 results
-    else:
-        logger.info("[PHASE2-QUEUE] No blocks need AI (all covered by Stages 0-9)")
-
-    # ──────────────────────────────────────────────────────────────────────
-    # FORMAT RESPONSE (same as before)
+    # FORMAT RESPONSE — runs for EVERY request, lock or not
     # ──────────────────────────────────────────────────────────────────────
     for b in blocks_needing_ai:
         # Q1: Filter out suppressed blocks entirely
@@ -1730,11 +1743,11 @@ def _ai_suggestions_via_classification_service(
 
     # Merge pipeline output with already-categorized blocks
     out = pipeline_out + [_format_locked(b) for b in already_categorized]
-    
+
     logger.info(
-        f"[RESPONSE] org={org.id} returning {len(pipeline_out)} pipeline (Phase 1 complete) + "
+        f"[RESPONSE] org={org.id} returning {len(pipeline_out)} pipeline + "
         f"{len(already_categorized)} locked = {len(out)} total blocks "
-        f"(Stage 10 AI queued to background)"
+        f"(processing={'ran' if do_processing else 'skipped'})"
     )
 
     return Response(out)
@@ -1928,13 +1941,22 @@ def ai_suggestions_today(request):
     org = get_request_org_override(request)
 
     import logging
-    
+    from django.core.cache import cache
+
     # =========================================================
-    # STEP 1: Compact any new unlinked events into blocks
-    # This only processes events where block__isnull=True
-    # Existing blocks are NEVER touched
+    # STEP 1: Compact any new unlinked events into blocks —
+    # but only ONE request at a time does the heavy work.
+    # Concurrent requests skip it and just read current state.
     # =========================================================
-    compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
+    lock_key = f"compact-classify:{org.id if org else 'global'}"
+    got_lock = bool(cache.add(lock_key, "1", timeout=60))  # auto-expires as a safety net
+
+    if got_lock:
+        try:
+            compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
+        except Exception:
+            cache.delete(lock_key)
+            raise
 
     start_utc = _start_of_local_day_utc()
     qs = Block.objects.filter(start__gte=start_utc).order_by("start")
@@ -1945,13 +1967,13 @@ def ai_suggestions_today(request):
     if org:
         qs = qs.filter(org=org)
 
-    # ✅ ADD THIS: Apply limit BEFORE converting to list
-    qs = qs[:limit]  # Slice the queryset
-    all_blocks = list(qs)  # Convert to list (already limited)
-    # Log what we're returning
-    log(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}")
+    qs = qs[:limit]
+    all_blocks = list(qs)
+    log(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}, got_lock: {got_lock}")
 
     if not all_blocks:
+        if got_lock:
+            cache.delete(lock_key)   # don't leave the lock held on early return
         return Response([])
 
     # =========================================================
@@ -1974,11 +1996,12 @@ def ai_suggestions_today(request):
     log(f"[OpenAI-Usage] Already categorized: {len(already_categorized)}")
 
 
-    # All orgs use the ClassificationService pipeline.
     return _ai_suggestions_via_classification_service(
-        request, org, all_blocks, blocks_needing_ai, already_categorized
+        request, org, all_blocks, blocks_needing_ai, already_categorized,
+        do_processing=got_lock,           # ← new
+        lock_key=lock_key if got_lock else None,
     )
-    
+
 def _host_from_url(u: str) -> str:
     try:
         return urllib.parse.urlparse(u or "").hostname or ""

@@ -294,8 +294,8 @@ export default function DailyReview() {
   }, [loadTimeSummary]);
 
   // ✨ NOW call the hook (after both callbacks are defined)
-  // const orgId = me?.org_id;
-  // useAICompletion(orgId, handleAIComplete);
+  const orgId = me?.org_id;
+  useAICompletion(orgId, handleAIComplete);
 
   useEffect(() => {
     const t = setTimeout(() => {

@@ -1643,3 +1643,76 @@ def batch_ai_classify_async(self, block_ids, org_id, user_id=None):
     except Exception as e:
         logger.error(f"[ASYNC-AI] ❌ Failed: {e}", exc_info=True)
         raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
+
+@shared_task(name='tracker.compact_and_classify_org', bind=True, max_retries=0)
+def compact_and_classify_org(self, org_id):
+    """
+    Full per-org pipeline off the request path:
+    compaction → Stages 0-9 → queue Stage 10.
+    Shares the same lock as ai_suggestions_today so the view
+    and this task never run the heavy work concurrently.
+    """
+    from django.core.cache import cache
+    from tracker.models import Organization, Block
+    from tracker.services.classification_service import ClassificationService
+    from tracker.services.compaction import compact_rawevents_into_blocks
+    from tracker.views import _start_of_local_day_utc  # adjust import if it lives elsewhere
+
+    lock_key = f"compact-classify:{org_id}"
+    if not cache.add(lock_key, "1", timeout=300):
+        return {'status': 'skipped', 'reason': 'already running'}
+
+    try:
+        org = Organization.objects.get(id=org_id)
+        compact_rawevents_into_blocks(org=org)
+
+        start_utc = _start_of_local_day_utc()
+        pending = list(Block.objects.filter(
+            org=org,
+            start__gte=start_utc,
+            is_categorized=False,
+        ).filter(
+            classification_state__in=['captured']
+        ) | Block.objects.filter(
+            org=org, start__gte=start_utc,
+            is_categorized=False, classification_state__isnull=True,
+        ))[:200]
+
+        for b in pending:
+            try:
+                service = ClassificationService(org=org, user=b.user)
+                decision = service.classify(b, skip_ai=True)
+                service.apply(b, decision)
+            except Exception as e:
+                logger.error(f"[COMPACT-CLASSIFY] Block {b.id} failed: {e}")
+                continue
+
+        ai_ids = list(Block.objects.filter(
+            org=org,
+            start__gte=start_utc,
+            classification_state='captured',
+            proposed_client_id__isnull=True,
+        ).values_list('id', flat=True)[:200])
+
+        if ai_ids:
+            batch_ai_classify_async.delay(block_ids=ai_ids, org_id=org_id, user_id=None)
+
+        return {'status': 'ok', 'classified': len(pending), 'queued_for_ai': len(ai_ids)}
+    finally:
+        cache.delete(lock_key)
+
+
+@shared_task(name='tracker.dispatch_compact_classify_all')
+def dispatch_compact_classify_all():
+    """Fan out compact_and_classify_org for orgs with recent agent activity."""
+    from tracker.models import RawEvent
+
+    cutoff = timezone.now() - timedelta(minutes=5)
+    org_ids = (RawEvent.objects
+               .filter(start_ts__gte=cutoff, block__isnull=True)
+               .values_list('org_id', flat=True)
+               .distinct())
+    for oid in org_ids:
+        if oid:
+            compact_and_classify_org.delay(oid)
+    return {'orgs_dispatched': len(list(org_ids))}

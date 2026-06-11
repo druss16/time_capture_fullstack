@@ -56,6 +56,17 @@ app.conf.beat_schedule = {
             'expires': 300,
         }
     },
+
+    # ✅ COMPACT + CLASSIFY DISPATCH: Every 90 seconds ⚡
+    # Per-org pipeline: compaction → Stages 0-9 → queue Stage 10.
+    # Shares the compact-classify lock with ai_suggestions_today.
+    'compact-classify-dispatch': {
+        'task': 'tracker.dispatch_compact_classify_all',
+        'schedule': 90.0,
+        'options': {
+            'expires': 90,   # skip stale runs if beat backs up
+        }
+    },
     
     # =========================================================================
     # DAILY NOTIFICATIONS (Mon-Fri)

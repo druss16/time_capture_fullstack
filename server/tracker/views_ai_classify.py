@@ -112,14 +112,21 @@ def _build_prompt(titles: list, clients: list) -> tuple:
     """
     import json
     
-    # v3.1: Cap client list at 25, most-used first
-    # The top 25 clients cover 90%+ of real activity. Sending all 100+
-    # wastes ~2000 tokens per call with zero accuracy gain.
-    clients_sorted = sorted(
-        clients, 
-        key=lambda c: c.get("usage_count", 0), 
-        reverse=True
-    )[:25]
+    # # v3.1: Cap client list at 25, most-used first
+    # # The top 25 clients cover 90%+ of real activity. Sending all 100+
+    # # wastes ~2000 tokens per call with zero accuracy gain.
+    # clients_sorted = sorted(
+    #     clients, 
+    #     key=lambda c: c.get("usage_count", 0), 
+    #     reverse=True
+    # )[:25]
+
+    # v3.2: Send the FULL client list. The v3.1 cap of 25 silently broke
+    # classification: clients_payload carries no 'usage_count' key, so the
+    # sort was a no-op and [:25] kept 25 arbitrary clients — the other ~300
+    # could never be matched. Full list ≈ 2K tokens; with the prompt-caching
+    # header this is cheap, and correctness beats token savings here.
+    clients_sorted = clients
     
     # Minified client format: just id and name. Aliases are almost never
     # the deciding factor — if the client name itself doesn't appear, 
@@ -195,7 +202,7 @@ def _call_openai(titles: list, clients: list) -> list:
             {"role": "user", "content": user},
         ],
         "temperature": 0.1,
-        "max_tokens": 400,  # ← CHANGE from 800
+        "max_tokens": 800,  # ← CHANGE from 800
         "response_format": {"type": "json_object"},
     }
 

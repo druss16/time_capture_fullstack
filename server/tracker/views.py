@@ -1782,12 +1782,13 @@ def _batch_ai_classify(blocks_for_ai, service, org, user):
 
     # Get clients list for OpenAI context (reuse for all batches)
     try:
+        service._ensure_context_loaded()   # async path: fresh service hasn't lazy-loaded yet
         clients_payload = [
             {'id': c.id, 'name': c.name, 'aliases': c.aliases or []}
             for c in service._clients
         ]
     except Exception as e:
-        logger.warning(f"Failed to build clients payload for batch AI: {e}")
+        logger.warning(f"Failed to build clients payload for batch AI: {e}", exc_info=True)
         return
 
     # Split blocks into smaller chunks for faster OpenAI responses

@@ -1704,15 +1704,21 @@ def compact_and_classify_org(self, org_id):
 
 @shared_task(name='tracker.dispatch_compact_classify_all')
 def dispatch_compact_classify_all():
-    """Fan out compact_and_classify_org for orgs with recent agent activity."""
-    from tracker.models import RawEvent
+    """Fan out for orgs with uncompacted events OR unclassified blocks."""
+    from tracker.models import RawEvent, Block
 
     cutoff = timezone.now() - timedelta(minutes=5)
-    org_ids = (RawEvent.objects
-               .filter(start_ts__gte=cutoff, block__isnull=True)
-               .values_list('org_id', flat=True)
-               .distinct())
+    block_cutoff = timezone.now() - timedelta(hours=24)
+
+    event_orgs = set(RawEvent.objects
+                     .filter(start_ts__gte=cutoff, block__isnull=True)
+                     .values_list('org_id', flat=True).distinct())
+
+    block_orgs = set(Block.objects
+                     .filter(classification_state='captured', start__gte=block_cutoff)
+                     .values_list('org_id', flat=True).distinct())
+
+    org_ids = {oid for oid in (event_orgs | block_orgs) if oid}
     for oid in org_ids:
-        if oid:
-            compact_and_classify_org.delay(oid)
-    return {'orgs_dispatched': len(list(org_ids))}
+        compact_and_classify_org.delay(oid)
+    return {'orgs_dispatched': len(org_ids)}

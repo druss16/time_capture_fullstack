@@ -1829,6 +1829,12 @@ def _batch_ai_classify(blocks_for_ai, service, org, user):
         # Map results back to blocks in this chunk and apply
         for block, result in zip(chunk, results):
             if not result:
+                # Stamp the attempt so the dispatcher doesn't re-send this
+                # block to OpenAI every 90s forever.
+                from tracker.models import Block as BlockModel
+                BlockModel.objects.filter(id=block.id).update(
+                    proposed_reasoning='AI: no client evidence found'
+                )
                 continue
 
             try:
@@ -1949,16 +1955,6 @@ def ai_suggestions_today(request):
     # but only ONE request at a time does the heavy work.
     # Concurrent requests skip it and just read current state.
     # =========================================================
-    lock_key = f"compact-classify:{org.id if org else 'global'}"
-    got_lock = bool(cache.add(lock_key, "1", timeout=60))  # auto-expires as a safety net
-
-    if got_lock:
-        try:
-            compact_rawevents_into_blocks(user=username, hostname=hostname, org=org)
-        except Exception:
-            cache.delete(lock_key)
-            raise
-
     start_utc = _start_of_local_day_utc()
     qs = Block.objects.filter(start__gte=start_utc).order_by("start")
     if username:
@@ -1973,8 +1969,6 @@ def ai_suggestions_today(request):
     log(f"[suggestions] Blocks: {len(all_blocks)}, Limit: {limit}, got_lock: {got_lock}")
 
     if not all_blocks:
-        if got_lock:
-            cache.delete(lock_key)   # don't leave the lock held on early return
         return Response([])
 
     # =========================================================
@@ -1996,11 +1990,10 @@ def ai_suggestions_today(request):
     log(f"[OpenAI-Usage] Blocks needing AI: {len(blocks_needing_ai)}")
     log(f"[OpenAI-Usage] Already categorized: {len(already_categorized)}")
 
-
     return _ai_suggestions_via_classification_service(
         request, org, all_blocks, blocks_needing_ai, already_categorized,
-        do_processing=got_lock,           # ← new
-        lock_key=lock_key if got_lock else None,
+        do_processing=False,   # view is read-only; Celery owns all processing
+        lock_key=None,
     )
 
 def _host_from_url(u: str) -> str:

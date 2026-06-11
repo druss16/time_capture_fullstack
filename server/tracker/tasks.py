@@ -1692,6 +1692,8 @@ def compact_and_classify_org(self, org_id):
             start__gte=start_utc,
             classification_state='captured',
             proposed_client_id__isnull=True,
+        ).exclude(
+            proposed_reasoning__startswith='AI:'   # ← already attempted, don't re-send
         ).values_list('id', flat=True)[:200])
 
         if ai_ids:

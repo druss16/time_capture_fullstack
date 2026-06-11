@@ -1228,6 +1228,36 @@ class ClassificationService:
         # Assign Billing/Admin category, no client. Stop pipeline.
         internal_cat = is_internal_firm_work(title)
         if internal_cat:
+            # GUARD: if a known client's name appears in the block text, this is
+            # CLIENT work that happens to look administrative (e.g. running
+            # payroll inside a client's QuickBooks file). Stand down and let
+            # the client-attribution stages (rules, patterns, AI) handle it.
+            self._ensure_context_loaded()
+            _hay = " ".join([
+                title or '',
+                getattr(block, 'window_title', '') or '',
+                getattr(block, 'file_path', '') or '',
+            ]).lower()
+            _client_hit = None
+            for _c in self._clients:
+                _names = [_c.name] + list(getattr(_c, 'aliases', None) or [])
+                if any(n and len(n) >= 4 and n.lower() in _hay for n in _names):
+                    _client_hit = _c
+                    break
+            if _client_hit:
+                decision.matched_signals.append(Signal(
+                    type='internal_work_deferred',
+                    strength=0.0,
+                    evidence=(
+                        f"Internal-work pattern matched but client "
+                        f"'{_client_hit.name}' appears in title — deferring "
+                        f"to client attribution stages"
+                    ),
+                    detail={'deferred_client_id': _client_hit.id,
+                            'internal_category': internal_cat},
+                ))
+                return False   # not handled — later stages attribute the client
+
             hours = round((block.minutes or 0) / 60.0, 2) if block.minutes else 0.0
             decision.category = internal_cat
             decision.category_hours = {internal_cat: hours}

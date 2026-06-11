@@ -24,5 +24,5 @@ urlpatterns = [
     path('privacy/', TemplateView.as_view(template_name='legal/privacy.html'), name='privacy'),
     path('api/deploy/', include('tracker.urls_deployment')),
     path('api/mobile/', include('mobile.urls')),  # ← add this
-    path('api/events/', include('django_eventstream.urls'), name='events'),
+    # path('api/events/', include('django_eventstream.urls'), name='events'),   # disabled until ASGI — SSE kills sync gunicorn workers
 ]

@@ -4099,15 +4099,15 @@ class ClassificationService:
                     detail={'rejected_client_id': cleared_client_id},
                 ))
 
-        # v1.3.59 FIX 6 (extended v1.3.60): Default is_billable=False when
-        # no client + no AI category. Must run BEFORE the strong/moderate/weak
-        # return branches so it applies to ALL classification outcomes.
-        #
-        # v1.3.60 addition: Also set decision.category to the org's non-billable
-        # fallback so the categorize endpoint can surface a pre-filled suggestion
-        # ("Personal/Non-Billable"). Without this, captured blocks come through
-        # with empty proposed_category and the user has to pick from scratch.
-        if decision.client_id is None and decision.is_billable:
+        # v1.3.61: FIX 6 must not fire when a client WAS identified via signals.
+        # decision.client_id isn't populated until _populate_classification_from_signals
+        # (which runs BELOW this point), so a client arriving from alias/title
+        # signals is invisible here — check the signals directly.
+        has_client_signal = any(
+            getattr(s, 'proposed_client_id', None) for s in signals
+        )
+
+        if decision.client_id is None and not has_client_signal and decision.is_billable:
             has_ai_category = any(
                 s.type == 'ai_category' for s in decision.matched_signals
             )
@@ -4127,50 +4127,25 @@ class ClassificationService:
                     decision.category = non_billable_fb
                     decision.matched_signals.append(Signal(
                         type='fix6_default',
-                        strength=0.50,  # weak — surfaces as suggestion, not auto-commit
+                        strength=0.50,
                         evidence=f'No client identified; defaulting to {non_billable_fb}',
                         detail={'category': non_billable_fb, 'is_billable': False},
                     ))
-
-        # Otherwise propose if we have any MODERATE-or-better signal.
-        # Weak-only signals (< 0.65) — typically just agent_current_client
-        # with no corroboration — don't justify proposing a client. The
-        # block goes to captured for user review instead.
-        moderate_or_better = [s for s in signals if s.strength >= 0.65]
-        if moderate_or_better:
-            self._populate_classification_from_signals(decision, signals)
-            decision.recommended_state = 'proposed'
-            decision.confidence = max(s.strength for s in moderate_or_better)
-            return decision
-
-        # Only weak signals exist — capture without attribution
-        if signals:
-            decision.recommended_state = 'captured'
-            decision.confidence = max(s.strength for s in signals)
-
-            # v1.3.60: user-friendly reasoning when FIX 6's default is the only signal.
-            # The classifier had no real evidence — it's just defaulting to non-billable
-            # as a safe fallback. Users need to know it's a default, not a confident guess,
-            # and that they should override if the block is actually client work.
-            fix6_signals = [s for s in signals if s.type == 'fix6_default']
-            if fix6_signals and len(fix6_signals) == len(signals):
-                decision.reasoning = (
-                    'No client or work pattern identified — '
-                    'defaulting to non-billable. Override if this is client work.'
-                )
-            else:
-                decision.reasoning = (
-                    'Weak signals only (' +
-                    ', '.join(f"{s.type}@{s.strength:.2f}" for s in signals) +
-                    ') — held for user review without attribution'
-                )
-            return decision
-
-        # Nothing — captured
-        decision.recommended_state = 'captured'
-        decision.confidence = 0.0
-        decision.reasoning = decision.reasoning or 'No classification signals matched'
-        return decision
+        elif has_client_signal and not decision.category:
+            # v1.3.61: client identified but no category signal — prefill the
+            # org's BILLABLE fallback ("General Client Work" for CPA), not
+            # Personal. Weak strength → surfaces as suggestion, not auto-commit.
+            industry = getattr(self.org, 'industry_type', None) or 'general'
+            billable_fb, _ = FALLBACK_CATEGORIES.get(
+                industry, FALLBACK_CATEGORIES_DEFAULT
+            )
+            decision.category = billable_fb
+            decision.matched_signals.append(Signal(
+                type='fix6b_client_default',
+                strength=0.50,
+                evidence=f'Client identified via signals; defaulting category to {billable_fb}',
+                detail={'category': billable_fb, 'is_billable': True},
+            ))
 
     @staticmethod
     def _has_contradicting_signal(signals: list, chosen_client_id: int) -> bool:

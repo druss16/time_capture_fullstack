@@ -15,6 +15,43 @@ export const API_ENDPOINTS = {
 } as const;
 
 // ============================================================================
+// v1.3.61 AUTH FIXES
+// 1. Never attach the Authorization header to auth/CSRF endpoints — sending a
+//    stale token to /auth/login/ makes DRF reject the request with 403 before
+//    the view runs, wedging the login page in a retry loop.
+// 2. When the API says the token is expired/invalid, clear stored tokens and
+//    send the user to /login ONCE — never retry-loop with a dead token.
+// ============================================================================
+
+const TOKEN_STORAGE_KEYS = ["auth_token", "tt_auth_token", "authToken", "token"];
+
+/** Endpoints that must be called WITHOUT an Authorization header. */
+function isAuthEndpoint(input: string): boolean {
+  return (
+    input.includes("/auth/login") ||
+    input.includes("/auth/signup") ||
+    input.includes("/get-csrf")
+  );
+}
+
+/** True if an error body indicates a dead token (expired or invalid). */
+function isTokenDeadError(message: string): boolean {
+  return /token/i.test(message) && /(expired|invalid)/i.test(message);
+}
+
+/** Clear stored tokens and route to login. Safe to call from anywhere. */
+export function handleTokenExpired(): void {
+  TOKEN_STORAGE_KEYS.forEach((k) => localStorage.removeItem(k));
+  // Avoid a redirect loop if we're already on the login page.
+  if (!window.location.pathname.startsWith("/login")) {
+    const next = encodeURIComponent(
+      window.location.pathname + window.location.search
+    );
+    window.location.href = `/login?next=${next}`;
+  }
+}
+
+// ============================================================================
 // Error message extractor — converts raw API error bodies into human-readable strings
 // Handles: Django custom errors, DRF detail/non_field_errors, plain text, etc.
 // ============================================================================
@@ -58,9 +95,13 @@ export async function safeFetchJson<T = any>(input: string, init: RequestInit = 
       ...(init.headers as Record<string, string> | undefined),
     };
 
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+    // v1.3.61: never send the token to auth endpoints — a stale token there
+    // causes a 403 before the login view ever runs.
+    if (!isAuthEndpoint(input)) {
+      const token = localStorage.getItem("auth_token");
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
     }
 
     if (!["GET", "HEAD", "OPTIONS", "TRACE"].includes((init.method || "GET").toUpperCase())) {
@@ -81,7 +122,14 @@ export async function safeFetchJson<T = any>(input: string, init: RequestInit = 
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     const body = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();
-    throw new Error(extractErrorMessage(body));
+    const message = extractErrorMessage(body);
+
+    // v1.3.61: dead token → clear storage + go to login. No retry loops.
+    if ((res.status === 401 || res.status === 403) && isTokenDeadError(message)) {
+      handleTokenExpired();
+    }
+
+    throw new Error(message);
   }
   return ct.includes("json") ? res.json() : ({} as T);
 }
@@ -99,7 +147,7 @@ export async function safeUploadFile<T = any>(
 ): Promise<T> {
   const formData = new FormData();
   formData.append(fieldName, file);
-  
+
   // Add any additional form fields
   if (additionalFields) {
     Object.entries(additionalFields).forEach(([key, value]) => {
@@ -114,19 +162,17 @@ export async function safeUploadFile<T = any>(
       // IMPORTANT: Do NOT set Content-Type here!
       // Browser sets it automatically to multipart/form-data with correct boundary
     };
-    
-    // Add Authorization header with token (if exists)
+
     const token = localStorage.getItem('auth_token');
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
-    
-    // Add CSRF token for POST requests
+
     const csrfToken = getCookie("csrftoken");
     if (csrfToken) {
       headers["X-CSRFToken"] = csrfToken;
     }
-    
+
     return headers;
   };
 
@@ -151,9 +197,13 @@ export async function safeUploadFile<T = any>(
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     const body = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();
-    throw new Error(extractErrorMessage(body));
+    const message = extractErrorMessage(body);
+    if ((res.status === 401 || res.status === 403) && isTokenDeadError(message)) {
+      handleTokenExpired();
+    }
+    throw new Error(message);
   }
-  
+
   return ct.includes("json") ? res.json() : ({} as T);
 }
 
@@ -170,17 +220,17 @@ export async function safeUploadFormData<T = any>(
       "X-Requested-With": "XMLHttpRequest",
       // IMPORTANT: Do NOT set Content-Type - browser sets it with boundary
     };
-    
+
     const token = localStorage.getItem('auth_token');
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
-    
+
     const csrfToken = getCookie("csrftoken");
     if (csrfToken) {
       headers["X-CSRFToken"] = csrfToken;
     }
-    
+
     return headers;
   };
 
@@ -204,8 +254,12 @@ export async function safeUploadFormData<T = any>(
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     const body = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();
-    throw new Error(extractErrorMessage(body));
+    const message = extractErrorMessage(body);
+    if ((res.status === 401 || res.status === 403) && isTokenDeadError(message)) {
+      handleTokenExpired();
+    }
+    throw new Error(message);
   }
-  
+
   return ct.includes("json") ? res.json() : ({} as T);
 }

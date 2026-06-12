@@ -227,3 +227,82 @@ class QBCompanyTracker:
                  if (now - e['refreshed_at']) > CACHE_TTL_SECONDS]
         for pid in stale:
             self._cache.pop(pid, None)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global (PID-free) mode — for callers that don't have the process id handy,
+# e.g. the inference collectors, which receive a window context (app/title/
+# path) but not a PID. Enumerates ALL visible top-level windows and returns
+# the first QB main-window company found. Cached with the same rate limit.
+#
+# Assumption: one QuickBooks instance / one open company at a time — true for
+# essentially all desktop QB usage. If a firm runs two company files at once
+# (QB Enterprise multi-instance), prefer the per-PID API above.
+# ─────────────────────────────────────────────────────────────────────────────
+
+if sys.platform == 'win32':
+
+    def _all_visible_window_titles() -> list[str]:
+        titles: list[str] = []
+
+        def _cb(hwnd, _lparam):
+            try:
+                if not _user32.IsWindowVisible(hwnd):
+                    return True
+                length = _user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buf = ctypes.create_unicode_buffer(length + 1)
+                _user32.GetWindowTextW(hwnd, buf, length + 1)
+                if buf.value and 'quickbooks' in buf.value.lower():
+                    titles.append(buf.value)
+            except Exception:
+                pass
+            return True
+
+        try:
+            _user32.EnumWindows(_EnumWindowsProc(_cb), 0)
+        except Exception as e:
+            logger.warning("EnumWindows (global) failed: %s", e)
+        return titles
+
+else:
+    def _all_visible_window_titles() -> list[str]:
+        return []
+
+
+_global_cache = {'company': None, 'enumerated_at': 0.0}
+_global_warned = False
+
+
+def get_company_global() -> str | None:
+    """
+    Company of the open QuickBooks file, found by scanning all visible
+    windows for a QB main-window title. Rate-limited; serves cache between
+    enumerations; fail-open (errors return last known value).
+    """
+    global _global_warned
+    now = time.monotonic()
+
+    if (now - _global_cache['enumerated_at']) < ENUM_INTERVAL_SECONDS:
+        return _global_cache['company']
+
+    try:
+        company = None
+        for title in _all_visible_window_titles():
+            company = _extract_company_from_main_title(title)
+            if company:
+                break
+
+        if company:
+            _global_cache['company'] = company
+        # No company visible this pass → keep serving the previous value
+        # (that's the whole point: persistence through nameless modals).
+        _global_cache['enumerated_at'] = now
+        return _global_cache['company']
+
+    except Exception as e:
+        if not _global_warned:
+            logger.warning("QB tracker global error (fail-open): %s", e)
+            _global_warned = True
+        return _global_cache['company']

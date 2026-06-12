@@ -66,6 +66,26 @@ MIN_BLOCK_MINUTES = 0.5
 SESSION_GAP = timedelta(minutes=30)
 AUTO_CATEGORIZE_THRESHOLD = 0.70
 
+# v1.3.62: QB company extraction for session continuity (see grouping loop).
+import re as _re_qb
+_QB_COMPACT_APPS = {'qbw', 'qbw.exe', 'qbw32', 'qbw32.exe'}
+_QB_TITLE_RE = _re_qb.compile(r'^(?P<company>.+?)\s+[-\u2013]\s+quickbooks\b', _re_qb.IGNORECASE)
+
+def _extract_qb_company_for_compaction(title: str):
+    """'{Company} - QuickBooks ...' -> 'Company', else None (modals, bare chrome)."""
+    if not title:
+        return None
+    bracket = title.rfind(' - [')
+    if bracket > 0:
+        title = title[:bracket]
+    m = _QB_TITLE_RE.match(title.strip())
+    if not m:
+        return None
+    company = m.group('company').strip().strip('-\u2013').strip()
+    if len(company) < 4 or company.lower().startswith(('quickbooks', 'intuit')):
+        return None
+    return company
+
 
 def _safe_device_id(device_id) -> int:
     if device_id is None:
@@ -678,25 +698,55 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     # Onvio into the same Block. See tracker/utils/content_classifier.py.
     blocks_to_create = []
     for session_idx, session in enumerate(sessions):
+
+        # v1.3.62: QB modal session continuity. QuickBooks modals ("Preview
+        # Paycheck", "Positive deduction?", date-range dialogs) carry no
+        # company in their titles, so each distinct modal title got its own
+        # content_id — a continuous 30-min payroll run shattered into a dozen
+        # 1-2 min blocks, none attributable. Within one session (time-ordered),
+        # forward-fill the most recent QB company (and its client_id) onto
+        # company-less QB events so the whole run groups into ONE block with
+        # the company-titled work. Fill resets whenever a NEW company title
+        # appears, so cross-company bleed is impossible within a session.
+        # NOTE: this pass runs BEFORE the grouping loop below, because the
+        # grouping loop reads _qb_company_fill when computing content_id.
+        _last_qb_company = None
+        _last_qb_client_id = None
+        for fill_ev in session:
+            app_l = (fill_ev.get("app_name") or "").strip().lower()
+            if app_l not in _QB_COMPACT_APPS:
+                continue
+            comp = _extract_qb_company_for_compaction(fill_ev.get("window_title") or "")
+            if comp:
+                _last_qb_company = comp
+                _last_qb_client_id = fill_ev.get("current_client_id") or _last_qb_client_id
+            elif _last_qb_company:
+                fill_ev["_qb_company_fill"] = _last_qb_company
+                if not fill_ev.get("current_client_id") and _last_qb_client_id:
+                    fill_ev["current_client_id"] = _last_qb_client_id
+
         by_app_client: Dict[str, List] = {}
         for ev in session:
             app = _app_key(ev)
             client_id = ev.get("current_client_id") or 0
             content_bucket = classify_event_content(ev["event"])
 
-            # v1.3.46: Universal content-identifier grouping. When the
-            # user opens a different file/URL/document, that's different
-            # work — even if the agent's current_client_id is stale.
-            # Without this, e.g. opening St Mary's Church QB file while
-            # current_client_id still points at St Mary's Cemetery would
-            # merge both into one wrong block. The file_path/URL/title
-            # captures the user's actual context independent of the
-            # agent's client opinion.
-            content_id = _content_identifier(
-                ev.get("window_title") or "",
-                ev.get("file_path") or "",
-                ev.get("url") or "",
-            )
+            # v1.3.62: for QB events, the COMPANY is the content identity —
+            # not the modal/screen title. Compute content_id from the company
+            # (extracted or forward-filled) so all of one company's QB events
+            # in a session share a key and merge into one block.
+            _qb_comp = None
+            if (ev.get("app_name") or "").strip().lower() in _QB_COMPACT_APPS:
+                _qb_comp = (_extract_qb_company_for_compaction(ev.get("window_title") or "")
+                            or ev.get("_qb_company_fill"))
+            if _qb_comp:
+                content_id = _content_identifier(_qb_comp, "", "")
+            else:
+                content_id = _content_identifier(
+                    ev.get("window_title") or "",
+                    ev.get("file_path") or "",
+                    ev.get("url") or "",
+                )
             content_part = f"|{content_id}" if content_id else ""
 
             key = f"s{session_idx}|{app}|{client_id}|{content_bucket}{content_part}"

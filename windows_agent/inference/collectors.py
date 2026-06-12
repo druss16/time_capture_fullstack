@@ -307,31 +307,49 @@ def collect_qb_company_file_evidence(
     """
     Tier 1 (0.95): Match QuickBooks company file against client list.
 
-    QB Desktop titles look like:
+    QB Desktop MAIN-window titles look like:
       'Holly Corbett, Inc - QuickBooks Accountant Desktop Plus 2024 - [Home]'
 
-    We strip the screen bracket to get just the company file, then match it
-    against clients. Unambiguous when it matches.
-    """
-    if not ctx.title:
-        return []
+    v1.4.3: QB modals/dialogs ("Preview Paycheck", "Select Date Range...",
+    bare product chrome) carry NO company in their titles. When the current
+    title has no ' - QuickBooks' company segment, fall back to the cached
+    main-window company from qb_company_tracker (which enumerates QB's
+    windows and persists the company across nameless modals). Cached-company
+    evidence is emitted at 0.90 — strong, slightly below a direct title read.
 
+    Also fixes a latent bug: previously a suffix-less title (e.g. the 'Home'
+    modal) was used WHOLESALE as the company string and matched against
+    clients — so a client named 'Home Depot LLC' could falsely match the QB
+    'Home' screen. Now a company is only extracted when the title actually
+    carries the ' - QuickBooks' main-window shape.
+    """
     # Only fire on QB-named processes
     exe_lower = (ctx.exe_name or "").lower()
     if "qbw" not in exe_lower and "quickbooks" not in (ctx.app_name or "").lower():
         return []
 
-    stripped = _strip_qb(ctx.title)
-    if not stripped:
-        return []
+    # ── Try to extract the company from THIS window's title ──
+    company_file = None
+    if ctx.title:
+        stripped = _strip_qb(ctx.title)
+        if stripped:
+            qb_idx = stripped.lower().find(" - quickbooks")
+            if qb_idx > 0:
+                cf = stripped[:qb_idx].strip()
+                # Strip trailing "(Primary)" or similar marker
+                cf = re.sub(r'\s*\([^)]+\)\s*$', '', cf).strip()
+                if cf and not cf.lower().startswith(("quickbooks", "intuit")):
+                    company_file = cf
 
-    # Extract the company-file portion: everything before "- QuickBooks"
-    company_file = stripped
-    qb_idx = stripped.lower().find(" - quickbooks")
-    if qb_idx > 0:
-        company_file = stripped[:qb_idx].strip()
-    # Strip trailing "(Primary)" or similar marker
-    company_file = re.sub(r'\s*\([^)]+\)\s*$', '', company_file).strip()
+    # ── v1.4.3 fallback: nameless modal/dialog/chrome → cached main window ──
+    via_session_cache = False
+    if not company_file:
+        try:
+            from qb_company_tracker import get_company_global
+            company_file = get_company_global()
+            via_session_cache = bool(company_file)
+        except Exception:
+            company_file = None  # tracker must never break collection
 
     if not company_file:
         return []
@@ -349,11 +367,12 @@ def collect_qb_company_file_evidence(
             return [Evidence(
                 source="qb_company_file",
                 client_id=client_id,
-                strength=0.95,
+                strength=0.90 if via_session_cache else 0.95,
                 detected_at=ctx.timestamp,
                 detail={
                     "company_file": company_file,
                     "matched_client_name": client_name,
+                    "via": "session_cache" if via_session_cache else "title",
                 },
             )]
 

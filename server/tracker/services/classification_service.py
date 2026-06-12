@@ -4131,7 +4131,9 @@ class ClassificationService:
                         evidence=f'No client identified; defaulting to {non_billable_fb}',
                         detail={'category': non_billable_fb, 'is_billable': False},
                     ))
-        elif has_client_signal and not decision.category:
+        elif has_client_signal and not decision.category and not any(
+            s.proposed_category for s in signals
+        ):
             # v1.3.61: client identified but no category signal — prefill the
             # org's BILLABLE fallback ("General Client Work" for CPA), not
             # Personal. Weak strength → surfaces as suggestion, not auto-commit.

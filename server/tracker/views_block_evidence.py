@@ -31,6 +31,7 @@ import re
 import logging
 
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -143,6 +144,184 @@ def _find_alias_matches(
 
 
 # =============================================================================
+# Surrounding context (v0.1) — temporal neighbor advice for nameless blocks
+# =============================================================================
+#
+# Many blocks have no client identity in their own title (QuickBooks splash /
+# modal screens like "Preview Paycheck", "Select Date Range", or the bare
+# "QuickBooks Accountant Desktop Plus 2024"). The classifier correctly refuses
+# to guess and parks them non-billable. But a human can often tell who the
+# work was for by looking at what client they were on immediately before and
+# after — especially when it's the SAME app (e.g. QuickBooks both sides).
+#
+# This helper surfaces that context as ADVICE, never as an auto-commit. It
+# returns the nearest attributed neighbor on each side, the gap, whether the
+# neighbor shares the block's app (strong continuity signal), and a weighted
+# suggestion the UI can offer as a one-click assign.
+
+# QuickBooks process names (mirror the agent / classifier vocabulary)
+_QB_APPS = {"qbw", "qbw.exe", "qbw32", "qbw32.exe"}
+
+# Only look this far for an attributed neighbor on either side.
+_NEIGHBOR_WINDOW_SECONDS = 30 * 60
+
+
+def _app_key(app_name: str) -> str:
+    return (app_name or "").strip().lower()
+
+
+def _is_qb(app_name: str) -> bool:
+    return _app_key(app_name) in _QB_APPS
+
+
+def _neighbor_payload(neighbor: Block, target: Block, side: str) -> Dict[str, Any]:
+    """Serialize one neighboring attributed block for the context panel."""
+    if side == "before":
+        gap = max(0, int((target.start - neighbor.end).total_seconds())) \
+            if (target.start and neighbor.end) else None
+        edge = neighbor.end
+    else:  # after
+        gap = max(0, int((neighbor.start - target.end).total_seconds())) \
+            if (target.end and neighbor.start) else None
+        edge = neighbor.start
+
+    same_app = _app_key(neighbor.app_name) == _app_key(target.app_name) \
+        and bool(_app_key(target.app_name))
+    same_qb_session = _is_qb(neighbor.app_name) and _is_qb(target.app_name)
+
+    return {
+        "block_id": neighbor.id,
+        "client_id": neighbor.client_id,
+        "client_name": neighbor.client.name if neighbor.client else None,
+        "at": edge.isoformat() if edge else None,
+        "gap_seconds": gap,
+        "app_name": neighbor.app_name or "",
+        "window_title": (neighbor.window_title or "")[:80],
+        "same_app": same_app,
+        "same_qb_session": same_qb_session,
+    }
+
+
+def _build_surrounding(block: Block) -> Optional[Dict[str, Any]]:
+    """
+    Find nearest attributed blocks before/after `block` and derive a
+    read-only suggestion. Returns None when the block already has a client
+    (no help needed) or when there are no attributed neighbors at all.
+    """
+    # Block already attributed — context panel not needed.
+    if block.client_id:
+        return None
+    if not block.start or not block.end:
+        return None
+
+    win_start = block.start - timezone.timedelta(seconds=_NEIGHBOR_WINDOW_SECONDS)
+    win_end = block.end + timezone.timedelta(seconds=_NEIGHBOR_WINDOW_SECONDS)
+
+    # Nearest attributed block ending at/before this block starts.
+    before = (
+        Block.objects
+        .filter(user=block.user, org=block.org,
+                client_id__isnull=False,
+                end__lte=block.start, end__gte=win_start)
+        .exclude(id=block.id)
+        .select_related("client")
+        .order_by("-end")
+        .first()
+    )
+    # Nearest attributed block starting at/after this block ends.
+    after = (
+        Block.objects
+        .filter(user=block.user, org=block.org,
+                client_id__isnull=False,
+                start__gte=block.end, start__lte=win_end)
+        .exclude(id=block.id)
+        .select_related("client")
+        .order_by("start")
+        .first()
+    )
+
+    if not before and not after:
+        return None
+
+    before_p = _neighbor_payload(before, block, "before") if before else None
+    after_p = _neighbor_payload(after, block, "after") if after else None
+
+    suggestion = _derive_context_suggestion(before_p, after_p)
+
+    return {
+        "before": before_p,
+        "after": after_p,
+        "suggestion": suggestion,
+    }
+
+
+def _derive_context_suggestion(
+    before: Optional[Dict[str, Any]],
+    after: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Turn before/after neighbors into a single weighted suggestion.
+
+    Confidence tiers (advice only — UI offers, human confirms):
+      high   — both sides agree on the same client
+      high   — one side, same QuickBooks session (e.g. QB splash → named QB file)
+      medium — one side, same app (non-QB)
+      low    — one side, different app  (weak; show context, soft suggest)
+      none   — sides disagree and neither is a same-app continuation
+
+    Same-app/same-QB continuity matters more than raw time proximity: a QB
+    block two minutes from a named QB file is far stronger evidence than an
+    Outlook block two minutes away.
+    """
+    b_cid = before["client_id"] if before else None
+    a_cid = after["client_id"] if after else None
+
+    def _suggest(cid, name, tier, reason):
+        return {"client_id": cid, "client_name": name,
+                "confidence": tier, "reason": reason}
+
+    # Both sides agree → strongest.
+    if b_cid and a_cid and b_cid == a_cid:
+        return _suggest(
+            b_cid, before["client_name"], "high",
+            f"You were on {before['client_name']} both just before and just after this block.",
+        )
+
+    # Sides disagree: prefer a same-QB-session continuation if exactly one exists.
+    if b_cid and a_cid and b_cid != a_cid:
+        qb_sides = [s for s in (before, after) if s and s["same_qb_session"]]
+        if len(qb_sides) == 1:
+            s = qb_sides[0]
+            return _suggest(
+                s["client_id"], s["client_name"], "medium",
+                f"Same QuickBooks session as {s['client_name']} "
+                f"{'just after' if s is after else 'just before'} this block.",
+            )
+        # Genuine ambiguity — no confident pick. UI shows both, suggests nothing.
+        return None
+
+    # Exactly one side has a client.
+    side = before if b_cid else after
+    if not side:
+        return None
+    where = "just before" if side is before else "just after"
+
+    if side["same_qb_session"]:
+        return _suggest(
+            side["client_id"], side["client_name"], "high",
+            f"Same QuickBooks session as {side['client_name']} {where} this block.",
+        )
+    if side["same_app"]:
+        return _suggest(
+            side["client_id"], side["client_name"], "medium",
+            f"Same application ({side['app_name']}) as {side['client_name']} {where}.",
+        )
+    return _suggest(
+        side["client_id"], side["client_name"], "low",
+        f"{side['client_name']} was the nearest attributed work, {where} this block.",
+    )
+
+# =============================================================================
 # Endpoint
 # =============================================================================
 
@@ -188,6 +367,7 @@ def block_evidence(request, block_id: int):
         return Response({
             "block": _serialize_block(block),
             "suggestion": _serialize_suggestion(block),
+            "surrounding": _build_surrounding(block),
             "events": [],
             "summary": {"total_events": 0, "events_per_client": {}},
         })
@@ -271,6 +451,7 @@ def block_evidence(request, block_id: int):
     return Response({
         "block": _serialize_block(block),
         "suggestion": _serialize_suggestion(block),
+        "surrounding": _build_surrounding(block),
         "events": serialized_events,
         "summary": {
             "total_events": len(serialized_events),

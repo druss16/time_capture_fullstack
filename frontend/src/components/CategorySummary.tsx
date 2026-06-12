@@ -1272,6 +1272,8 @@ export default function CategorySummary({
   const [clientDropTarget, setClientDropTarget] = useState<string | null>(null);
   const [draggingBlockId, setDraggingBlockId] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // EDIT 1 of 4: per-client reveal state for parked non-billable / no-client time.
+  const [revealedNonBill, setRevealedNonBill] = useState<Set<string>>(new Set());
 
   const pendingToggleRef = useRef<Set<string>>(new Set());
   const handleToggleSelect = useCallback((rowKey: string, _idx: number, _shift: boolean) => {
@@ -1443,6 +1445,19 @@ export default function CategorySummary({
             (cat) => cat.hours > 0 || cat.sample_activities.length > 0
           );
 
+          // EDIT 2 of 4: split parked non-billable/no-client categories out of
+          // the main view. Only applies inside the Unassigned bucket — billable
+          // client-less work stays visible (it genuinely needs attention).
+          const parkedCats = unassigned
+            ? visibleCategories.filter((cat) => isNonBillable(cat.name))
+            : [];
+          const mainCats = unassigned
+            ? visibleCategories.filter((cat) => !isNonBillable(cat.name))
+            : visibleCategories;
+          const isRevealed = revealedNonBill.has(clientKey);
+          const parkedMinutes = parkedCats.reduce((s, cat) => s + cat.hours, 0);
+          const parkedCount = parkedCats.reduce((s, cat) => s + cat.block_count, 0);
+
           const hiddenZeroCount = client.categories.length - visibleCategories.length;
           const totalActivityCount = visibleCategories.reduce((sum, cat) => sum + cat.block_count, 0);
 
@@ -1542,7 +1557,8 @@ export default function CategorySummary({
 
               {!isCollapsed && (
                 <div>
-                  {visibleCategories.map((cat) => {
+                  {/* EDIT 3 of 4: render mainCats (parked non-billable split out below) */}
+                  {mainCats.map((cat) => {
                     const catKey = `${client.client_id}-${cat.name}`;
                     return (
                       <CategorySection
@@ -1563,6 +1579,52 @@ export default function CategorySummary({
                       />
                     );
                   })}
+
+                  {/* EDIT 4 of 4: collapsed parked non-billable / no-client time
+                      with a reveal toggle, mirroring the empty-categories footer. */}
+                  {parkedCats.length > 0 && (
+                    <div className="border-t border-slate-100">
+                      <button
+                        onClick={() => setRevealedNonBill((prev) => {
+                          const next = new Set(prev);
+                          next.has(clientKey) ? next.delete(clientKey) : next.add(clientKey);
+                          return next;
+                        })}
+                        className="w-full px-5 py-2 flex items-center gap-1.5 text-left hover:bg-slate-50 transition-colors"
+                      >
+                        {isRevealed
+                          ? <ChevronDown className="w-3 h-3 text-slate-300" />
+                          : <ChevronRight className="w-3 h-3 text-slate-300" />}
+                        <span className="text-[11px] text-slate-400 font-medium">
+                          {parkedCount} non-billable / no-client {parkedCount === 1 ? "entry" : "entries"}
+                          {" "}({fmt(parkedMinutes)}) {isRevealed ? "— hide" : "— show"}
+                        </span>
+                      </button>
+
+                      {isRevealed && parkedCats.map((cat) => {
+                        const catKey = `${client.client_id}-${cat.name}`;
+                        return (
+                          <CategorySection
+                            key={cat.name}
+                            cat={cat}
+                            client={client}
+                            allClients={availableClients}
+                            allCategories={availableCategories}
+                            onMoveActivity={moveSingle}
+                            onMoveAll={moveMany}
+                            draggingBlockId={draggingBlockId}
+                            onCatDragOver={makeCatDragOver(catKey)}
+                            onCatDragLeave={() => setCatDropTarget(null)}
+                            onCatDrop={makeCatDrop(client.client_id, cat.name)}
+                            isCatDropTarget={catDropTarget === catKey}
+                            selectedIds={selectedIds}
+                            onToggleSelect={handleToggleSelect}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {hiddenZeroCount > 0 && (
                     <div className="px-5 py-2 border-t border-slate-100">
                       <span className="text-[11px] text-slate-300 font-medium">

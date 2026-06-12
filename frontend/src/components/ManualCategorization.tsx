@@ -1,5 +1,9 @@
 /**
- * ManualCategorization.tsx — v1.3.60 Phase 2
+ * ManualCategorization.tsx — v1.3.61
+ *
+ * v1.3.61: date is now a controlled prop driven by the parent (DailyReview),
+ * so Summary and Categorize tabs share one date. Removed the in-tab "Select
+ * Date" picker — the toolbar date control at the top governs both tabs.
  *
  * Rewrites the categorize page around dense rows + bulk action. Replaces the
  * BlockCard render loop with BlockRow, adds a floating SelectionBar for bulk
@@ -115,6 +119,8 @@ interface CategorizationData {
 }
 
 interface ManualCategorizationProps {
+  // v1.3.61: date is controlled by the parent so both tabs stay in sync.
+  date: string;
   onComplete?: () => void;
 }
 
@@ -145,17 +151,16 @@ const isOneClickSuggestion = (block: Block): boolean => {
   return !!s.client; // billable but has a client → still one-click
 };
 
-const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
+const ManualCategorization = ({ date, onComplete }: ManualCategorizationProps) => {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [industryType, setIndustryType] = useState<string>('general');
 
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const today = new Date();
-    return today.toLocaleDateString('en-CA');
-  });
+  // v1.3.61: date comes from props (parent-owned), not local state. Both
+  // the Summary toolbar picker and this tab now read/write the same value.
+  const selectedDate = date;
 
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<CategorizationData['stats'] | null>(null);
@@ -410,19 +415,10 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
     <div className="max-w-6xl mx-auto pb-24">
       {/* ── Compact header ──────────────────────────────────────────── */}
       <div className="mb-4">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
-              Select Date:
-            </label>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="w-full max-w-xs border border-border rounded px-3 py-1.5 bg-card text-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-            />
-          </div>
-
+        {/* v1.3.61: in-tab date picker removed — the toolbar date control at
+            the top of Daily Review governs both Summary and Categorize. The
+            industry chip + Refresh remain. */}
+        <div className="flex items-center justify-end gap-3 mb-3">
           {industryType && industryType !== 'general' && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary text-xs font-semibold rounded-full">
               <Briefcase className="w-3 h-3" />
@@ -433,7 +429,7 @@ const ManualCategorization = ({ onComplete }: ManualCategorizationProps) => {
           <button
             onClick={fetchCategorizationData}
             disabled={loading}
-            className="mt-5 px-3 py-1.5 bg-primary text-primary-foreground rounded text-sm hover:bg-primary/90 transition-colors flex items-center gap-1.5"
+            className="px-3 py-1.5 bg-primary text-primary-foreground rounded text-sm hover:bg-primary/90 transition-colors flex items-center gap-1.5"
           >
             <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
             Refresh

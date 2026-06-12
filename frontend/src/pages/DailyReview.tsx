@@ -519,7 +519,10 @@ export default function DailyReview() {
             />
           </>
         ) : (
-          <ManualCategorization onComplete={handleCategorizationComplete} />
+          <ManualCategorization
+            date={date}
+            onComplete={handleCategorizationComplete}
+          />
         )}
       </div>
 

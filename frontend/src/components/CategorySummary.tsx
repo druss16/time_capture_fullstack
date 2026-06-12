@@ -1435,6 +1435,11 @@ export default function CategorySummary({
           const clientKey = `${client.client_id}-${client.client}`;
           const isCollapsed = collapsedClients.has(clientKey);
           const unassigned = client.client.toLowerCase() === "unassigned";
+          // Display-only relabel: "Unassigned" reads as a to-do, but for
+          // intentionally client-less work it's a resolved state. "No Client"
+          // states the fact without implying an unfinished task. The control
+          // value (`unassigned`) still keys off the real backend string.
+          const displayName = unassigned ? "No Client" : client.client;
           const isClientDrop = clientDropTarget === clientKey;
 
           const accent = unassigned
@@ -1490,7 +1495,7 @@ export default function CategorySummary({
                     "font-bold text-base truncate",
                     unassigned ? "text-slate-500" : "text-slate-900"
                   )}>
-                    {client.client}
+                    {displayName}
                   </span>
                   {isCollapsed ? (
                     <span className="text-xs text-slate-400 font-medium flex-shrink-0">

@@ -1,6 +1,5 @@
 const express = require('express');
 const path = require('path');
-
 const app = express();
 
 // Serve static files from dist folder
@@ -12,6 +11,15 @@ app.use(express.static(path.join(__dirname, 'dist'), {
     }
   }
 }));
+
+// Microsoft publisher domain verification — must come BEFORE the SPA fallback
+app.get('/.well-known/microsoft-identity-association.json', (req, res) => {
+  res.json({
+    associatedApplications: [
+      { applicationId: '1178d566-16f1-4c70-b30a-a046c5879688' }
+    ]
+  });
+});
 
 // SPA fallback - new Express 5 syntax for catch-all
 app.use((req, res) => {

@@ -3,19 +3,18 @@
  *
  * Renders the raw events backing a block, so users can see WHY the AI
  * (or mail/calendar matcher) is suggesting a different client. Mounted
- * inside the disagreement banner cards in CategorySummary, expanded by
- * the user via "Show details."
+ * inside the disagreement banner cards in CategorySummary, and inside the
+ * Categorize-tab BlockRow expansion, expanded by the user via "Show details."
  *
- * v0.1: adds a "Surrounding context" section for blocks with NO client —
- * shows the nearest attributed work before/after (with same-QuickBooks-
- * session detection) and a one-click assign. Helps the human attribute
- * nameless QuickBooks splash/modal blocks ("Preview Paycheck", the bare
- * product title) that the classifier correctly refused to guess on.
+ * v0.2: "Surrounding context" reworked into an honest memory-jogger. Shows a
+ * one-click assign ONLY for trustworthy cases (two-sided same client, or
+ * same-QuickBooks-session). Weaker cases show neutral facts ("right before you
+ * were on X") plus a day-dominant cue ("most of this day was Y"), never a
+ * misleading "Likely X". Helps the human attribute nameless QuickBooks
+ * splash/modal blocks the classifier correctly refused to guess on.
  *
  * Design language follows CategorySummary:
- *   - Same fmt() time formatter
  *   - Slate type scale, primary brand color for accents
- *   - Inset white card on a tinted parent (parent provides color)
  *   - Tabular nums for any time/count column
  */
 
@@ -23,7 +22,6 @@ import { useEffect, useState } from "react";
 import { Sparkles, Mail, CalendarClock, Target, Compass, ArrowRight, Check } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
-import { BlockEvidencePanel } from '@/components/BlockEvidencePanel';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api")
@@ -75,17 +73,9 @@ interface NeighborInfo {
 interface ContextSuggestion {
   client_id: number;
   client_name: string | null;
-  confidence: "high" | "medium" | "low";
+  confidence: "high" | "medium";
   reason: string;
 }
-
-interface Surrounding {
-  before: NeighborInfo | null;
-  after: NeighborInfo | null;
-  suggestion: ContextSuggestion | null;
-  day_dominant: DayDominant | null;   // ← new
-}
-
 
 interface DayDominant {
   client_id: number;
@@ -94,6 +84,12 @@ interface DayDominant {
   minutes: number;
 }
 
+interface Surrounding {
+  before: NeighborInfo | null;
+  after: NeighborInfo | null;
+  suggestion: ContextSuggestion | null;
+  day_dominant: DayDominant | null;
+}
 
 interface EvidenceResponse {
   block: {
@@ -135,20 +131,14 @@ function fmtDuration(seconds: number): string {
   return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
 }
 
-function fmtGap(seconds: number | null): string {
+function fmtGapHuman(seconds: number | null): string {
   if (seconds === null) return "";
   const m = Math.round(seconds / 60);
-  if (m < 1) return "<1 min";
-  return `${m} min`;
-}
-
-function fmtClock(iso: string | null): string {
-  if (!iso) return "";
-  try {
-    return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  } catch {
-    return "";
-  }
+  if (m < 1) return "less than a minute";
+  if (m === 1) return "1 minute";
+  if (m < 60) return `${m} minutes`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  return rm ? `${h}h ${rm}m` : `${h}h`;
 }
 
 // Bold the matched token inside the window title without breaking layout
@@ -187,47 +177,9 @@ function SignalIcon({ type }: { type: Signal["type"] }) {
   }
 }
 
-// ─── Surrounding context section ──────────────────────────────────────────────
 
-function NeighborLine({ side, info }: { side: "Before" | "After"; info: NeighborInfo | null }) {
-  if (!info) {
-    return (
-      <div className="flex items-baseline gap-2 text-[12px]">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-300 w-12 shrink-0">
-          {side}
-        </span>
-        <span className="text-slate-400 italic">no attributed work nearby</span>
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-baseline gap-2 text-[12px]">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 w-12 shrink-0">
-        {side}
-      </span>
-      <span className="font-semibold text-slate-700 truncate">{info.client_name}</span>
-      {info.same_qb_session && (
-        <span className="text-[9px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 border border-emerald-200 rounded px-1 shrink-0">
-          same QB
-        </span>
-      )}
-      <span className="text-slate-400 shrink-0 ml-auto tabular-nums">
-        {fmtClock(info.at)}{info.gap_seconds !== null && ` · ${fmtGap(info.gap_seconds)} gap`}
-      </span>
-    </div>
-  );
-}
+// ─── Surrounding context section (v0.2 — honest memory-jogger) ────────────────
 
-function fmtGapHuman(seconds: number | null): string {
-  if (seconds === null) return "";
-  const m = Math.round(seconds / 60);
-  if (m < 1) return "less than a minute";
-  if (m === 1) return "1 minute";
-  if (m < 60) return `${m} minutes`;
-  const h = Math.floor(m / 60), rm = m % 60;
-  return rm ? `${h}h ${rm}m` : `${h}h`;
-}
- 
 function NeighborFact({ side, info }: { side: "before" | "after"; info: NeighborInfo | null }) {
   const label = side === "before" ? "Right before" : "Right after";
   if (!info) {
@@ -251,7 +203,7 @@ function NeighborFact({ side, info }: { side: "before" | "after"; info: Neighbor
     </div>
   );
 }
- 
+
 function SurroundingContext({
   surrounding,
   onAssign,
@@ -263,18 +215,18 @@ function SurroundingContext({
 }) {
   const { before, after, suggestion, day_dominant } = surrounding;
   if (!before && !after && !day_dominant) return null;
- 
+
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 my-2">
       {/* Plain-English explanation of what this is */}
       <div className="flex items-start gap-1.5 mb-2">
         <Compass className="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
         <p className="text-[11px] text-slate-500 leading-snug">
-          We couldn’t automatically tell which client this block belongs to.
-          Here’s what you were doing around it — to help you remember.
+          We couldn&rsquo;t automatically tell which client this block belongs to.
+          Here&rsquo;s what you were doing around it &mdash; to help you remember.
         </p>
       </div>
- 
+
       {/* Trustworthy suggestion → offer a one-click assign */}
       {suggestion && suggestion.client_id && (
         <div className={cn(
@@ -285,7 +237,7 @@ function SurroundingContext({
         )}>
           <p className="text-[12px] leading-snug mb-1.5 text-slate-700">
             <span className="font-bold">Best guess: {suggestion.client_name}</span>
-            <span className="text-slate-600"> — {suggestion.reason}</span>
+            <span className="text-slate-600"> &mdash; {suggestion.reason}</span>
           </p>
           <button
             onClick={() => onAssign(suggestion.client_id, suggestion.client_name || "")}
@@ -294,18 +246,18 @@ function SurroundingContext({
                        bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 transition-colors"
           >
             {assigning
-              ? <><Check className="w-3 h-3" /> Assigning…</>
+              ? <><Check className="w-3 h-3" /> Assigning&hellip;</>
               : <>Assign to {suggestion.client_name} <ArrowRight className="w-3 h-3" /></>}
           </button>
         </div>
       )}
- 
+
       {/* Neutral before/after facts — always shown, never misleading */}
       <div className="mb-1">
         <NeighborFact side="before" info={before} />
         <NeighborFact side="after" info={after} />
       </div>
- 
+
       {/* Day-dominant cue — only present when one client owned the majority of the day */}
       {day_dominant && (
         <div className="mt-2 pt-2 border-t border-slate-200/70">
@@ -332,7 +284,7 @@ function SurroundingContext({
     </div>
   );
 }
- 
+
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -389,7 +341,7 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
   if (loading) {
     return (
       <div className="px-3 py-4 text-xs text-slate-400 italic">
-        Loading event details…
+        Loading event details&hellip;
       </div>
     );
   }
@@ -451,7 +403,7 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
                 <span className="font-mono text-slate-900 tabular-nums text-xs shrink-0">
                   {fmtDuration(info.duration_seconds)}
                   <span className="text-slate-400 ml-1.5">
-                    · {info.event_count} {info.event_count === 1 ? "event" : "events"}
+                    &middot; {info.event_count} {info.event_count === 1 ? "event" : "events"}
                   </span>
                 </span>
               </div>

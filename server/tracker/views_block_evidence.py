@@ -202,13 +202,31 @@ def _neighbor_payload(neighbor: Block, target: Block, side: str) -> Dict[str, An
     }
 
 
+# =============================================================================
+# Surrounding context (v0.2) — honest memory-jogger for nameless blocks
+# =============================================================================
+#
+# v0.2 changes (replaces the v0.1 _build_surrounding + _derive_context_suggestion):
+#   - Adds `day_dominant`: the client this user spent the most attributed time
+#     on THIS DAY, when one clearly dominates (>50% of attributed minutes). A
+#     strong memory cue: if 70% of the day was Sacred Heart, a nameless block
+#     probably is too.
+#   - Demotes the weak "one side, different app" case from a suggestion to
+#     neutral context. It no longer returns a `suggestion` (so the UI shows no
+#     "Likely X" / Assign button) — it just reports the facts and lets the human
+#     decide. Only high/medium tiers (two-sided agreement, same-QB-session,
+#     same-app) produce an actionable suggestion.
+#   - Suggestion `confidence` is now only 'high' or 'medium'. 'low' is gone;
+#     those cases return suggestion=None and rely on the context strip + the
+#     day_dominant jog.
+
+
 def _build_surrounding(block: Block) -> Optional[Dict[str, Any]]:
     """
-    Find nearest attributed blocks before/after `block` and derive a
-    read-only suggestion. Returns None when the block already has a client
-    (no help needed) or when there are no attributed neighbors at all.
+    Find nearest attributed blocks before/after `block`, the day's dominant
+    client, and derive a read-only suggestion. Returns None only when the block
+    already has a client OR there's genuinely nothing to show.
     """
-    # Block already attributed — context panel not needed.
     if block.client_id:
         return None
     if not block.start or not block.end:
@@ -217,7 +235,6 @@ def _build_surrounding(block: Block) -> Optional[Dict[str, Any]]:
     win_start = block.start - timezone.timedelta(seconds=_NEIGHBOR_WINDOW_SECONDS)
     win_end = block.end + timezone.timedelta(seconds=_NEIGHBOR_WINDOW_SECONDS)
 
-    # Nearest attributed block ending at/before this block starts.
     before = (
         Block.objects
         .filter(user=block.user, org=block.org,
@@ -228,7 +245,6 @@ def _build_surrounding(block: Block) -> Optional[Dict[str, Any]]:
         .order_by("-end")
         .first()
     )
-    # Nearest attributed block starting at/after this block ends.
     after = (
         Block.objects
         .filter(user=block.user, org=block.org,
@@ -240,18 +256,63 @@ def _build_surrounding(block: Block) -> Optional[Dict[str, Any]]:
         .first()
     )
 
-    if not before and not after:
+    day_dominant = _day_dominant_client(block)
+
+    # Show the panel if we have ANY of: a neighbor, or a dominant-day cue.
+    if not before and not after and not day_dominant:
         return None
 
     before_p = _neighbor_payload(before, block, "before") if before else None
     after_p = _neighbor_payload(after, block, "after") if after else None
-
     suggestion = _derive_context_suggestion(before_p, after_p)
 
     return {
         "before": before_p,
         "after": after_p,
-        "suggestion": suggestion,
+        "suggestion": suggestion,       # high/medium only, or None
+        "day_dominant": day_dominant,   # {client_id, client_name, pct, minutes} or None
+    }
+
+
+def _day_dominant_client(block: Block) -> Optional[Dict[str, Any]]:
+    """
+    The client this user spent the most attributed time on, on the same local
+    day as `block` — but only when it clears a majority (>50% of attributed
+    minutes). Returned as a gentle cue, never an auto-action.
+    """
+    from django.db.models import Sum
+    if not block.start:
+        return None
+
+    day = block.start.date()
+    rows = (
+        Block.objects
+        .filter(user=block.user, org=block.org,
+                client_id__isnull=False,
+                start__date=day)
+        .exclude(id=block.id)
+        .values("client_id", "client__name")
+        .annotate(total=Sum("minutes"))
+        .order_by("-total")
+    )
+    rows = list(rows)
+    if not rows:
+        return None
+
+    total_attributed = sum((r["total"] or 0) for r in rows)
+    if total_attributed <= 0:
+        return None
+
+    top = rows[0]
+    pct = (top["total"] or 0) / total_attributed
+    if pct <= 0.50:
+        return None  # no clear majority — not a useful cue
+
+    return {
+        "client_id": top["client_id"],
+        "client_name": top["client__name"],
+        "pct": round(pct * 100),
+        "minutes": int(top["total"] or 0),
     }
 
 
@@ -260,18 +321,13 @@ def _derive_context_suggestion(
     after: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """
-    Turn before/after neighbors into a single weighted suggestion.
+    Actionable suggestion ONLY for trustworthy cases. Returns None otherwise
+    (UI then shows neutral context + the day-dominant cue, no "Likely X").
 
-    Confidence tiers (advice only — UI offers, human confirms):
       high   — both sides agree on the same client
-      high   — one side, same QuickBooks session (e.g. QB splash → named QB file)
+      high   — one side, same QuickBooks session (QB splash/modal → named QB file)
       medium — one side, same app (non-QB)
-      low    — one side, different app  (weak; show context, soft suggest)
-      none   — sides disagree and neither is a same-app continuation
-
-    Same-app/same-QB continuity matters more than raw time proximity: a QB
-    block two minutes from a named QB file is far stronger evidence than an
-    Outlook block two minutes away.
+      (the old 'low' one-sided-different-app tier now returns None on purpose)
     """
     b_cid = before["client_id"] if before else None
     a_cid = after["client_id"] if after else None
@@ -284,27 +340,27 @@ def _derive_context_suggestion(
     if b_cid and a_cid and b_cid == a_cid:
         return _suggest(
             b_cid, before["client_name"], "high",
-            f"You were on {before['client_name']} both just before and just after this block.",
+            f"You were working on {before['client_name']} both right before and "
+            f"right after this block.",
         )
 
-    # Sides disagree: prefer a same-QB-session continuation if exactly one exists.
+    # Sides disagree: only a same-QB-session continuation is trustworthy.
     if b_cid and a_cid and b_cid != a_cid:
         qb_sides = [s for s in (before, after) if s and s["same_qb_session"]]
         if len(qb_sides) == 1:
             s = qb_sides[0]
             return _suggest(
-                s["client_id"], s["client_name"], "medium",
-                f"Same QuickBooks session as {s['client_name']} "
-                f"{'just after' if s is after else 'just before'} this block.",
+                s["client_id"], s["client_name"], "high",
+                f"This looks like the same QuickBooks session as "
+                f"{s['client_name']} {'right after' if s is after else 'right before'}.",
             )
-        # Genuine ambiguity — no confident pick. UI shows both, suggests nothing.
-        return None
+        return None  # genuine ambiguity
 
     # Exactly one side has a client.
     side = before if b_cid else after
     if not side:
         return None
-    where = "just before" if side is before else "just after"
+    where = "right before" if side is before else "right after"
 
     if side["same_qb_session"]:
         return _suggest(
@@ -314,12 +370,11 @@ def _derive_context_suggestion(
     if side["same_app"]:
         return _suggest(
             side["client_id"], side["client_name"], "medium",
-            f"Same application ({side['app_name']}) as {side['client_name']} {where}.",
+            f"Same program ({side['app_name']}) as {side['client_name']} {where}.",
         )
-    return _suggest(
-        side["client_id"], side["client_name"], "low",
-        f"{side['client_name']} was the nearest attributed work, {where} this block.",
-    )
+    # One side, different app → NOT a suggestion. Context strip will still show
+    # this neighbor as information; we just don't pretend it's a recommendation.
+    return None
 
 # =============================================================================
 # Endpoint

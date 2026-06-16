@@ -23,11 +23,13 @@ import { useEffect, useState } from "react";
 import { Sparkles, Mail, CalendarClock, Target, Compass, ArrowRight, Check } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
+import { BlockEvidencePanel } from '@/components/BlockEvidencePanel';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api")
   ? RAW_BASE
   : `${RAW_BASE.replace(/\/+$/, "")}/api`;
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,7 +83,17 @@ interface Surrounding {
   before: NeighborInfo | null;
   after: NeighborInfo | null;
   suggestion: ContextSuggestion | null;
+  day_dominant: DayDominant | null;   // ← new
 }
+
+
+interface DayDominant {
+  client_id: number;
+  client_name: string;
+  pct: number;
+  minutes: number;
+}
+
 
 interface EvidenceResponse {
   block: {
@@ -103,6 +115,7 @@ interface Props {
   // Optional: parent can refresh its list after a successful assign.
   onAssigned?: () => void;
 }
+
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
 
@@ -205,6 +218,40 @@ function NeighborLine({ side, info }: { side: "Before" | "After"; info: Neighbor
   );
 }
 
+function fmtGapHuman(seconds: number | null): string {
+  if (seconds === null) return "";
+  const m = Math.round(seconds / 60);
+  if (m < 1) return "less than a minute";
+  if (m === 1) return "1 minute";
+  if (m < 60) return `${m} minutes`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  return rm ? `${h}h ${rm}m` : `${h}h`;
+}
+ 
+function NeighborFact({ side, info }: { side: "before" | "after"; info: NeighborInfo | null }) {
+  const label = side === "before" ? "Right before" : "Right after";
+  if (!info) {
+    return (
+      <div className="flex gap-2 text-[12px] py-0.5">
+        <span className="text-slate-400 w-24 shrink-0">{label}</span>
+        <span className="text-slate-400 italic">nothing else tracked nearby</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex gap-2 text-[12px] py-0.5">
+      <span className="text-slate-500 w-24 shrink-0">{label}</span>
+      <span className="text-slate-700">
+        <span className="font-semibold">{info.client_name}</span>
+        {info.window_title ? <span className="text-slate-500"> — {info.window_title}</span> : null}
+        {info.gap_seconds !== null && (
+          <span className="text-slate-400"> ({fmtGapHuman(info.gap_seconds)} {side === "before" ? "earlier" : "later"})</span>
+        )}
+      </span>
+    </div>
+  );
+}
+ 
 function SurroundingContext({
   surrounding,
   onAssign,
@@ -214,57 +261,78 @@ function SurroundingContext({
   onAssign: (clientId: number, clientName: string) => void;
   assigning: boolean;
 }) {
-  const { before, after, suggestion } = surrounding;
-  if (!before && !after) return null;
-
-  const tierStyle = {
-    high:   "bg-emerald-50 border-emerald-200 text-emerald-800",
-    medium: "bg-amber-50 border-amber-200 text-amber-800",
-    low:    "bg-slate-50 border-slate-200 text-slate-600",
-  } as const;
-
+  const { before, after, suggestion, day_dominant } = surrounding;
+  if (!before && !after && !day_dominant) return null;
+ 
   return (
-    <div className="px-3 py-2.5 border-b border-slate-200/70">
-      <div className="flex items-center gap-1.5 mb-2">
-        <Compass className="w-3 h-3 text-slate-400" />
-        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-          Surrounding context
-        </span>
+    <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 my-2">
+      {/* Plain-English explanation of what this is */}
+      <div className="flex items-start gap-1.5 mb-2">
+        <Compass className="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
+        <p className="text-[11px] text-slate-500 leading-snug">
+          We couldn’t automatically tell which client this block belongs to.
+          Here’s what you were doing around it — to help you remember.
+        </p>
       </div>
-
-      <div className="space-y-1 mb-2">
-        <NeighborLine side="Before" info={before} />
-        <NeighborLine side="After" info={after} />
-      </div>
-
-      {suggestion && suggestion.client_id ? (
-        <div className={cn("rounded-lg border px-2.5 py-2 mt-2", tierStyle[suggestion.confidence])}>
-          <p className="text-[12px] leading-snug mb-2">
-            <span className="font-bold">Likely {suggestion.client_name}</span>
-            <span className="opacity-80"> — {suggestion.reason}</span>
+ 
+      {/* Trustworthy suggestion → offer a one-click assign */}
+      {suggestion && suggestion.client_id && (
+        <div className={cn(
+          "rounded-md border px-2.5 py-2 mb-2",
+          suggestion.confidence === "high"
+            ? "bg-emerald-50 border-emerald-200"
+            : "bg-amber-50 border-amber-200",
+        )}>
+          <p className="text-[12px] leading-snug mb-1.5 text-slate-700">
+            <span className="font-bold">Best guess: {suggestion.client_name}</span>
+            <span className="text-slate-600"> — {suggestion.reason}</span>
           </p>
           <button
             onClick={() => onAssign(suggestion.client_id, suggestion.client_name || "")}
             disabled={assigning}
-            className={cn(
-              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold transition-all",
-              "bg-white/70 hover:bg-white border border-current/20 disabled:opacity-50"
-            )}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold
+                       bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 transition-colors"
           >
             {assigning
               ? <><Check className="w-3 h-3" /> Assigning…</>
               : <>Assign to {suggestion.client_name} <ArrowRight className="w-3 h-3" /></>}
           </button>
         </div>
-      ) : (
-        <p className="text-[11px] text-slate-400 italic mt-1.5">
-          The work around this block points to different clients — no confident
-          suggestion. Use the context above to decide.
-        </p>
+      )}
+ 
+      {/* Neutral before/after facts — always shown, never misleading */}
+      <div className="mb-1">
+        <NeighborFact side="before" info={before} />
+        <NeighborFact side="after" info={after} />
+      </div>
+ 
+      {/* Day-dominant cue — only present when one client owned the majority of the day */}
+      {day_dominant && (
+        <div className="mt-2 pt-2 border-t border-slate-200/70">
+          <p className="text-[12px] text-slate-600 leading-snug">
+            <span className="text-slate-400">Most of this day </span>
+            (<span className="font-semibold tabular-nums">{day_dominant.pct}%</span>)
+            <span className="text-slate-400"> was spent on </span>
+            <span className="font-semibold text-slate-700">{day_dominant.client_name}</span>
+            <span className="text-slate-400">, if that helps narrow it down.</span>
+          </p>
+          {/* Only offer the day-dominant as a click if there was NO better suggestion */}
+          {!suggestion && (
+            <button
+              onClick={() => onAssign(day_dominant.client_id, day_dominant.client_name)}
+              disabled={assigning}
+              className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold
+                         bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+            >
+              Assign to {day_dominant.client_name} <ArrowRight className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
 }
+ 
 
 // ─── Component ────────────────────────────────────────────────────────────────
 

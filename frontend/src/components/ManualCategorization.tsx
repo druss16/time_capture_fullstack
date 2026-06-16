@@ -559,6 +559,7 @@ const ManualCategorization = ({ date, onComplete }: ManualCategorizationProps) =
               isSelected={selectedIds.has(block.id)}
               onToggleSelect={handleToggleSelect}
               onCategorize={categorizeBlock}
+              onRefresh={fetchCategorizationData}   // ← add this
             />
           ))}
         </div>

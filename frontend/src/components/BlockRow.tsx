@@ -28,6 +28,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
+import { BlockEvidencePanel } from '@/components/BlockEvidencePanel';
+
 interface Suggestion {
   client: string;
   category: string;
@@ -79,6 +81,7 @@ interface BlockRowProps {
     category: string,
     notes?: string,
   ) => Promise<any>;
+  onRefresh?: () => void;          // ← add this
 }
 
 // Categories that don't require a client to be set before confirming.
@@ -107,6 +110,7 @@ const BlockRow = ({
   isSelected,
   onToggleSelect,
   onCategorize,
+  onRefresh,                       // ← add this
 }: BlockRowProps) => {
   const topSuggestion = block.suggestions?.[0];
 
@@ -354,6 +358,18 @@ const BlockRow = ({
                   )}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* v1.3.63: surrounding-context advisor for no-client blocks (QB
+              nameless modals/splash). Shows the client open before/after with
+              one-click assign on confident cases. Hidden once a client is set. */}
+          {!block.current_client_id && (
+            <div
+              className="rounded-md border border-slate-200 overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <BlockEvidencePanel blockId={block.id} onAssigned={onRefresh} />
             </div>
           )}
 

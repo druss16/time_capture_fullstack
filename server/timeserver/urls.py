@@ -2,8 +2,16 @@ from django.contrib import admin
 from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt  # ← Add this
 from django.views.generic import TemplateView
+from django.http import JsonResponse
 from tracker import views as tracker_views
 from rest_framework.routers import DefaultRouter
+
+def ms_identity_association(request):
+    return JsonResponse({
+        "associatedApplications": [
+            {"applicationId": "1178d566-16f1-4c70-b30a-a046c5879688"}
+        ]
+    })
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -19,6 +27,8 @@ urlpatterns = [
     path("api/whoami/",      tracker_views.whoami,      name="whoami"),
     path('api/onboarding/', include('tracker.urls_onboarding')),
     path('api/billing/', include('tracker.urls_billing')),
+
+    path(".well-known/microsoft-identity-association.json", ms_identity_association),
 
     path('eula/', TemplateView.as_view(template_name='legal/eula.html'), name='eula'),
     path('privacy/', TemplateView.as_view(template_name='legal/privacy.html'), name='privacy'),

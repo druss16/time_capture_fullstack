@@ -1,5 +1,5 @@
 """
-Drop-in replacement for the watchdog + tracking loop heartbeat in main.py.
+In-process watchdog + tracking-loop heartbeat for the TimeTracker agent.
 
 THE PROBLEM WITH THE OLD WATCHDOG:
 - It only checked `tracking_thread.is_alive()`
@@ -9,7 +9,7 @@ THE PROBLEM WITH THE OLD WATCHDOG:
 - The _suspended gap check inside the loop never fires if the loop is blocked
   BEFORE reaching that check
 
-THE FIX (two complementary signals):
+THE FREEZE-DETECTION FIX (two complementary signals):
 - heartbeat_touch() / heartbeat_age(): catches win32 API freezes — the thread
   is blocked BEFORE progress_tick() even fires, so this is the first line of
   defense against hard freezes (GetForegroundWindow blocking after sleep, etc.)
@@ -17,18 +17,36 @@ THE FIX (two complementary signals):
   the thread is running but not making forward progress through the loop body
   (e.g. stuck in a tight retry loop, blocked on DB, etc.)
 
-Either signal alone triggers an os._exit(1) hard kill — Task Scheduler
-restarts the whole process cleanly.
+Either signal alone triggers a hard restart of the whole process.
+
+THE RESTART FIX (v1.5.x — self-relaunch):
+Previously every restart path called a bare `os._exit(1)` and relied on an
+EXTERNAL restarter (tt_watchdog.exe, or a logon scheduled task) to bring the
+agent back. That assumption can fail: the agent and tt_watchdog.exe are
+mutually dependent (the agent launches tt_watchdog at startup; tt_watchdog
+relaunches the agent). If a single sleep/wake event takes BOTH down at once,
+neither is left alive to restart the other, and the machine resumes into an
+already-logged-in session so the ONLOGON task never re-fires. Result: agent
+dead until the next interactive logon — observed once on a TL Wall machine
+that stayed dark for 4 days.
+
+The fix: before exiting, the agent spawns its OWN replacement. It no longer
+trusts any external restarter to be alive. The single-instance mutex in
+main() (with its self-relaunch retry window) guarantees we never end up with
+two live agents. A rate cap prevents fork storms if the agent freezes on
+startup repeatedly.
 
 INTEGRATION:
-Replace the existing watchdog() function and add heartbeat_touch() calls
-in the tracking loop. See comments marked "ADD" and "REPLACE" below.
+- Replace the existing watchdog() function with this one.
+- Keep calling heartbeat_touch() at the top of every tracking-loop iteration.
 """
 
 import os
+import sys
 import time
 import threading
 import traceback
+import subprocess
 
 # ── Heartbeat state (module-level so watchdog can read it) ──────────────────
 _heartbeat_lock = threading.Lock()
@@ -40,6 +58,7 @@ WATCHDOG_CHECK_INTERVAL   = 30    # How often watchdog checks
 WATCHDOG_GRACE_PERIOD     = 120   # Don't kill during first 2min of startup
 
 _watchdog_stop = threading.Event()
+
 
 def heartbeat_touch():
     """
@@ -59,9 +78,90 @@ def heartbeat_age() -> float:
         return time.time() - _last_heartbeat
 
 
+# ── Self-relaunch (v1.5.x) ──────────────────────────────────────────────────
+# Track relaunch timestamps so a freeze-on-startup loop can't fork-bomb.
+_relaunch_times = []
+_RELAUNCH_WINDOW_S = 600   # 10 minutes
+_RELAUNCH_MAX = 3          # max relaunches per window before giving up
+
+
+def _self_relaunch_then_exit(log_fn, trigger):
+    """
+    Spawn a fresh agent process, then hard-exit this one.
+
+    Why spawn-before-exit instead of bare os._exit(1):
+      The old code trusted tt_watchdog.exe or a logon task to restart us.
+      Both can be dead simultaneously after a sleep/wake event, leaving
+      nothing to bring the agent back. Spawning our own replacement makes
+      the agent its own anchor — on startup run_agent() also re-launches
+      tt_watchdog.exe, so both keep-alive layers get rebuilt.
+
+    Safety:
+      - Frozen-only: in dev (unfrozen), sys.executable is python.exe, not the
+        agent exe, so we must NOT spawn it with a "start" arg. Just exit.
+      - Rate-capped: if we've relaunched _RELAUNCH_MAX times within
+        _RELAUNCH_WINDOW_S, stop relaunching and stay down. A persistent
+        startup freeze should surface via server-side staleness alerting
+        rather than spin forever.
+      - Mutex-safe: the spawned child hits main()'s CreateMutexW. Because this
+        parent is still alive for ~the Popen call, the child may briefly see
+        ERROR_ALREADY_EXISTS — main() retries the mutex for ~5s to cover this
+        handoff window, so the child wins the lock as soon as we exit.
+    """
+    # Dev mode: sys.executable is the interpreter, not the frozen agent.
+    # Spawning [python.exe, "start"] would do the wrong thing. Just exit.
+    if not getattr(sys, 'frozen', False):
+        log_fn(f"[WATCHDOG] dev mode — exiting without self-relaunch ({trigger})")
+        os._exit(1)
+
+    now = time.time()
+    # Drop relaunch timestamps older than the window.
+    while _relaunch_times and now - _relaunch_times[0] > _RELAUNCH_WINDOW_S:
+        _relaunch_times.pop(0)
+
+    if len(_relaunch_times) >= _RELAUNCH_MAX:
+        log_fn(
+            f"[WATCHDOG] 🛑 {_RELAUNCH_MAX} relaunches within "
+            f"{_RELAUNCH_WINDOW_S // 60} min — NOT relaunching, staying down "
+            f"({trigger}). Staleness alerting should surface this."
+        )
+        os._exit(1)
+
+    _relaunch_times.append(now)
+
+    try:
+        # sys.executable is the frozen agent exe (this thread runs inside the
+        # agent process). main() routes the "start" arg → run_agent().
+        subprocess.Popen(
+            [sys.executable, "start"],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
+        log_fn(f"[WATCHDOG] ↻ self-relaunched before exit ({trigger})")
+    except Exception as e:
+        log_fn(f"[WATCHDOG] self-relaunch FAILED ({trigger}): {e}")
+
+    # Give the child a moment to start coming up before we release the mutex
+    # by exiting. main()'s mutex retry covers the rest of the handoff window.
+    time.sleep(1)
+    os._exit(1)
+
+
+def _ship_logs_safe(trigger):
+    """Best-effort log ship before restart. Never blocks the restart path."""
+    try:
+        from main import ship_logs_to_backend
+        ship_logs_to_backend(tail_lines=200, trigger=trigger)
+        time.sleep(2)
+    except Exception:
+        pass
+
+
 def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_fn=None):
     """
-    Bulletproof watchdog. Detects BOTH dead threads AND frozen threads.
+    Bulletproof watchdog. Detects BOTH dead threads AND frozen threads,
+    and self-relaunches the agent before exiting so recovery never depends
+    on an external restarter being alive.
 
     Two frozen-detection signals:
       1. heartbeat_age() > WATCHDOG_FROZEN_THRESHOLD
@@ -119,13 +219,8 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
                     report_error_fn("watchdog_dead", "Tracking thread died", "")
                 except Exception:
                     pass
-            try:
-                from main import ship_logs_to_backend
-                ship_logs_to_backend(tail_lines=200, trigger="watchdog_dead")
-                time.sleep(2)
-            except Exception:
-                pass
-            os._exit(1)  # Task Scheduler / startup task restarts us
+            _ship_logs_safe("watchdog_dead")
+            _self_relaunch_then_exit(log_fn, "dead")
 
         # ── Case 2: Thread alive but frozen (heartbeat OR progress timeout) ──
         # Signal 1: heartbeat_age — hard freeze (win32 API blocking)
@@ -157,14 +252,8 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
                 except Exception:
                     pass
 
-            try:
-                from main import ship_logs_to_backend
-                ship_logs_to_backend(tail_lines=200, trigger="watchdog_frozen")
-                time.sleep(2)
-            except Exception:
-                pass
-
-            os._exit(1)  # Hard kill — clean restart
+            _ship_logs_safe("watchdog_frozen")
+            _self_relaunch_then_exit(log_fn, "frozen")
 
         # ── Case 3: GUI thread hung — force restart ────────────────────────
         try:
@@ -172,7 +261,8 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
             if gui_menu_bar and hasattr(gui_menu_bar, 'icon'):
                 if gui_menu_bar.icon is None:
                     log_fn("[WATCHDOG] ⚠️ GUI icon is None — forcing restart")
-                    os._exit(1)
+                    _ship_logs_safe("watchdog_gui")
+                    _self_relaunch_then_exit(log_fn, "gui")
         except Exception:
             pass
 

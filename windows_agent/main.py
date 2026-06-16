@@ -31,6 +31,7 @@ import uuid
 import getpass
 import ctypes
 import traceback
+import traceback as _diag_traceback
 import logging
 import socket
 from logging.handlers import RotatingFileHandler
@@ -3472,10 +3473,23 @@ def main():
             last_error = ctypes.windll.kernel32.GetLastError()
 
         if last_error == 183:  # ERROR_ALREADY_EXISTS
-            print("[AGENT] Another instance is already running — exiting.")
-            ctypes.windll.kernel32.CloseHandle(_lock_mutex)
-            _lock_mutex = None
-            sys.exit(0)
+            # Could be a self-relaunch where the old process is still exiting
+            # and hasn't released the mutex yet. Retry briefly before giving up.
+            _got_it = False
+            for _ in range(10):  # ~5s
+                time.sleep(0.5)
+                ctypes.windll.kernel32.CloseHandle(_lock_mutex)
+                _lock_mutex = ctypes.windll.kernel32.CreateMutexW(
+                    None, True, "Global\\TimeTrackerAgent_MavOps"
+                )
+                if ctypes.windll.kernel32.GetLastError() != 183:
+                    _got_it = True
+                    break
+            if not _got_it:
+                print("[AGENT] Another instance is already running — exiting.")
+                ctypes.windll.kernel32.CloseHandle(_lock_mutex)
+                _lock_mutex = None
+                sys.exit(0)
 
         if not _lock_mutex:
             print("[AGENT] ⚠️ Failed to create mutex — proceeding without lock")

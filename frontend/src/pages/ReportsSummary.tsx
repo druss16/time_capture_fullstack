@@ -81,7 +81,7 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "quarter", label: "Quarter" },
 ];
 
-type SortKey = keyof Pick
+type SortKey = keyof Pick<
   SummaryRow,
   "label" | "total_hours" | "billable_hours" | "non_billable_hours" | "uncategorized_hours" | "utilization_pct"
 >;

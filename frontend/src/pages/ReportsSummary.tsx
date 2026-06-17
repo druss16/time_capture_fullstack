@@ -102,7 +102,7 @@ export default function ReportsSummary({
     try {
       const token = getAuthToken();
       const res = await fetch(
-        `${API_BASE}/api/reports/summary/?${buildParams()}`,
+        `${API_BASE}/reports/summary/?${buildParams()}`,
         {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           credentials: "include",

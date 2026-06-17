@@ -126,7 +126,7 @@ export default function ReportsSummary({
 
   const handleExport = useCallback(() => {
     const token = getAuthToken();
-    const url = `${API_BASE}/api/reports/summary/export/?${buildParams()}`;
+    const url = `${API_BASE}/reports/summary/export/?${buildParams()}`;
     // Token in querystring isn't used here — export relies on session cookie
     // via credentials. For token-only clients, fetch+blob instead:
     fetch(url, {

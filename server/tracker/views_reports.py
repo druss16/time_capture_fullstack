@@ -425,11 +425,21 @@ def reports_summary(request):
 
     # Merge uncategorized minutes onto each row, and surface rows that have
     # ONLY uncategorized time (no committed time yet) so they don't vanish.
+    # Uncategorized is now ADDED INTO total_hours (Total = committed + uncat).
+    # Utilization stays billable ÷ total, so adding uncategorized to total
+    # correctly drags utilization down until that time is reviewed.
     seen_keys = set()
     for row in summary["rows"]:
         key = (row["id"] if group_by == "employee" else (row["id"] or "unassigned"))
         seen_keys.add(key)
-        row["uncategorized_hours"] = round(uncat_by_group.get(key, 0) / 60, 2)
+        uncat_h = round(uncat_by_group.get(key, 0) / 60, 2)
+        row["uncategorized_hours"] = uncat_h
+        row["total_hours"] = round(row["total_hours"] + uncat_h, 2)
+        # Recompute utilization against the new (larger) total.
+        row["utilization_pct"] = (
+            round(100 * row["billable_hours"] / row["total_hours"], 1)
+            if row["total_hours"] else 0.0
+        )
 
     for key, mins in uncat_by_group.items():
         if key in seen_keys:
@@ -444,19 +454,31 @@ def reports_summary(request):
                 else:
                     label = b.client.name if b.client_id else "Unassigned"
                 break
+        uncat_h = round(mins / 60, 2)
         summary["rows"].append({
             "id": None if key == "unassigned" else key,
             "label": label or "Unknown",
-            "total_hours": 0.0,
+            "total_hours": uncat_h,           # all of this row's time is uncategorized
             "billable_hours": 0.0,
             "non_billable_hours": 0.0,
             "utilization_pct": 0.0,
             "top_client": None,
             "block_count": 0,
-            "uncategorized_hours": round(mins / 60, 2),
+            "uncategorized_hours": uncat_h,
         })
 
+    # Re-sort: rows may have changed total_hours, and new rows were appended.
+    summary["rows"].sort(key=lambda r: r["total_hours"], reverse=True)
+
+    # Totals: fold uncategorized into the headline total + recompute utilization.
     summary["totals"]["uncategorized_hours"] = round(total_uncat_min / 60, 2)
+    summary["totals"]["total_hours"] = round(
+        summary["totals"]["total_hours"] + (total_uncat_min / 60), 2
+    )
+    summary["totals"]["utilization_pct"] = (
+        round(100 * summary["totals"]["billable_hours"] / summary["totals"]["total_hours"], 1)
+        if summary["totals"]["total_hours"] else 0.0
+    )
 
     # timeseries from a fresh queryset (Trunc needs a queryset, not a list)
     ts_qs = _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id)
@@ -521,7 +543,13 @@ def reports_summary_export(request):
     total_uncat_min, uncat_by_group = _uncategorized_by_group(uncat_blocks, group_by)
     for r in summary["rows"]:
         key = (r["id"] if group_by == "employee" else (r["id"] or "unassigned"))
-        r["uncategorized_hours"] = round(uncat_by_group.get(key, 0) / 60, 2)
+        uncat_h = round(uncat_by_group.get(key, 0) / 60, 2)
+        r["uncategorized_hours"] = uncat_h
+        r["total_hours"] = round(r["total_hours"] + uncat_h, 2)
+        r["utilization_pct"] = (
+            round(100 * r["billable_hours"] / r["total_hours"], 1)
+            if r["total_hours"] else 0.0
+        )
 
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -551,10 +579,15 @@ def reports_summary_export(request):
 
     writer.writerow([])
     t = summary["totals"]
+    grand_total_h = round(t["total_hours"] + (total_uncat_min / 60), 2)
+    grand_util = (
+        round(100 * t["billable_hours"] / grand_total_h, 1)
+        if grand_total_h else 0.0
+    )
     writer.writerow([
-        "TOTAL", t["total_hours"], t["billable_hours"],
+        "TOTAL", grand_total_h, t["billable_hours"],
         t["non_billable_hours"], round(total_uncat_min / 60, 2),
-        t["utilization_pct"],
+        grand_util,
     ])
 
     resp = HttpResponse(buf.getvalue(), content_type="text/csv")

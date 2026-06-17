@@ -174,13 +174,14 @@ def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id,
             Q(classification_state="committed") | Q(is_categorized=True)
         )
     else:
-        # Everything NOT yet committed/categorized: the review pile.
-        # Exclude suppressed blocks — the classifier already decided those
-        # are meaningless (shell windows, transient dialogs) and they should
-        # never count as "needs categorizing."
-        qs = qs.exclude(
-            Q(classification_state="committed") | Q(is_categorized=True)
-        ).exclude(classification_state="suppressed")
+        # The review pile — match get_categorization_data() EXACTLY so the
+        # report's Uncategorized number agrees with the Categorize tab badge.
+        # That endpoint uses is_categorized=False (not a state-machine check),
+        # excluding only suppressed blocks. Proposed/captured blocks the AI
+        # hasn't had confirmed are is_categorized=False, so they count here.
+        qs = qs.filter(is_categorized=False).exclude(
+            classification_state="suppressed"
+        )
 
     if not can_see_all and forced_user_id:
         qs = qs.filter(user_id=forced_user_id)
@@ -190,10 +191,13 @@ def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id,
 
 def _uncategorized_by_group(blocks, group_by: str):
     """
-    Tally uncommitted (captured/proposed) minutes per group key + the overall
-    total. Kept deliberately simple — just minutes, no billable split, since
-    these blocks aren't confirmed yet. Idle/uncategorized-category noise is
-    skipped so the number reflects real work awaiting review.
+    Tally uncommitted minutes per group key + the overall total. These are
+    blocks the agent captured but nobody has confirmed (is_categorized=False).
+
+    We skip only genuine *idle* blocks (the agent's idle/AFK sentinels) — NOT
+    blocks that merely lack a category. A block with no category yet IS the
+    thing we're counting, so excluding it (as the committed aggregation does
+    via _EXCLUDE_CATEGORIES) would zero out the very number we want.
 
     Returns: (total_uncat_min: int, {group_key: minutes})
     """
@@ -203,8 +207,11 @@ def _uncategorized_by_group(blocks, group_by: str):
         minutes = b.minutes or 0
         if minutes <= 0:
             continue
+        # Skip only true idle — match _is_idle semantics, not category text.
         cat = _dominant_category(b).lower()
-        if cat in _EXCLUDE_CATEGORIES:
+        if cat == "idle":
+            continue
+        if (b.bundle_id or "").lower() == "__idle__":
             continue
         key = (b.user_id if group_by == "employee" else (b.client_id or "unassigned"))
         per_group[key] += minutes

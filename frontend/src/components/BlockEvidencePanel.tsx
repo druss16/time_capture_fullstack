@@ -322,12 +322,13 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
   const handleAssign = async (clientId: number, clientName: string) => {
     setAssigning(true);
     try {
-      // Reuse the existing recategorize endpoint. Category left undefined so
-      // the backend keeps/derives it; the point here is client attribution.
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ client_id: clientId }),
+        body: JSON.stringify({
+          client_id: clientId,
+          category: "Accounting/Bookkeeping",   // QB work default; user can edit after
+        }),
       });
       setAssignedTo(clientName);
       if (onAssigned) onAssigned();

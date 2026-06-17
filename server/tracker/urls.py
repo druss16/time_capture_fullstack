@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -470,5 +470,8 @@ urlpatterns = [
     path("analytics/saved-views/<int:view_id>/",
          views_analytics_v2.saved_view_detail,
          name="analytics_v2_saved_view_detail"),
+
+    path("reports/summary/", views_reports.reports_summary),
+    path("reports/summary/export/", views_reports.reports_summary_export),
 
 ]

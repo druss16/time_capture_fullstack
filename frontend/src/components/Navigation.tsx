@@ -17,6 +17,7 @@ import {
   Building2,
   Download,
   BarChart2,
+  PieChart,
 } from 'lucide-react';
 import { safeFetchJson, API_BASE } from "@/lib/api";
 import { cn, getRoleColor } from "@/lib/design-system";
@@ -101,6 +102,7 @@ export default function Navigation() {
   const navItems = [
     { path: '/daily',     label: 'Daily Review', icon: Calendar,  show: true                },
     { path: '/billing',   label: 'Billing',       icon: Receipt,   show: true                },
+    { path: '/reports',   label: 'Reports',       icon: PieChart,  show: true                },
     { path: '/analytics', label: 'Analytics',     icon: BarChart2, show: canAccessAnalytics  },
     { path: '/settings',  label: 'Settings',      icon: Settings,  show: canAccessSettings   },
   ].filter(item => item.show);

@@ -19,7 +19,10 @@ import {
   BarChart2,
   PieChart,
 } from 'lucide-react';
-import { safeFetchJson, API_BASE } from "@/lib/api";
+const json = await safeFetchJson(
+  `${API_BASE}/reports/summary/?${buildParams()}`
+);
+setData(json);
 import { cn, getRoleColor } from "@/lib/design-system";
 
 interface UserInfo {

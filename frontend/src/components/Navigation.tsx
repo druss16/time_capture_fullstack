@@ -20,7 +20,6 @@ import {
   PieChart,
 } from 'lucide-react';
 
-setData(json);
 import { cn, getRoleColor } from "@/lib/design-system";
 
 interface UserInfo {

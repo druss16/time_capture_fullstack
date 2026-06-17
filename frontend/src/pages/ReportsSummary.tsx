@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle, AlertCircle,
 } from "lucide-react";
+import { safeFetchJson, API_BASE } from "@/lib/api";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -29,7 +30,15 @@ function getAuthToken(): string | null {
   );
 }
 
-import { safeFetchJson, API_BASE } from "@/lib/api";
+// Format decimal hours as "1h 18m" / "27m" / "2h". Display-only — the raw
+// numeric value is still used for sorting, so this doesn't affect ordering.
+function fmtHours(hours: number | undefined): string {
+  const totalMin = Math.round((hours || 0) * 60);
+  if (totalMin < 60) return `${totalMin}m`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
 
 type Period = "day" | "week" | "month" | "quarter";
 type GroupBy = "employee" | "client";
@@ -72,7 +81,7 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "quarter", label: "Quarter" },
 ];
 
-type SortKey = keyof Pick<
+type SortKey = keyof Pick
   SummaryRow,
   "label" | "total_hours" | "billable_hours" | "non_billable_hours" | "uncategorized_hours" | "utilization_pct"
 >;
@@ -226,21 +235,21 @@ export default function ReportsSummary({
           <KPICard
             icon={<Briefcase className="h-4 w-4" />}
             label="Billable Hours"
-            value={`${data.totals.billable_hours}h`}
+            value={fmtHours(data.totals.billable_hours)}
             accent="blue"
             sub="Surfaced this period"
           />
           <KPICard
             icon={<Clock className="h-4 w-4" />}
             label="Total Captured"
-            value={`${data.totals.total_hours}h`}
+            value={fmtHours(data.totals.total_hours)}
             accent="slate"
             sub="Confirmed only"
           />
           <KPICard
             icon={<AlertCircle className="h-4 w-4" />}
             label="Uncategorized"
-            value={`${data.totals.uncategorized_hours || 0}h`}
+            value={fmtHours(data.totals.uncategorized_hours)}
             accent="amber"
             sub="Needs review"
           />
@@ -249,7 +258,7 @@ export default function ReportsSummary({
             label="Active Clients"
             value={`${data.totals.active_clients}`}
             accent="violet"
-            sub={`${data.totals.non_billable_hours}h non-billable`}
+            sub={`${fmtHours(data.totals.non_billable_hours)} non-billable`}
           />
         </div>
       )}
@@ -330,13 +339,13 @@ export default function ReportsSummary({
               {sortedRows.map((r) => (
                 <tr key={`${r.id}-${r.label}`} className="hover:bg-slate-50/60">
                   <td className="px-4 py-2.5 font-medium text-slate-800">{r.label}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{r.total_hours}h</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700">{r.billable_hours}h</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-400">{r.non_billable_hours}h</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{fmtHours(r.total_hours)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700">{fmtHours(r.billable_hours)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-400">{fmtHours(r.non_billable_hours)}</td>
                   <td className={
                     "px-4 py-2.5 text-right tabular-nums " +
                     ((r.uncategorized_hours || 0) > 0 ? "text-amber-600 font-medium" : "text-slate-300")
-                  }>{r.uncategorized_hours || 0}h</td>
+                  }>{fmtHours(r.uncategorized_hours)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{r.utilization_pct}%</td>
                   {groupBy === "employee" && (
                     <td className="px-4 py-2.5 text-slate-500 text-xs">{r.top_client || "—"}</td>

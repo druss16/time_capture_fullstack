@@ -29,7 +29,7 @@ function getAuthToken(): string | null {
   );
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE || "";
+import { safeFetchJson, API_BASE } from "@/lib/api";
 
 type Period = "day" | "week" | "month" | "quarter";
 type GroupBy = "employee" | "client";

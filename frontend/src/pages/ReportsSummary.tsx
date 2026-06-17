@@ -16,10 +16,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle,
+  Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle, AlertCircle,
 } from "lucide-react";
-
-import { safeFetchJson, API_BASE } from "@/lib/api";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -31,6 +29,8 @@ function getAuthToken(): string | null {
   );
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE || "";
+
 type Period = "day" | "week" | "month" | "quarter";
 type GroupBy = "employee" | "client";
 
@@ -40,6 +40,7 @@ interface SummaryRow {
   total_hours: number;
   billable_hours: number;
   non_billable_hours: number;
+  uncategorized_hours?: number;
   utilization_pct: number;
   top_client: string | null;
   block_count: number;
@@ -56,6 +57,7 @@ interface SummaryResponse {
     total_hours: number;
     billable_hours: number;
     non_billable_hours: number;
+    uncategorized_hours?: number;
     utilization_pct: number;
     active_clients: number;
   };
@@ -72,7 +74,7 @@ const PERIODS: { key: Period; label: string }[] = [
 
 type SortKey = keyof Pick<
   SummaryRow,
-  "label" | "total_hours" | "billable_hours" | "non_billable_hours" | "utilization_pct"
+  "label" | "total_hours" | "billable_hours" | "non_billable_hours" | "uncategorized_hours" | "utilization_pct"
 >;
 
 export default function ReportsSummary({
@@ -98,10 +100,19 @@ export default function ReportsSummary({
     setLoading(true);
     setError(null);
     try {
-      const json = await safeFetchJson(
-        `${API_BASE}/reports/summary/?${buildParams()}`
+      const token = getAuthToken();
+      const res = await fetch(
+        `${API_BASE}/api/reports/summary/?${buildParams()}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          credentials: "include",
+        }
       );
-      setData(json);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Request failed (${res.status})`);
+      }
+      setData(await res.json());
     } catch (e: any) {
       setError(e.message || "Failed to load report");
     } finally {
@@ -115,7 +126,7 @@ export default function ReportsSummary({
 
   const handleExport = useCallback(() => {
     const token = getAuthToken();
-    const url = `${API_BASE}/reports/summary/export/?${buildParams()}`;
+    const url = `${API_BASE}/api/reports/summary/export/?${buildParams()}`;
     // Token in querystring isn't used here — export relies on session cookie
     // via credentials. For token-only clients, fetch+blob instead:
     fetch(url, {
@@ -144,7 +155,7 @@ export default function ReportsSummary({
       if (typeof av === "string" && typeof bv === "string") {
         cmp = av.localeCompare(bv);
       } else {
-        cmp = (av as number) - (bv as number);
+        cmp = ((av as number) || 0) - ((bv as number) || 0);
       }
       return sortDir === "asc" ? cmp : -cmp;
     });
@@ -204,7 +215,7 @@ export default function ReportsSummary({
 
       {/* KPI strip */}
       {data && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <KPICard
             icon={<TrendingUp className="h-4 w-4" />}
             label="Utilization"
@@ -224,7 +235,14 @@ export default function ReportsSummary({
             label="Total Captured"
             value={`${data.totals.total_hours}h`}
             accent="slate"
-            sub="Auto-tracked"
+            sub="Confirmed only"
+          />
+          <KPICard
+            icon={<AlertCircle className="h-4 w-4" />}
+            label="Uncategorized"
+            value={`${data.totals.uncategorized_hours || 0}h`}
+            accent="amber"
+            sub="Needs review"
           />
           <KPICard
             icon={<Users className="h-4 w-4" />}
@@ -288,6 +306,9 @@ export default function ReportsSummary({
                 <Th onClick={() => toggleSort("non_billable_hours")} active={sortKey === "non_billable_hours"} dir={sortDir} right>
                   Non-Bill
                 </Th>
+                <Th onClick={() => toggleSort("uncategorized_hours")} active={sortKey === "uncategorized_hours"} dir={sortDir} right>
+                  Uncategorized
+                </Th>
                 <Th onClick={() => toggleSort("utilization_pct")} active={sortKey === "utilization_pct"} dir={sortDir} right>
                   Util %
                 </Th>
@@ -301,7 +322,7 @@ export default function ReportsSummary({
             <tbody className="divide-y divide-slate-100">
               {sortedRows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">
+                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-400">
                     No committed time in this period yet.
                   </td>
                 </tr>
@@ -312,6 +333,10 @@ export default function ReportsSummary({
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{r.total_hours}h</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700">{r.billable_hours}h</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-400">{r.non_billable_hours}h</td>
+                  <td className={
+                    "px-4 py-2.5 text-right tabular-nums " +
+                    ((r.uncategorized_hours || 0) > 0 ? "text-amber-600 font-medium" : "text-slate-300")
+                  }>{r.uncategorized_hours || 0}h</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{r.utilization_pct}%</td>
                   {groupBy === "employee" && (
                     <td className="px-4 py-2.5 text-slate-500 text-xs">{r.top_client || "—"}</td>
@@ -334,13 +359,14 @@ function KPICard({
   label: string;
   value: string;
   sub?: string;
-  accent: "emerald" | "blue" | "slate" | "violet";
+  accent: "emerald" | "blue" | "slate" | "violet" | "amber";
 }) {
   const accentMap: Record<string, string> = {
     emerald: "text-emerald-600 bg-emerald-50",
     blue: "text-blue-600 bg-blue-50",
     slate: "text-slate-600 bg-slate-100",
     violet: "text-violet-600 bg-violet-50",
+    amber: "text-amber-600 bg-amber-50",
   };
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">

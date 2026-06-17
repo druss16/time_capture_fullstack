@@ -148,13 +148,19 @@ def _resolve_scope(request, org):
 # ──────────────────────────────────────────────────────────────────────────
 # Core aggregation
 # ──────────────────────────────────────────────────────────────────────────
-def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id):
+def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id,
+                    committed_only=True):
     """
-    Committed, non-deleted blocks for the org in the window.
+    Non-deleted blocks for the org in the window.
 
-    We intentionally read committed blocks (state machine) so reports reflect
-    confirmed time, not in-flight proposals. Mobile manual entries are
-    is_categorized=True/committed too, so they're included naturally.
+    committed_only=True (default): only confirmed time (state machine
+    'committed', with is_categorized fallback for legacy rows). This is what
+    the totals/rows/timeseries read — reports reflect confirmed time, not
+    in-flight proposals. Mobile manual entries are committed too.
+
+    committed_only=False: the inverse — captured/proposed blocks the agent
+    tracked but nobody has confirmed yet. Used to tally the "uncategorized"
+    (still-needs-review) column, kept separate from Total.
     """
     qs = Block.objects.filter(
         org=org,
@@ -163,16 +169,47 @@ def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id):
         start__lt=end_utc,
     )
 
-    # Committed only. Fall back to is_categorized for any legacy rows that
-    # predate the state machine but were categorized.
-    qs = qs.filter(
-        Q(classification_state="committed") | Q(is_categorized=True)
-    )
+    if committed_only:
+        qs = qs.filter(
+            Q(classification_state="committed") | Q(is_categorized=True)
+        )
+    else:
+        # Everything NOT yet committed/categorized: the review pile.
+        # Exclude suppressed blocks — the classifier already decided those
+        # are meaningless (shell windows, transient dialogs) and they should
+        # never count as "needs categorizing."
+        qs = qs.exclude(
+            Q(classification_state="committed") | Q(is_categorized=True)
+        ).exclude(classification_state="suppressed")
 
     if not can_see_all and forced_user_id:
         qs = qs.filter(user_id=forced_user_id)
 
     return qs.select_related("client", "user")
+
+
+def _uncategorized_by_group(blocks, group_by: str):
+    """
+    Tally uncommitted (captured/proposed) minutes per group key + the overall
+    total. Kept deliberately simple — just minutes, no billable split, since
+    these blocks aren't confirmed yet. Idle/uncategorized-category noise is
+    skipped so the number reflects real work awaiting review.
+
+    Returns: (total_uncat_min: int, {group_key: minutes})
+    """
+    per_group: dict = defaultdict(int)
+    total = 0
+    for b in blocks:
+        minutes = b.minutes or 0
+        if minutes <= 0:
+            continue
+        cat = _dominant_category(b).lower()
+        if cat in _EXCLUDE_CATEGORIES:
+            continue
+        key = (b.user_id if group_by == "employee" else (b.client_id or "unassigned"))
+        per_group[key] += minutes
+        total += minutes
+    return total, per_group
 
 
 def _is_billable_block(block) -> bool:
@@ -376,6 +413,51 @@ def reports_summary(request):
 
     summary = _aggregate(blocks, group_by)
 
+    # Uncategorized (still-needs-review) tally — a separate fetch of the
+    # uncommitted blocks, kept OUT of Total so Total stays "confirmed time."
+    uncat_blocks = list(
+        _block_queryset(
+            org, start_utc, end_utc, can_see_all, forced_user_id,
+            committed_only=False,
+        )
+    )
+    total_uncat_min, uncat_by_group = _uncategorized_by_group(uncat_blocks, group_by)
+
+    # Merge uncategorized minutes onto each row, and surface rows that have
+    # ONLY uncategorized time (no committed time yet) so they don't vanish.
+    seen_keys = set()
+    for row in summary["rows"]:
+        key = (row["id"] if group_by == "employee" else (row["id"] or "unassigned"))
+        seen_keys.add(key)
+        row["uncategorized_hours"] = round(uncat_by_group.get(key, 0) / 60, 2)
+
+    for key, mins in uncat_by_group.items():
+        if key in seen_keys:
+            continue
+        # Row exists only in the uncategorized set — build a minimal row.
+        label = None
+        for b in uncat_blocks:
+            bkey = (b.user_id if group_by == "employee" else (b.client_id or "unassigned"))
+            if bkey == key:
+                if group_by == "employee":
+                    label = (b.user.get_full_name().strip() or b.user.username) if b.user_id else "Unknown"
+                else:
+                    label = b.client.name if b.client_id else "Unassigned"
+                break
+        summary["rows"].append({
+            "id": None if key == "unassigned" else key,
+            "label": label or "Unknown",
+            "total_hours": 0.0,
+            "billable_hours": 0.0,
+            "non_billable_hours": 0.0,
+            "utilization_pct": 0.0,
+            "top_client": None,
+            "block_count": 0,
+            "uncategorized_hours": round(mins / 60, 2),
+        })
+
+    summary["totals"]["uncategorized_hours"] = round(total_uncat_min / 60, 2)
+
     # timeseries from a fresh queryset (Trunc needs a queryset, not a list)
     ts_qs = _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id)
     ts_qs = ts_qs.filter(minutes__gt=0)
@@ -429,6 +511,18 @@ def reports_summary_export(request):
     )
     summary = _aggregate(blocks, group_by)
 
+    # Uncategorized tally (same logic as the JSON endpoint)
+    uncat_blocks = list(
+        _block_queryset(
+            org, start_utc, end_utc, can_see_all, forced_user_id,
+            committed_only=False,
+        )
+    )
+    total_uncat_min, uncat_by_group = _uncategorized_by_group(uncat_blocks, group_by)
+    for r in summary["rows"]:
+        key = (r["id"] if group_by == "employee" else (r["id"] or "unassigned"))
+        r["uncategorized_hours"] = round(uncat_by_group.get(key, 0) / 60, 2)
+
     buf = io.StringIO()
     writer = csv.writer(buf)
 
@@ -439,7 +533,7 @@ def reports_summary_export(request):
     writer.writerow([])
     header = [
         label_col, "Total Hours", "Billable Hours",
-        "Non-Billable Hours", "Utilization %",
+        "Non-Billable Hours", "Uncategorized Hours", "Utilization %",
     ]
     if group_by == "employee":
         header.append("Top Client")
@@ -448,7 +542,8 @@ def reports_summary_export(request):
     for r in summary["rows"]:
         row = [
             r["label"], r["total_hours"], r["billable_hours"],
-            r["non_billable_hours"], r["utilization_pct"],
+            r["non_billable_hours"], r.get("uncategorized_hours", 0),
+            r["utilization_pct"],
         ]
         if group_by == "employee":
             row.append(r["top_client"] or "")
@@ -458,7 +553,8 @@ def reports_summary_export(request):
     t = summary["totals"]
     writer.writerow([
         "TOTAL", t["total_hours"], t["billable_hours"],
-        t["non_billable_hours"], t["utilization_pct"],
+        t["non_billable_hours"], round(total_uncat_min / 60, 2),
+        t["utilization_pct"],
     ])
 
     resp = HttpResponse(buf.getvalue(), content_type="text/csv")

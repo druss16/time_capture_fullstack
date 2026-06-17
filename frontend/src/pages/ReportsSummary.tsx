@@ -19,6 +19,8 @@ import {
   Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle,
 } from "lucide-react";
 
+import { safeFetchJson, API_BASE } from "@/lib/api";
+
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
   return (
@@ -28,8 +30,6 @@ function getAuthToken(): string | null {
     localStorage.getItem("token")
   );
 }
-
-const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 type Period = "day" | "week" | "month" | "quarter";
 type GroupBy = "employee" | "client";
@@ -115,7 +115,7 @@ export default function ReportsSummary({
 
   const handleExport = useCallback(() => {
     const token = getAuthToken();
-    const url = `${API_BASE}/api/reports/summary/export/?${buildParams()}`;
+    const url = `${API_BASE}/reports/summary/export/?${buildParams()}`;
     // Token in querystring isn't used here — export relies on session cookie
     // via credentials. For token-only clients, fetch+blob instead:
     fetch(url, {

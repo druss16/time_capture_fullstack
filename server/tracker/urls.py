@@ -471,6 +471,7 @@ urlpatterns = [
          views_analytics_v2.saved_view_detail,
          name="analytics_v2_saved_view_detail"),
 
+
     path("reports/summary/", views_reports.reports_summary),
     path("reports/summary/export/", views_reports.reports_summary_export),
 

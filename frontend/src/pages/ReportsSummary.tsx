@@ -98,19 +98,10 @@ export default function ReportsSummary({
     setLoading(true);
     setError(null);
     try {
-      const token = getAuthToken();
-      const res = await fetch(
-        `${API_BASE}/api/reports/summary/?${buildParams()}`,
-        {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          credentials: "include",
-        }
+      const json = await safeFetchJson(
+        `${API_BASE}/reports/summary/?${buildParams()}`
       );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Request failed (${res.status})`);
-      }
-      setData(await res.json());
+      setData(json);
     } catch (e: any) {
       setError(e.message || "Failed to load report");
     } finally {

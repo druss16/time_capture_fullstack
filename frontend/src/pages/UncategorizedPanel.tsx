@@ -44,6 +44,7 @@ interface ThemeGroup {
   block_count: number;
   sample_block_ids: number[];
   pct_of_uncategorized: number;
+  is_immaterial?: boolean;
 }
 
 interface UncatResponse {
@@ -190,29 +191,48 @@ export default function UncategorizedPanel({
               {/* Theme groups */}
               <div className="space-y-2">
                 {data.groups.map((g, i) => (
-                  <div
-                    key={i}
-                    className="rounded-lg border border-slate-200 p-3 hover:border-slate-300 transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-slate-800 truncate">{g.label}</div>
-                        <div className="text-xs text-slate-400 mt-0.5">
-                          {g.block_count} {g.block_count === 1 ? "block" : "blocks"} · {g.pct_of_uncategorized}% of pile
+                  g.is_immaterial ? (
+                    <div
+                      key={i}
+                      className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-medium text-slate-500 truncate">{g.label}</div>
+                          <div className="text-[11px] text-slate-400 mt-0.5">
+                            Too short to count toward utilization
+                          </div>
+                        </div>
+                        <div className="text-xs font-medium text-slate-400 tabular-nums shrink-0">
+                          {fmtH(g.hours)}
                         </div>
                       </div>
-                      <div className="text-sm font-semibold text-amber-600 tabular-nums shrink-0">
-                        {fmtH(g.hours)}
+                    </div>
+                  ) : (
+                    <div
+                      key={i}
+                      className="rounded-lg border border-slate-200 p-3 hover:border-slate-300 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-slate-800 truncate">{g.label}</div>
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            {g.block_count} {g.block_count === 1 ? "block" : "blocks"} · {g.pct_of_uncategorized}% of pile
+                          </div>
+                        </div>
+                        <div className="text-sm font-semibold text-amber-600 tabular-nums shrink-0">
+                          {fmtH(g.hours)}
+                        </div>
+                      </div>
+                      {/* Mini proportion bar */}
+                      <div className="mt-2 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full bg-amber-400 rounded-full"
+                          style={{ width: `${Math.min(100, g.pct_of_uncategorized)}%` }}
+                        />
                       </div>
                     </div>
-                    {/* Mini proportion bar */}
-                    <div className="mt-2 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                      <div
-                        className="h-full bg-amber-400 rounded-full"
-                        style={{ width: `${Math.min(100, g.pct_of_uncategorized)}%` }}
-                      />
-                    </div>
-                  </div>
+                  )
                 ))}
               </div>
 

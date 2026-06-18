@@ -101,11 +101,37 @@ def _block_minutes(b) -> int:
     Report-counting minutes for a block: 0 if anomalous (excluded), else the
     block's own minutes floored at 0. Single chokepoint so every aggregation
     path treats anomalies identically.
+
+    NOTE: this is the LEDGER value — used for Total Captured, which counts all
+    real time. Materiality (the utilization/uncategorized threshold) is applied
+    separately via _is_material(), so Total Captured stays honest while the
+    quality metrics ignore sub-threshold noise.
     """
     if _is_anomalous_block(b):
         return 0
     m = b.minutes or 0
     return m if m > 0 else 0
+
+
+# ── Materiality threshold ─────────────────────────────────────────────────
+# Blocks shorter than this are immaterial noise — 30-second context switches,
+# alt-tabs, momentary glances at Outlook/Calculator/a PDF. They still count in
+# Total Captured (the ledger), but are EXCLUDED from the utilization ratio and
+# the "needs review" uncategorized pile, because forcing nobody-will-ever-
+# categorize-these slivers into the denominator drags utilization down and
+# misrepresents a productive day. Mirrors the Categorize tab's own
+# SHORT_BLOCK_THRESHOLD_MINUTES=2 so the two views agree.
+#
+# Utilization is a QUALITY metric (how much real working time was billable),
+# not an accounting ledger — Total Captured is the ledger. Keeping those two
+# numbers serving different jobs is why this threshold applies here and not to
+# _block_minutes above.
+_MATERIAL_MIN_MINUTES = 2
+
+
+def _is_material(b) -> bool:
+    """True if the block is long enough to count toward utilization / review."""
+    return _block_minutes(b) >= _MATERIAL_MIN_MINUTES
 
 
 def _resolve_period_window(period: str, anchor_date):
@@ -257,6 +283,11 @@ def _uncategorized_by_group(blocks, group_by: str):
             continue
         if (b.bundle_id or "").lower() == "__idle__":
             continue
+        # Skip immaterial sub-threshold slivers — they're noise, not a real
+        # "needs review" item, and (since uncategorized folds into the
+        # utilization total) counting them here would drag utilization down.
+        if not _is_material(b):
+            continue
         key = (b.user_id if group_by == "employee" else (b.client_id or "unassigned"))
         per_group[key] += minutes
         total += minutes
@@ -283,17 +314,19 @@ def _aggregate(blocks, group_by: str):
 
     Returns a dict ready to serialize.
     """
-    total_min = 0
+    total_min = 0          # material only — drives utilization denominator
     billable_min = 0
     non_billable_min = 0
+    immaterial_min = 0     # sub-threshold noise — added to displayed Total, NOT utilization
 
     # group_key -> rollup
     groups: dict = defaultdict(lambda: {
         "label": "",
         "id": None,
-        "total_min": 0,
+        "total_min": 0,          # material only (utilization denominator)
         "billable_min": 0,
         "non_billable_min": 0,
+        "immaterial_min": 0,     # sub-threshold, shown in Total but not utilization
         "top_client": defaultdict(int),   # client name -> minutes (employee view)
         "block_count": 0,
     })
@@ -309,16 +342,9 @@ def _aggregate(blocks, group_by: str):
         if cat in _EXCLUDE_CATEGORIES:
             continue
 
-        billable = _is_billable_block(b)
         client_name = b.client.name if b.client_id else "Unassigned"
         if b.client_id:
             distinct_clients.add(b.client_id)
-
-        total_min += minutes
-        if billable:
-            billable_min += minutes
-        else:
-            non_billable_min += minutes
 
         # group key
         if group_by == "client":
@@ -334,8 +360,23 @@ def _aggregate(blocks, group_by: str):
         g = groups[key]
         g["label"] = label
         g["id"] = (b.user_id if group_by == "employee" else b.client_id)
-        g["total_min"] += minutes
         g["block_count"] += 1
+
+        # Immaterial (sub-2min) blocks count toward the ledger (Total Captured)
+        # but are excluded from billable/non-billable → never touch utilization.
+        if not _is_material(b):
+            immaterial_min += minutes
+            g["immaterial_min"] += minutes
+            continue
+
+        billable = _is_billable_block(b)
+        total_min += minutes
+        if billable:
+            billable_min += minutes
+        else:
+            non_billable_min += minutes
+
+        g["total_min"] += minutes
         if billable:
             g["billable_min"] += minutes
         else:
@@ -351,14 +392,17 @@ def _aggregate(blocks, group_by: str):
         if g["top_client"]:
             top_client = max(g["top_client"].items(), key=lambda kv: kv[1])[0]
 
+        # Utilization denominator is MATERIAL time only (g["total_min"]).
         util = (
             round(100 * g["billable_min"] / g["total_min"], 1)
             if g["total_min"] else 0.0
         )
+        # Displayed Total = material + immaterial (the honest ledger).
+        display_total_min = g["total_min"] + g["immaterial_min"]
         rows.append({
             "id": g["id"],
             "label": g["label"],
-            "total_hours": round(g["total_min"] / 60, 2),
+            "total_hours": round(display_total_min / 60, 2),
             "billable_hours": round(g["billable_min"] / 60, 2),
             "non_billable_hours": round(g["non_billable_min"] / 60, 2),
             "utilization_pct": util,
@@ -368,15 +412,19 @@ def _aggregate(blocks, group_by: str):
 
     rows.sort(key=lambda r: r["total_hours"], reverse=True)
 
+    # Overall utilization: billable ÷ MATERIAL total (immaterial excluded so it
+    # can't drag the ratio). Displayed Total still includes immaterial below.
     util_overall = (
         round(100 * billable_min / total_min, 1) if total_min else 0.0
     )
 
     return {
         "totals": {
-            "total_hours": round(total_min / 60, 2),
+            # Total Captured = material + immaterial (full ledger, honest sum).
+            "total_hours": round((total_min + immaterial_min) / 60, 2),
             "billable_hours": round(billable_min / 60, 2),
             "non_billable_hours": round(non_billable_min / 60, 2),
+            "immaterial_hours": round(immaterial_min / 60, 2),
             "utilization_pct": util_overall,
             "active_clients": len(distinct_clients),
         },
@@ -779,6 +827,12 @@ def reports_uncategorized_detail(request):
     })
     total_min = 0
 
+    # Immaterial (sub-2min) slivers are rolled into ONE summary line instead of
+    # cluttering the themed list — visible and accounted for, but not treated
+    # as individual "needs review" items.
+    immaterial_min = 0
+    immaterial_count = 0
+
     for b in uncat_blocks:
         minutes = _block_minutes(b)
         if minutes <= 0:
@@ -787,6 +841,12 @@ def reports_uncategorized_detail(request):
         if cat == "idle":
             continue
         if (b.bundle_id or "").lower() == "__idle__":
+            continue
+
+        # Roll up immaterial blocks rather than listing each tiny sliver.
+        if not _is_material(b):
+            immaterial_min += minutes
+            immaterial_count += 1
             continue
 
         label, key = _normalize_signature(b.app_name, b.window_title, b.url)
@@ -815,6 +875,7 @@ def reports_uncategorized_detail(request):
     groups.sort(key=lambda x: x["minutes"], reverse=True)
 
     # A one-line "headline theme" the frontend can show as the wow stat.
+    # (Based on material groups only — the headline should be a real chunk.)
     headline = None
     if groups:
         top = groups[0]
@@ -824,11 +885,30 @@ def reports_uncategorized_detail(request):
             "pct": top["pct_of_uncategorized"],
         }
 
+    # Append the rolled-up immaterial line LAST so it sits at the bottom of the
+    # list. Flagged with is_immaterial so the frontend can render it muted /
+    # non-actionable (it's not a "go categorize this" item). Its minutes are
+    # NOT in total_min, so it doesn't affect pct_of_uncategorized of real groups.
+    if immaterial_min > 0:
+        groups.append({
+            "label": f"{immaterial_count} small activities (under {_MATERIAL_MIN_MINUTES}m each)",
+            "hours": round(immaterial_min / 60, 2),
+            "minutes": immaterial_min,
+            "block_count": immaterial_count,
+            "sample_block_ids": [],
+            "pct_of_uncategorized": 0.0,
+            "is_immaterial": True,
+        })
+
     return Response({
         "org_id": org.id,
         "period": period,
         "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        # total_uncategorized_hours = MATERIAL uncategorized only (matches the
+        # KPI tile / utilization). Immaterial is surfaced separately below.
         "total_uncategorized_hours": round(total_min / 60, 2),
+        "immaterial_hours": round(immaterial_min / 60, 2),
+        "immaterial_count": immaterial_count,
         "group_count": len(groups),
         "headline": headline,
         "groups": groups,

@@ -477,6 +477,8 @@ _network_ok_lock = threading.Lock()
 _last_successful_post = 0.0
 _wake_timestamp = 0.0  # When we last woke from sleep
 _wake_event = threading.Event()   # Signal tracking loop to reset after sleep/wake
+_sleep_event = threading.Event()  # Signal tracking loop that sleep began
+_sleep_timestamp = 0.0            # Wall time when PBT_APMSUSPEND fired
 _wake_handled = False     
 _health_monitor_running = False
 NETWORK_GRACE_PERIOD = 30  # Seconds after wake to skip network calls
@@ -1563,7 +1565,10 @@ def register_power_notifications(os_user: str, hostname: str, device_id: str):
         def wndproc(hwnd, msg, wparam, lparam):
             if msg == win32con.WM_POWERBROADCAST:
                 if wparam == PBT_APMSUSPEND:
-                    log("[POWER] System going to sleep...")
+                    global _sleep_timestamp
+                    _sleep_timestamp = time.time()
+                    _sleep_event.set()
+                    log("[POWER] System going to sleep — flagged dwell for close at sleep_ts")
                 elif wparam in (PBT_APMRESUMESUSPEND, PBT_APMRESUMEAUTOMATIC):
                     _on_wake()
             return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
@@ -3048,7 +3053,22 @@ def run_agent():
                         tracking_loop._last_iter_time = now_t
      
                         _suspended = iter_gap > 60
-     
+
+                        # ── Sleep-close (v1.4.x): PBT_APMSUSPEND fired on the
+                        # power thread; close the open dwell AT sleep time so an
+                        # overnight machine-asleep stretch never gets recorded as
+                        # one giant active block. Same _emit_current_dwell the
+                        # idle/wake paths use — on this thread, so no race.
+                        if _sleep_event.is_set():
+                            _sleep_event.clear()
+                            if current_sig and current_sig != IDLE_SIG and last_emit_ts and _sleep_timestamp:
+                                close_ts = max(_sleep_timestamp, last_emit_ts + 0.1)
+                                _emit_current_dwell(close_ts)
+                                log(f"[TRACKING] Closed dwell at sleep_ts {close_ts}")
+                            current_sig = None
+                            dwell_start = None
+                            last_emit_ts = None
+
                         if _wake_event.is_set() or _suspended:
                             _wake_event.clear()
      

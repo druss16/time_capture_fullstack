@@ -913,3 +913,131 @@ def reports_uncategorized_detail(request):
         "headline": headline,
         "groups": groups,
     })
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# AI performance — "is the tool working?" metrics
+# ──────────────────────────────────────────────────────────────────────────
+# What counts as the AI/automation classifying on its own (real-time flow):
+_AUTOMATED_SOURCES = {
+    "ai", "pattern", "learned", "deterministic", "meeting_detector", "tax_software",
+}
+# Excluded from the rate entirely — these are admin/backfill operations, NOT
+# the classifier working in the normal flow. Counting them would credit the AI
+# for migration scripts. ('system' + any reclassify_* bulk tag.)
+_NON_CLASSIFICATION_SOURCES = {"system", "import"}
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def reports_ai_performance(request):
+    """
+    GET /api/reports/ai-performance/
+      ?period=...&date=...&org_id=...   (same window params as summary)
+
+    The "is the tool earning its keep" story:
+      - auto_categorization_rate: of blocks the system actually classified
+        (real-time flow, excluding admin/bulk backfills), what % was automated
+        vs. needed a human to categorize from scratch.
+      - ai_override_rate: of AI-categorized blocks, what % a human later
+        corrected. Low = the AI's guesses are trusted as-is. (Honest framing:
+        this is "overridden", not "proven correct" — unreviewed blocks aren't
+        counted as either right or wrong.)
+      - hours_auto_captured: total agent-captured time in the window — time
+        that exists without anyone manually entering it.
+      - blocks counts for transparency.
+    """
+    period = (request.GET.get("period") or "week").lower()
+    if period not in _TRUNC:
+        period = "week"
+
+    date_str = request.GET.get("date")
+    anchor = parse_date(date_str) if date_str else timezone.localdate()
+    if not anchor:
+        anchor = timezone.localdate()
+
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+
+    can_see_all, forced_user_id = _resolve_scope(request, org)
+
+    start_date, end_date = _resolve_period_window(period, anchor)
+    start_utc, end_utc = _day_bounds_utc(start_date, end_date)
+
+    # All non-deleted blocks in the window (both committed and not), scoped.
+    qs = Block.objects.filter(
+        org=org,
+        deleted_at__isnull=True,
+        start__gte=start_utc,
+        start__lt=end_utc,
+    )
+    if not can_see_all and forced_user_id:
+        qs = qs.filter(user_id=forced_user_id)
+
+    qs = qs.select_related("client")
+
+    automated_blocks = 0
+    automated_min = 0
+    manual_blocks = 0           # human categorized from scratch
+    correction_blocks = 0       # human overrode an AI guess
+    ai_blocks = 0               # specifically categorized_by='ai'
+    auto_captured_min = 0       # all agent-captured material time
+
+    for b in qs:
+        minutes = _block_minutes(b)  # respects anomaly exclusion
+        cb = (b.categorized_by or "").lower()
+
+        # Hours auto-captured: any real (material, non-anomalous) time the
+        # agent recorded. This is the "time you didn't have to write down."
+        if minutes > 0 and _is_material(b):
+            auto_captured_min += minutes
+
+        # Classification-source accounting — only for blocks that were actually
+        # classified by something we count (exclude admin/bulk + uncategorized).
+        if cb in _NON_CLASSIFICATION_SOURCES:
+            continue
+        if cb in _AUTOMATED_SOURCES:
+            automated_blocks += 1
+            automated_min += minutes
+            if cb == "ai":
+                ai_blocks += 1
+        elif cb == "manual":
+            manual_blocks += 1
+        elif cb == "correction":
+            # A correction is BOTH a human touch AND evidence the AI was
+            # overridden. Counted in the denominator for override rate.
+            correction_blocks += 1
+
+    # Auto-categorization rate: automated ÷ (automated + human-from-scratch +
+    # corrections). Excludes uncategorized (categorized_by is null) and
+    # admin/bulk. Answers "of what got classified, how much did the AI do."
+    classified_total = automated_blocks + manual_blocks + correction_blocks
+    auto_cat_rate = (
+        round(100 * automated_blocks / classified_total, 1)
+        if classified_total else 0.0
+    )
+
+    # AI override rate: corrections ÷ (ai_blocks + corrections). Of the AI's
+    # guesses, how many a human flipped. Low is good.
+    ai_decisions = ai_blocks + correction_blocks
+    override_rate = (
+        round(100 * correction_blocks / ai_decisions, 1)
+        if ai_decisions else 0.0
+    )
+
+    return Response({
+        "org_id": org.id,
+        "period": period,
+        "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        "auto_categorization_rate": auto_cat_rate,      # e.g. 98.2 (%)
+        "ai_override_rate": override_rate,              # e.g. 0.3 (%)
+        "hours_auto_captured": round(auto_captured_min / 60, 2),
+        "counts": {
+            "automated_blocks": automated_blocks,
+            "manual_blocks": manual_blocks,
+            "correction_blocks": correction_blocks,
+            "ai_blocks": ai_blocks,
+            "classified_total": classified_total,
+        },
+    })

@@ -477,4 +477,6 @@ urlpatterns = [
 
     path("reports/uncategorized/", views_reports.reports_uncategorized_detail),
 
+    path("reports/ai-performance/", views_reports.reports_ai_performance),
+
 ]

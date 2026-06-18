@@ -21,6 +21,7 @@ import {
 import { safeFetchJson, API_BASE } from "@/lib/api";
 import DailyShapeChart from "./DailyShapeChart";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
+import AIPerformanceStrip from "./AIPerformanceStrip";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -224,6 +225,8 @@ export default function ReportsSummary({
           </button>
         </div>
       </div>
+
+      {data && <AIPerformanceStrip period={period} orgIdOverride={orgIdOverride} />}
 
       {/* KPI strip */}
       {data && (

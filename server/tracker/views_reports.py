@@ -63,21 +63,49 @@ _TRUNC = {
 # Categories that should never count toward billable/total (mirrors today_time).
 _EXCLUDE_CATEGORIES = {"idle", "uncategorized"}
 
-# Per-block sanity cap. A single block should never contribute more than this
-# many minutes to a report total. Guards against the sleep/wake block-capping
-# bug where an overnight block stays open until wake and balloons to 8-12h
-# (see agent/main.py power-event TODO). This is a REPORT-SIDE guardrail only —
-# it keeps one bad block from making the dashboard lie; it does not fix the
-# underlying block. 8h is a generous single-session ceiling for a work block.
-_MAX_BLOCK_MINUTES = 8 * 60
+# ── Anomalous-block guardrail (report-side) ───────────────────────────────
+# A block whose wall-clock span (end - start) exceeds this is almost certainly
+# the sleep/wake artifact: the agent left a block open while the machine slept
+# and closed it on wake, so an idle overnight stretch got recorded as one giant
+# "active" block (classic: Explorer/desktop left open → 10h block).
+#
+# Blocks store NO interaction signal (no idle/active seconds), so we can't tell
+# active-from-idle after the fact. The honest move is to EXCLUDE these from
+# report math entirely rather than cap them to a smaller wrong number — a 10h
+# overnight block capped to 8h is still a lie; dropped, it stops distorting
+# totals. The real fix is upstream (agent closes block at sleep); this is the
+# backstop so existing/legacy bad blocks don't make the dashboard wrong.
+#
+# 6h is deliberately generous: no single uninterrupted app session in a CPA
+# workday legitimately runs 6h without the agent breaking it into pieces, so
+# anything longer is an artifact, not work. Tune via this one constant.
+_MAX_PLAUSIBLE_BLOCK_MINUTES = 6 * 60
 
 
-def _capped_minutes(b) -> int:
-    """Block minutes, floored at 0 and capped at _MAX_BLOCK_MINUTES."""
-    m = b.minutes or 0
-    if m < 0:
+def _is_anomalous_block(b) -> bool:
+    """
+    True if this block looks like a sleep/wake idle artifact and should be
+    excluded from report totals. Uses wall-clock span; falls back to .minutes
+    if start/end are missing.
+    """
+    span_min = None
+    if b.start and b.end:
+        span_min = (b.end - b.start).total_seconds() / 60.0
+    if span_min is None:
+        span_min = b.minutes or 0
+    return span_min > _MAX_PLAUSIBLE_BLOCK_MINUTES
+
+
+def _block_minutes(b) -> int:
+    """
+    Report-counting minutes for a block: 0 if anomalous (excluded), else the
+    block's own minutes floored at 0. Single chokepoint so every aggregation
+    path treats anomalies identically.
+    """
+    if _is_anomalous_block(b):
         return 0
-    return min(m, _MAX_BLOCK_MINUTES)
+    m = b.minutes or 0
+    return m if m > 0 else 0
 
 
 def _resolve_period_window(period: str, anchor_date):
@@ -220,7 +248,7 @@ def _uncategorized_by_group(blocks, group_by: str):
     per_group: dict = defaultdict(int)
     total = 0
     for b in blocks:
-        minutes = _capped_minutes(b)
+        minutes = _block_minutes(b)
         if minutes <= 0:
             continue
         # Skip only true idle — match _is_idle semantics, not category text.
@@ -273,7 +301,7 @@ def _aggregate(blocks, group_by: str):
     distinct_clients = set()
 
     for b in blocks:
-        minutes = _capped_minutes(b)
+        minutes = _block_minutes(b)
         if minutes <= 0:
             continue
 
@@ -386,7 +414,7 @@ def _daily_shape(committed_blocks, uncat_blocks, period: str):
     })
 
     for b in committed_blocks:
-        minutes = _capped_minutes(b)
+        minutes = _block_minutes(b)
         if minutes <= 0:
             continue
         cat = _dominant_category(b).lower()
@@ -399,7 +427,7 @@ def _daily_shape(committed_blocks, uncat_blocks, period: str):
             buckets[key]["non_billable_min"] += minutes
 
     for b in uncat_blocks:
-        minutes = _capped_minutes(b)
+        minutes = _block_minutes(b)
         if minutes <= 0:
             continue
         cat = _dominant_category(b).lower()
@@ -752,7 +780,7 @@ def reports_uncategorized_detail(request):
     total_min = 0
 
     for b in uncat_blocks:
-        minutes = _capped_minutes(b)
+        minutes = _block_minutes(b)
         if minutes <= 0:
             continue
         cat = _dominant_category(b).lower()

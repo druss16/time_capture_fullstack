@@ -60,7 +60,9 @@ export default function AIPerformanceStrip({
     setError(false);
     try {
       const p = new URLSearchParams({ period });
-      if (orgIdOverride) p.set("org_id", String(orgIdOverride));
+      const impersonatedOrg = localStorage.getItem("impersonating_org_id");
+      const effectiveOrg = orgIdOverride || (impersonatedOrg ? Number(impersonatedOrg) : null);
+      if (effectiveOrg) p.set("org_id", String(effectiveOrg));
       const token = getAuthToken();
       const res = await fetch(`${API_BASE}/reports/ai-performance/?${p.toString()}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},

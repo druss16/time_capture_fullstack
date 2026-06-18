@@ -105,7 +105,9 @@ export default function ReportsSummary({
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams({ period, group_by: groupBy });
-    if (orgIdOverride) p.set("org_id", String(orgIdOverride));
+    const impOrg = localStorage.getItem("impersonating_org_id");
+    const effOrg = orgIdOverride || (impOrg ? Number(impOrg) : null);
+    if (effOrg) p.set("org_id", String(effOrg));
     return p.toString();
   }, [period, groupBy, orgIdOverride]);
 

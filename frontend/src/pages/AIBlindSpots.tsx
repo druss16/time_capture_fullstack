@@ -101,7 +101,9 @@ export default function AIBlindSpots({
     setError(null);
     try {
       const p = new URLSearchParams({ period });
-      if (orgIdOverride) p.set("org_id", String(orgIdOverride));
+      const _impOrg = localStorage.getItem("impersonating_org_id");
+      const _effOrg = orgIdOverride || (_impOrg ? Number(_impOrg) : null);
+      if (_effOrg) p.set("org_id", String(_effOrg));
       // No user_id → org-wide aggregation (all employees combined).
       const token = getAuthToken();
       const res = await fetch(`${API_BASE}/reports/uncategorized/?${p.toString()}`, {
@@ -129,7 +131,9 @@ export default function AIBlindSpots({
       try {
         const token = getAuthToken();
         const p = new URLSearchParams();
-        if (orgIdOverride) p.set("org_id", String(orgIdOverride));
+        const _impOrg = localStorage.getItem("impersonating_org_id");
+        const _effOrg = orgIdOverride || (_impOrg ? Number(_impOrg) : null);
+        if (_effOrg) p.set("org_id", String(_effOrg));
         const res = await fetch(`${API_BASE}/clients/?${p.toString()}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           credentials: "include",

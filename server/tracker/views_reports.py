@@ -824,6 +824,7 @@ def reports_uncategorized_detail(request):
         "block_count": 0,
         "sample_block_ids": [],
         "apps": set(),
+        "user_ids": set(),   # distinct employees hitting this theme (blind-spots)
     })
     total_min = 0
 
@@ -855,6 +856,8 @@ def reports_uncategorized_detail(request):
         g["minutes"] += minutes
         g["block_count"] += 1
         g["apps"].add((b.app_name or "").strip())
+        if b.user_id:
+            g["user_ids"].add(b.user_id)
         if len(g["sample_block_ids"]) < 10:
             g["sample_block_ids"].append(b.id)
         total_min += minutes
@@ -866,6 +869,7 @@ def reports_uncategorized_detail(request):
             "hours": round(g["minutes"] / 60, 2),
             "minutes": g["minutes"],
             "block_count": g["block_count"],
+            "user_count": len(g["user_ids"]),   # how many employees hit this theme
             "sample_block_ids": g["sample_block_ids"],
             "pct_of_uncategorized": (
                 round(100 * g["minutes"] / total_min, 1) if total_min else 0.0

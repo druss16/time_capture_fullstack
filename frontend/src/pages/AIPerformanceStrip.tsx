@@ -14,7 +14,7 @@
  * Self-contained: own fetch + auth chain, mirrors UncategorizedPanel's style.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Sparkles, ShieldCheck, Clock3 } from "lucide-react";
+import { Sparkles, ShieldCheck, Clock3, Info } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 function getAuthToken(): string | null {
@@ -101,6 +101,7 @@ export default function AIPerformanceStrip({
           label="Auto-categorized"
           sub={`${data.counts.automated_blocks.toLocaleString()} of ${data.counts.classified_total.toLocaleString()} classified by AI`}
           accent="violet"
+          tip="Of the blocks that were classified this period, the share the AI (and learned rules) handled on its own — versus a person categorizing from scratch. Excludes admin/bulk operations. Higher means less manual work."
         />
         <AIStat
           icon={<ShieldCheck className="h-4 w-4" />}
@@ -112,6 +113,7 @@ export default function AIPerformanceStrip({
               : `${data.counts.correction_blocks} of ${data.counts.ai_blocks.toLocaleString()} AI calls changed`
           }
           accent="emerald"
+          tip="Of the AI's categorizations this period, the share a person later changed. Lower is better. Note: blocks nobody has reviewed yet aren't counted as right or wrong — this measures overrides, not proven accuracy."
         />
         <AIStat
           icon={<Clock3 className="h-4 w-4" />}
@@ -119,6 +121,7 @@ export default function AIPerformanceStrip({
           label="Captured automatically"
           sub="Tracked without manual entry"
           accent="blue"
+          tip="Total time the agent recorded automatically this period (material blocks, overnight artifacts excluded) — time that exists without anyone manually starting a timer or writing it down."
         />
       </div>
     </div>
@@ -126,13 +129,14 @@ export default function AIPerformanceStrip({
 }
 
 function AIStat({
-  icon, value, label, sub, accent,
+  icon, value, label, sub, accent, tip,
 }: {
   icon: React.ReactNode;
   value: string;
   label: string;
   sub: string;
   accent: "violet" | "emerald" | "blue";
+  tip?: string;
 }) {
   const accentMap: Record<string, string> = {
     violet: "text-violet-600",
@@ -146,7 +150,17 @@ function AIStat({
         <div className="text-xl font-semibold text-slate-900 tabular-nums leading-tight">
           {value}
         </div>
-        <div className="text-xs font-medium text-slate-600">{label}</div>
+        <div className="flex items-center gap-1 text-xs font-medium text-slate-600">
+          {label}
+          {tip && (
+            <span className="group relative inline-flex">
+              <Info className="h-3 w-3 text-slate-300 hover:text-slate-500 cursor-help" />
+              <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1 hidden w-60 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-normal leading-snug text-white shadow-lg group-hover:block">
+                {tip}
+              </span>
+            </span>
+          )}
+        </div>
         <div className="text-[11px] text-slate-400 mt-0.5">{sub}</div>
       </div>
     </div>

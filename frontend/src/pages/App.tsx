@@ -45,6 +45,7 @@ const RequestAccess = lazy(() => import("./RequestAccess"));
 const MavOpsAdmin = lazy(() => import("./MavOpsAdmin"));
 const DashboardV2 = lazy(() => import("./DashboardV2"));
 const ReportsSummary = lazy(() => import("./ReportsSummary"));
+const AIBlindSpots = lazy(() => import("./AIBlindSpots"));
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
@@ -208,6 +209,7 @@ export default function App() {
                 {/* Protected — all users */}
                 <Route path="/daily" element={<MaybeProtected><AppLayout><DailyReview /></AppLayout></MaybeProtected>} />
                 <Route path="/reports" element={<MaybeProtected><AppLayout><ReportsSummary /></AppLayout></MaybeProtected>} />
+                <Route path="/reports/blind-spots" element={<MaybeProtected><AppLayout><AIBlindSpots /></AppLayout></MaybeProtected>} />
                 <Route path="/summary" element={<MaybeProtected><AppLayout><TimecardSummary /></AppLayout></MaybeProtected>} />
                 <Route path="/billing" element={<MaybeProtected><AppLayout><BillingPage /></AppLayout></MaybeProtected>} />
                 <Route path="/devices" element={<MaybeProtected><AppLayout><Devices /></AppLayout></MaybeProtected>} />

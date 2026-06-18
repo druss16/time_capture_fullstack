@@ -18,8 +18,10 @@
  * but harmless to expose to firm owners.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, AlertCircle, Users, Layers } from "lucide-react";
+import { Loader2, AlertCircle, Users, Layers, Plus, CheckCircle2 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
+import CreateRuleDialog, { RuleTheme } from "./CreateRuleDialog";
+import { useAuth } from "@/auth/AuthProvider";
 
 function getAuthToken(): string | null {
   return (
@@ -70,10 +72,29 @@ export default function AIBlindSpots({
 }: {
   orgIdOverride?: number | null;
 }) {
+  const { me } = useAuth();
+  const isStaff = !!me?.is_staff;
   const [period, setPeriod] = useState<Period>("week");
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Rule-creation dialog + the org's clients (for the route dropdown).
+  const [ruleTheme, setRuleTheme] = useState<RuleTheme | null>(null);
+  const [clients, setClients] = useState<{ id: number; name: string }[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Parse the blind-spot label "App.Exe — Title" into app + title hints.
+  const parseTheme = (label: string): RuleTheme => {
+    const parts = label.split(" — ");
+    const appPart = (parts[0] || "").trim();
+    const titlePart = (parts.slice(1).join(" — ") || "").trim();
+    // appHint as an exe-ish token: "Outlook.Exe" → "outlook.exe"
+    const appHint = appPart.toLowerCase().includes(".exe")
+      ? appPart.toLowerCase()
+      : `${appPart.toLowerCase()}.exe`;
+    return { label, appHint, titleHint: titlePart || appPart };
+  };
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -100,6 +121,32 @@ export default function AIBlindSpots({
   }, [period, orgIdOverride]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Fetch the org's clients once, for the route-to-client dropdown in the
+  // rule dialog. Best-effort — if it fails, route option just shows empty.
+  useEffect(() => {
+    (async () => {
+      try {
+        const token = getAuthToken();
+        const p = new URLSearchParams();
+        if (orgIdOverride) p.set("org_id", String(orgIdOverride));
+        const res = await fetch(`${API_BASE}/clients/?${p.toString()}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          credentials: "include",
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        const list = Array.isArray(json) ? json : (json.results || json.clients || []);
+        setClients(
+          list
+            .map((c: any) => ({ id: c.id, name: c.name }))
+            .filter((c: any) => c.id && c.name)
+        );
+      } catch {
+        /* non-fatal */
+      }
+    })();
+  }, [orgIdOverride]);
 
   // Real themes only (drop the rolled-up immaterial line — not a blind spot).
   const themes = (data?.groups || []).filter((g) => !g.is_immaterial);
@@ -208,11 +255,45 @@ export default function AIBlindSpots({
                       Firm-wide pattern — a rule here helps {t.user_count} people
                     </div>
                   )}
+                  <div className="mt-2 flex justify-end">
+                    {isStaff ? (
+                      <button
+                        onClick={() => setRuleTheme(parseTheme(t.label))}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-violet-700 border border-slate-200 hover:border-violet-300 rounded-md px-2 py-1 transition-colors"
+                      >
+                        <Plus className="h-3 w-3" />
+                        Create rule
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-slate-300">
+                        Flag to MavOps to add a rule
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </>
+      )}
+
+      {/* Rule creation dialog */}
+      <CreateRuleDialog
+        open={!!ruleTheme}
+        onClose={() => setRuleTheme(null)}
+        theme={ruleTheme}
+        clients={clients}
+        orgIdOverride={orgIdOverride}
+        onCreated={(msg) => { setToast(msg); fetchData(); }}
+      />
+
+      {/* Success toast */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-xl bg-slate-900 text-white px-4 py-3 shadow-xl text-xs max-w-md">
+          <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+          <span>{toast}</span>
+          <button onClick={() => setToast(null)} className="ml-2 text-slate-400 hover:text-white">✕</button>
+        </div>
       )}
     </div>
   );

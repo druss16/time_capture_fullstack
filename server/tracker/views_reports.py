@@ -40,7 +40,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from tracker.models import Block, OrganizationMembership
+from tracker.models import Block, OrganizationMembership, OrgRoutingRule, Client
 
 # Reuse the helpers already defined in views.py — single source of truth for
 # org resolution + impersonation. (These are module-level functions in views.py.)
@@ -1044,4 +1044,188 @@ def reports_ai_performance(request):
             "ai_blocks": ai_blocks,
             "classified_total": classified_total,
         },
+    })
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Create an OrgRoutingRule from a blind-spot signature (safe-by-default)
+# ──────────────────────────────────────────────────────────────────────────
+# Browser exes: rules matching on these by exe are almost always wrong (the
+# same browser hosts client work, personal news, and login screens). We steer
+# browser rules to title matching and refuse exe-match for them.
+_BROWSER_EXES = {
+    "msedge.exe", "chrome.exe", "firefox.exe", "brave.exe", "opera.exe",
+    "msedge", "chrome", "firefox", "brave", "opera",
+}
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def reports_create_rule(request):
+    """
+    POST /api/reports/create-rule/
+    Body (JSON):
+      {
+        "match_type": "title_contains" | "exe",
+        "match_value": "Inbox" | "outlook.exe",
+        "action": "route_to_client" | "assign_category" | "propose_only"
+                  | "mark_non_billable" | "suppress",
+        "target_client_id": <int|null>,     # for route_to_client
+        "target_category": "<str>",          # for assign_category
+        "suggest_only": true|false,          # default true → runs_at=classifier
+        "org_id": <int>                      # staff impersonation (optional)
+      }
+
+    SAFETY (deliberate, to avoid the Rule-17 terminal-rule mistake):
+      - Only org owners/admins/managers or staff may create rules.
+      - priority is forced to 100 (lowest — user soft rule, never overrides
+        org hard rules at 300/500).
+      - runs_at defaults to 'classifier' (server-side propose path) so a wrong
+        rule surfaces as a REVIEWABLE proposal, not a silent live commit.
+      - Browser exes cannot be matched by exe (too broad); forced to title.
+      - never creates a terminal/short-circuiting configuration by default.
+    """
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+
+    # Permission: firm-wide rules affect EVERYONE at the firm and route time
+    # onto client invoices, so creation is restricted to MavOps staff for now.
+    # (Interim gate — the planned propose+approval queue will let firm users
+    # propose rules that MavOps/owners approve before they fire. Until that
+    # ships, only staff may create, so a manager can't mis-route the whole
+    # firm's time.)
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Firm-wide rules can only be created by MavOps staff. "
+                      "Please flag this activity to your MavOps contact."},
+            status=403,
+        )
+
+    data = request.data or {}
+    match_type = (data.get("match_type") or "title_contains").strip()
+    match_value = (data.get("match_value") or "").strip()
+    action = (data.get("action") or "propose_only").strip()
+    target_client_id = data.get("target_client_id")
+    target_category = (data.get("target_category") or "").strip()
+    suggest_only = data.get("suggest_only", True)
+
+    # ── Validation ──────────────────────────────────────────────────────
+    valid_match_types = {
+        "exe", "exe_family", "title_contains", "title_regex", "file_path_contains",
+    }
+    if match_type not in valid_match_types:
+        return Response({"error": f"Invalid match_type: {match_type}"}, status=400)
+    if not match_value:
+        return Response({"error": "match_value is required."}, status=400)
+
+    valid_actions = {
+        "route_to_client", "assign_category", "propose_only",
+        "mark_non_billable", "suppress",
+    }
+    if action not in valid_actions:
+        return Response({"error": f"Invalid action: {action}"}, status=400)
+
+    # Browser guard: refuse exe-match on a browser (too broad → mis-routes).
+    if match_type == "exe" and match_value.lower() in _BROWSER_EXES:
+        return Response({
+            "error": (
+                "Matching a browser by app name would mis-categorize unrelated "
+                "tabs (client work, news, logins all share the browser). "
+                "Use a title keyword instead."
+            ),
+        }, status=400)
+
+    # Resolve / validate target depending on action.
+    target_client = None
+    rule_category = "routing"
+    if action == "route_to_client":
+        if not target_client_id:
+            return Response(
+                {"error": "target_client_id is required for route_to_client."},
+                status=400,
+            )
+        try:
+            target_client = Client.objects.get(id=target_client_id, org=org)
+        except Client.DoesNotExist:
+            return Response(
+                {"error": "Client not found in this org."}, status=400
+            )
+        rule_category = "routing"
+    elif action == "assign_category":
+        if not target_category:
+            return Response(
+                {"error": "target_category is required for assign_category."},
+                status=400,
+            )
+        rule_category = "categorization"
+    elif action == "mark_non_billable":
+        rule_category = "billing"
+    elif action == "suppress":
+        rule_category = "routing"
+    elif action == "propose_only":
+        rule_category = "routing"
+
+    # ── Safe defaults ──────────────────────────────────────────────────
+    # suggest_only → runs_at='classifier' (server propose path, reviewable).
+    # Even when not suggest_only, we keep priority low and avoid terminal modes.
+    runs_at = "classifier" if suggest_only else "both"
+
+    # Human-readable description for the admin UI.
+    if action == "route_to_client":
+        target_desc = f"→ {target_client.name}"
+    elif action == "assign_category":
+        target_desc = f"→ category '{target_category}'"
+    elif action == "mark_non_billable":
+        target_desc = "→ non-billable"
+    elif action == "suppress":
+        target_desc = "→ ignore"
+    else:
+        target_desc = "→ propose for review"
+    description = f"[from blind-spots] {match_type}='{match_value}' {target_desc}"[:255]
+
+    # Guard against creating an exact duplicate.
+    existing = OrgRoutingRule.objects.filter(
+        org=org, match_type=match_type, match_value=match_value, action=action,
+    ).first()
+    if existing:
+        return Response({
+            "created": False,
+            "duplicate": True,
+            "rule_id": existing.id,
+            "message": "An identical rule already exists.",
+        })
+
+    rule = OrgRoutingRule.objects.create(
+        org=org,
+        match_type=match_type,
+        match_value=match_value,
+        action=action,
+        target_client=target_client,
+        target_category=target_category if action == "assign_category" else "",
+        category=rule_category,
+        runs_at=runs_at,
+        priority=100,                 # lowest — never overrides hard rules
+        enabled=True,
+        is_default=False,
+        source="manual",
+        description=description,
+        created_by=request.user if request.user.is_authenticated else None,
+    )
+
+    return Response({
+        "created": True,
+        "rule_id": rule.id,
+        "match_type": rule.match_type,
+        "match_value": rule.match_value,
+        "action": rule.action,
+        "runs_at": rule.runs_at,
+        "suggest_only": suggest_only,
+        "description": rule.description,
+        "message": (
+            "Rule created in suggest-only mode — future matching blocks will be "
+            "proposed for review, not auto-committed."
+            if suggest_only else
+            "Rule created and active."
+        ),
     })

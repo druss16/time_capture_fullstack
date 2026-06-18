@@ -479,4 +479,6 @@ urlpatterns = [
 
     path("reports/ai-performance/", views_reports.reports_ai_performance),
 
+    path("reports/create-rule/", views_reports.reports_create_rule),
+
 ]

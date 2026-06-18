@@ -63,6 +63,22 @@ _TRUNC = {
 # Categories that should never count toward billable/total (mirrors today_time).
 _EXCLUDE_CATEGORIES = {"idle", "uncategorized"}
 
+# Per-block sanity cap. A single block should never contribute more than this
+# many minutes to a report total. Guards against the sleep/wake block-capping
+# bug where an overnight block stays open until wake and balloons to 8-12h
+# (see agent/main.py power-event TODO). This is a REPORT-SIDE guardrail only —
+# it keeps one bad block from making the dashboard lie; it does not fix the
+# underlying block. 8h is a generous single-session ceiling for a work block.
+_MAX_BLOCK_MINUTES = 8 * 60
+
+
+def _capped_minutes(b) -> int:
+    """Block minutes, floored at 0 and capped at _MAX_BLOCK_MINUTES."""
+    m = b.minutes or 0
+    if m < 0:
+        return 0
+    return min(m, _MAX_BLOCK_MINUTES)
+
 
 def _resolve_period_window(period: str, anchor_date):
     """
@@ -204,7 +220,7 @@ def _uncategorized_by_group(blocks, group_by: str):
     per_group: dict = defaultdict(int)
     total = 0
     for b in blocks:
-        minutes = b.minutes or 0
+        minutes = _capped_minutes(b)
         if minutes <= 0:
             continue
         # Skip only true idle — match _is_idle semantics, not category text.
@@ -257,7 +273,7 @@ def _aggregate(blocks, group_by: str):
     distinct_clients = set()
 
     for b in blocks:
-        minutes = b.minutes or 0
+        minutes = _capped_minutes(b)
         if minutes <= 0:
             continue
 
@@ -370,7 +386,7 @@ def _daily_shape(committed_blocks, uncat_blocks, period: str):
     })
 
     for b in committed_blocks:
-        minutes = b.minutes or 0
+        minutes = _capped_minutes(b)
         if minutes <= 0:
             continue
         cat = _dominant_category(b).lower()
@@ -383,7 +399,7 @@ def _daily_shape(committed_blocks, uncat_blocks, period: str):
             buckets[key]["non_billable_min"] += minutes
 
     for b in uncat_blocks:
-        minutes = b.minutes or 0
+        minutes = _capped_minutes(b)
         if minutes <= 0:
             continue
         cat = _dominant_category(b).lower()
@@ -736,7 +752,7 @@ def reports_uncategorized_detail(request):
     total_min = 0
 
     for b in uncat_blocks:
-        minutes = b.minutes or 0
+        minutes = _capped_minutes(b)
         if minutes <= 0:
             continue
         cat = _dominant_category(b).lower()

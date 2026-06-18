@@ -226,7 +226,18 @@ export default function ReportsSummary({
         </div>
       </div>
 
+
       {data && <AIPerformanceStrip period={period} orgIdOverride={orgIdOverride} />}
+
+      {data && data.scope === "all" && (
+      <div className="flex justify-end -mt-2">
+            <ahref="/reports/blind-spots"
+            className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 hover:text-violet-700 hover:underline"
+          >
+            View AI blind spots →
+          </a>
+        </div>
+      )}
 
       {/* KPI strip */}
       {data && (

@@ -75,20 +75,40 @@ def refresh_access_token(integration):
     )
     
     if 'error' in result:
-        logger.error(f"[MSGRAPH] Refresh failed for user {integration.user_id}")
-        integration.is_connected = False
+        fail_count = (integration.sync_failure_count or 0) + 1
+        # Only mark disconnected after repeated consecutive failures — transient
+        # Azure AD errors (throttling, brief outages) should self-heal on the next
+        # sync cycle rather than disconnecting the user and requiring manual repair.
+        DISCONNECT_THRESHOLD = 3
+        will_disconnect = fail_count >= DISCONNECT_THRESHOLD
+        logger.error(
+            f"[MSGRAPH] Refresh failed for user {integration.user_id} "
+            f"(attempt {fail_count}, disconnect={will_disconnect}): "
+            f"{result.get('error_description', '')[:200]}"
+        )
+        integration.sync_failure_count = fail_count
         integration.last_sync_error = f"Refresh failed: {result.get('error_description')}"
-        integration.sync_failure_count = (integration.sync_failure_count or 0) + 1
-        integration.save(update_fields=['is_connected', 'last_sync_error', 'sync_failure_count'])
+        if will_disconnect:
+            integration.is_connected = False
+        integration.save(update_fields=[
+            'is_connected', 'last_sync_error', 'sync_failure_count',
+        ])
         raise MSGraphAuthError(result.get('error_description'))
     
     integration.access_token = result['access_token']
     if 'refresh_token' in result:
         integration.refresh_token = result['refresh_token']
     integration.token_expires_at = timezone.now() + timedelta(seconds=result.get('expires_in', 3600))
+    # A successful refresh means we're connected again — reset failure state so a
+    # transient Azure error doesn't leave the integration permanently disconnected.
+    integration.is_connected = True
     integration.last_sync_error = ''
-    integration.save(update_fields=['access_token', 'refresh_token', 'token_expires_at', 'last_sync_error'])
-    
+    integration.sync_failure_count = 0
+    integration.save(update_fields=[
+        'access_token', 'refresh_token', 'token_expires_at',
+        'is_connected', 'last_sync_error', 'sync_failure_count',
+    ])
+
     return result['access_token']
 
 
@@ -214,20 +234,33 @@ def refresh_access_token_mail(integration):
     )
 
     if 'error' in result:
-        logger.error(f"[MSGRAPH-MAIL] Refresh failed for user {integration.user_id}")
-        integration.is_connected = False
+        fail_count = (integration.sync_failure_count or 0) + 1
+        DISCONNECT_THRESHOLD = 3
+        will_disconnect = fail_count >= DISCONNECT_THRESHOLD
+        logger.error(
+            f"[MSGRAPH-MAIL] Refresh failed for user {integration.user_id} "
+            f"(attempt {fail_count}, disconnect={will_disconnect}): "
+            f"{result.get('error_description', '')[:200]}"
+        )
+        integration.sync_failure_count = fail_count
         integration.last_sync_error = f"Refresh failed: {result.get('error_description')}"
-        integration.sync_failure_count = (integration.sync_failure_count or 0) + 1
-        integration.save(update_fields=['is_connected', 'last_sync_error', 'sync_failure_count'])
+        if will_disconnect:
+            integration.is_connected = False
+        integration.save(update_fields=[
+            'is_connected', 'last_sync_error', 'sync_failure_count',
+        ])
         raise MSGraphAuthError(result.get('error_description'))
 
     integration.access_token = result['access_token']
     if 'refresh_token' in result:
         integration.refresh_token = result['refresh_token']
     integration.token_expires_at = timezone.now() + timedelta(seconds=result.get('expires_in', 3600))
+    integration.is_connected = True
     integration.last_sync_error = ''
+    integration.sync_failure_count = 0
     integration.save(update_fields=[
-        'access_token', 'refresh_token', 'token_expires_at', 'last_sync_error',
+        'access_token', 'refresh_token', 'token_expires_at',
+        'is_connected', 'last_sync_error', 'sync_failure_count',
     ])
 
     return result['access_token']

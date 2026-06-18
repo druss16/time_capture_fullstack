@@ -340,39 +340,72 @@ def _aggregate(blocks, group_by: str):
     }
 
 
-def _timeseries(blocks, period: str, start_utc, end_utc):
-    """
-    Bucketed billable vs total hours over the window, for a simple trend strip.
-    Uses DB-side Trunc on `start` so granularity matches the requested period.
-    """
-    trunc = _TRUNC.get(period, TruncDay)
+def _bucket_key(dt_value, period: str):
+    """Local-date bucket label for a datetime, matching the period granularity."""
+    local = timezone.localtime(dt_value)
+    if period == "day":
+        return local.date().isoformat()
+    if period == "week":
+        monday = local.date() - timedelta(days=local.date().weekday())
+        return monday.isoformat()
+    if period == "month":
+        return local.date().replace(day=1).isoformat()
+    if period == "quarter":
+        q_start_month = ((local.month - 1) // 3) * 3 + 1
+        return local.date().replace(month=q_start_month, day=1).isoformat()
+    return local.date().isoformat()
 
-    agg = (
-        blocks
-        .annotate(bucket=trunc("start"))
-        .values("bucket")
-        .annotate(
-            total_min=Sum("minutes"),
-            billable_min=Sum(
-                Case(
-                    When(is_billable=True, client__isnull=False, then=F("minutes")),
-                    default=0,
-                    output_field=IntegerField(),
-                )
-            ),
-        )
-        .order_by("bucket")
-    )
+
+def _daily_shape(committed_blocks, uncat_blocks, period: str):
+    """
+    Build a per-bucket stacked-bar series with three bands:
+      billable / non_billable (from committed) + uncategorized (from uncommitted).
+
+    Walks the in-memory block lists (already fetched) rather than hitting the
+    DB again — keeps it one pass and lets us reuse the same idle/category
+    skipping rules as the rest of the report.
+    """
+    buckets: dict = defaultdict(lambda: {
+        "billable_min": 0, "non_billable_min": 0, "uncategorized_min": 0,
+    })
+
+    for b in committed_blocks:
+        minutes = b.minutes or 0
+        if minutes <= 0:
+            continue
+        cat = _dominant_category(b).lower()
+        if cat in _EXCLUDE_CATEGORIES:
+            continue
+        key = _bucket_key(b.start, period)
+        if _is_billable_block(b):
+            buckets[key]["billable_min"] += minutes
+        else:
+            buckets[key]["non_billable_min"] += minutes
+
+    for b in uncat_blocks:
+        minutes = b.minutes or 0
+        if minutes <= 0:
+            continue
+        cat = _dominant_category(b).lower()
+        if cat == "idle":
+            continue
+        if (b.bundle_id or "").lower() == "__idle__":
+            continue
+        key = _bucket_key(b.start, period)
+        buckets[key]["uncategorized_min"] += minutes
 
     out = []
-    for row in agg:
-        bucket = row["bucket"]
-        total_min = row["total_min"] or 0
-        billable_min = row["billable_min"] or 0
+    for key in sorted(buckets.keys()):
+        v = buckets[key]
+        billable_h = round(v["billable_min"] / 60, 2)
+        non_billable_h = round(v["non_billable_min"] / 60, 2)
+        uncategorized_h = round(v["uncategorized_min"] / 60, 2)
         out.append({
-            "bucket": bucket.date().isoformat() if hasattr(bucket, "date") else str(bucket),
-            "total_hours": round(total_min / 60, 2),
-            "billable_hours": round(billable_min / 60, 2),
+            "bucket": key,
+            "billable_hours": billable_h,
+            "non_billable_hours": non_billable_h,
+            "uncategorized_hours": uncategorized_h,
+            "total_hours": round(billable_h + non_billable_h + uncategorized_h, 2),
         })
     return out
 
@@ -487,10 +520,9 @@ def reports_summary(request):
         if summary["totals"]["total_hours"] else 0.0
     )
 
-    # timeseries from a fresh queryset (Trunc needs a queryset, not a list)
-    ts_qs = _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id)
-    ts_qs = ts_qs.filter(minutes__gt=0)
-    series = _timeseries(ts_qs, period, start_utc, end_utc)
+    # Daily shape — 3-band stacked series (billable / non-billable / uncategorized)
+    # built from the block lists already in memory. No extra DB round-trip.
+    series = _daily_shape(blocks, uncat_blocks, period)
 
     return Response({
         "org_id": org.id,
@@ -601,3 +633,159 @@ def reports_summary_export(request):
     fname = f"time_summary_{org.slug}_{period}_{start_date}.csv"
     resp["Content-Disposition"] = f'attachment; filename="{fname}"'
     return resp
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Uncategorized drill-through — the "what's in the pile + common theme" view
+# ──────────────────────────────────────────────────────────────────────────
+def _normalize_signature(app_name: str, window_title: str, url: str) -> tuple:
+    """
+    Collapse an activity into a stable (theme_label, group_key) so blocks that
+    are really 'the same thing' bucket together. Mirrors the spirit of
+    get_categorization_data's signature logic but tuned for theme display.
+
+    Examples:
+      Outlook / "Inbox - wayne@..."     → "Outlook — Inbox"
+      Chrome  / "Acme 1040 - Google..." → "Chrome — Acme 1040"
+      Acrobat / "SOE26 - 247 TL WALL"   → "Acrobat — SOE26 - 247 TL WALL"
+    """
+    app = (app_name or "Unknown").strip()
+    # Strip common app suffixes/extensions for a cleaner label
+    app_clean = app.replace(".exe", "").replace(".EXE", "").strip().title()
+
+    title = (window_title or "").strip()
+    # Drop everything after a " - <app>" tail and trailing email/account noise
+    # Keep the first meaningful segment.
+    if title:
+        # Take the part before the last " - " if it looks like an app/account tail
+        segs = [s.strip() for s in title.split(" - ") if s.strip()]
+        head = segs[0] if segs else title
+        # Truncate very long heads
+        head = head[:60]
+        label = f"{app_clean} — {head}"
+    elif url:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").replace("www.", "")
+        label = f"{app_clean} — {host}" if host else app_clean
+    else:
+        label = app_clean
+
+    return (label, label.lower())
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def reports_uncategorized_detail(request):
+    """
+    GET /api/reports/uncategorized/
+      ?period=...&date=...&group_by=...&org_id=...   (same params as summary)
+      &user_id=<id>   (optional — narrow to one employee, e.g. clicking a row)
+
+    Returns the uncommitted (needs-review) blocks for the window, grouped by a
+    normalized app+title signature so a 'common theme' surfaces. Each theme
+    group carries total minutes, block count, and a few sample block ids the
+    frontend can deep-link into the Categorize tab.
+    """
+    period = (request.GET.get("period") or "week").lower()
+    if period not in _TRUNC:
+        period = "week"
+
+    group_by = (request.GET.get("group_by") or "employee").lower()
+    if group_by not in ("employee", "client"):
+        group_by = "employee"
+
+    date_str = request.GET.get("date")
+    anchor = parse_date(date_str) if date_str else timezone.localdate()
+    if not anchor:
+        anchor = timezone.localdate()
+
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+
+    can_see_all, forced_user_id = _resolve_scope(request, org)
+
+    # Optional narrowing to a single employee (row click in the table).
+    # Only honored if the requester is allowed to see others.
+    row_user_id = request.GET.get("user_id")
+    if row_user_id and can_see_all:
+        try:
+            forced_user_id = int(row_user_id)
+            can_see_all = False  # narrow the queryset to just this user
+        except (ValueError, TypeError):
+            pass
+
+    start_date, end_date = _resolve_period_window(period, anchor)
+    start_utc, end_utc = _day_bounds_utc(start_date, end_date)
+
+    uncat_blocks = list(
+        _block_queryset(
+            org, start_utc, end_utc, can_see_all, forced_user_id,
+            committed_only=False,
+        )
+    )
+
+    # Group by normalized signature
+    themes: dict = defaultdict(lambda: {
+        "label": "",
+        "minutes": 0,
+        "block_count": 0,
+        "sample_block_ids": [],
+        "apps": set(),
+    })
+    total_min = 0
+
+    for b in uncat_blocks:
+        minutes = b.minutes or 0
+        if minutes <= 0:
+            continue
+        cat = _dominant_category(b).lower()
+        if cat == "idle":
+            continue
+        if (b.bundle_id or "").lower() == "__idle__":
+            continue
+
+        label, key = _normalize_signature(b.app_name, b.window_title, b.url)
+        g = themes[key]
+        g["label"] = label
+        g["minutes"] += minutes
+        g["block_count"] += 1
+        g["apps"].add((b.app_name or "").strip())
+        if len(g["sample_block_ids"]) < 10:
+            g["sample_block_ids"].append(b.id)
+        total_min += minutes
+
+    groups = []
+    for key, g in themes.items():
+        groups.append({
+            "label": g["label"],
+            "hours": round(g["minutes"] / 60, 2),
+            "minutes": g["minutes"],
+            "block_count": g["block_count"],
+            "sample_block_ids": g["sample_block_ids"],
+            "pct_of_uncategorized": (
+                round(100 * g["minutes"] / total_min, 1) if total_min else 0.0
+            ),
+        })
+
+    groups.sort(key=lambda x: x["minutes"], reverse=True)
+
+    # A one-line "headline theme" the frontend can show as the wow stat.
+    headline = None
+    if groups:
+        top = groups[0]
+        headline = {
+            "label": top["label"],
+            "hours": top["hours"],
+            "pct": top["pct_of_uncategorized"],
+        }
+
+    return Response({
+        "org_id": org.id,
+        "period": period,
+        "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        "total_uncategorized_hours": round(total_min / 60, 2),
+        "group_count": len(groups),
+        "headline": headline,
+        "groups": groups,
+    })

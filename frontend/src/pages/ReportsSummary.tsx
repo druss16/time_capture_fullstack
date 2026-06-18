@@ -19,6 +19,8 @@ import {
   Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle, AlertCircle,
 } from "lucide-react";
 import { safeFetchJson, API_BASE } from "@/lib/api";
+import DailyShapeChart from "./DailyShapeChart";
+import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -98,6 +100,7 @@ export default function ReportsSummary({
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("total_hours");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [panelParams, setPanelParams] = useState<UncatPanelParams | null>(null);
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams({ period, group_by: groupBy });
@@ -263,6 +266,8 @@ export default function ReportsSummary({
         </div>
       )}
 
+      {data && <DailyShapeChart data={data.timeseries as any} />}
+
       {/* Group-by toggle */}
       <div className="flex items-center gap-2 text-xs">
         <span className="text-slate-500">Group by:</span>
@@ -342,10 +347,22 @@ export default function ReportsSummary({
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{fmtHours(r.total_hours)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700">{fmtHours(r.billable_hours)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-400">{fmtHours(r.non_billable_hours)}</td>
-                  <td className={
-                    "px-4 py-2.5 text-right tabular-nums " +
-                    ((r.uncategorized_hours || 0) > 0 ? "text-amber-600 font-medium" : "text-slate-300")
-                  }>{fmtHours(r.uncategorized_hours)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">
+                    {(r.uncategorized_hours || 0) > 0 ? (
+                      <button
+                        onClick={() => setPanelParams({
+                          period, group_by: groupBy, orgId: orgIdOverride,
+                          userId: groupBy === "employee" ? r.id : null,
+                          userLabel: r.label,
+                        })}
+                        className="text-amber-600 font-medium hover:underline"
+                      >
+                        {fmtHours(r.uncategorized_hours)}
+                      </button>
+                    ) : (
+                      <span className="text-slate-300">{fmtHours(r.uncategorized_hours)}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{r.utilization_pct}%</td>
                   {groupBy === "employee" && (
                     <td className="px-4 py-2.5 text-slate-500 text-xs">{r.top_client || "—"}</td>
@@ -356,6 +373,11 @@ export default function ReportsSummary({
           </table>
         </div>
       )}
+      <UncategorizedPanel
+        open={!!panelParams}
+        onClose={() => setPanelParams(null)}
+        params={panelParams || { period, group_by: groupBy }}
+      />
     </div>
   );
 }

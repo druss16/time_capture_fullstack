@@ -2241,6 +2241,66 @@ class OrgRoutingRule(models.Model):
 
 
 
+class RuleSuggestion(models.Model):
+    org = models.ForeignKey(
+        'tracker.Organization',
+        on_delete=models.CASCADE,
+        related_name='rule_suggestions',
+    )
+    suggested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='rule_suggestions_made',
+    )
+ 
+    # The blind-spot signature being flagged.
+    label = models.CharField(max_length=255, help_text="Display label, e.g. 'Outlook.Exe — Inbox'")
+    app_hint = models.CharField(max_length=255, blank=True, default='')
+    title_hint = models.CharField(max_length=255, blank=True, default='')
+ 
+    # Impact context captured at submission time (so reviewers see why it mattered).
+    minutes = models.IntegerField(default=0)
+    block_count = models.IntegerField(default=0)
+    user_count = models.IntegerField(default=0)
+ 
+    note = models.TextField(blank=True, default='', help_text="Optional free-text from the submitter.")
+ 
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('actioned', 'Actioned'),   # a rule was created from it
+        ('dismissed', 'Dismissed'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+ 
+    # Set when MavOps turns this into a real rule — links suggestion → rule.
+    resulting_rule = models.ForeignKey(
+        'tracker.OrgRoutingRule',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='source_suggestions',
+    )
+ 
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='rule_suggestions_reviewed',
+    )
+ 
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['org', 'status']),
+        ]
+ 
+    def __str__(self):
+        return f"Suggestion #{self.pk}: {self.label} ({self.status})"
+ 
+
+
 """
 Add this model to server/tracker/models.py — anywhere works, but the
 "CLASSIFICATION RULES" section (right after OrgRoutingRule) is most natural.

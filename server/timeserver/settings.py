@@ -380,6 +380,8 @@ MS_GRAPH_MAIL_REDIRECT_URI = os.getenv(
 
 FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', '')
 
+
+SUGGESTIONS_NOTIFY_EMAIL = "support@mavops.ai"
 # -----------------------------------------------------
 # Logging
 # -----------------------------------------------------

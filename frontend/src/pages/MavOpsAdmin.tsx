@@ -842,6 +842,164 @@ function CopyRulesModal({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ─── Rule Suggestions Tab — firm-flagged blind spots awaiting MavOps action ─────
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Paste this component into MavOpsAdmin.tsx, after RoutingRulesTab (before the
+// "Main Dashboard" section). It reuses the same `T` theme, `mono`, `card`,
+// `Btn`, `Badge`, `OrgPill`, `StatCard`, and `timeAgo` helpers already defined
+// in that file — no new imports needed.
+//
+// Reads: GET /api/reports/suggestions/?status=pending   (via apiFetch)
+// The "create rule" action drills the user into the org's rules view, where the
+// existing TemplatePickerModal / raw RuleFormModal flow handles actual creation.
+
+interface RuleSuggestionRow {
+  id: number;
+  org_id: number;
+  org_name: string | null;
+  label: string;
+  app_hint: string;
+  title_hint: string;
+  minutes: number;
+  hours: number;
+  block_count: number;
+  user_count: number;
+  note: string;
+  status: string;
+  suggested_by: string | null;
+  resulting_rule_id: number | null;
+  created_at: string | null;
+}
+
+interface SuggestionsTabProps {
+  apiFetch: (path: string, opts?: RequestInit) => Promise<any>;
+  flash: (msg: string, type?: "ok" | "err") => void;
+  onManageOrgRules: (orgId: number) => void;   // jumps to rules tab for that org
+}
+
+function SuggestionsTab({ apiFetch, flash, onManageOrgRules }: SuggestionsTabProps) {
+  const [rows, setRows] = useState<RuleSuggestionRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"pending" | "actioned" | "dismissed" | "all">("pending");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const q = statusFilter === "all" ? "" : `?status=${statusFilter}`;
+      const d = await apiFetch(`/reports/suggestions/${q}`);
+      setRows(d.suggestions || []);
+    } catch {
+      flash("Failed to load suggestions.", "err");
+    } finally {
+      setLoading(false);
+    }
+  }, [apiFetch, flash, statusFilter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const setStatus = async (id: number, status: "actioned" | "dismissed") => {
+    try {
+      await apiFetch(`/reports/suggestions/${id}/status/`, {
+        method: "POST",
+        body: JSON.stringify({ status }),
+      });
+      flash(`✓ Marked ${status}`);
+      load();
+    } catch (e: any) {
+      flash(`Update failed: ${e.message}`, "err");
+    }
+  };
+
+  const pendingCount = rows.filter(r => r.status === "pending").length;
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 20 }}>
+        <StatCard label="Showing" value={rows.length} color={T.text} />
+        <StatCard label="Pending" value={statusFilter === "pending" ? rows.length : pendingCount} color={T.yellow} />
+        <StatCard
+          label="Total Hours Flagged"
+          value={`${rows.reduce((s, r) => s + (r.hours || 0), 0).toFixed(1)}h`}
+          color={T.teal}
+        />
+      </div>
+
+      {/* Status filter */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {(["pending", "actioned", "dismissed", "all"] as const).map(f => (
+          <button key={f} onClick={() => setStatusFilter(f)}
+            style={{
+              background: statusFilter === f ? T.teal + "25" : "transparent",
+              border: `1px solid ${statusFilter === f ? T.teal : T.border}`,
+              color: statusFilter === f ? T.teal : T.textSub,
+              padding: "6px 16px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono,
+              textTransform: "capitalize" as const, fontWeight: statusFilter === f ? 600 : 400,
+            }}>
+            {f}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <Btn label="↻ refresh" onClick={load} outline color={T.textSub} small />
+      </div>
+
+      {loading && <div style={{ color: T.textMuted, ...mono, fontSize: 13, paddingTop: 12 }}>loading…</div>}
+
+      {!loading && rows.length === 0 && (
+        <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
+          <div style={{ color: T.textMuted, fontSize: 14, ...mono }}>
+            no {statusFilter === "all" ? "" : statusFilter} suggestions
+          </div>
+        </div>
+      )}
+
+      {rows.map(r => (
+        <div key={r.id} style={{ ...card, padding: "14px 20px" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" as const }}>
+                {r.org_name && <OrgPill name={r.org_name} />}
+                <code style={{ fontSize: 12, color: T.text, ...mono, background: T.bg, padding: "3px 10px", borderRadius: 3, fontWeight: 600 }}>
+                  {r.label}
+                </code>
+                {r.status === "pending" && <Badge label="pending" color={T.yellow} />}
+                {r.status === "actioned" && <Badge label="actioned" color={T.green} />}
+                {r.status === "dismissed" && <Badge label="dismissed" color={T.textMuted} />}
+              </div>
+              <div style={{ display: "flex", gap: 16, alignItems: "center", fontSize: 11, color: T.textMuted, ...mono, flexWrap: "wrap" as const }}>
+                <span style={{ color: T.teal, fontWeight: 600 }}>{r.hours.toFixed(1)}h</span>
+                <span>{r.block_count} block{r.block_count === 1 ? "" : "s"}</span>
+                <span>{r.user_count} employee{r.user_count === 1 ? "" : "s"}</span>
+                {r.suggested_by && <span>flagged by {r.suggested_by}</span>}
+                {r.created_at && <span>{timeAgo(r.created_at)}</span>}
+              </div>
+              {r.note && (
+                <div style={{ marginTop: 8, padding: "8px 12px", background: T.bg, borderLeft: `2px solid ${T.purple}`, borderRadius: 3, fontSize: 12, color: T.textSub }}>
+                  "{r.note}"
+                </div>
+              )}
+              {r.resulting_rule_id && (
+                <div style={{ marginTop: 6, fontSize: 11, color: T.green, ...mono }}>
+                  → became rule #{r.resulting_rule_id}
+                </div>
+              )}
+            </div>
+
+            {r.status === "pending" && (
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <Btn label="create rule →" onClick={() => onManageOrgRules(r.org_id)} color={T.teal} small />
+                <Btn label="actioned" onClick={() => setStatus(r.id, "actioned")} outline color={T.green} small />
+                <Btn label="dismiss" onClick={() => setStatus(r.id, "dismissed")} outline color={T.textMuted} small />
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -850,7 +1008,7 @@ export default function MavOpsAdmin() {
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
-  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules">("orgs");
+  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "suggestions">("orgs");
 
   const [filterOrg, setFilterOrg] = useState<number | null>(null);
   const [filterHostname, setFilterHostname] = useState("");
@@ -1021,7 +1179,7 @@ export default function MavOpsAdmin() {
     return [d.machine_name, d.user, d.org_name].some(s => s.toLowerCase().includes(search.toLowerCase()));
   });
 
-  const TABS = ["orgs", "devices", "logs", "errors", "rules"] as const;
+  const TABS = ["orgs", "devices", "logs", "errors", "rules", "suggestions"] as const;
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'DM Sans', sans-serif" }}>
@@ -1485,6 +1643,14 @@ export default function MavOpsAdmin() {
             flash={flash}
             filterOrg={filterOrg}
             setFilterOrg={setFilterOrg}
+          />
+        )}
+        {/* ══ SUGGESTIONS ══ */}
+        {tab === "suggestions" && (
+          <SuggestionsTab
+            apiFetch={apiFetch}
+            flash={flash}
+            onManageOrgRules={(orgId) => { setFilterOrg(orgId); setTab("rules"); }}
           />
         )}
       </div>

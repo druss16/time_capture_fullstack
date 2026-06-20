@@ -1229,3 +1229,157 @@ def reports_create_rule(request):
             "Rule created and active."
         ),
     })
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Rule suggestions — firm users flag a blind spot; MavOps reviews & creates
+# ──────────────────────────────────────────────────────────────────────────
+# NOTE: requires the RuleSuggestion model (migration 0118). Import is done
+# lazily inside the functions so this module still imports cleanly before the
+# migration is applied (avoids a hard ImportError on deploy ordering).
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def reports_submit_suggestion(request):
+    """
+    POST /api/reports/suggest-rule/
+    Body: { label, app_hint, title_hint, minutes, block_count, user_count, note?, org_id? }
+
+    Any authenticated firm user may submit (it's a problem report, not a rule).
+    Stores a RuleSuggestion and best-effort emails MavOps. The email failing
+    never blocks the record from saving.
+    """
+    from tracker.models import RuleSuggestion  # lazy (post-migration)
+
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+
+    data = request.data or {}
+    label = (data.get("label") or "").strip()
+    if not label:
+        return Response({"error": "label is required."}, status=400)
+
+    def _int(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+
+    suggestion = RuleSuggestion.objects.create(
+        org=org,
+        suggested_by=request.user if request.user.is_authenticated else None,
+        label=label[:255],
+        app_hint=(data.get("app_hint") or "")[:255],
+        title_hint=(data.get("title_hint") or "")[:255],
+        minutes=_int(data.get("minutes")),
+        block_count=_int(data.get("block_count")),
+        user_count=_int(data.get("user_count")),
+        note=(data.get("note") or "").strip(),
+        status="pending",
+    )
+
+    # Best-effort email notification — never block on it.
+    try:
+        from tracker.email_service import send_rule_suggestion_notification
+        send_rule_suggestion_notification(
+            org_name=org.name,
+            submitted_by=(request.user.get_full_name() or request.user.username) if request.user.is_authenticated else "Unknown",
+            label=suggestion.label,
+            minutes=suggestion.minutes,
+            block_count=suggestion.block_count,
+            user_count=suggestion.user_count,
+            note=suggestion.note,
+            suggestion_id=suggestion.id,
+        )
+    except Exception:
+        # Swallow — the suggestion is saved; the notification is a convenience.
+        pass
+
+    return Response({
+        "created": True,
+        "suggestion_id": suggestion.id,
+        "message": "Sent to MavOps — thanks! We'll review this and set up a rule.",
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def reports_list_suggestions(request):
+    """
+    GET /api/reports/suggestions/?status=pending&org_id=
+    Staff-only. Lists rule suggestions for review in MavOps Admin.
+    """
+    from tracker.models import RuleSuggestion  # lazy
+
+    if not request.user.is_staff:
+        return Response({"error": "Staff only."}, status=403)
+
+    qs = RuleSuggestion.objects.select_related("org", "suggested_by", "resulting_rule")
+
+    status_filter = (request.GET.get("status") or "").strip()
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+
+    org_id = request.GET.get("org_id")
+    if org_id:
+        try:
+            qs = qs.filter(org_id=int(org_id))
+        except (ValueError, TypeError):
+            pass
+
+    out = []
+    for s in qs[:200]:
+        out.append({
+            "id": s.id,
+            "org_id": s.org_id,
+            "org_name": s.org.name if s.org_id else None,
+            "label": s.label,
+            "app_hint": s.app_hint,
+            "title_hint": s.title_hint,
+            "minutes": s.minutes,
+            "hours": round((s.minutes or 0) / 60, 2),
+            "block_count": s.block_count,
+            "user_count": s.user_count,
+            "note": s.note,
+            "status": s.status,
+            "suggested_by": (
+                (s.suggested_by.get_full_name() or s.suggested_by.username)
+                if s.suggested_by_id else None
+            ),
+            "resulting_rule_id": s.resulting_rule_id,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        })
+
+    return Response({"suggestions": out, "count": len(out)})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def reports_suggestion_set_status(request, suggestion_id):
+    """
+    POST /api/reports/suggestions/<id>/status/
+    Body: { status: 'actioned' | 'dismissed' }
+    Staff-only. Marks a suggestion reviewed (and records who/when).
+    """
+    from tracker.models import RuleSuggestion  # lazy
+
+    if not request.user.is_staff:
+        return Response({"error": "Staff only."}, status=403)
+
+    new_status = (request.data or {}).get("status", "").strip()
+    if new_status not in ("actioned", "dismissed", "pending"):
+        return Response({"error": "Invalid status."}, status=400)
+
+    try:
+        s = RuleSuggestion.objects.get(id=suggestion_id)
+    except RuleSuggestion.DoesNotExist:
+        return Response({"error": "Not found."}, status=404)
+
+    s.status = new_status
+    s.reviewed_at = timezone.now()
+    s.reviewed_by = request.user if request.user.is_authenticated else None
+    s.save(update_fields=["status", "reviewed_at", "reviewed_by"])
+
+    return Response({"updated": True, "id": s.id, "status": s.status})

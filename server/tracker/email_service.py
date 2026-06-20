@@ -791,3 +791,54 @@ def send_timesheet_rejected(
         html_content=html,
         categories=["timesheet_rejected"],
     )
+
+# ============================================================================
+# RULE SUGGESTION NOTIFICATION
+# ============================================================================
+# Append this function to tracker/email_service.py.
+
+def send_rule_suggestion_notification(
+    *,
+    org_name: str,
+    submitted_by: str,
+    label: str,
+    minutes: int,
+    block_count: int,
+    user_count: int,
+    note: str = "",
+    suggestion_id: int = None,
+):
+    """
+    Notify MavOps that a firm user flagged an uncategorized activity as a
+    candidate for a routing/categorization rule. Best-effort — callers wrap
+    this in try/except so a failed email never blocks the suggestion saving.
+    """
+    hours = round((minutes or 0) / 60, 1)
+    note_html = (
+        f'<p style="margin:12px 0;padding:10px;background:#f8fafc;border-left:3px solid #8b5cf6;">'
+        f'<strong>Note from submitter:</strong><br>{note}</p>'
+        if note else ""
+    )
+    html = f"""
+    <div style="font-family:system-ui,sans-serif;max-width:520px;">
+      <h2 style="color:#7c3aed;margin-bottom:4px;">New rule suggestion</h2>
+      <p style="color:#64748b;margin-top:0;">From <strong>{submitted_by}</strong> at <strong>{org_name}</strong></p>
+      <table style="width:100%;border-collapse:collapse;font-size:14px;">
+        <tr><td style="padding:6px 0;color:#64748b;">Activity</td><td style="padding:6px 0;font-weight:600;">{label}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748b;">Uncategorized time</td><td style="padding:6px 0;">{hours}h ({minutes} min)</td></tr>
+        <tr><td style="padding:6px 0;color:#64748b;">Blocks</td><td style="padding:6px 0;">{block_count}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748b;">Employees affected</td><td style="padding:6px 0;">{user_count}</td></tr>
+      </table>
+      {note_html}
+      <p style="color:#94a3b8;font-size:12px;margin-top:16px;">
+        Review in MavOps Admin → Rule Suggestions{f' (#{suggestion_id})' if suggestion_id else ''}.
+      </p>
+    </div>
+    """
+    return send_email(
+        to_email=getattr(settings, "SUGGESTIONS_NOTIFY_EMAIL", "support@mavops.ai"),
+        subject=f"Rule suggestion from {org_name}: {label}",
+        html_content=html,
+        from_name="TimeTracker",
+        categories=["rule_suggestion"],
+    )

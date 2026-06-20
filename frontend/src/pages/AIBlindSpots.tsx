@@ -81,6 +81,50 @@ export default function AIBlindSpots({
 
   // Rule-creation dialog + the org's clients (for the route dropdown).
   const [ruleTheme, setRuleTheme] = useState<RuleTheme | null>(null);
+  // Non-staff "Flag to MavOps" flow: which theme's note box is open, and the note.
+  const [flaggingIdx, setFlaggingIdx] = useState<number | null>(null);
+  const [flagNote, setFlagNote] = useState("");
+  const [flaggedKeys, setFlaggedKeys] = useState<Set<string>>(new Set());
+  const [flagSaving, setFlagSaving] = useState(false);
+
+  const submitSuggestion = async (t: ThemeGroup) => {
+    setFlagSaving(true);
+    try {
+      const token = getAuthToken();
+      const parsed = parseTheme(t.label);
+      const impOrg = localStorage.getItem("impersonating_org_id");
+      const effOrg = orgIdOverride || (impOrg ? Number(impOrg) : null);
+      const body: any = {
+        label: t.label,
+        app_hint: parsed.appHint,
+        title_hint: parsed.titleHint,
+        minutes: t.minutes,
+        block_count: t.block_count,
+        user_count: t.user_count || 0,
+        note: flagNote.trim(),
+      };
+      if (effOrg) body.org_id = effOrg;
+      const res = await fetch(`${API_BASE}/reports/suggest-rule/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `Failed (${res.status})`);
+      setFlaggedKeys((prev) => new Set(prev).add(t.label));
+      setToast(json.message || "Sent to MavOps — thanks!");
+      setFlaggingIdx(null);
+      setFlagNote("");
+    } catch (e: any) {
+      setToast(e.message || "Couldn't send — try again.");
+    } finally {
+      setFlagSaving(false);
+    }
+  };
   const [clients, setClients] = useState<{ id: number; name: string }[]>([]);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -259,7 +303,7 @@ export default function AIBlindSpots({
                       Firm-wide pattern — a rule here helps {t.user_count} people
                     </div>
                   )}
-                  <div className="mt-2 flex justify-end">
+                  <div className="mt-2 flex flex-col items-end gap-2">
                     {isStaff ? (
                       <button
                         onClick={() => setRuleTheme(parseTheme(t.label))}
@@ -268,10 +312,43 @@ export default function AIBlindSpots({
                         <Plus className="h-3 w-3" />
                         Create rule
                       </button>
-                    ) : (
-                      <span className="text-[11px] text-slate-300">
-                        Flag to MavOps to add a rule
+                    ) : flaggedKeys.has(t.label) ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Flagged to MavOps
                       </span>
+                    ) : flaggingIdx === i ? (
+                      <div className="w-full max-w-xs flex flex-col items-end gap-1.5">
+                        <textarea
+                          value={flagNote}
+                          onChange={(e) => setFlagNote(e.target.value)}
+                          placeholder="Optional: which client/category should this be?"
+                          rows={2}
+                          className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-[11px]"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { setFlaggingIdx(null); setFlagNote(""); }}
+                            className="text-[11px] text-slate-500 hover:text-slate-700 px-2 py-1"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => submitSuggestion(t)}
+                            disabled={flagSaving}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-white bg-violet-600 hover:bg-violet-700 rounded-md px-2.5 py-1 disabled:opacity-50"
+                          >
+                            {flagSaving ? "Sending…" : "Send to MavOps"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setFlaggingIdx(i); setFlagNote(""); }}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-violet-700 border border-slate-200 hover:border-violet-300 rounded-md px-2 py-1 transition-colors"
+                      >
+                        Flag to MavOps
+                      </button>
                     )}
                   </div>
                 </div>

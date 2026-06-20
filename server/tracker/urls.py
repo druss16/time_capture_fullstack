@@ -481,4 +481,8 @@ urlpatterns = [
 
     path("reports/create-rule/", views_reports.reports_create_rule),
 
+    path("reports/suggest-rule/", views_reports.reports_submit_suggestion),
+    path("reports/suggestions/", views_reports.reports_list_suggestions),
+    path("reports/suggestions/<int:suggestion_id>/status/", views_reports.reports_suggestion_set_status),
+
 ]

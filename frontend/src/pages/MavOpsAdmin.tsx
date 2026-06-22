@@ -898,7 +898,7 @@ function SuggestionsTab({ apiFetch, flash, onManageOrgRules }: SuggestionsTabPro
 
   useEffect(() => { load(); }, [load]);
 
-  const setStatus = async (id: number, status: "actioned" | "dismissed") => {
+  const setStatus = async (id: number, status: "actioned" | "dismissed" | "pending") => {
     try {
       await apiFetch(`/reports/suggestions/${id}/status/`, {
         method: "POST",
@@ -990,6 +990,11 @@ function SuggestionsTab({ apiFetch, flash, onManageOrgRules }: SuggestionsTabPro
                 <Btn label="create rule →" onClick={() => onManageOrgRules(r.org_id)} color={T.teal} small />
                 <Btn label="actioned" onClick={() => setStatus(r.id, "actioned")} outline color={T.green} small />
                 <Btn label="dismiss" onClick={() => setStatus(r.id, "dismissed")} outline color={T.textMuted} small />
+              </div>
+            )}
+            {r.status !== "pending" && (
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <Btn label="↩ re-open" onClick={() => setStatus(r.id, "pending")} outline color={T.yellow} small />
               </div>
             )}
           </div>

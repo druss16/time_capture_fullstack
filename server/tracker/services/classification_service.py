@@ -4216,23 +4216,31 @@ class ClassificationService:
                 decision.client_id = None
 
                 # Drop AI category — it was predicated on the now-cleared client.
-                # tool_category SURVIVES: it's a fact about the tool (QuickBooks
-                # is bookkeeping) independent of which client the work was for.
-                # We re-seed decision.category from the surviving tool_category
-                # signal so the block keeps its category even with no client.
                 ai_cat_signals = [s for s in decision.matched_signals if s.type == 'ai_category']
                 if ai_cat_signals:
                     decision.is_billable = True  # reset so FIX 6 logic fires correctly
                     decision.matched_signals = [
                         s for s in decision.matched_signals if s.type != 'ai_category'
                     ]
-                    surviving_tool_cat = next(
-                        (s for s in decision.matched_signals if s.type == 'tool_category'),
-                        None,
-                    )
-                    decision.category = (
-                        surviving_tool_cat.proposed_category if surviving_tool_cat else None
-                    )
+
+                # tool_category SURVIVES a client clear: it's a fact about the
+                # tool (QuickBooks is bookkeeping) independent of which client
+                # the work was for. Re-seed decision.category from it whenever
+                # one is present — runs regardless of whether an ai_category
+                # was dropped above, because the QB case often has NO
+                # ai_category (Stage 9.6 supplied the category and Stage 10
+                # skipped). Without this outside the if, the re-seed silently
+                # never fired for the exact blocks it was meant to protect.
+                surviving_tool_cat = next(
+                    (s for s in decision.matched_signals if s.type == 'tool_category'),
+                    None,
+                )
+                if surviving_tool_cat:
+                    decision.category = surviving_tool_cat.proposed_category
+                elif ai_cat_signals:
+                    # AI category was dropped and there's no tool_category to
+                    # fall back on — clear the orphaned category.
+                    decision.category = None
 
                 decision.matched_signals.append(Signal(
                     type='fix7_stickiness_rejected',

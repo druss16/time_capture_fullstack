@@ -68,6 +68,8 @@ interface NeighborInfo {
   window_title: string;
   same_app: boolean;
   same_qb_session: boolean;
+  category: string;
+  is_billable: boolean;
 }
 
 interface ContextSuggestion {
@@ -180,27 +182,54 @@ function SignalIcon({ type }: { type: Signal["type"] }) {
 
 // ─── Surrounding context section (v0.2 — honest memory-jogger) ────────────────
 
-function NeighborFact({ side, info }: { side: "before" | "after"; info: NeighborInfo | null }) {
-  const label = side === "before" ? "Right before" : "Right after";
+function NeighborAssignButton({
+  side,
+  info,
+  onAssign,
+  assigning,
+}: {
+  side: "before" | "after";
+  info: NeighborInfo | null;
+  onAssign: (clientId: number, clientName: string, category?: string) => void;
+  assigning: boolean;
+}) {
   if (!info) {
     return (
-      <div className="flex gap-2 text-[12px] py-0.5">
-        <span className="text-slate-400 w-24 shrink-0">{label}</span>
+      <div className="flex gap-2 text-[12px] py-1">
+        <span className="text-slate-400 w-24 shrink-0">
+          {side === "before" ? "Right before" : "Right after"}
+        </span>
         <span className="text-slate-400 italic">nothing else tracked nearby</span>
       </div>
     );
   }
+
+  const when =
+    info.gap_seconds !== null
+      ? `${fmtGapHuman(info.gap_seconds)} ${side === "before" ? "before" : "after"}`
+      : side === "before" ? "before" : "after";
+
+  const billable = info.is_billable;
+  const styles = billable
+    ? { bg: "#E1F5EE", border: "#5DCAA5", text: "#04342C", sub: "#0F6E56" }
+    : { bg: "#F1EFE8", border: "#B4B2A9", text: "#2C2C2A", sub: "#5F5E5A" };
+
   return (
-    <div className="flex gap-2 text-[12px] py-0.5">
-      <span className="text-slate-500 w-24 shrink-0">{label}</span>
-      <span className="text-slate-700">
+    <button
+      onClick={() => onAssign(info.client_id, info.client_name || "", info.category)}
+      disabled={assigning}
+      className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md text-left disabled:opacity-50 transition-colors"
+      style={{ background: styles.bg, border: `0.5px solid ${styles.border}` }}
+    >
+      <span className="text-[13px]" style={{ color: styles.text }}>
+        <span style={{ color: styles.sub }}>{when} · </span>
         <span className="font-semibold">{info.client_name}</span>
-        {info.window_title ? <span className="text-slate-500"> — {info.window_title}</span> : null}
-        {info.gap_seconds !== null && (
-          <span className="text-slate-400"> ({fmtGapHuman(info.gap_seconds)} {side === "before" ? "earlier" : "later"})</span>
-        )}
+        <span style={{ color: styles.sub }}> · {billable ? "billable" : "non-billable"}</span>
       </span>
-    </div>
+      <span className="text-[12px] font-semibold whitespace-nowrap" style={{ color: styles.sub }}>
+        use this →
+      </span>
+    </button>
   );
 }
 
@@ -252,10 +281,10 @@ function SurroundingContext({
         </div>
       )}
 
-      {/* Neutral before/after facts — always shown, never misleading */}
-      <div className="mb-1">
-        <NeighborFact side="before" info={before} />
-        <NeighborFact side="after" info={after} />
+      {/* Before/after neighbors as one-tap assign buttons, colored by billable */}
+      <div className="flex flex-col gap-2 mb-1">
+        <NeighborAssignButton side="before" info={before} onAssign={onAssign} assigning={assigning} />
+        <NeighborAssignButton side="after" info={after} onAssign={onAssign} assigning={assigning} />
       </div>
 
       {/* Day-dominant cue — only present when one client owned the majority of the day */}
@@ -320,7 +349,7 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
     };
   }, [blockId]);
 
-  const handleAssign = async (clientId: number, clientName: string) => {
+const handleAssign = async (clientId: number, clientName: string, category?: string) => {
     setAssigning(true);
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
@@ -328,7 +357,7 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           client_id: clientId,
-          category: "Accounting/Bookkeeping",   // QB work default; user can edit after
+          category: category || "Accounting/Bookkeeping",
         }),
       });
       setAssignedTo(clientName);

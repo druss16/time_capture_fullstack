@@ -199,6 +199,8 @@ def _neighbor_payload(neighbor: Block, target: Block, side: str) -> Dict[str, An
         "window_title": (neighbor.window_title or "")[:80],
         "same_app": same_app,
         "same_qb_session": same_qb_session,
+        "category": neighbor.proposed_category or "",
+        "is_billable": bool(neighbor.is_billable),
     }
 
 

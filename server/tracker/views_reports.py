@@ -53,11 +53,14 @@ from tracker.views import (
 # ──────────────────────────────────────────────────────────────────────────
 # Period handling
 # ──────────────────────────────────────────────────────────────────────────
+from django.db.models.functions import TruncYear  # add to the existing functions import
+
 _TRUNC = {
     "day": TruncDay,
     "week": TruncWeek,
     "month": TruncMonth,
     "quarter": TruncQuarter,
+    "year": TruncYear,
 }
 
 # Categories that should never count toward billable/total (mirrors today_time).
@@ -172,6 +175,11 @@ def _resolve_period_window(period: str, anchor_date):
             nxt = first.replace(month=end_month + 1, day=1)
         return first, nxt - timedelta(days=1)
 
+    if period == "year":
+        first = d.replace(month=1, day=1)
+        last = d.replace(month=12, day=31)
+        return first, last
+
     # default: treat as day
     return d, d
 
@@ -240,8 +248,11 @@ def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id,
     )
 
     if committed_only:
+        # Match Daily Review (today_time), which is the source of truth: it
+        # counts proposed AND committed time, not committed-only. Without this
+        # the dashboard under-reports billable hours vs the day view.
         qs = qs.filter(
-            Q(classification_state="committed") | Q(is_categorized=True)
+            Q(classification_state__in=["committed", "proposed"]) | Q(is_categorized=True)
         )
     else:
         # The review pile — match get_categorization_data() EXACTLY so the
@@ -536,7 +547,15 @@ def reports_summary(request):
 
     can_see_all, forced_user_id = _resolve_scope(request, org)
 
-    start_date, end_date = _resolve_period_window(period, anchor)
+    # Custom range: if explicit start & end are passed, use them directly and
+    # ignore period/anchor. Powers the calendar start–end picker on the
+    # dashboard. Falls back to the named-period window otherwise.
+    custom_start = parse_date(request.GET.get("start") or "")
+    custom_end = parse_date(request.GET.get("end") or "")
+    if custom_start and custom_end and custom_start <= custom_end:
+        start_date, end_date = custom_start, custom_end
+    else:
+        start_date, end_date = _resolve_period_window(period, anchor)
     start_utc, end_utc = _day_bounds_utc(start_date, end_date)
 
     blocks = list(
@@ -656,7 +675,15 @@ def reports_summary_export(request):
         return Response({"error": "No organization found"}, status=404)
 
     can_see_all, forced_user_id = _resolve_scope(request, org)
-    start_date, end_date = _resolve_period_window(period, anchor)
+    # Custom range: if explicit start & end are passed, use them directly and
+    # ignore period/anchor. Powers the calendar start–end picker on the
+    # dashboard. Falls back to the named-period window otherwise.
+    custom_start = parse_date(request.GET.get("start") or "")
+    custom_end = parse_date(request.GET.get("end") or "")
+    if custom_start and custom_end and custom_start <= custom_end:
+        start_date, end_date = custom_start, custom_end
+    else:
+        start_date, end_date = _resolve_period_window(period, anchor)
     start_utc, end_utc = _day_bounds_utc(start_date, end_date)
 
     blocks = list(
@@ -807,7 +834,15 @@ def reports_uncategorized_detail(request):
         except (ValueError, TypeError):
             pass
 
-    start_date, end_date = _resolve_period_window(period, anchor)
+    # Custom range: if explicit start & end are passed, use them directly and
+    # ignore period/anchor. Powers the calendar start–end picker on the
+    # dashboard. Falls back to the named-period window otherwise.
+    custom_start = parse_date(request.GET.get("start") or "")
+    custom_end = parse_date(request.GET.get("end") or "")
+    if custom_start and custom_end and custom_start <= custom_end:
+        start_date, end_date = custom_start, custom_end
+    else:
+        start_date, end_date = _resolve_period_window(period, anchor)
     start_utc, end_utc = _day_bounds_utc(start_date, end_date)
 
     uncat_blocks = list(
@@ -966,9 +1001,16 @@ def reports_ai_performance(request):
 
     can_see_all, forced_user_id = _resolve_scope(request, org)
 
-    start_date, end_date = _resolve_period_window(period, anchor)
+    # Custom range: if explicit start & end are passed, use them directly and
+    # ignore period/anchor. Powers the calendar start–end picker on the
+    # dashboard. Falls back to the named-period window otherwise.
+    custom_start = parse_date(request.GET.get("start") or "")
+    custom_end = parse_date(request.GET.get("end") or "")
+    if custom_start and custom_end and custom_start <= custom_end:
+        start_date, end_date = custom_start, custom_end
+    else:
+        start_date, end_date = _resolve_period_window(period, anchor)
     start_utc, end_utc = _day_bounds_utc(start_date, end_date)
-
     # All non-deleted blocks in the window (both committed and not), scoped.
     qs = Block.objects.filter(
         org=org,

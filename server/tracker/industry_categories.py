@@ -152,7 +152,7 @@ CPA_TOOL_DETECTION = {
         "confidence": 0.95
     },
     "quickbooks": {
-        "keywords": ["quickbooks", "qbo", "quickbooks online"],
+        "keywords": ["quickbooks", "qbo", "quickbooks online", "qbw", "qbw.exe", "qbw32"],
         "domains": ["quickbooks.intuit.com", "qbo.intuit.com", "app.quickbooks.com"],
         "category": "Accounting/Bookkeeping",
         "confidence": 0.93

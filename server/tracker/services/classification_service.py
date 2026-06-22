@@ -410,6 +410,11 @@ class ClassificationService:
         # weak enough to defer to direct title evidence.
         self._stage_9_5_bracket_attribution(block, decision)
 
+        # Stage 9.6 — Deterministic tool→category from industry config.
+        # Backstops Stage 10 so routine tool work (QuickBooks→Bookkeeping,
+        # Figma→Design) is categorized without an LLM call.
+        self._stage_9_6_tool_category(block, decision)
+
         # Stage 10 — AI inference (last resort, only when nothing else fired)
         # Calls OpenAI to classify when stages 0-9 produced no signals.
         # Cost-controlled: only invoked if no Signal has strength >= 0.65.
@@ -3297,6 +3302,98 @@ class ClassificationService:
                         },
                     ))
 
+    def _stage_9_6_tool_category(self, block, decision: ClassificationDecision):
+        """
+        Stage 9.6 — Deterministic tool→category from the industry config.
+
+        Reads get_combined_tool_detection(industry) (the single source of
+        truth in industry_categories.py) and matches the block's app/title/url
+        against known tool patterns. Emits a CATEGORY-ONLY signal — never a
+        client. This is the "common sense" layer: QuickBooks is bookkeeping,
+        Figma is design, VS Code is development. Facts about the tool, not
+        inferences, so they shouldn't depend on an LLM round-trip.
+
+        Fires only when no earlier stage produced a category signal, so it
+        backstops Stage 10 without overriding anything that already decided.
+        Strength caps below the tool's own confidence so a real AI category
+        (Stage 10) or an org rule still wins when present.
+        """
+        # Don't override a category another stage already proposed
+        if decision.category or any(s.proposed_category for s in decision.matched_signals):
+            return
+
+        try:
+            from tracker.industry_categories import get_combined_tool_detection
+        except ImportError:
+            return
+
+        industry = getattr(self.org, 'industry_type', None) or 'general'
+        tool_map = get_combined_tool_detection(industry)
+        if not tool_map:
+            return
+
+        # Build the same haystack the client stages use (QB bracket stripped,
+        # path noise cleaned, all distinct event titles aggregated).
+        haystack = self._build_haystack(block)
+        app_lower = (block.app_name or '').lower()
+        url_lower = (block.url or '').strip().lower()
+        domain = self._extract_domain(url_lower)
+
+        best_category = None
+        best_confidence = 0.0
+        best_tool = ''
+
+        for tool_name, spec in tool_map.items():
+            category = spec.get('category')
+            conf = spec.get('confidence', 0.0)
+            if not category or conf <= best_confidence:
+                continue
+
+            matched = False
+
+            # Domain match (strongest, most specific)
+            for d in spec.get('domains', []):
+                if d and domain and (domain == d or domain.endswith('.' + d) or d in domain):
+                    matched = True
+                    break
+
+            # Keyword match against app name + haystack
+            if not matched:
+                for kw in spec.get('keywords', []):
+                    if not kw:
+                        continue
+                    k = kw.lower()
+                    if k in app_lower or k in haystack:
+                        matched = True
+                        break
+
+            if matched:
+                best_category = category
+                best_confidence = conf
+                best_tool = tool_name
+
+        if not best_category:
+            return
+
+        # Cap so a genuine Stage 10 AI category or an org rule still outranks
+        # this. Tool detection is a strong backstop, not the final word.
+        strength = min(0.80, best_confidence)
+
+        decision.matched_signals.append(Signal(
+            type='tool_category',
+            strength=strength,
+            evidence=(
+                f"Tool '{best_tool}' detected ({app_lower or domain or 'title'}) "
+                f"→ category '{best_category}' (industry={industry})"
+            ),
+            detail={
+                'category':   best_category,
+                'tool':       best_tool,
+                'confidence': best_confidence,
+                'industry':   industry,
+            },
+        ))
+
     # -------------------------------------------------------------------------
     # STAGE 10 — AI inference (last resort, cost-controlled)
     # -------------------------------------------------------------------------
@@ -3745,6 +3842,36 @@ class ClassificationService:
             billable = parsed.get('billable', True)
             reasoning = parsed.get('reasoning', '')
 
+            # v1.3.72: Repair near-miss category strings instead of discarding.
+            # The model frequently returns valid-but-non-exact names
+            # ("Bookkeeping" for "Accounting/Bookkeeping", "Email" for
+            # "Email/Communication"). The hard `not in allowed_categories`
+            # discard nuked these → no category signal → block fell through to
+            # the FIX 6b "General Client Work" fallback. validate_and_fix_ai_response
+            # is the same safety net the batch path already uses: exact match →
+            # KNOWN_FIXES alias → difflib fuzzy (>0.75). Only a truly
+            # unrecognizable string falls through to the discard below.
+            original_category = category
+            if category not in allowed_categories:
+                try:
+                    from tracker.industry_categories import validate_and_fix_ai_response
+                    fixed = validate_and_fix_ai_response(
+                        [{'categories': {category: 1.0}, 'confidence': ai_confidence}],
+                        industry_type,
+                    )
+                    repaired = next(iter(fixed[0].get('categories', {})), category)
+                    if repaired in allowed_categories:
+                        logger.info(
+                            f"[STAGE-10-CAT] Block {block.pk}: repaired category "
+                            f"'{original_category}' → '{repaired}'"
+                        )
+                        category = repaired
+                except Exception as e:
+                    logger.warning(
+                        f"[STAGE-10-CAT] Block {block.pk}: category repair failed "
+                        f"for '{original_category}' — {e}"
+                    )
+
             self._log_ai_call(
                 operation_type='stage_10_category',
                 input_data={
@@ -3753,17 +3880,22 @@ class ClassificationService:
                     'client_name': client_name,
                 },
                 output_data={
-                    'category':      category,
-                    'confidence':    ai_confidence,
-                    'is_billable':   billable,
-                    'reasoning':     reasoning[:200],
+                    'category':          category,
+                    'original_category': original_category,
+                    'confidence':        ai_confidence,
+                    'is_billable':       billable,
+                    'reasoning':         reasoning[:200],
                 },
                 processing_time_ms=processing_ms,
                 success=True,
             )
 
+            # Still unrecognizable after repair — genuinely garbage, discard.
             if category not in allowed_categories:
-                logger.warning(f"AI returned unknown category '{category}' for block {block.pk} — discarding")
+                logger.warning(
+                    f"AI returned unknown category '{original_category}' for "
+                    f"block {block.pk} — unrepairable, discarding"
+                )
                 return None
 
             if ai_confidence < 0.5:
@@ -4083,14 +4215,24 @@ class ClassificationService:
                 cleared_client_id = decision.client_id
                 decision.client_id = None
 
-                # Drop AI category — it was predicated on the now-cleared client
+                # Drop AI category — it was predicated on the now-cleared client.
+                # tool_category SURVIVES: it's a fact about the tool (QuickBooks
+                # is bookkeeping) independent of which client the work was for.
+                # We re-seed decision.category from the surviving tool_category
+                # signal so the block keeps its category even with no client.
                 ai_cat_signals = [s for s in decision.matched_signals if s.type == 'ai_category']
                 if ai_cat_signals:
-                    decision.category = None
                     decision.is_billable = True  # reset so FIX 6 logic fires correctly
                     decision.matched_signals = [
                         s for s in decision.matched_signals if s.type != 'ai_category'
                     ]
+                    surviving_tool_cat = next(
+                        (s for s in decision.matched_signals if s.type == 'tool_category'),
+                        None,
+                    )
+                    decision.category = (
+                        surviving_tool_cat.proposed_category if surviving_tool_cat else None
+                    )
 
                 decision.matched_signals.append(Signal(
                     type='fix7_stickiness_rejected',

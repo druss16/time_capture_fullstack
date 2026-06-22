@@ -32,6 +32,8 @@ import {
   ArrowRightLeft,
 } from 'lucide-react';
 import BlockRow from './BlockRow';
+import SimpleReview from '@/components/SimpleReview';
+
 
 import { safeFetchJson } from '@/lib/api';
 
@@ -527,48 +529,21 @@ const ManualCategorization = ({ date, onComplete }: ManualCategorizationProps) =
             <CheckCircle2 className="w-6 h-6 text-success" />
           </div>
           <p className="text-base font-semibold text-foreground mb-1">
-            ✨ All blocks categorized!
+            All blocks categorized!
           </p>
           <p className="text-sm text-muted-foreground">
             All time blocks for {selectedDate} have been categorized.
           </p>
         </div>
       ) : (
-        <div className="space-y-1.5">
-          {/* Short-block filter toggle */}
-          <div className="flex items-center justify-between mb-2 px-1 text-xs">
-            <label className="flex items-center gap-2 text-gray-600 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={hideShortBlocks}
-                onChange={(e) => setHideShortBlocks(e.target.checked)}
-                className="rounded border-gray-300"
-              />
-              Hide short blocks (under {SHORT_BLOCK_THRESHOLD_MINUTES} min)
-            </label>
-            {hiddenBlockCount > 0 && hideShortBlocks && (
-              <button
-                onClick={() => setHideShortBlocks(false)}
-                className="text-blue-600 hover:underline"
-              >
-                Show {hiddenBlockCount} hidden
-              </button>
-            )}
-          </div>
-          {visibleBlocks.map((block) => (
-            <BlockRow
-              key={block.id}
-              block={block}
-              clients={clients}
-              categories={categories}
-              internalCategories={INTERNAL_CATEGORIES}
-              isSelected={selectedIds.has(block.id)}
-              onToggleSelect={handleToggleSelect}
-              onCategorize={categorizeBlock}
-              onRefresh={fetchCategorizationData}   // ← add this
-            />
-          ))}
-        </div>
+        <SimpleReview
+          blocks={visibleBlocks}
+          clients={clients}
+          categories={categories}
+          internalCategories={INTERNAL_CATEGORIES}
+          onCategorize={categorizeBlock}
+          onAllDone={fetchCategorizationData}
+        />
       )}
 
       {/* ── Floating selection bar (when items selected) ────────────── */}

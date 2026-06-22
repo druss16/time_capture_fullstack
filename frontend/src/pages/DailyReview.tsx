@@ -258,7 +258,14 @@ export default function DailyReview() {
       const data = await safeFetchJson<{ blocks: any[]; categories?: string[] }>(
         `${API_BASE}/categorization/data/?date=${date}`
       );
-      setUncategorizedCount(data.blocks?.length || 0);
+      // Count only blocks the user actually sees in Categorize — the tab hides
+      // short blocks (< 2 min) by default, so the badge should match that, not
+      // the full list. Mirrors SHORT_BLOCK_THRESHOLD_MINUTES in ManualCategorization.
+      const SHORT_BLOCK_THRESHOLD_MINUTES = 2;
+      const visibleCount = (data.blocks || []).filter(
+        (b: any) => (b.duration_minutes ?? 0) >= SHORT_BLOCK_THRESHOLD_MINUTES
+      ).length;
+      setUncategorizedCount(visibleCount);
       if (data.categories?.length) setAvailableCategories(data.categories);
     } catch {}
   }, [date]);

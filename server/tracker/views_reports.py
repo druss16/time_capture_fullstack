@@ -378,14 +378,19 @@ def _aggregate(blocks, group_by: str):
         g["id"] = (b.user_id if group_by == "employee" else b.client_id)
         g["block_count"] += 1
 
-        # Immaterial (sub-2min) blocks count toward the ledger (Total Captured)
-        # but are excluded from billable/non-billable → never touch utilization.
-        if not _is_material(b):
+        # Immaterial (sub-2min) blocks: the materiality filter exists to keep
+        # noise out of the utilization ratio — BUT a sub-2min block that is
+        # billable with a real client is genuine billable work (the agent often
+        # captures client work in <2min slices), not noise. Dropping it here is
+        # what made the dashboard show 1h14m when the real billable is 3h51m.
+        # So: only treat NON-billable sub-2min blocks as immaterial. Billable-
+        # with-client time always counts, matching today_time.
+        billable = _is_billable_block(b)
+        if not _is_material(b) and not billable:
             immaterial_min += minutes
             g["immaterial_min"] += minutes
             continue
 
-        billable = _is_billable_block(b)
         total_min += minutes
         if billable:
             billable_min += minutes

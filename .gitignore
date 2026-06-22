@@ -208,3 +208,5 @@ coverage.xml
 temp/
 tmp/.expo/
 security-reports/
+
+_scratch/

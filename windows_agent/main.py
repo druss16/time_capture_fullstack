@@ -1159,8 +1159,12 @@ def try_get_url_or_path(exe_name: str, window_title: str, hwnd: int = 0) -> Dict
     exe_lower = exe_name.lower()
 
     if exe_lower in ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"):
-        # Prefer real address-bar URL via UIA; fall back to title parsing.
-        url = get_browser_url_uia(hwnd, exe_lower, window_title)
+        # 1. Extension (reliable, full path) — primary source.
+        url = get_browser_url_from_ctx(exe_lower)
+        # 2. UIA fallback — rare; Chromium hides the address bar from UIA.
+        if not url:
+            url = get_browser_url_uia(hwnd, exe_lower, window_title)
+        # 3. Title-parse fallback — last resort.
         if not url:
             url = extract_url_from_browser_title(window_title, exe_lower)
         return {"url": url, "file_path": None}
@@ -1228,6 +1232,58 @@ def _normalize_captured_url(raw: str) -> Optional[str]:
     except Exception:
         return None
     return raw[:500]  # cap length
+
+
+_BROWSER_CTX_TTL_SECONDS = 35.0
+ 
+ 
+def get_browser_url_from_ctx(exe_lower: str) -> Optional[str]:
+    """Read the active-tab URL reported by the browser extension.
+ 
+    Returns a sanitized URL (scheme://host/path, no query) or None.
+ 
+    Only returns a value when:
+      - the foreground exe is actually a browser (caller already gates this),
+      - the extension posted a payload with window_focused == True,
+      - that payload is fresh (within _BROWSER_CTX_TTL_SECONDS).
+ 
+    Never raises.
+    """
+    try:
+        from datetime import datetime, timezone as _tz
+ 
+        entry = _CONTEXT.get("browser_extension")
+        if not entry:
+            return None
+ 
+        # Extension only posts when the browser window is focused; double-check.
+        if entry.get("window_focused") is not True:
+            return None
+ 
+        # Freshness check — reject stale context (user moved off browser).
+        ts_str = entry.get("tab_focused_at")
+        if ts_str:
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                age = (datetime.now(_tz.utc) - ts).total_seconds()
+                if age > _BROWSER_CTX_TTL_SECONDS:
+                    return None
+            except Exception:
+                # Unparseable timestamp — treat as stale, don't trust it.
+                return None
+        else:
+            # No timestamp — can't verify freshness, don't trust it.
+            return None
+ 
+        url = entry.get("url")
+        if not url:
+            return None
+ 
+        # The extension already strips query/fragment, but re-run our own
+        # normalizer for defense in depth (and to add scheme if ever missing).
+        return _normalize_captured_url(url)
+    except Exception:
+        return None
 
 def get_browser_url_uia(hwnd: int, exe_lower: str, window_title: str) -> Optional[str]:
     """Read the active tab's URL from a Chromium/Firefox window via UIA.

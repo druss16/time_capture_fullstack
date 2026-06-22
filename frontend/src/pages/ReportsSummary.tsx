@@ -43,7 +43,7 @@ function fmtHours(hours: number | undefined): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-type Period = "day" | "week" | "month" | "quarter";
+type Period = "day" | "week" | "month" | "quarter" | "year";
 type GroupBy = "employee" | "client";
 
 interface SummaryRow {
@@ -82,6 +82,7 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "week", label: "Week" },
   { key: "month", label: "Month" },
   { key: "quarter", label: "Quarter" },
+  { key: "year", label: "Year" },
 ];
 
 type SortKey = keyof Pick<
@@ -95,6 +96,9 @@ export default function ReportsSummary({
   orgIdOverride?: number | null;
 }) {
   const [period, setPeriod] = useState<Period>("week");
+  const [customMode, setCustomMode] = useState(false);
+  const [customStart, setCustomStart] = useState<string>("");
+  const [customEnd, setCustomEnd] = useState<string>("");
   const [groupBy, setGroupBy] = useState<GroupBy>("employee");
   const [data, setData] = useState<SummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,12 +108,19 @@ export default function ReportsSummary({
   const [panelParams, setPanelParams] = useState<UncatPanelParams | null>(null);
 
   const buildParams = useCallback(() => {
-    const p = new URLSearchParams({ period, group_by: groupBy });
+    const p = new URLSearchParams({ group_by: groupBy });
+    if (customMode && customStart && customEnd) {
+      // Backend uses explicit start/end when both are present, ignoring period.
+      p.set("start", customStart);
+      p.set("end", customEnd);
+    } else {
+      p.set("period", period);
+    }
     const impOrg = localStorage.getItem("impersonating_org_id");
     const effOrg = orgIdOverride || (impOrg ? Number(impOrg) : null);
     if (effOrg) p.set("org_id", String(effOrg));
     return p.toString();
-  }, [period, groupBy, orgIdOverride]);
+  }, [period, groupBy, orgIdOverride, customMode, customStart, customEnd]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -205,10 +216,10 @@ export default function ReportsSummary({
             {PERIODS.map((p) => (
               <button
                 key={p.key}
-                onClick={() => setPeriod(p.key)}
+                onClick={() => { setCustomMode(false); setPeriod(p.key); }}
                 className={
                   "px-3 py-1.5 text-xs font-medium rounded-md transition-colors " +
-                  (period === p.key
+                  (!customMode && period === p.key
                     ? "bg-slate-900 text-white"
                     : "text-slate-600 hover:bg-slate-50")
                 }
@@ -216,7 +227,36 @@ export default function ReportsSummary({
                 {p.label}
               </button>
             ))}
+            <button
+              onClick={() => setCustomMode(true)}
+              className={
+                "px-3 py-1.5 text-xs font-medium rounded-md transition-colors " +
+                (customMode ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")
+              }
+            >
+              Custom
+            </button>
           </div>
+
+          {customMode && (
+            <div className="inline-flex items-center gap-1.5">
+              <input
+                type="date"
+                value={customStart}
+                max={customEnd || undefined}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700"
+              />
+              <span className="text-xs text-slate-400">to</span>
+              <input
+                type="date"
+                value={customEnd}
+                min={customStart || undefined}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700"
+              />
+            </div>
+          )}
           <button
             onClick={handleExport}
             disabled={!data}

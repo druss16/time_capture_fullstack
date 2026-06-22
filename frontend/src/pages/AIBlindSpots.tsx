@@ -73,7 +73,7 @@ export default function AIBlindSpots({
   orgIdOverride?: number | null;
 }) {
   const { me } = useAuth();
-  const isStaff = !!me?.is_staff;
+  const isStaff = !!me?.is_staff && !localStorage.getItem("impersonating_org_id");
   const [period, setPeriod] = useState<Period>("week");
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(true);

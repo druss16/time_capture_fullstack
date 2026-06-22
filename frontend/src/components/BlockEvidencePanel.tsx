@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Sparkles, Mail, CalendarClock, Target, Compass, ArrowRight, Check } from "lucide-react";
+import { Sparkles, Mail, CalendarClock, Target, Compass, ArrowRight, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 
@@ -294,6 +294,7 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [assigning, setAssigning] = useState(false);
   const [assignedTo, setAssignedTo] = useState<string | null>(null);
+  const [showEvents, setShowEvents] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -386,101 +387,109 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
         />
       )}
 
-      {/* ─── Time breakdown roll-up ─── */}
-      {rollupEntries.length > 0 && (
-        <div className="px-3 py-2.5 border-b border-slate-200/70">
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
-            Time breakdown
-          </div>
-          <div className="space-y-1">
-            {rollupEntries.map(([cid, info]) => (
-              <div
-                key={cid}
-                className="flex items-baseline justify-between gap-2"
-              >
-                <span className="text-slate-700 font-medium truncate">
-                  {info.name}
-                </span>
-                <span className="font-mono text-slate-900 tabular-nums text-xs shrink-0">
-                  {fmtDuration(info.duration_seconds)}
-                  <span className="text-slate-400 ml-1.5">
-                    &middot; {info.event_count} {info.event_count === 1 ? "event" : "events"}
-                  </span>
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ─── Activity detail: collapsed by default. The surrounding-context
+            clue above is what the user needs to decide; the raw event list is
+            reference, shown only on request so the card stays scannable. ─── */}
+      {(rollupEntries.length > 0 || data.events.length > 0) && (
+        <div>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowEvents((v) => !v); }}
+            className="w-full flex items-center gap-1.5 px-3 py-2 text-[11px] font-semibold
+                       text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            {showEvents ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            {showEvents ? "Hide activity" : `Show activity (${data.summary.total_events} ${data.summary.total_events === 1 ? "event" : "events"})`}
+          </button>
 
-      {/* ─── Event list (chronological) ─── */}
-      {data.events.length === 0 ? (
-        <div className="px-3 py-4 text-xs text-slate-400 text-center italic">
-          No events recorded for this block.
-        </div>
-      ) : (
-        <ol className="divide-y divide-slate-200/70">
-          {data.events.map((ev) => {
-            const hit = titleHit(ev.signals);
-            return (
-              <li key={ev.id} className="px-3 py-2.5">
-                {/* Row meta: offset, duration, app */}
-                <div className="flex items-baseline gap-2 mb-1">
-                  <span className="font-mono text-[10px] text-slate-500 tabular-nums shrink-0">
-                    {fmtOffset(ev.offset_seconds)}
-                  </span>
-                  <span className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0">
-                    ({fmtDuration(ev.duration_seconds)})
-                  </span>
-                  <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
-                    {ev.app_name}
-                  </span>
-                </div>
-
-                {/* Window title (with optional highlight) */}
-                <div className="text-[13px] text-slate-800 leading-snug break-words">
-                  <HighlightedTitle
-                    title={ev.window_title || "(no title)"}
-                    position={hit?.match_position}
-                  />
-                </div>
-
-                {/* Host or filename, if present */}
-                {(ev.url_host || ev.file_basename) && (
-                  <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                    {ev.url_host || ev.file_basename}
+          {showEvents && (
+            <>
+              {/* Time breakdown roll-up */}
+              {rollupEntries.length > 0 && (
+                <div className="px-3 py-2.5 border-b border-slate-200/70">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+                    Time breakdown
                   </div>
-                )}
-
-                {/* Signal chips */}
-                {ev.signals.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1.5">
-                    {ev.signals.map((sig, idx) => (
-                      <span
-                        key={idx}
-                        className={cn(
-                          "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-semibold",
-                          sig.type === "agent_selection"
-                            ? "bg-slate-100 text-slate-600 border-slate-200"
-                            : "bg-amber-50 text-amber-800 border-amber-200"
-                        )}
-                        title={sig.description}
-                      >
-                        <SignalIcon type={sig.type} />
-                        <span className="truncate max-w-[160px]">{sig.client_name}</span>
-                        {sig.confidence !== undefined && (
-                          <span className="opacity-60 tabular-nums">
-                            {Math.round(sig.confidence * 100)}%
+                  <div className="space-y-1">
+                    {rollupEntries.map(([cid, info]) => (
+                      <div key={cid} className="flex items-baseline justify-between gap-2">
+                        <span className="text-slate-700 font-medium truncate">{info.name}</span>
+                        <span className="font-mono text-slate-900 tabular-nums text-xs shrink-0">
+                          {fmtDuration(info.duration_seconds)}
+                          <span className="text-slate-400 ml-1.5">
+                            &middot; {info.event_count} {info.event_count === 1 ? "event" : "events"}
                           </span>
-                        )}
-                      </span>
+                        </span>
+                      </div>
                     ))}
                   </div>
-                )}
-              </li>
-            );
-          })}
-        </ol>
+                </div>
+              )}
+
+              {/* Event list (chronological) */}
+              {data.events.length === 0 ? (
+                <div className="px-3 py-4 text-xs text-slate-400 text-center italic">
+                  No events recorded for this block.
+                </div>
+              ) : (
+                <ol className="divide-y divide-slate-200/70">
+                  {data.events.map((ev) => {
+                    const hit = titleHit(ev.signals);
+                    return (
+                      <li key={ev.id} className="px-3 py-2.5">
+                        <div className="flex items-baseline gap-2 mb-1">
+                          <span className="font-mono text-[10px] text-slate-500 tabular-nums shrink-0">
+                            {fmtOffset(ev.offset_seconds)}
+                          </span>
+                          <span className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0">
+                            ({fmtDuration(ev.duration_seconds)})
+                          </span>
+                          <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
+                            {ev.app_name}
+                          </span>
+                        </div>
+                        <div className="text-[13px] text-slate-800 leading-snug break-words">
+                          <HighlightedTitle
+                            title={ev.window_title || "(no title)"}
+                            position={hit?.match_position}
+                          />
+                        </div>
+                        {(ev.url_host || ev.file_basename) && (
+                          <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                            {ev.url_host || ev.file_basename}
+                          </div>
+                        )}
+                        {ev.signals.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {ev.signals.map((sig, idx) => (
+                              <span
+                                key={idx}
+                                className={cn(
+                                  "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-semibold",
+                                  sig.type === "agent_selection"
+                                    ? "bg-slate-100 text-slate-600 border-slate-200"
+                                    : "bg-amber-50 text-amber-800 border-amber-200"
+                                )}
+                                title={sig.description}
+                              >
+                                <SignalIcon type={sig.type} />
+                                <span className="truncate max-w-[160px]">{sig.client_name}</span>
+                                {sig.confidence !== undefined && (
+                                  <span className="opacity-60 tabular-nums">
+                                    {Math.round(sig.confidence * 100)}%
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </>
+          )}
+        </div>
       )}
     </div>
   );

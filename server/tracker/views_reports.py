@@ -350,8 +350,14 @@ def _aggregate(blocks, group_by: str):
             continue
 
         cat = _dominant_category(b).lower()
-        if cat in _EXCLUDE_CATEGORIES:
-            continue
+        # Only drop genuine non-billable idle/uncategorized noise. A block that
+        # is billable WITH a client but has empty category_hours reads as
+        # "uncategorized" here — it's real billable time and must be counted,
+        # matching today_time (which counts by client+billable, not category
+        # label). Without this, AI-proposed billable blocks vanish from the
+        # dashboard's billable total.
+        if cat in _EXCLUDE_CATEGORIES and not (b.is_billable and b.client_id):
+            continue            continue
 
         client_name = b.client.name if b.client_id else "Unassigned"
         if b.client_id:
@@ -477,7 +483,14 @@ def _daily_shape(committed_blocks, uncat_blocks, period: str):
         if minutes <= 0:
             continue
         cat = _dominant_category(b).lower()
-        if cat in _EXCLUDE_CATEGORIES:
+        # Only drop genuine non-billable idle/uncategorized noise. A block that
+        # is billable WITH a client but has empty category_hours reads as
+        # "uncategorized" here — it's real billable time and must be counted,
+        # matching today_time (which counts by client+billable, not category
+        # label). Without this, AI-proposed billable blocks vanish from the
+        # dashboard's billable total.
+        if cat in _EXCLUDE_CATEGORIES and not (b.is_billable and b.client_id):
+            continue
             continue
         key = _bucket_key(b.start, period)
         if _is_billable_block(b):

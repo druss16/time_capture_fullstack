@@ -353,18 +353,18 @@ const BlockRow = ({
             <span className="text-foreground">{block.window_title || '(empty)'}</span>
           </div>
 
-          {/* Suggestion details */}
-          {topSuggestion && (
-            <div className="px-3 py-2 rounded-md bg-amber-50 border border-amber-200">
+          {/* Suggestion details — only when confident; never the yellow guess */}
+          {suggestionIsConfident && topSuggestion && (
+            <div className="px-3 py-2 rounded-md bg-emerald-50 border border-emerald-200">
               <div className="flex items-start gap-2">
-                <Sparkles className="w-3.5 h-3.5 text-amber-600 mt-0.5 flex-shrink-0" />
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600 mt-0.5 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-semibold text-amber-900">
+                  <div className="text-xs font-semibold text-emerald-900">
                     {suggestionLabel}: {topSuggestion.category}
                     {topSuggestion.client && ` for ${topSuggestion.client}`}
                   </div>
                   {topSuggestion.reasoning && (
-                    <div className="text-xs text-amber-700 mt-0.5 italic">
+                    <div className="text-xs text-emerald-700 mt-0.5 italic">
                       {topSuggestion.reasoning}
                     </div>
                   )}

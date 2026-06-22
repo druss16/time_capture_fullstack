@@ -141,12 +141,18 @@ const NON_BILLABLE_CATEGORIES = new Set([
 const isNonBillableCategory = (cat: string): boolean =>
   NON_BILLABLE_CATEGORIES.has(cat) || cat.toLowerCase().includes('personal');
 
-// A suggestion is "one-click-confirmable" if either:
+// A suggestion is "one-click-confirmable" only if the classifier is reasonably
+// confident (>= 0.65, matching BlockRow's pre-fill line) AND it's actionable:
 //   - The category is non-billable (no client needed), OR
 //   - Both client AND category are pre-filled
+// The confidence gate keeps the "Confirm N suggested" bulk button from
+// sweeping up weak guesses that the row-level UI deliberately leaves for the
+// user to resolve.
+const ONE_CLICK_MIN_CONFIDENCE = 0.65;
 const isOneClickSuggestion = (block: Block): boolean => {
   const s = block.suggestions?.[0];
   if (!s || !s.category) return false;
+  if ((s.confidence ?? 0) < ONE_CLICK_MIN_CONFIDENCE) return false;
   if (isNonBillableCategory(s.category)) return true;
   return !!s.client; // billable but has a client → still one-click
 };

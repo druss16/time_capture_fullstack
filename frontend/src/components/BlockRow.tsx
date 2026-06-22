@@ -124,13 +124,17 @@ const BlockRow = ({
   );
 
   const [expanded, setExpanded] = useState(false);
+  // Only pre-fill the form from a suggestion the classifier is reasonably sure
+  // about (>= 0.65, the same line as the "Likely" tier). Below that, leave the
+  // form empty so the user picks deliberately instead of un-doing a weak guess.
+  const suggestionIsConfident = (topSuggestion?.confidence ?? 0) >= 0.65;
   const [selectedClient, setSelectedClient] = useState<string>(
     block.current_client_id?.toString() ||
-      suggestedClientObj?.id.toString() ||
+      (suggestionIsConfident ? suggestedClientObj?.id.toString() : '') ||
       '',
   );
   const [selectedCategory, setSelectedCategory] = useState<string>(
-    topSuggestion?.category || '',
+    suggestionIsConfident ? (topSuggestion?.category || '') : '',
   );
   const [notes, setNotes] = useState<string>('');
   const [saving, setSaving] = useState(false);
@@ -287,19 +291,27 @@ const BlockRow = ({
           </div>
         </div>
 
-        {/* Suggestion chip */}
+        {/* Suggestion chip — styled by confidence so an unsure guess doesn't
+            masquerade as a confident answer. >=0.65 shows the proposal in a
+            calm, confident style; below that it reads as a question the user
+            should resolve, not an answer to accept. */}
         {topSuggestion && !expanded && (
-          <div className="flex-shrink-0 hidden md:flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-50 border border-amber-200">
-            <Sparkles className="w-3 h-3 text-amber-600" />
-            <span className="text-xs font-semibold text-amber-900">
-              {topSuggestion.category || 'Suggestion'}
-            </span>
-            {topSuggestion.client && (
-              <span className="text-xs text-amber-700">
-                · {topSuggestion.client}
+          suggestionIsConfident ? (
+            <div className="flex-shrink-0 hidden md:flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-50 border border-emerald-200">
+              <Sparkles className="w-3 h-3 text-emerald-600" />
+              <span className="text-xs font-semibold text-emerald-900">
+                {topSuggestion.client || topSuggestion.category || 'Suggestion'}
               </span>
-            )}
-          </div>
+              {topSuggestion.client && topSuggestion.category && (
+                <span className="text-xs text-emerald-700">· {topSuggestion.category}</span>
+              )}
+            </div>
+          ) : (
+            <div className="flex-shrink-0 hidden md:flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-50 border border-slate-200">
+              <AlertCircle className="w-3 h-3 text-slate-400" />
+              <span className="text-xs font-medium text-slate-500">needs you</span>
+            </div>
+          )
         )}
 
         {/* Confirm button */}
@@ -428,6 +440,24 @@ const BlockRow = ({
               </select>
             </div>
           </div>
+
+          {/* Quick "Personal / Non-Billable" — the pile has real personal
+              browsing (news, shopping); this saves a dropdown hunt. Sets the
+              category and immediately confirms (no client needed). */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedClient('');
+              setSelectedCategory('Personal/Non-Billable');
+            }}
+            disabled={saving}
+            className="
+              text-xs font-medium text-slate-500 hover:text-slate-800
+              underline underline-offset-2 disabled:opacity-50
+            "
+          >
+            Mark as Personal / Non-Billable
+          </button>
 
           {/* Notes (optional, hidden until toggled) */}
           <details onClick={(e) => e.stopPropagation()}>

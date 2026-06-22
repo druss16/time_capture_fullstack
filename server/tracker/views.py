@@ -4141,6 +4141,8 @@ def today_time(request):
         user=user,
         start_ts__gte=start_utc,
         start_ts__lt=end_utc,
+    ).exclude(
+        block__classification_state='suppressed',
     ).select_related('block', 'block__client').order_by('start_ts'))
 
     from django.db.models import Q

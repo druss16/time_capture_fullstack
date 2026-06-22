@@ -3461,6 +3461,29 @@ def run_agent():
                         url, fpath = extras.get("url"), extras.get("file_path")
                         sig = (app_name, exe_name, window_title, url, fpath)
                         now_loop = time.time()
+
+                        # ── Desktop-shell guard (v1.4.x) ──
+                        # explorer.exe with an empty or "Program Manager" title is
+                        # the bare Windows desktop — nothing is actually open. On
+                        # VMs / RDP sessions GetLastInputInfo can report phantom
+                        # input (hypervisor cursor / RDP keepalive), so the loop
+                        # wrongly thinks the user is active and records the desktop
+                        # shell as work — overnight, this becomes hours of fake
+                        # "Explorer" time (TL Wall: Terri, 6h47m of 2am Explorer).
+                        # Treat bare-desktop-foreground as idle: close any open
+                        # dwell and skip recording. Real Explorer file-browsing has
+                        # a folder name in the title and is NOT caught here.
+                        _exe_l = (exe_name or "").lower()
+                        _title_l = (window_title or "").strip().lower()
+                        if _exe_l in ("explorer.exe", "explorer") and _title_l in ("", "program manager"):
+                            if current_sig and current_sig != IDLE_SIG and last_emit_ts:
+                                _emit_current_dwell(now_loop)
+                            current_sig = None
+                            dwell_start = None
+                            last_emit_ts = None
+                            time.sleep(POLL_SECONDS)
+                            consecutive_errors = 0
+                            continue
      
                         if sig != current_sig:
                             if current_sig and current_sig != IDLE_SIG:

@@ -116,6 +116,7 @@ def _block_minutes(b) -> int:
     return m if m > 0 else 0
 
 
+
 # ── Materiality threshold ─────────────────────────────────────────────────
 # Blocks shorter than this are immaterial noise — 30-second context switches,
 # alt-tabs, momentary glances at Outlook/Calculator/a PDF. They still count in

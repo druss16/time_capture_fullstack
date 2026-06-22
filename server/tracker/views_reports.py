@@ -357,8 +357,7 @@ def _aggregate(blocks, group_by: str):
         # label). Without this, AI-proposed billable blocks vanish from the
         # dashboard's billable total.
         if cat in _EXCLUDE_CATEGORIES and not (b.is_billable and b.client_id):
-            continue            continue
-
+            continue
         client_name = b.client.name if b.client_id else "Unassigned"
         if b.client_id:
             distinct_clients.add(b.client_id)

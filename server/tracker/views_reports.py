@@ -246,6 +246,8 @@ def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id,
         deleted_at__isnull=True,
         start__gte=start_utc,
         start__lt=end_utc,
+    ).exclude(
+        classification_state="suppressed",
     )
 
     if committed_only:

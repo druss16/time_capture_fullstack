@@ -491,7 +491,6 @@ def _daily_shape(committed_blocks, uncat_blocks, period: str):
         # dashboard's billable total.
         if cat in _EXCLUDE_CATEGORIES and not (b.is_billable and b.client_id):
             continue
-            continue
         key = _bucket_key(b.start, period)
         if _is_billable_block(b):
             buckets[key]["billable_min"] += minutes

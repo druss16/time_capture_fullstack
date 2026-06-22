@@ -4395,6 +4395,11 @@ SUPPRESS_PATTERNS = [
     'select item',
     'browse for folder',
     'choose folder',
+    'sign in to your account',
+    'sharing link validation',
+    'working...',
+    'redirecting',
+    'authenticating',
 ]
 
 # Bare tax software splash titles (exact match required, lowercase)
@@ -4494,7 +4499,8 @@ DOMAIN_COMMON_WORDS = {
     # qualifier words — they don't uniquely identify a client.
     'complete', 'comprehensive', 'professional', 'premium', 'standard',
     'national', 'regional', 'local', 'global', 'advanced', 'integrated',
-    'unified', 'universal', 'modern', 'classic', 'essential',
+    'unified', 'universal', 'modern', 'classic', 'essential', 'onedrive', 
+    'sharepoint', 'sharing', 'validation', 'signin',
 }
 
 # v1.3.23: Reject matches where the haystack has no specific content.

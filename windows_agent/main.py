@@ -1148,25 +1148,145 @@ def get_foreground_window_info() -> Optional[Tuple[str, str, int, Optional[str]]
             exe_name = "Unknown"
             app_name = "Unknown"
         
-        return (app_name, exe_name, pid, title)
+        return (app_name, exe_name, pid, title, hwnd)
     
     except Exception as e:
         if VERBOSE:
             log(f"[WARN] get_foreground_window_info error: {e}")
         return None
 
-def try_get_url_or_path(exe_name: str, window_title: str) -> Dict[str, Optional[str]]:
+def try_get_url_or_path(exe_name: str, window_title: str, hwnd: int = 0) -> Dict[str, Optional[str]]:
     exe_lower = exe_name.lower()
-    
+
     if exe_lower in ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"):
-        url = extract_url_from_browser_title(window_title, exe_lower)
+        # Prefer real address-bar URL via UIA; fall back to title parsing.
+        url = get_browser_url_uia(hwnd, exe_lower, window_title)
+        if not url:
+            url = extract_url_from_browser_title(window_title, exe_lower)
         return {"url": url, "file_path": None}
-    
+
     if exe_lower in ("excel.exe", "winword.exe", "powerpnt.exe"):
-        file_path = get_office_file_path(exe_lower, window_title)  # ← pass title
+        file_path = get_office_file_path(exe_lower, window_title)
         return {"url": None, "file_path": file_path}
-    
+
     return {"url": None, "file_path": None}
+
+
+# ---------------- Browser URL via UI Automation ----------------
+# Edge/Chrome put the PAGE TITLE in the window title, not the URL. For
+# SharePoint/OneDrive/CS-online work the client signal lives in the URL
+# (e.g. tlwall-my.sharepoint.com/personal/.../Varacchi 1040/...), which
+# never appears in the title. Read the address bar directly via UIA.
+try:
+    import uiautomation as _uia
+    _UIA_AVAILABLE = True
+except Exception:
+    _UIA_AVAILABLE = False
+    _uia = None
+
+# Cache URL per (hwnd, title) so we only walk the UIA tree on change, not
+# every 5s tick. UIA tree walks are ~30-80ms — fine on window change,
+# wasteful on a heartbeat for an unchanged page.
+_url_cache_lock = threading.Lock()
+_url_cache = {}          # hwnd -> (title_seen, url, captured_at)
+_URL_CACHE_TTL = 30.0    # re-probe after this many seconds even if title same
+
+# Address-bar AutomationId / Name varies by browser. These are the known
+# values for Chromium-based browsers (Edge, Chrome, Brave) and Firefox.
+_ADDRESS_BAR_NAMES = (
+    "Address and search bar",   # Edge / Chrome (en-US)
+    "Address and search field", # some Chrome builds
+    "Search or enter address",  # Firefox
+)
+
+def _normalize_captured_url(raw: str) -> Optional[str]:
+    """Clean a raw address-bar string into a storable URL.
+
+    - Strips query string and fragment (avoids logging auth tokens /
+      SharePoint sharing GUIDs; host+path is all the classifier needs).
+    - Drops obvious non-URLs (empty, search terms with spaces).
+    - Adds https:// scheme if the bar shows a bare host/path.
+    """
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw or " " in raw and "://" not in raw and not raw.startswith("www."):
+        # User is typing a search query, not a URL
+        return None
+    # Strip query + fragment
+    for sep in ("?", "#"):
+        idx = raw.find(sep)
+        if idx > 0:
+            raw = raw[:idx]
+    if "://" not in raw:
+        raw = "https://" + raw
+    # Sanity: must parse to a host with a dot
+    try:
+        host = urlparse(raw).hostname or ""
+        if "." not in host:
+            return None
+    except Exception:
+        return None
+    return raw[:500]  # cap length
+
+def get_browser_url_uia(hwnd: int, exe_lower: str, window_title: str) -> Optional[str]:
+    """Read the active tab's URL from a Chromium/Firefox window via UIA.
+
+    Returns a cleaned URL (host+path, no query) or None. Never raises.
+    """
+    if not _UIA_AVAILABLE or not hwnd:
+        return None
+
+    now = time.time()
+    with _url_cache_lock:
+        cached = _url_cache.get(hwnd)
+        if cached:
+            title_seen, url, captured_at = cached
+            if title_seen == window_title and (now - captured_at) < _URL_CACHE_TTL:
+                return url
+
+    url = None
+    try:
+        # Wrap the window control by handle, then find the address bar Edit.
+        win = _uia.ControlFromHandle(hwnd)
+        if win:
+            edit = None
+            for name in _ADDRESS_BAR_NAMES:
+                try:
+                    cand = win.EditControl(Name=name)
+                    if cand.Exists(maxSearchSeconds=0.4):
+                        edit = cand
+                        break
+                except Exception:
+                    continue
+            # Fallback: first EditControl with a ValuePattern that looks URL-ish
+            if edit is None:
+                try:
+                    cand = win.EditControl(searchDepth=12)
+                    if cand.Exists(maxSearchSeconds=0.4):
+                        edit = cand
+                except Exception:
+                    edit = None
+            if edit is not None:
+                try:
+                    raw = edit.GetValuePattern().Value
+                except Exception:
+                    raw = getattr(edit, "Name", "") or ""
+                url = _normalize_captured_url(raw)
+    except Exception as e:
+        if VERBOSE:
+            log(f"[URL-UIA] probe failed: {e}")
+        url = None
+
+    with _url_cache_lock:
+        _url_cache[hwnd] = (window_title, url, now)
+        # Bound the cache so closed-window hwnds don't accumulate
+        if len(_url_cache) > 64:
+            oldest = sorted(_url_cache.items(), key=lambda kv: kv[1][2])[:32]
+            for k, _ in oldest:
+                _url_cache.pop(k, None)
+
+    return url
 
 def extract_url_from_browser_title(title: str, exe: str) -> Optional[str]:
     """Parse URL from browser window title."""
@@ -3108,7 +3228,7 @@ def run_agent():
                         force_idle = False
                         front_peek = get_foreground_window_info()
                         if front_peek:
-                            peek_app, peek_exe, peek_pid, peek_title = front_peek
+                            peek_app, peek_exe, peek_pid, peek_title, peek_hwnd = front_peek
                             if (peek_app and peek_app.lower() in LOCK_SCREEN_APPS) or \
                                (peek_title and "lock screen" in peek_title.lower()):
                                 force_idle = True
@@ -3130,9 +3250,9 @@ def run_agent():
                         if in_meeting:
                             front = front_peek
                             if front:
-                                app_name, exe_name, pid, window_title = front
+                                app_name, exe_name, pid, window_title, hwnd = front
                                 window_title = normalize_window_title(window_title or "")
-                                extras = try_get_url_or_path(exe_name, window_title)
+                                extras = try_get_url_or_path(exe_name, window_title, hwnd)
                                 url, fpath = extras.get("url"), extras.get("file_path")
                                 sig = (app_name, exe_name, window_title, url, fpath)
                                 now_loop = time.time()
@@ -3279,9 +3399,9 @@ def run_agent():
                             consecutive_errors = 0
                             continue
      
-                        app_name, exe_name, pid, window_title = front
+                        app_name, exe_name, pid, window_title, hwnd = front
                         window_title = normalize_window_title(window_title or "")
-                        extras = try_get_url_or_path(exe_name, window_title)
+                        extras = try_get_url_or_path(exe_name, window_title, hwnd)
                         url, fpath = extras.get("url"), extras.get("file_path")
                         sig = (app_name, exe_name, window_title, url, fpath)
                         now_loop = time.time()

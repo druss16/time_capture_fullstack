@@ -67,6 +67,11 @@ app.conf.beat_schedule = {
             'expires': 90,   # skip stale runs if beat backs up
         }
     },
+
+    'second-pass-categorize-nightly': {
+        'task': 'tracker.tasks.second_pass_categorize_all',
+        'schedule': crontab(hour=2, minute=30),
+    },
     
     # =========================================================================
     # DAILY NOTIFICATIONS (Mon-Fri)

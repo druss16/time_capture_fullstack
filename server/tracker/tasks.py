@@ -1724,3 +1724,19 @@ def dispatch_compact_classify_all():
     for oid in org_ids:
         compact_and_classify_org.delay(oid)
     return {'orgs_dispatched': len(org_ids)}
+    
+
+@shared_task(name='tracker.tasks.second_pass_categorize_all', bind=True, max_retries=2)
+def second_pass_categorize_all(self):
+    from tracker.models import Organization
+    from tracker.services.second_pass import run_second_pass
+    import logging
+    log = logging.getLogger('timetracker')
+    for oid in Organization.objects.values_list('id', flat=True):
+        try:
+            s = run_second_pass(oid, days=14, dry_run=False)
+            if s.get('billed'):
+                log.error(f"[SECOND-PASS] org {oid}: {s['billed']} billed from guess!")
+            log.info(f"[SECOND-PASS] org {oid}: {s}")
+        except Exception as e:
+            log.exception(f"[SECOND-PASS] org {oid} failed: {e}")

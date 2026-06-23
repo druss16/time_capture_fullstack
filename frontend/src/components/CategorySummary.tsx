@@ -1281,84 +1281,96 @@ function OnboardingHint() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-/* ────────────────────────────────────────────────────────────────────
-   REPLACE the existing ProposedRow component in CategorySummary.tsx
-   with this version.
+// Group proposed blocks by title so 20× "Christ Our Hope" → one row.
+type ProposedGroup = {
+  title: string;
+  blockIds: number[];
+  totalMinutes: number;
+  proposed_client_id: number | null;
+  proposed_client_name: string | null;
+  proposed_category: string;
+};
 
-   Behavior:
-   - HAS a guessed client → three actions:
-       [Confirm <ClientName>]   (emerald, accepts the guess)
-       [No Client]              (marks non-billable, no client)
-       [Other…]                 (opens picker to choose a different client)
-   - NO guess → two actions:
-       [Assign client]          (opens picker)
-       [No Client]              (marks non-billable)
+function groupProposed(items: ProposedInline[]): ProposedGroup[] {
+  const map = new Map<string, ProposedGroup>();
+  for (const p of items) {
+    const key = `${p.proposed_client_id ?? 'none'}::${(p.window_title || '').trim()}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        title: p.window_title || '(untitled)',
+        blockIds: [],
+        totalMinutes: 0,
+        proposed_client_id: p.proposed_client_id,
+        proposed_client_name: p.proposed_client_name,
+        proposed_category: p.proposed_category,
+      });
+    }
+    const g = map.get(key)!;
+    g.blockIds.push(p.block_id);
+    g.totalMinutes += p.minutes || 0;
+  }
+  return [...map.values()].sort((a, b) => b.totalMinutes - a.totalMinutes);
+}
 
-   onConfirm(blockId, clientId, category):
-     - clientId = a number  → assign to that client (billable)
-     - clientId = null      → No Client / non-billable
-   ──────────────────────────────────────────────────────────────────── */
-function ProposedRow({
-  p, allClients, allCategories, onConfirm,
+// One grouped pending row: red clock, "Nm · Nx", Confirm-all / No Client / Other.
+function ProposedGroupRow({
+  g, allClients, allCategories, onConfirm,
 }: {
-  p: ProposedInline;
+  g: ProposedGroup;
   allClients: ClientOption[];
   allCategories: string[];
-  onConfirm: (blockId: number, clientId: number | null, category: string) => void;
+  onConfirm: (blockIds: number[], clientId: number | null, category: string) => void;
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const mins = p.minutes || 0;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
+  const h = Math.floor(g.totalMinutes / 60);
+  const m = g.totalMinutes % 60;
   const timeStr = h === 0 ? `${m}m` : m === 0 ? `${h}h` : `${h}h ${m}m`;
-  const hasGuess = !!p.proposed_client_id;
-  const guessCategory = p.proposed_category || "General Client Work";
+  const hasGuess = !!g.proposed_client_id;
+  const guessCategory = g.proposed_category || "General Client Work";
+  const n = g.blockIds.length;
 
   return (
     <div ref={ref} className="flex items-center gap-2 px-3 py-1.5 ml-6 rounded-lg bg-amber-50/50 relative">
       <Clock className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
-      <span className="text-sm flex-1 truncate text-slate-600" title={p.window_title}>
-        {p.window_title || "(untitled)"}
+      <span className="text-sm flex-1 truncate text-slate-600" title={g.title}>
+        {g.title}
       </span>
+      {n > 1 && (
+        <span className="text-[10px] font-semibold text-slate-400 flex-shrink-0">
+          {n}×
+        </span>
+      )}
       <span className="text-[11px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded tabular-nums flex-shrink-0">
         {timeStr}
       </span>
-
       {hasGuess ? (
         <>
-          {/* Accept the guess */}
           <button
-            onClick={() => onConfirm(p.block_id, p.proposed_client_id, guessCategory)}
+            onClick={() => onConfirm(g.blockIds, g.proposed_client_id, guessCategory)}
             className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all flex-shrink-0"
-            title={`Assign to ${p.proposed_client_name}`}
+            title={`Assign ${n} to ${g.proposed_client_name}`}
           >
-            Confirm {p.proposed_client_name}
+            Confirm{n > 1 ? ` all ${n}` : ''}
           </button>
-          {/* No client */}
           <button
-            onClick={() => onConfirm(p.block_id, null, "Personal/Non-Billable")}
+            onClick={() => onConfirm(g.blockIds, null, "Personal/Non-Billable")}
             className="px-2 py-0.5 text-[11px] font-semibold border border-slate-300 text-slate-500 hover:bg-slate-100 rounded-md transition-all flex-shrink-0"
-          >
-            No Client
-          </button>
-          {/* Pick a different client */}
+          >No Client</button>
           <div className="relative flex-shrink-0">
             <button
               onClick={() => setShowPicker((v) => !v)}
               className="px-2 py-0.5 text-[11px] font-semibold border border-amber-300 text-amber-700 hover:bg-amber-100 rounded-md transition-all"
-            >
-              Other…
-            </button>
+            >Other…</button>
             {showPicker && (
               <MovePopover
                 anchorEl={ref.current}
                 clients={allClients}
                 categories={allCategories}
-                currentClientId={p.proposed_client_id}
+                currentClientId={g.proposed_client_id}
                 currentCategory={guessCategory}
                 label="Pick a different client"
-                onApply={(clientId, category) => { setShowPicker(false); onConfirm(p.block_id, clientId, category); }}
+                onApply={(clientId, category) => { setShowPicker(false); onConfirm(g.blockIds, clientId, category); }}
                 onClose={() => setShowPicker(false)}
               />
             )}
@@ -1366,33 +1378,28 @@ function ProposedRow({
         </>
       ) : (
         <>
-          {/* No guess → assign or mark no-client */}
           <div className="relative flex-shrink-0">
             <button
               onClick={() => setShowPicker((v) => !v)}
               className="px-2 py-0.5 text-[11px] font-semibold border border-amber-300 text-amber-700 hover:bg-amber-100 rounded-md transition-all"
-            >
-              Assign client
-            </button>
+            >Assign client</button>
             {showPicker && (
               <MovePopover
                 anchorEl={ref.current}
                 clients={allClients}
                 categories={allCategories}
                 currentClientId={null}
-                currentCategory={p.proposed_category || (allCategories[0] ?? "")}
-                label="Assign this entry"
-                onApply={(clientId, category) => { setShowPicker(false); onConfirm(p.block_id, clientId, category); }}
+                currentCategory={g.proposed_category || (allCategories[0] ?? "")}
+                label={`Assign ${n > 1 ? `these ${n} entries` : 'this entry'}`}
+                onApply={(clientId, category) => { setShowPicker(false); onConfirm(g.blockIds, clientId, category); }}
                 onClose={() => setShowPicker(false)}
               />
             )}
           </div>
           <button
-            onClick={() => onConfirm(p.block_id, null, "Personal/Non-Billable")}
+            onClick={() => onConfirm(g.blockIds, null, "Personal/Non-Billable")}
             className="px-2 py-0.5 text-[11px] font-semibold border border-slate-300 text-slate-500 hover:bg-slate-100 rounded-md transition-all flex-shrink-0"
-          >
-            No Client
-          </button>
+          >No Client</button>
         </>
       )}
     </div>
@@ -1509,10 +1516,12 @@ export default function CategorySummary({
     }
   }, [moveActivity, onRefresh, showToast]);
 
-  const confirmProposalInline = useCallback(async (blockId: number, clientId: number | null, category: string) => {
+  const confirmProposalInline = useCallback(async (blockIds: number[], clientId: number | null, category: string) => {
     try {
-      await moveActivity(blockId, clientId, category || "General Client Work");
-      showToast("Confirmed", "success");
+      for (const id of blockIds) {
+        await moveActivity(id, clientId, category || "General Client Work");
+      }
+      showToast(blockIds.length > 1 ? `Confirmed ${blockIds.length}` : "Confirmed", "success");
       onRefresh();
     } catch (e: any) {
       showToast(e?.message || "Confirm failed", "error");
@@ -1554,17 +1563,20 @@ export default function CategorySummary({
   const getNonBillable = (c: ClientTime) =>
     c.categories.filter((cat) => isNonBillable(cat.name)).reduce((s, cat) => s + cat.hours, 0);
 
-  const proposedByClient = new Map<number | null, ProposedInline[]>();
-  for (const p of proposedInline) {
-    const k = p.proposed_client_id ?? null;
-    if (!proposedByClient.has(k)) proposedByClient.set(k, []);
-    proposedByClient.get(k)!.push(p);
+  // Group proposed blocks (collapses duplicate titles), then bucket by guessed client.
+  const proposedGroups = groupProposed(proposedInline);
+  const groupsByClient = new Map<number | null, ProposedGroup[]>();
+  for (const g of proposedGroups) {
+    const k = g.proposed_client_id ?? null;
+    if (!groupsByClient.has(k)) groupsByClient.set(k, []);
+    groupsByClient.get(k)!.push(g);
   }
-  // clients that have proposals but no time card today (need their own card)
   const summaryClientIds = new Set(timeSummary.map((c) => c.client_id));
-  const orphanGuessClientIds = [...proposedByClient.keys()].filter(
+  // guessed-clients that have NO card today → render their own pending sub-card
+  const orphanGuessIds = [...groupsByClient.keys()].filter(
     (k) => k !== null && !summaryClientIds.has(k)
   );
+  const noClientGroups = groupsByClient.get(null) || [];
 
   return (
     <div>
@@ -1574,35 +1586,42 @@ export default function CategorySummary({
         onResolveDisagreement={onResolveDisagreement}
         onConfirmProposal={confirmProposalInline}
       />
-      {proposedInline.length > 0 && (
+      {(noClientGroups.length > 0 || orphanGuessIds.length > 0) && (
         <div className="mb-3 rounded-xl border border-amber-200 bg-white overflow-hidden">
           <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
             <Clock className="w-3.5 h-3.5 text-red-500" />
             <span className="text-sm font-semibold text-amber-800">
-              {proposedInline.length} pending — confirm to count as billable
+              Pending — confirm to count as billable
             </span>
           </div>
           <div className="py-2 space-y-1">
-            {/* grouped by guessed client */}
-            {[...proposedByClient.entries()].map(([cid, items]) => {
-              const name = cid == null
-                ? "No Client"
-                : (availableClients.find((c) => c.id === cid)?.name
-                   || items[0]?.proposed_client_name || `Client ${cid}`);
+            {/* guessed clients with no card today */}
+            {orphanGuessIds.map((cid) => {
+              const groups = groupsByClient.get(cid) || [];
+              const name = availableClients.find((c) => c.id === cid)?.name
+                || groups[0]?.proposed_client_name || `Client ${cid}`;
               return (
-                <div key={cid ?? "none"}>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide px-4 py-1">
-                    {name}
-                  </p>
-                  {items.map((p) => (
-                    <ProposedRow key={p.block_id} p={p}
-                      allClients={availableClients}
-                      allCategories={availableCategories}
+                <div key={`orphan-${cid}`}>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide px-4 py-1">{name}</p>
+                  {groups.map((g) => (
+                    <ProposedGroupRow key={`${cid}-${g.title}`} g={g}
+                      allClients={availableClients} allCategories={availableCategories}
                       onConfirm={confirmProposalInline} />
                   ))}
                 </div>
               );
             })}
+            {/* no-guess → No Client */}
+            {noClientGroups.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide px-4 py-1">No Client</p>
+                {noClientGroups.map((g) => (
+                  <ProposedGroupRow key={`noclient-${g.title}`} g={g}
+                    allClients={availableClients} allCategories={availableCategories}
+                    onConfirm={confirmProposalInline} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1794,6 +1813,24 @@ export default function CategorySummary({
                       />
                     );
                   })}
+
+                  {/* Pending guesses for THIS client — red clock, NOT counted until confirmed */}
+                  {(groupsByClient.get(client.client_id) || []).length > 0 && (
+                    <div className="border-t border-amber-100 bg-amber-50/30 py-2">
+                      <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wide px-5 mb-1">
+                        Pending — confirm to count as billable
+                      </p>
+                      {(groupsByClient.get(client.client_id) || []).map((g) => (
+                        <ProposedGroupRow
+                          key={`${g.proposed_client_id}-${g.title}`}
+                          g={g}
+                          allClients={availableClients}
+                          allCategories={availableCategories}
+                          onConfirm={confirmProposalInline}
+                        />
+                      ))}
+                    </div>
+                  )}
 
                   {/* EDIT 4 of 4: collapsed parked non-billable / no-client time
                       with a reveal toggle, mirroring the empty-categories footer. */}

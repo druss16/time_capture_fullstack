@@ -1281,6 +1281,23 @@ function OnboardingHint() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+/* ────────────────────────────────────────────────────────────────────
+   REPLACE the existing ProposedRow component in CategorySummary.tsx
+   with this version.
+
+   Behavior:
+   - HAS a guessed client → three actions:
+       [Confirm <ClientName>]   (emerald, accepts the guess)
+       [No Client]              (marks non-billable, no client)
+       [Other…]                 (opens picker to choose a different client)
+   - NO guess → two actions:
+       [Assign client]          (opens picker)
+       [No Client]              (marks non-billable)
+
+   onConfirm(blockId, clientId, category):
+     - clientId = a number  → assign to that client (billable)
+     - clientId = null      → No Client / non-billable
+   ──────────────────────────────────────────────────────────────────── */
 function ProposedRow({
   p, allClients, allCategories, onConfirm,
 }: {
@@ -1292,9 +1309,12 @@ function ProposedRow({
   const [showPicker, setShowPicker] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const mins = p.minutes || 0;
-  const h = Math.floor(mins / 60); const m = mins % 60;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
   const timeStr = h === 0 ? `${m}m` : m === 0 ? `${h}h` : `${h}h ${m}m`;
   const hasGuess = !!p.proposed_client_id;
+  const guessCategory = p.proposed_category || "General Client Work";
+
   return (
     <div ref={ref} className="flex items-center gap-2 px-3 py-1.5 ml-6 rounded-lg bg-amber-50/50 relative">
       <Clock className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
@@ -1304,30 +1324,76 @@ function ProposedRow({
       <span className="text-[11px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded tabular-nums flex-shrink-0">
         {timeStr}
       </span>
+
       {hasGuess ? (
-        <button
-          onClick={() => onConfirm(p.block_id, p.proposed_client_id, p.proposed_category || "General Client Work")}
-          className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all flex-shrink-0"
-        >Confirm</button>
-      ) : (
-        <div className="relative flex-shrink-0">
+        <>
+          {/* Accept the guess */}
           <button
-            onClick={() => setShowPicker((v) => !v)}
-            className="px-2 py-0.5 text-[11px] font-semibold border border-amber-300 text-amber-700 hover:bg-amber-100 rounded-md transition-all"
-          >Assign client</button>
-          {showPicker && (
-            <MovePopover
-              anchorEl={ref.current}
-              clients={allClients}
-              categories={allCategories}
-              currentClientId={null}
-              currentCategory={p.proposed_category || (allCategories[0] ?? "")}
-              label="Assign this entry"
-              onApply={(clientId, category) => { setShowPicker(false); onConfirm(p.block_id, clientId, category); }}
-              onClose={() => setShowPicker(false)}
-            />
-          )}
-        </div>
+            onClick={() => onConfirm(p.block_id, p.proposed_client_id, guessCategory)}
+            className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all flex-shrink-0"
+            title={`Assign to ${p.proposed_client_name}`}
+          >
+            Confirm {p.proposed_client_name}
+          </button>
+          {/* No client */}
+          <button
+            onClick={() => onConfirm(p.block_id, null, "Personal/Non-Billable")}
+            className="px-2 py-0.5 text-[11px] font-semibold border border-slate-300 text-slate-500 hover:bg-slate-100 rounded-md transition-all flex-shrink-0"
+          >
+            No Client
+          </button>
+          {/* Pick a different client */}
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={() => setShowPicker((v) => !v)}
+              className="px-2 py-0.5 text-[11px] font-semibold border border-amber-300 text-amber-700 hover:bg-amber-100 rounded-md transition-all"
+            >
+              Other…
+            </button>
+            {showPicker && (
+              <MovePopover
+                anchorEl={ref.current}
+                clients={allClients}
+                categories={allCategories}
+                currentClientId={p.proposed_client_id}
+                currentCategory={guessCategory}
+                label="Pick a different client"
+                onApply={(clientId, category) => { setShowPicker(false); onConfirm(p.block_id, clientId, category); }}
+                onClose={() => setShowPicker(false)}
+              />
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          {/* No guess → assign or mark no-client */}
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={() => setShowPicker((v) => !v)}
+              className="px-2 py-0.5 text-[11px] font-semibold border border-amber-300 text-amber-700 hover:bg-amber-100 rounded-md transition-all"
+            >
+              Assign client
+            </button>
+            {showPicker && (
+              <MovePopover
+                anchorEl={ref.current}
+                clients={allClients}
+                categories={allCategories}
+                currentClientId={null}
+                currentCategory={p.proposed_category || (allCategories[0] ?? "")}
+                label="Assign this entry"
+                onApply={(clientId, category) => { setShowPicker(false); onConfirm(p.block_id, clientId, category); }}
+                onClose={() => setShowPicker(false)}
+              />
+            )}
+          </div>
+          <button
+            onClick={() => onConfirm(p.block_id, null, "Personal/Non-Billable")}
+            className="px-2 py-0.5 text-[11px] font-semibold border border-slate-300 text-slate-500 hover:bg-slate-100 rounded-md transition-all flex-shrink-0"
+          >
+            No Client
+          </button>
+        </>
       )}
     </div>
   );

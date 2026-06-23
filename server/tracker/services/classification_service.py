@@ -4268,6 +4268,16 @@ class ClassificationService:
                 )
                 decision.is_billable = False
 
+                # Detect unambiguous overhead (inbox, login, new tab, etc.).
+                # For those, AUTO-COMMIT the non-billable default instead of
+                # leaving a weak proposal in the pile (strength 0.50 → proposed).
+                _title_l = (getattr(block, 'window_title', '') or '').lower()
+                _app_l = (getattr(block, 'app_name', '') or '').lower()
+                _is_overhead = (
+                    any(sub in _title_l for sub in AUTO_NONBILLABLE_TITLE_SUBSTRINGS)
+                    or _app_l in AUTO_NONBILLABLE_APPS
+                )
+
                 # v1.3.60: also propose a category so the UI can pre-fill
                 industry = getattr(self.org, 'industry_type', None) or 'general'
                 _, non_billable_fb = FALLBACK_CATEGORIES.get(
@@ -4275,6 +4285,18 @@ class ClassificationService:
                 )
                 if not decision.category:
                     decision.category = non_billable_fb
+                if _is_overhead:
+                    # Strong strength → auto-commits as non-billable. User can
+                    # still override in Daily Review if a given inbox session
+                    # was actually billable correspondence.
+                    decision.recommended_state = 'committed'
+                    decision.matched_signals.append(Signal(
+                        type='overhead_auto_nonbillable',
+                        strength=0.90,
+                        evidence=f'Unambiguous overhead → auto non-billable ({non_billable_fb})',
+                        detail={'category': non_billable_fb, 'is_billable': False},
+                    ))
+                else:
                     decision.matched_signals.append(Signal(
                         type='fix6_default',
                         strength=0.50,
@@ -4570,6 +4592,25 @@ STOP_WORDS = {
     'inbox', 'outlook', 'email', 'mail', 'word', 'excel', 'powerpoint',
     'document', 'file', 'folder', 'window', 'tab',
 }
+
+# Signatures that are ALWAYS firm overhead → non-billable, safe to AUTO-COMMIT
+# (not just propose). These are unambiguous: an email inbox, a login screen, a
+# blank new browser tab is never billable client work for anyone. Matching here
+# lets FIX 6 commit the non-billable default instead of leaving it as a proposal
+# that the user has to confirm — clearing the overhead pile with zero touch.
+# Non-billable is the safe direction (a wrongly-non-billable block is visible
+# and re-billable in Daily Review; it can never mis-charge a client).
+AUTO_NONBILLABLE_TITLE_SUBSTRINGS = (
+    'inbox',
+    'new tab',
+    'sign in', 'sign-in', 'log in', 'login',
+    'enter your phone',
+    'creative cloud desktop',
+    'payroll subscription',
+)
+AUTO_NONBILLABLE_APPS = (
+    'olk',
+)
 
 
 # Short single-word aliases that produce too many false matches.

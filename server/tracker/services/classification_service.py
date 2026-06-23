@@ -4329,10 +4329,38 @@ class ClassificationService:
         moderate_or_better = [s for s in signals if s.strength >= 0.65]
         if moderate_or_better:
             self._populate_classification_from_signals(decision, signals)
-            # Don't downgrade an overhead auto-commit back to 'proposed'. FIX 6
-            # already committed this as unambiguous non-billable overhead
-            # (inbox/login/new-tab); a tool_category signal here (e.g. "Outlook
-            # → email") shouldn't pull it back into the review pile.
+
+            # v1.3.75: A moderate-or-better signal can carry a CATEGORY without
+            # proposing a CLIENT (e.g. tool_category "Outlook → Email" at 0.80).
+            # In that case _populate may have pulled the client_id from a WEAK
+            # signal (agent_current_client at 0.45) — exactly the stale
+            # stickiness FIX 7 is meant to reject. Guard it here: if the only
+            # signal attesting to the chosen client is uncorroborated agent
+            # stickiness, clear the client (keep the category). This is the
+            # Mets bug: a personal email kept Transfiguration because the agent
+            # had it selected, and tool_category(0.80) tripped this branch while
+            # the only client evidence was agent stickiness(0.45).
+            if decision.client_id is not None:
+                attesting = [
+                    s for s in decision.matched_signals
+                    if s.detail and s.detail.get('client_id') == decision.client_id
+                ]
+                non_stickiness = [s for s in attesting if s.type != 'agent_current_client']
+                stickiness_corroborated = any(
+                    s.type == 'agent_current_client' and s.detail.get('corroborated')
+                    for s in attesting
+                )
+                if not non_stickiness and not stickiness_corroborated:
+                    logger.info(
+                        f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                        f"clearing client_id={decision.client_id} proposed only via "
+                        f"weak agent stickiness while a clientless moderate signal "
+                        f"(e.g. tool_category) tripped the propose branch"
+                    )
+                    decision.client_id = None
+                    decision.is_billable = False
+
+            # Don't downgrade an overhead auto-commit back to 'proposed'.
             if not any(s.type == 'overhead_auto_nonbillable' for s in decision.matched_signals):
                 decision.recommended_state = 'proposed'
             decision.confidence = max(s.strength for s in moderate_or_better)

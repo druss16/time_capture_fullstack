@@ -559,6 +559,15 @@ function ActivityList({
                   ).trim()
                 : undefined;
 
+              // All blocks in THIS category section sharing this row's title.
+              // "Click to move" moves the whole title-group at once (e.g. all
+              // 115 "Sacred Heart-Rome-Budgets" rows), not one block at a time.
+              const thisTitle = parsed.title;
+              const siblingBlockIds = group.activities
+                .filter((a) => parse(a).title === thisTitle)
+                .map((a) => parse(a).blockId)
+                .filter((id): id is number => id !== null);
+
               return (
                 <React.Fragment key={rowKey}>
                   {insertAfterIdx === idx - 1 && <InsertionLine />}
@@ -575,6 +584,7 @@ function ActivityList({
                     onDragOver={(e) => handleRowDragOver(e, idx)}
                     onToggleSelect={(_shift) => onToggleSelect(rowKey, idx, false)}
                     indented={isGrouped}
+                    siblingBlockIds={siblingBlockIds}
                   />
                   {insertAfterIdx === idx && <InsertionLine />}
                 </React.Fragment>
@@ -592,6 +602,7 @@ function ActivityList({
 function ActivityRow({
   activity, displayTitle, client, categoryName, allClients, allCategories,
   onMove, isBeingDragged, isSelected, onDragOver, onToggleSelect, indented,
+  siblingBlockIds,
 }: {
   activity: string;
   displayTitle?: string;
@@ -605,6 +616,7 @@ function ActivityRow({
   onDragOver: (e: React.DragEvent) => void;
   onToggleSelect: (shift: boolean) => void;
   indented?: boolean;
+  siblingBlockIds?: number[];
 }) {
   const [showPopover, setShowPopover] = useState(false);
   const [checkboxActive, setCheckboxActive] = useState(false);
@@ -635,7 +647,10 @@ function ActivityRow({
 
   const handleApply = async (clientId: number | null, category: string) => {
     setShowPopover(false);
-    if (parsed.blockId) await onMove(parsed.blockId, clientId, category);
+    const ids = (siblingBlockIds && siblingBlockIds.length > 0)
+      ? siblingBlockIds
+      : (parsed.blockId ? [parsed.blockId] : []);
+    for (const id of ids) await onMove(id, clientId, category);
   };
 
   const handleCheckboxClick = (e: React.MouseEvent) => {

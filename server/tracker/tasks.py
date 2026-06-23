@@ -890,6 +890,20 @@ def ai_classify_uncategorized_blocks(self, limit=80):
                         exc_info=True,
                     )
                     stats['errors'] += 1
+                    
+        # ── INTRADAY SECOND-PASS ──────────────────────────────────────────
+        # After first-pass classification, second-pass the orgs we just
+        # touched so proposals appear within ~5 min (not just nightly).
+        # days=1 keeps it fast; nightly task sweeps the full 14-day window.
+        try:
+            from tracker.services.second_pass import run_second_pass
+            for org_id in by_org.keys():
+                sp = run_second_pass(org_id, days=1, dry_run=False)
+                if sp.get('billed'):
+                    logger.error(f"[SECOND-PASS intraday] org {org_id}: {sp['billed']} billed from guess!")
+        except Exception as e:
+            logger.error(f"[SECOND-PASS intraday] failed: {e}", exc_info=True)
+        # ──────────────────────────────────────────────────────────────────
  
         logger.info(
             f"[AI-SAFETY-NET] Done: "
@@ -1724,7 +1738,7 @@ def dispatch_compact_classify_all():
     for oid in org_ids:
         compact_and_classify_org.delay(oid)
     return {'orgs_dispatched': len(org_ids)}
-    
+
 
 @shared_task(name='tracker.tasks.second_pass_categorize_all', bind=True, max_retries=2)
 def second_pass_categorize_all(self):

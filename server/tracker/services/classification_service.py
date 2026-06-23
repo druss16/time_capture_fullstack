@@ -4641,6 +4641,25 @@ AUTO_NONBILLABLE_TITLE_SUBSTRINGS = (
     'enter your phone',
     'creative cloud desktop',
     'payroll subscription',
+    # v1.3.76: QB/tax/OS navigation & dialog chrome that names no client.
+    # SAFE because _is_overhead only fires when block already has NO client
+    # and NO AI category (see _finalize_decision ~line 4265) — real billable
+    # reconciliation/payroll work has a client and never reaches here.
+    'begin reconciliation',
+    'select reconciliation',
+    'reconciliation report',
+    'print preview',
+    'print checks',
+    'printer setup',
+    'preview paycheck',
+    'special paycheck situation',
+    'preparer options',
+    'past transactions',
+    'recycle bin',
+    'this pc',
+    'quick access',
+    'control panel',
+    'task manager',
 )
 AUTO_NONBILLABLE_APPS = (
     'olk',

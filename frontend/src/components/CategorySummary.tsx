@@ -999,7 +999,6 @@ function FlaggedBanner({
   const aiDisagreements = flagged.filter(f => f.type === 'ai_disagreement');
   const mailDisagreements = flagged.filter(f => f.type === 'mail_disagreement');
   const calendarDisagreements = flagged.filter(f => f.type === 'calendar_disagreement');
-  const secondPass = flagged.filter(f => f.type === 'second_pass');
 
   return (
 
@@ -1215,78 +1214,6 @@ function FlaggedBanner({
                       className="px-3 py-1.5 text-xs font-semibold bg-cyan-100 hover:bg-cyan-200 text-cyan-900 rounded-lg transition-all"
                     >
                       {dismissCopy}
-                    </button>
-                  </div>
-                  <EvidenceExpansion
-                    blockId={f.block_id}
-                    isExpanded={expandedBlocks.has(f.block_id)}
-                    onToggle={() => toggleExpanded(f.block_id)}
-                    colorScheme="cyan"
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {secondPass.length > 0 && (
-        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 overflow-hidden">
-          <div className="px-4 py-2 bg-emerald-100/70 border-b border-emerald-200 flex items-center gap-2">
-            <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-            <span className="text-emerald-800 font-semibold text-sm">
-              {secondPass.length} auto-categorized {secondPass.length === 1 ? "entry" : "entries"} — confirm or change
-            </span>
-          </div>
-          <div className="divide-y divide-emerald-100">
-            {secondPass.map((f) => {
-              const confident = (f.proposed_confidence ?? 0) >= 0.7;
-              const hasGuess = !!f.proposed_client_id;
-              return (
-                <div key={f.block_id} className="px-4 py-3">
-                  <div className="flex items-start justify-between gap-4 mb-2">
-                    <div className="flex items-start gap-2 min-w-0">
-                      <AlertCircle className="w-3.5 h-3.5 text-emerald-500 mt-0.5 shrink-0" />
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-emerald-900 truncate">
-                          {f.window_title || f.client_name} — {fmt(f.minutes / 60)}
-                        </p>
-                        {hasGuess ? (
-                          <p className="text-sm font-semibold text-emerald-900 mt-1">
-                            {confident ? "Auto-assigned" : "Best guess"}: {f.proposed_client_name}
-                            {f.proposed_confidence != null && (
-                              <span className="text-emerald-600 font-normal ml-1.5">
-                                ({Math.round((f.proposed_confidence ?? 0) * 100)}% confident)
-                              </span>
-                            )}
-                          </p>
-                        ) : (
-                          <p className="text-sm font-semibold text-amber-700 mt-1">
-                            Needs a client
-                          </p>
-                        )}
-                        {f.proposed_reasoning && (
-                          <p className="text-xs text-emerald-600 mt-1.5 italic line-clamp-2">
-                            {f.proposed_reasoning}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 mt-2 ml-5">
-                    {hasGuess && (
-                      <button
-                        onClick={() => onConfirmProposal?.(f.block_id, f.proposed_client_id ?? null, f.proposed_category ?? "General Client Work")}
-                        className="px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-all"
-                      >
-                        Confirm {f.proposed_client_name}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => onConfirmProposal?.(f.block_id, null, "Personal/Non-Billable")}
-                      className="px-3 py-1.5 text-xs font-semibold bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg transition-all"
-                    >
-                      {hasGuess ? "Not billable" : "Mark non-billable"}
                     </button>
                   </div>
                   <EvidenceExpansion

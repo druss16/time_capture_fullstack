@@ -4625,7 +4625,6 @@ def today_time(request):
             'proposed_client_name': _b.proposed_client.name if _b.proposed_client_id else None,
             'proposed_confidence':  float(getattr(_b, 'proposed_confidence', 0.0) or 0.0),
             'proposed_category':    getattr(_b, 'proposed_category', '') or '',
-            'proposed_inline':    proposed_inline,
         })
 
 
@@ -4636,6 +4635,8 @@ def today_time(request):
         'non_billable_hours': round(non_billable_minutes / 60, 2),
         'date':               target_date.isoformat(),
         'flagged_blocks':     flagged_blocks,
+        'proposed_inline':    proposed_inline,
+
     })
 
 

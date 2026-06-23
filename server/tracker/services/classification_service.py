@@ -4328,7 +4328,12 @@ class ClassificationService:
         moderate_or_better = [s for s in signals if s.strength >= 0.65]
         if moderate_or_better:
             self._populate_classification_from_signals(decision, signals)
-            decision.recommended_state = 'proposed'
+            # Don't downgrade an overhead auto-commit back to 'proposed'. FIX 6
+            # already committed this as unambiguous non-billable overhead
+            # (inbox/login/new-tab); a tool_category signal here (e.g. "Outlook
+            # → email") shouldn't pull it back into the review pile.
+            if not any(s.type == 'overhead_auto_nonbillable' for s in decision.matched_signals):
+                decision.recommended_state = 'proposed'
             decision.confidence = max(s.strength for s in moderate_or_better)
             return decision
 

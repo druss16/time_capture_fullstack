@@ -1940,14 +1940,14 @@ class ClassificationService:
             # (6 char shared prefix). Possessive variants ("mary"/"marys")
             # are already handled by _normalize's stem-trailing-s logic.
             for ht in pre_bracket_tokens:
-                if len(ht) < 5 or ht in DOMAIN_COMMON_WORDS:
+                if len(ht) < 6 or ht in DOMAIN_COMMON_WORDS:
                     continue
                 cp = 0
                 for x, y in zip(ct, ht):
                     if x != y:
                         break
                     cp += 1
-                if cp >= 5:
+                if cp >= 6 and cp >= 0.7 * min(len(ct), len(ht)):
                     matched_score += 1.0
                     break
 
@@ -2047,21 +2047,22 @@ class ClassificationService:
             if at in hset:
                 return True
             for ht in htoks:
-                if len(ht) < 5:
+                if len(ht) < 6:
                     continue
-                # If this is the distinctive-tokens pass, don't allow fuzzy
-                # matches against domain-common haystack tokens — otherwise
-                # "church-hamilton" sneaks past via "church" alone.
                 if not allow_domain_common_fuzzy and ht in DOMAIN_COMMON_WORDS:
                     continue
-                # v1.3.53: Tightened fuzzy-prefix from 4 to 5 chars to
-                # reject false matches like complete/complex.
+                # v1.3.74: Tightened fuzzy-prefix from 5 to 6 chars AND require
+                # the shared prefix to cover >=70% of the shorter token. 5 chars
+                # let "transaction" match "transfiguration" (5 shared: t-r-a-n-s),
+                # billing a personal "Syracuse Mets Transaction" email to
+                # Transfiguration Church. 70% coverage rejects that (5/11 = 45%)
+                # while keeping real near-matches like "cemete"/"cemetery" (6/8 = 75%).
                 cp = 0
                 for x, y in zip(at, ht):
                     if x != y:
                         break
                     cp += 1
-                if cp >= 5:
+                if cp >= 6 and cp >= 0.7 * min(len(at), len(ht)):
                     return True
             return False
 
@@ -2136,15 +2137,15 @@ class ClassificationService:
                 if ht == at:
                     positions.append(i)
                     continue
-                # Fuzzy prefix (5+ char shared, ht not domain-common)
-                if len(ht) < 5 or ht in DOMAIN_COMMON_WORDS:
+                # Fuzzy prefix (v1.3.74: 6+ char shared AND >=70% of shorter token)
+                if len(ht) < 6 or ht in DOMAIN_COMMON_WORDS:
                     continue
                 cp = 0
                 for x, y in zip(at, ht):
                     if x != y:
                         break
                     cp += 1
-                if cp >= 5:
+                if cp >= 6 and cp >= 0.7 * min(len(at), len(ht)):
                     positions.append(i)
             if positions:
                 positions_by_token[at] = positions

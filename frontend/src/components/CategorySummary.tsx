@@ -1521,12 +1521,23 @@ export default function CategorySummary({
       for (const id of blockIds) {
         await moveActivity(id, clientId, category || "General Client Work");
       }
-      showToast(blockIds.length > 1 ? `Confirmed ${blockIds.length}` : "Confirmed", "success");
+      // Sum the minutes we just confirmed (from the proposed groups) and name
+      // the destination, so the user can SEE what landed where.
+      const confirmedMins = proposedInline
+        .filter((p) => blockIds.includes(p.block_id))
+        .reduce((s, p) => s + (p.minutes || 0), 0);
+      const destName = clientId == null
+        ? "No Client"
+        : (availableClients.find((c) => c.id === clientId)?.name || "client");
+      const h = Math.floor(confirmedMins / 60);
+      const m = confirmedMins % 60;
+      const timeStr = h === 0 ? `${m}m` : m === 0 ? `${h}h` : `${h}h ${m}m`;
+      showToast(`Confirmed ${timeStr} → ${destName}`, "success");
       onRefresh();
     } catch (e: any) {
       showToast(e?.message || "Confirm failed", "error");
     }
-  }, [moveActivity, onRefresh, showToast]);
+  }, [moveActivity, onRefresh, showToast, proposedInline, availableClients]);
 
   const makeCatDragOver = (catKey: string) => (e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation(); setCatDropTarget(catKey);

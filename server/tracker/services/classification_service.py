@@ -1901,6 +1901,27 @@ class ClassificationService:
         if in_bracket and alias_n in in_bracket:
             return 0.40
 
+        # v1.3.75: WHOLE-NAME SIMILARITY GATE for the token-coverage fallback.
+        # Token-coverage lets a client match on scattered shared words even
+        # when the overall names are nothing alike — e.g. "CNY Coin & Silver"
+        # matching "All Around Auto Repair and Sales Corp" on generic tokens.
+        # Require the alias to genuinely RESEMBLE the title (as a whole or as
+        # its leading chunk) before any scatter-match score is allowed.
+        # Proven: "All Round Repair"≈"All Around Auto Repair" = 0.90 (keep),
+        # "CNY Coin & Silver" = 0.39 (reject). Contiguous Tiers 1/2 above are
+        # unaffected — they're already high-similarity by definition.
+        from difflib import SequenceMatcher
+        _WHOLE_NAME_GATE = 0.70
+        _whole = SequenceMatcher(None, alias_n, pre_bracket).ratio()
+        # Also test the leading chunk of the title (length of alias + slack),
+        # so trailing window chrome ("- Work - Microsoft Edge") doesn't dilute
+        # an otherwise-strong leading-name match.
+        _lead_chunk = pre_bracket[:len(alias_n) + 5]
+        _lead = SequenceMatcher(None, alias_n, _lead_chunk).ratio()
+        _name_sim = max(_whole, _lead)
+        if _name_sim < _WHOLE_NAME_GATE:
+            return 0.0
+
         # Tier 3 (existing v1.3.24 behavior): Token-coverage fallback.
         # For aliases whose words appear scattered through the haystack
         # rather than contiguously. Capped at 0.5 so non-contiguous

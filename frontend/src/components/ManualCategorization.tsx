@@ -456,7 +456,7 @@ const ManualCategorization = ({ date, onComplete }: ManualCategorizationProps) =
             <Clock className="w-4 h-4 text-primary flex-shrink-0" />
             <div>
               <div className="text-sm font-bold text-foreground">
-                {blocks.length} block{blocks.length !== 1 ? 's' : ''} to review
+                {visibleBlocks.length} block{visibleBlocks.length !== 1 ? 's' : ''} to review
               </div>
               <div className="text-xs text-muted-foreground">
                 {formatMins(totalMinutes)} total
@@ -491,13 +491,13 @@ const ManualCategorization = ({ date, onComplete }: ManualCategorizationProps) =
         </div>
 
         {/* Select all toggle */}
-        {blocks.length > 1 && (
+        {visibleBlocks.length > 1 && (
           <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
             <button
               onClick={handleSelectAll}
               className="hover:text-foreground hover:underline"
             >
-              {selectedIds.size === blocks.length ? 'Deselect all' : 'Select all'}
+              {selectedIds.size === visibleBlocks.length ? 'Deselect all' : 'Select all'}
             </button>
             <span>·</span>
             <span>Shift-click to select a range · Esc to clear</span>
@@ -523,7 +523,7 @@ const ManualCategorization = ({ date, onComplete }: ManualCategorizationProps) =
       )}
 
       {/* ── Block rows ──────────────────────────────────────────────── */}
-      {blocks.length === 0 ? (
+      {visibleBlocks.length === 0 ? (
         <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
           <div className="w-12 h-12 bg-success/20 rounded-full flex items-center justify-center mx-auto mb-3">
             <CheckCircle2 className="w-6 h-6 text-success" />

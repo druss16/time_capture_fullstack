@@ -82,6 +82,15 @@ type FlaggedBlock = {
   proposed_category?: string | null;
   proposed_reasoning?: string;
 };
+type ProposedInline = {
+  block_id: number;
+  window_title: string;
+  minutes: number;
+  proposed_client_id: number | null;
+  proposed_client_name: string | null;
+  proposed_confidence: number;
+  proposed_category: string;
+};
 type TodayTimeResponse = {
   clients: ClientTime[];
   billable_hours: number;
@@ -89,7 +98,9 @@ type TodayTimeResponse = {
   global_hours: number;
   date: string;
   flagged_blocks: FlaggedBlock[];
+  proposed_inline?: ProposedInline[];
 };
+
 
 // ─── Toast ───────────────────────────────────────────────────────────────────
 
@@ -169,6 +180,7 @@ export default function DailyReview() {
   });
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
   const [aiInProgress, setAiInProgress] = useState(false);
+  const [proposedInline, setProposedInline] = useState<ProposedInline[]>([]);
 
 
 
@@ -219,6 +231,7 @@ export default function DailyReview() {
       setTimeSummary(json.clients || []);
       setBillableHours(json.billable_hours || 0);
       setNonBillableHours(json.non_billable_hours || 0);
+      setProposedInline(json.proposed_inline || []);
       const allFlagged = json.flagged_blocks || [];
       const needsReview = allFlagged.filter(b => b.review_reason?.includes("Mixed content"));
       setFlaggedBlocks(allFlagged);
@@ -522,6 +535,7 @@ export default function DailyReview() {
               availableClients={availableClients}
               availableCategories={availableCategories}
               flaggedBlocks={flaggedBlocks}
+              proposedInline={proposedInline}
               busy={busy}
               onDismissReview={handleDismissReview}
               onResolveDisagreement={handleResolveDisagreement}

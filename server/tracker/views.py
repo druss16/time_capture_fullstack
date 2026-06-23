@@ -4607,6 +4607,28 @@ def today_time(request):
         if 'type' not in fb:
             fb['type'] = 'mobile_review'
 
+    # ── Proposed blocks for inline display (red-clock rows, NOT in totals) ──
+    proposed_inline = []
+    _pi = Block.objects.filter(
+        user=user, day=target_date, classification_state='proposed',
+        deleted_at__isnull=True,
+    ).exclude(categorized_by__in=['manual', 'correction']).select_related('proposed_client')
+    for _b in _pi:
+        _r = getattr(_b, 'proposed_reasoning', '') or ''
+        if 'second-pass' not in _r and not _b.proposed_client_id:
+            continue
+        proposed_inline.append({
+            'block_id':             _b.id,
+            'window_title':         getattr(_b, 'window_title', '') or '',
+            'minutes':              _b.minutes or 0,
+            'proposed_client_id':   _b.proposed_client_id,
+            'proposed_client_name': _b.proposed_client.name if _b.proposed_client_id else None,
+            'proposed_confidence':  float(getattr(_b, 'proposed_confidence', 0.0) or 0.0),
+            'proposed_category':    getattr(_b, 'proposed_category', '') or '',
+            'proposed_inline':    proposed_inline,
+        })
+
+
     return Response({
         'clients':            result,
         'global_hours':       round(total_minutes / 60, 2),
@@ -5055,6 +5077,26 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
             'calendar_disagreement_source':  block.calendar_disagreement_source or 'classifier',
         })
 
+    # ── Proposed blocks for inline display (red-clock rows, NOT in totals) ──
+    proposed_inline = []
+    _pi = Block.objects.filter(
+        user=user, day=target_date, classification_state='proposed',
+        deleted_at__isnull=True,
+    ).exclude(categorized_by__in=['manual', 'correction']).select_related('proposed_client')
+    for _b in _pi:
+        _r = getattr(_b, 'proposed_reasoning', '') or ''
+        if 'second-pass' not in _r and not _b.proposed_client_id:
+            continue
+        proposed_inline.append({
+            'block_id':             _b.id,
+            'window_title':         getattr(_b, 'window_title', '') or '',
+            'minutes':              _b.minutes or 0,
+            'proposed_client_id':   _b.proposed_client_id,
+            'proposed_client_name': _b.proposed_client.name if _b.proposed_client_id else None,
+            'proposed_confidence':  float(getattr(_b, 'proposed_confidence', 0.0) or 0.0),
+            'proposed_category':    getattr(_b, 'proposed_category', '') or '',
+        })
+
     return Response({
         'clients':            result,
         'global_hours':       round(total_minutes / 60, 2),
@@ -5062,6 +5104,7 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
         'non_billable_hours': round((total_minutes - billable_minutes) / 60, 2),
         'date':               target_date.isoformat(),
         'flagged_blocks':     flagged_blocks,
+        'proposed_inline':    proposed_inline,
     })
 
 # ============================================================================

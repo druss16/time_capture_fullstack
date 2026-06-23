@@ -20,6 +20,7 @@ import {
   MousePointerClick,
   Mail,
   CalendarClock,
+  Clock
 } from "lucide-react";
 import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -77,6 +78,15 @@ type FlaggedBlock = {
   proposed_confidence?: number;
   proposed_category?: string | null;
   proposed_reasoning?: string;
+};
+type ProposedInline = {
+  block_id: number;
+  window_title: string;
+  minutes: number;
+  proposed_client_id: number | null;
+  proposed_client_name: string | null;
+  proposed_confidence: number;
+  proposed_category: string;
 };
 
 type ParsedActivity = { blockId: number | null; title: string };
@@ -1340,7 +1350,61 @@ function OnboardingHint() {
   );
 }
 
+
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
+
+function ProposedRow({
+  p, allClients, allCategories, onConfirm,
+}: {
+  p: ProposedInline;
+  allClients: ClientOption[];
+  allCategories: string[];
+  onConfirm: (blockId: number, clientId: number | null, category: string) => void;
+}) {
+  const [showPicker, setShowPicker] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const mins = p.minutes || 0;
+  const h = Math.floor(mins / 60); const m = mins % 60;
+  const timeStr = h === 0 ? `${m}m` : m === 0 ? `${h}h` : `${h}h ${m}m`;
+  const hasGuess = !!p.proposed_client_id;
+  return (
+    <div ref={ref} className="flex items-center gap-2 px-3 py-1.5 ml-6 rounded-lg bg-amber-50/50 relative">
+      <Clock className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
+      <span className="text-sm flex-1 truncate text-slate-600" title={p.window_title}>
+        {p.window_title || "(untitled)"}
+      </span>
+      <span className="text-[11px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded tabular-nums flex-shrink-0">
+        {timeStr}
+      </span>
+      {hasGuess ? (
+        <button
+          onClick={() => onConfirm(p.block_id, p.proposed_client_id, p.proposed_category || "General Client Work")}
+          className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all flex-shrink-0"
+        >Confirm</button>
+      ) : (
+        <div className="relative flex-shrink-0">
+          <button
+            onClick={() => setShowPicker((v) => !v)}
+            className="px-2 py-0.5 text-[11px] font-semibold border border-amber-300 text-amber-700 hover:bg-amber-100 rounded-md transition-all"
+          >Assign client</button>
+          {showPicker && (
+            <MovePopover
+              anchorEl={ref.current}
+              clients={allClients}
+              categories={allCategories}
+              currentClientId={null}
+              currentCategory={p.proposed_category || (allCategories[0] ?? "")}
+              label="Assign this entry"
+              onApply={(clientId, category) => { setShowPicker(false); onConfirm(p.block_id, clientId, category); }}
+              onClose={() => setShowPicker(false)}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function CategorySummary({
   timeSummary,
@@ -1352,6 +1416,7 @@ export default function CategorySummary({
   onResolveDisagreement,
   onRefresh,
   showToast,
+  proposedInline = [],
 }: {
   timeSummary: ClientTime[];
   availableClients: ClientOption[];
@@ -1362,6 +1427,7 @@ export default function CategorySummary({
   onResolveDisagreement?: (id: number, action: 'accept' | 'dismiss') => void;
   onRefresh: () => void;
   showToast: (msg: string, type: "success" | "error") => void;
+  proposedInline?: ProposedInline[];
 }) {
   const [collapsedClients, setCollapsedClients] = useState<Set<string>>(new Set());
   const [catDropTarget, setCatDropTarget] = useState<string | null>(null);
@@ -1450,7 +1516,7 @@ export default function CategorySummary({
     }
   }, [moveActivity, onRefresh, showToast]);
 
-  const confirmProposal = useCallback(async (blockId: number, clientId: number | null, category: string) => {
+  const confirmProposalInline = useCallback(async (blockId: number, clientId: number | null, category: string) => {
     try {
       await moveActivity(blockId, clientId, category || "General Client Work");
       showToast("Confirmed", "success");
@@ -1495,14 +1561,58 @@ export default function CategorySummary({
   const getNonBillable = (c: ClientTime) =>
     c.categories.filter((cat) => isNonBillable(cat.name)).reduce((s, cat) => s + cat.hours, 0);
 
+  const proposedByClient = new Map<number | null, ProposedInline[]>();
+  for (const p of proposedInline) {
+    const k = p.proposed_client_id ?? null;
+    if (!proposedByClient.has(k)) proposedByClient.set(k, []);
+    proposedByClient.get(k)!.push(p);
+  }
+  // clients that have proposals but no time card today (need their own card)
+  const summaryClientIds = new Set(timeSummary.map((c) => c.client_id));
+  const orphanGuessClientIds = [...proposedByClient.keys()].filter(
+    (k) => k !== null && !summaryClientIds.has(k)
+  );
+
   return (
     <div>
       <FlaggedBanner 
         flagged={flaggedBlocks} 
         onDismiss={onDismissReview}
         onResolveDisagreement={onResolveDisagreement}
-        onConfirmProposal={confirmProposal}    // ADD
+        onConfirmProposal={confirmProposalInline}
       />
+      {proposedInline.length > 0 && (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-white overflow-hidden">
+          <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5 text-red-500" />
+            <span className="text-sm font-semibold text-amber-800">
+              {proposedInline.length} pending — confirm to count as billable
+            </span>
+          </div>
+          <div className="py-2 space-y-1">
+            {/* grouped by guessed client */}
+            {[...proposedByClient.entries()].map(([cid, items]) => {
+              const name = cid == null
+                ? "No Client"
+                : (availableClients.find((c) => c.id === cid)?.name
+                   || items[0]?.proposed_client_name || `Client ${cid}`);
+              return (
+                <div key={cid ?? "none"}>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide px-4 py-1">
+                    {name}
+                  </p>
+                  {items.map((p) => (
+                    <ProposedRow key={p.block_id} p={p}
+                      allClients={availableClients}
+                      allCategories={availableCategories}
+                      onConfirm={confirmProposalInline} />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <OnboardingHint />
 
       {timeSummary.length > 1 && (

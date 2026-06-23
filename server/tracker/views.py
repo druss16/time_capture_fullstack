@@ -6340,54 +6340,6 @@ def delete_project(request, project_id):
 
 
 
-# Add this view to your tracker/views.py file
-# This enables drag-and-drop recategorization in DailyReview
-
-@api_view(["PATCH"])
-@permission_classes([IsAuthenticated])
-def recategorize_block(request, block_id):
-    try:
-        block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
-    except Block.DoesNotExist:
-        return Response({"error": "Block not found"}, status=404)
-    
-    new_category = request.data.get('category')
-    new_client_id = request.data.get('client_id')
-    
-    if not new_category:
-        return Response({"error": "category required"}, status=400)
-    
-    # Track old category
-    old_category = None
-    if block.category_hours:
-        old_category = list(block.category_hours.keys())[0] if block.category_hours else None
-    
-    # Calculate duration
-    duration = (block.end - block.start).total_seconds() / 3600 if block.end and block.start else 0
-    block.category_hours = {new_category: round(duration, 2)}
-    
-    # Mark as user correction
-    block.categorized_by = 'correction'
-    block.categorized_at = timezone.now()
-    
-    # Optionally update client
-    if new_client_id:
-        try:
-            block.client = Client.objects.get(id=new_client_id)
-        except Client.DoesNotExist:
-            pass
-    
-    # ✅ CRITICAL: force_update=True bypasses immutability protection
-    block.save(force_update=True)
-    
-    return Response({
-        "success": True,
-        "block_id": block.id,
-        "old_category": old_category,
-        "new_category": new_category
-    })
-
-
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_manual_time_entry(request):
@@ -6534,50 +6486,64 @@ def delete_block(request, block_id):
     })
 
 
+def _is_nonbillable_category(category):
+    return (category or '').strip().lower() in {'personal/non-billable', 'idle', 'uncategorized'}
+
+
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
 def recategorize_block(request, block_id):
-    """
-    Move a block to a different category and/or client.
-    Only works on non-deleted blocks.
-    """
+    """Move a block to a different category and/or client. Handles No Client."""
     try:
         block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
     except Block.DoesNotExist:
         return Response({"error": "Block not found"}, status=404)
 
     new_category = request.data.get('category')
+    client_provided = 'client_id' in request.data
     new_client_id = request.data.get('client_id')
 
+    # No-Client moves allowed with empty category → default to non-billable.
     if not new_category:
-        return Response({"error": "category required"}, status=400)
+        if client_provided and new_client_id is None:
+            new_category = 'Personal/Non-Billable'
+        else:
+            return Response({"error": "category required"}, status=400)
 
-    # Track old category for response
     old_category = list(block.category_hours.keys())[0] if block.category_hours else None
 
-    # Calculate duration in hours
-    duration = (block.end - block.start).total_seconds() / 3600 if block.end and block.start else 0
-    block.category_hours = {new_category: round(duration, 2)}
+    # PRESERVE the block's real recorded duration. Do NOT recompute from
+    # end-start (idle-capped / merged blocks have category_hours != span).
+    existing_total = sum((block.category_hours or {}).values())
+    if existing_total <= 0:
+        existing_total = (block.end - block.start).total_seconds() / 3600 if block.end and block.start else 0
+    block.category_hours = {new_category: round(existing_total, 4)}
 
-    # Mark as user correction
+    # Client: distinguish "absent" (leave as-is) from "present & null" (No Client).
+    if client_provided:
+        if new_client_id is None:
+            block.client = None
+            block.is_billable = False
+        else:
+            try:
+                block.client = Client.objects.get(id=new_client_id)
+                block.is_billable = not _is_nonbillable_category(new_category)
+            except Client.DoesNotExist:
+                pass
+
+    # Protect the manual decision from re-classification.
     block.categorized_by = 'correction'
     block.categorized_at = timezone.now()
+    block.is_categorized = True
+    block.classification_state = 'committed'
 
-    # Optionally update client
-    if new_client_id:
-        try:
-            block.client = Client.objects.get(id=new_client_id)
-        except Client.DoesNotExist:
-            pass
-
-    # force_update=True bypasses immutability protection on model save()
     block.save(force_update=True)
-
     return Response({
         "success": True,
         "block_id": block.id,
         "old_category": old_category,
         "new_category": new_category,
+        "client_id": block.client_id,
     })
 
 @api_view(["POST"])

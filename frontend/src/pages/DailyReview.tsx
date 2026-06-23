@@ -60,7 +60,7 @@ type FlaggedBlock = {
   review_reason: string;
   minutes: number;
   start: string;
-  type?: 'mobile_review' | 'ai_disagreement' | 'mail_disagreement' | 'calendar_disagreement';
+  type?: 'mobile_review' | 'ai_disagreement' | 'mail_disagreement' | 'calendar_disagreement' | 'second_pass';
   ai_proposed_client_id?: number | null;
   ai_proposed_client_name?: string | null;
   ai_confidence?: number;
@@ -75,6 +75,12 @@ type FlaggedBlock = {
   calendar_confidence?: number;
   calendar_reasoning?: string;
   calendar_disagreement_source?: 'classifier' | 'manual';
+  window_title?: string;
+  proposed_client_id?: number | null;
+  proposed_client_name?: string | null;
+  proposed_confidence?: number;
+  proposed_category?: string | null;
+  proposed_reasoning?: string;
 };
 type TodayTimeResponse = {
   clients: ClientTime[];

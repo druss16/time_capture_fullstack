@@ -4571,6 +4571,37 @@ def today_time(request):
             'type':          'needs_review',
         })
 
+    # =========================================================================
+    # STEP 6.8: Second-pass proposals → flagged_blocks (type='second_pass')
+    # =========================================================================
+    second_pass_blocks = Block.objects.filter(
+        user=user,
+        day=target_date,
+        classification_state='proposed',
+        deleted_at__isnull=True,
+    ).exclude(
+        categorized_by__in=['manual', 'correction'],
+    ).select_related('client', 'proposed_client')
+
+    for block in second_pass_blocks:
+        reason = getattr(block, 'proposed_reasoning', '') or ''
+        if 'second-pass' not in reason and not block.proposed_client_id:
+            continue
+        flagged_blocks.append({
+            'block_id':              block.id,
+            'type':                  'second_pass',
+            'window_title':          getattr(block, 'window_title', '') or '',
+            'client_name':           block.client.name if block.client else 'Uncategorized',
+            'review_reason':         'Auto-categorized — confirm',
+            'minutes':               block.minutes or 0,
+            'start':                 block.start.isoformat() if block.start else '',
+            'proposed_client_id':    block.proposed_client_id,
+            'proposed_client_name':  block.proposed_client.name if block.proposed_client_id else None,
+            'proposed_confidence':   float(getattr(block, 'proposed_confidence', 0.0) or 0.0),
+            'proposed_category':     getattr(block, 'proposed_category', '') or '',
+            'proposed_reasoning':    reason,
+        })
+
     # Tag mobile-review-flagged blocks with their type for the frontend
     for fb in flagged_blocks:
         if 'type' not in fb:

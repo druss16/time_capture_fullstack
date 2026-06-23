@@ -504,7 +504,7 @@ export default function DailyReview() {
           </div>
         )}
 
-        {aiInProgress && (
+{/*        {aiInProgress && (
           <div className="mb-4 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
             <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
             <span className="text-blue-700 text-sm font-semibold">
@@ -512,23 +512,9 @@ export default function DailyReview() {
             </span>
           </div>
         )}
-
+*/}
         {activeTab === "summary" ? (
           <>
-            {uncategorizedCount > 0 && (
-              <div className="mb-4 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
-                <div className="flex items-center gap-2 text-amber-700 text-sm font-semibold">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  {uncategorizedCount} block{uncategorizedCount !== 1 ? "s" : ""} need categorization
-                </div>
-                <button
-                  onClick={() => setActiveTab("categorize")}
-                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-md transition-colors"
-                >
-                  Categorize now
-                </button>
-              </div>
-            )}
 
             <CategorySummary
               timeSummary={timeSummary}

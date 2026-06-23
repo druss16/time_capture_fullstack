@@ -1578,6 +1578,27 @@ export default function CategorySummary({
   );
   const noClientGroups = groupsByClient.get(null) || [];
 
+  // Pending groups that have no real client card to live in:
+  //  - noClientGroups  (no guess at all)
+  //  - orphan guesses  (guessed client has no card today)
+  // Collect them so they render under a single "No Client" card at the bottom.
+  const homelessPendingGroups: ProposedGroup[] = [
+    ...noClientGroups,
+    ...orphanGuessIds.flatMap((cid) => groupsByClient.get(cid) || []),
+  ];
+
+  // Does timeSummary already contain an Unassigned/No-Client card?
+  const hasUnassignedCard = timeSummary.some(
+    (c) => c.client_id == null || c.client.toLowerCase() === "unassigned"
+  );
+
+  // Build the render list: real clients, plus a synthetic No-Client card
+  // ONLY if there are homeless pending groups and no Unassigned card exists.
+  const renderClients: ClientTime[] =
+    (homelessPendingGroups.length > 0 && !hasUnassignedCard)
+      ? [...timeSummary, { client_id: null, client: "Unassigned", total_hours: 0, categories: [] }]
+      : timeSummary;
+
   return (
     <div>
       <FlaggedBanner 
@@ -1586,45 +1607,6 @@ export default function CategorySummary({
         onResolveDisagreement={onResolveDisagreement}
         onConfirmProposal={confirmProposalInline}
       />
-      {(noClientGroups.length > 0 || orphanGuessIds.length > 0) && (
-        <div className="mb-3 rounded-xl border border-amber-200 bg-white overflow-hidden">
-          <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
-            <Clock className="w-3.5 h-3.5 text-red-500" />
-            <span className="text-sm font-semibold text-amber-800">
-              Pending — confirm to count as billable
-            </span>
-          </div>
-          <div className="py-2 space-y-1">
-            {/* guessed clients with no card today */}
-            {orphanGuessIds.map((cid) => {
-              const groups = groupsByClient.get(cid) || [];
-              const name = availableClients.find((c) => c.id === cid)?.name
-                || groups[0]?.proposed_client_name || `Client ${cid}`;
-              return (
-                <div key={`orphan-${cid}`}>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide px-4 py-1">{name}</p>
-                  {groups.map((g) => (
-                    <ProposedGroupRow key={`${cid}-${g.title}`} g={g}
-                      allClients={availableClients} allCategories={availableCategories}
-                      onConfirm={confirmProposalInline} />
-                  ))}
-                </div>
-              );
-            })}
-            {/* no-guess → No Client */}
-            {noClientGroups.length > 0 && (
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide px-4 py-1">No Client</p>
-                {noClientGroups.map((g) => (
-                  <ProposedGroupRow key={`noclient-${g.title}`} g={g}
-                    allClients={availableClients} allCategories={availableCategories}
-                    onConfirm={confirmProposalInline} />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
       <OnboardingHint />
 
       {timeSummary.length > 1 && (
@@ -1660,7 +1642,7 @@ export default function CategorySummary({
       )}
 
       <div className="space-y-3">
-        {timeSummary.map((client, clientIndex) => {
+        {renderClients.map((client, clientIndex) => {
           const clientKey = `${client.client_id}-${client.client}`;
           const isCollapsed = collapsedClients.has(clientKey);
           const unassigned = client.client.toLowerCase() === "unassigned";
@@ -1814,23 +1796,29 @@ export default function CategorySummary({
                     );
                   })}
 
-                  {/* Pending guesses for THIS client — red clock, NOT counted until confirmed */}
-                  {(groupsByClient.get(client.client_id) || []).length > 0 && (
-                    <div className="border-t border-amber-100 bg-amber-50/30 py-2">
-                      <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wide px-5 mb-1">
-                        Pending — confirm to count as billable
-                      </p>
-                      {(groupsByClient.get(client.client_id) || []).map((g) => (
-                        <ProposedGroupRow
-                          key={`${g.proposed_client_id}-${g.title}`}
-                          g={g}
-                          allClients={availableClients}
-                          allCategories={availableCategories}
-                          onConfirm={confirmProposalInline}
-                        />
-                      ))}
-                    </div>
-                  )}
+                  {(() => {
+                    const isNoClient = client.client_id == null || client.client.toLowerCase() === "unassigned";
+                    const pendingForCard = isNoClient
+                      ? homelessPendingGroups
+                      : (groupsByClient.get(client.client_id) || []);
+                    if (pendingForCard.length === 0) return null;
+                    return (
+                      <div className="border-t border-amber-100 bg-amber-50/30 py-2">
+                        <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wide px-5 mb-1">
+                          Pending — confirm to count as billable
+                        </p>
+                        {pendingForCard.map((g) => (
+                          <ProposedGroupRow
+                            key={`${g.proposed_client_id}-${g.title}`}
+                            g={g}
+                            allClients={availableClients}
+                            allCategories={availableCategories}
+                            onConfirm={confirmProposalInline}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })()}
 
                   {/* EDIT 4 of 4: collapsed parked non-billable / no-client time
                       with a reveal toggle, mirroring the empty-categories footer. */}

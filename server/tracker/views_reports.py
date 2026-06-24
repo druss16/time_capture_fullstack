@@ -66,6 +66,18 @@ _TRUNC = {
 # Categories that should never count toward billable/total (mirrors today_time).
 _EXCLUDE_CATEGORIES = {"idle", "uncategorized"}
 
+# ── Standard workday model (utilization denominator) ──────────────────────
+# Utilization has two honest denominators and they tell different stories:
+#   (a) ÷ captured time — "of what we tracked, how much billed." The denominator
+#       drifts with how long the agent happened to run, so a laptop left on
+#       overnight depresses the ratio unfairly.
+#   (b) ÷ STANDARD AVAILABLE hours — "of the time we PAY for, how much billed."
+#       This is the number partners actually care about and consultants quote.
+# We compute BOTH and let the frontend lead with (b). _STANDARD_WORKDAY_HOURS is
+# the per-person available-hours baseline for a single working day; weekends are
+# excluded from the count. Override per-org later via an OrgSetting if needed.
+_STANDARD_WORKDAY_HOURS = 8.0
+
 # ── Anomalous-block guardrail (report-side) ───────────────────────────────
 # A block whose wall-clock span (end - start) exceeds this is almost certainly
 # the sleep/wake artifact: the agent left a block open while the machine slept
@@ -136,6 +148,24 @@ _MATERIAL_MIN_MINUTES = 2
 def _is_material(b) -> bool:
     """True if the block is long enough to count toward utilization / review."""
     return _block_minutes(b) >= _MATERIAL_MIN_MINUTES
+
+
+def _count_working_days(start_date, end_date) -> int:
+    """
+    Inclusive Mon–Fri count between two dates. Used as the per-person multiplier
+    for standard-available-hours utilization. Saturdays/Sundays are excluded so
+    a normal week reads as 5 working days, not 7 — otherwise the standard-hours
+    denominator would understate utilization on every weekend-spanning range.
+    """
+    if end_date < start_date:
+        return 0
+    days = 0
+    d = start_date
+    while d <= end_date:
+        if d.weekday() < 5:  # 0=Mon … 4=Fri
+            days += 1
+        d += timedelta(days=1)
+    return days
 
 
 def _resolve_period_window(period: str, anchor_date):
@@ -222,6 +252,26 @@ def _resolve_scope(request, org):
 
     # member (or anything unexpected) — locked to self.
     return False, request.user.id
+
+
+def _headcount_for_scope(org, can_see_all, forced_user_id) -> int:
+    """
+    Number of people the utilization denominator should account for.
+      - self scope → 1 (the requesting member).
+      - team scope → active memberships in the org.
+    Used to size the standard-available-hours denominator
+    (headcount × working_days × _STANDARD_WORKDAY_HOURS).
+    """
+    if not can_see_all:
+        return 1
+    qs = OrganizationMembership.objects.filter(org=org)
+    # Honor an is_active flag if the model has one; otherwise count all members.
+    try:
+        qs = qs.filter(is_active=True)
+    except Exception:
+        pass
+    n = qs.values("user_id").distinct().count()
+    return max(n, 1)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -645,10 +695,29 @@ def reports_summary(request):
     summary["totals"]["total_hours"] = round(
         summary["totals"]["total_hours"] + (total_uncat_min / 60), 2
     )
+    # Capture-based utilization (billable ÷ total captured). Kept for the
+    # "of what we tracked" framing and backwards-compat with existing callers.
     summary["totals"]["utilization_pct"] = (
         round(100 * summary["totals"]["billable_hours"] / summary["totals"]["total_hours"], 1)
         if summary["totals"]["total_hours"] else 0.0
     )
+
+    # ── Standard-hours utilization (the number partners actually quote) ─────
+    # billable ÷ (headcount × working_days × 8h). This is the headline util the
+    # frontend leads with; capture-based stays available as a secondary read.
+    headcount = _headcount_for_scope(org, can_see_all, forced_user_id)
+    working_days = _count_working_days(start_date, end_date)
+    available_hours = round(headcount * working_days * _STANDARD_WORKDAY_HOURS, 2)
+    summary["totals"]["available_hours"] = available_hours
+    summary["totals"]["headcount"] = headcount
+    summary["totals"]["working_days"] = working_days
+    summary["totals"]["utilization_standard_pct"] = (
+        round(100 * summary["totals"]["billable_hours"] / available_hours, 1)
+        if available_hours else 0.0
+    )
+    # Keep the capture-based number under an explicit name too, so the frontend
+    # can label each one unambiguously instead of guessing.
+    summary["totals"]["utilization_captured_pct"] = summary["totals"]["utilization_pct"]
 
     # Daily shape — 3-band stacked series (billable / non-billable / uncategorized)
     # built from the block lists already in memory. No extra DB round-trip.
@@ -738,7 +807,7 @@ def reports_summary_export(request):
     writer.writerow([])
     header = [
         label_col, "Total Hours", "Billable Hours",
-        "Non-Billable Hours", "Uncategorized Hours", "Utilization %",
+        "Non-Billable Hours", "Needs Review Hours", "Utilization %",
     ]
     if group_by == "employee":
         header.append("Top Client")
@@ -993,16 +1062,29 @@ def reports_ai_performance(request):
     GET /api/reports/ai-performance/
       ?period=...&date=...&org_id=...   (same window params as summary)
 
-    The "is the tool earning its keep" story:
-      - auto_categorization_rate: of blocks the system actually classified
-        (real-time flow, excluding admin/bulk backfills), what % was automated
-        vs. needed a human to categorize from scratch.
-      - ai_override_rate: of AI-categorized blocks, what % a human later
-        corrected. Low = the AI's guesses are trusted as-is. (Honest framing:
-        this is "overridden", not "proven correct" — unreviewed blocks aren't
-        counted as either right or wrong.)
-      - hours_auto_captured: total agent-captured time in the window — time
-        that exists without anyone manually entering it.
+    The "is the tool earning its keep" story. We report THREE distinct things
+    that customers conflate if you let them:
+
+      1. AUTOMATED — how much work the tool did for you.
+         auto_categorization_rate: of blocks the system actually classified
+         (real-time flow, excluding admin/bulk backfills), what % was automated
+         vs. needed a human to categorize from scratch.
+
+      2. ACCURATE — how often you trust its guess.
+         ai_override_rate: of AI-categorized blocks, what % a human later
+         corrected. Low = guesses trusted as-is. We ALSO return its inverse,
+         ai_confirmation_rate, because "90.7% confirmed" sells where "9.3%
+         overridden" reads like a defect rate. Honest framing either way:
+         unreviewed blocks count as neither right nor wrong.
+
+      3. CONFIDENT — how sure the tool was up front.
+         ai_confidence_rate: share of blocks the AI placed WITHOUT flagging
+         uncertainty (no red clock). A low confidence rate flags a messy client
+         or a rules gap — a quality signal distinct from override.
+
+    Plus:
+      - hours_auto_captured: total agent-captured time — exists without anyone
+        typing it.
       - blocks counts for transparency.
     """
     period = (request.GET.get("period") or "week").lower()
@@ -1049,6 +1131,29 @@ def reports_ai_performance(request):
     ai_blocks = 0               # specifically categorized_by='ai'
     auto_captured_min = 0       # all agent-captured material time
 
+    # Confidence accounting — independent of who/what categorized. A block is
+    # "uncertain" if it carries a low-confidence flag (the red clock). We probe
+    # a few likely attribute names so this keeps working regardless of which
+    # field the classifier stamps; absence of all of them = treat as confident.
+    confident_blocks = 0
+    uncertain_blocks = 0
+    confidence_observed = 0     # blocks where we could actually read a signal
+
+    def _is_uncertain(b) -> bool:
+        # needs_review / low_confidence boolean flags, if present.
+        for attr in ("needs_review", "is_uncertain", "low_confidence"):
+            v = getattr(b, attr, None)
+            if isinstance(v, bool):
+                return v
+        # numeric confidence score, if present (0..1 or 0..100).
+        score = getattr(b, "confidence", None)
+        if score is None:
+            score = getattr(b, "ai_confidence", None)
+        if isinstance(score, (int, float)):
+            thresh = 0.6 if score <= 1 else 60
+            return score < thresh
+        return False  # no signal → assume confident
+
     for b in qs:
         minutes = _block_minutes(b)  # respects anomaly exclusion
         cb = (b.categorized_by or "").lower()
@@ -1057,6 +1162,20 @@ def reports_ai_performance(request):
         # agent recorded. This is the "time you didn't have to write down."
         if minutes > 0 and _is_material(b):
             auto_captured_min += minutes
+
+        # Confidence: only meaningful for material blocks the agent classified.
+        if minutes > 0 and _is_material(b) and cb not in _NON_CLASSIFICATION_SOURCES:
+            has_signal = any(
+                getattr(b, a, None) is not None
+                for a in ("needs_review", "is_uncertain", "low_confidence",
+                          "confidence", "ai_confidence")
+            )
+            if has_signal:
+                confidence_observed += 1
+                if _is_uncertain(b):
+                    uncertain_blocks += 1
+                else:
+                    confident_blocks += 1
 
         # Classification-source accounting — only for blocks that were actually
         # classified by something we count (exclude admin/bulk + uncategorized).
@@ -1090,13 +1209,25 @@ def reports_ai_performance(request):
         round(100 * correction_blocks / ai_decisions, 1)
         if ai_decisions else 0.0
     )
+    # Inverse — the framing that actually sells. "90.7% confirmed as proposed."
+    confirmation_rate = round(100 - override_rate, 1) if ai_decisions else 0.0
+
+    # AI confidence rate: confident ÷ (confident + uncertain), over blocks where
+    # we could read a signal. None observed → return None so the frontend can
+    # hide the tile rather than show a misleading 100%.
+    confidence_rate = (
+        round(100 * confident_blocks / confidence_observed, 1)
+        if confidence_observed else None
+    )
 
     return Response({
         "org_id": org.id,
         "period": period,
         "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
-        "auto_categorization_rate": auto_cat_rate,      # e.g. 98.2 (%)
-        "ai_override_rate": override_rate,              # e.g. 0.3 (%)
+        "auto_categorization_rate": auto_cat_rate,      # e.g. 90.5 (%)
+        "ai_override_rate": override_rate,              # e.g. 9.3 (%)
+        "ai_confirmation_rate": confirmation_rate,      # e.g. 90.7 (%) — lead with this
+        "ai_confidence_rate": confidence_rate,          # e.g. 94.0 (%) or null
         "hours_auto_captured": round(auto_captured_min / 60, 2),
         "counts": {
             "automated_blocks": automated_blocks,
@@ -1104,7 +1235,164 @@ def reports_ai_performance(request):
             "correction_blocks": correction_blocks,
             "ai_blocks": ai_blocks,
             "classified_total": classified_total,
+            "confident_blocks": confident_blocks,
+            "uncertain_blocks": uncertain_blocks,
+            "confidence_observed": confidence_observed,
         },
+    })
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Billing leakage — "what did we capture but never invoice?" (Phase 3 seed)
+# ──────────────────────────────────────────────────────────────────────────
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def reports_leakage(request):
+    """
+    GET /api/reports/leakage/
+      ?period=...&date=...&group_by=client|employee&org_id=...
+
+    The recurring revenue-recovery story: billable time the agent CAPTURED that
+    never made it onto an invoice. No manual-timesheet firm can see this number
+    because the time was never written down in the first place — that's the moat.
+
+        captured_billable_hours  — billable+client time we recorded
+        invoiced_hours           — hours actually marked billed/invoiced
+        leakage_hours            — captured_billable − invoiced (floored at 0)
+
+    A dollar figure needs a bill rate. If the Block (or a related rate table)
+    exposes one we use it; otherwise leakage is returned in HOURS only and the
+    frontend can multiply by a firm-entered blended rate. We deliberately do NOT
+    invent a rate server-side — a made-up dollar number is worse than none.
+
+    NOTE: this reads whatever "invoiced" signal the Block model exposes
+    (is_invoiced / invoiced_at / invoice_id). If none exist yet, invoiced_hours
+    is 0 and leakage == captured_billable, which is still directionally useful
+    and flags that invoice-linkage is the next thing to wire up.
+    """
+    period = (request.GET.get("period") or "week").lower()
+    if period not in _TRUNC:
+        period = "week"
+    group_by = (request.GET.get("group_by") or "client").lower()
+    if group_by not in ("employee", "client"):
+        group_by = "client"
+
+    date_str = request.GET.get("date")
+    anchor = parse_date(date_str) if date_str else timezone.localdate()
+    if not anchor:
+        anchor = timezone.localdate()
+
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+
+    can_see_all, forced_user_id = _resolve_scope(request, org)
+
+    custom_start = parse_date(request.GET.get("start") or "")
+    custom_end = parse_date(request.GET.get("end") or "")
+    if custom_start and custom_end and custom_start <= custom_end:
+        start_date, end_date = custom_start, custom_end
+    else:
+        start_date, end_date = _resolve_period_window(period, anchor)
+    start_utc, end_utc = _day_bounds_utc(start_date, end_date)
+
+    blocks = list(
+        _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id)
+    )
+
+    def _is_invoiced(b) -> bool:
+        for attr in ("is_invoiced", "invoiced", "billed"):
+            v = getattr(b, attr, None)
+            if isinstance(v, bool):
+                return v
+        for attr in ("invoiced_at", "invoice_id", "invoice_line_id"):
+            if getattr(b, attr, None):
+                return True
+        return False
+
+    def _rate_for(b):
+        # Best-effort per-block bill rate, if the schema exposes one.
+        for attr in ("bill_rate", "billing_rate", "rate"):
+            v = getattr(b, attr, None)
+            if isinstance(v, (int, float, Decimal)) and v:
+                return float(v)
+        return None
+
+    per_group = defaultdict(lambda: {
+        "label": "",
+        "id": None,
+        "captured_billable_min": 0,
+        "invoiced_min": 0,
+        "leakage_dollars": 0.0,
+        "has_rate": False,
+    })
+    tot_capt = tot_inv = 0
+    tot_leak_dollars = 0.0
+    any_rate = False
+
+    for b in blocks:
+        if not _is_billable_block(b):
+            continue
+        minutes = _block_minutes(b)
+        if minutes <= 0 or not _is_material(b):
+            continue
+
+        if group_by == "client":
+            key = b.client_id or "unassigned"
+            label = b.client.name if b.client_id else "Unassigned"
+        else:
+            key = b.user_id
+            label = (b.user.get_full_name().strip() or b.user.username) if b.user_id else "Unknown"
+
+        g = per_group[key]
+        g["label"] = label
+        g["id"] = (b.client_id if group_by == "client" else b.user_id)
+        g["captured_billable_min"] += minutes
+        tot_capt += minutes
+
+        invoiced = _is_invoiced(b)
+        if invoiced:
+            g["invoiced_min"] += minutes
+            tot_inv += minutes
+        else:
+            rate = _rate_for(b)
+            if rate is not None:
+                any_rate = True
+                g["has_rate"] = True
+                dollars = (minutes / 60.0) * rate
+                g["leakage_dollars"] += dollars
+                tot_leak_dollars += dollars
+
+    rows = []
+    for key, g in per_group.items():
+        leak_min = max(g["captured_billable_min"] - g["invoiced_min"], 0)
+        rows.append({
+            "id": g["id"],
+            "label": g["label"],
+            "captured_billable_hours": round(g["captured_billable_min"] / 60, 2),
+            "invoiced_hours": round(g["invoiced_min"] / 60, 2),
+            "leakage_hours": round(leak_min / 60, 2),
+            "leakage_dollars": round(g["leakage_dollars"], 2) if g["has_rate"] else None,
+        })
+    rows.sort(key=lambda r: r["leakage_hours"], reverse=True)
+
+    total_leak_min = max(tot_capt - tot_inv, 0)
+    return Response({
+        "org_id": org.id,
+        "period": period,
+        "group_by": group_by,
+        "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        "totals": {
+            "captured_billable_hours": round(tot_capt / 60, 2),
+            "invoiced_hours": round(tot_inv / 60, 2),
+            "leakage_hours": round(total_leak_min / 60, 2),
+            # Only present a dollar figure if at least one block carried a real
+            # rate. Otherwise null → frontend asks for a blended rate instead of
+            # showing a fabricated number.
+            "leakage_dollars": round(tot_leak_dollars, 2) if any_rate else None,
+            "rate_available": any_rate,
+        },
+        "rows": rows,
     })
 
 

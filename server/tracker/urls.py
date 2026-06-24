@@ -479,6 +479,9 @@ urlpatterns = [
 
     path("reports/ai-performance/", views_reports.reports_ai_performance),
 
+    path("reports/leakage/", views_reports.reports_leakage),
+
+
     path("reports/create-rule/", views_reports.reports_create_rule),
 
     path("reports/suggest-rule/", views_reports.reports_submit_suggestion),

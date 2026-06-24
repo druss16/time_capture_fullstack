@@ -1,7 +1,7 @@
 /**
  * ReportsSummary.tsx — simple high-level time reporting for customer firms.
  *
- * Sits BELOW the C-level DashboardV2. Deliberately flat: four KPI tiles,
+ * Sits BELOW the C-level DashboardV2. Deliberately flat: five KPI tiles,
  * a period toggle, one sortable table, and a CSV export button. No drilldowns.
  *
  * Role-gating is enforced server-side (members see only their own numbers),
@@ -13,10 +13,20 @@
  * for staff/superusers.
  *
  * Auth: uses the same localStorage token chain as the rest of the app.
+ *
+ * WHAT CHANGED (value-framing pass):
+ *  - "Uncategorized" → "Needs review" everywhere (it's a queue, not a defect).
+ *  - Utilization leads with the STANDARD-HOURS number (billable ÷ available
+ *    hours), the figure partners actually quote — with the capture-based number
+ *    available in its tooltip. Falls back to capture-based if the backend hasn't
+ *    sent the new field yet.
+ *  - Every defensible metric carries a small "?" that explains, in plain words,
+ *    exactly how it's calculated. Transparency-on-demand is the product thesis
+ *    (glass box vs black box), so it lives in the UI, not a help doc.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle, AlertCircle,
+  Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle, AlertCircle, HelpCircle,
 } from "lucide-react";
 import { safeFetchJson, API_BASE } from "@/lib/api";
 import DailyShapeChart from "./DailyShapeChart";
@@ -52,7 +62,7 @@ interface SummaryRow {
   total_hours: number;
   billable_hours: number;
   non_billable_hours: number;
-  uncategorized_hours?: number;
+  uncategorized_hours?: number;   // server name kept; displayed as "Needs review"
   utilization_pct: number;
   top_client: string | null;
   block_count: number;
@@ -70,7 +80,12 @@ interface SummaryResponse {
     billable_hours: number;
     non_billable_hours: number;
     uncategorized_hours?: number;
-    utilization_pct: number;
+    utilization_pct: number;                 // legacy / capture-based
+    utilization_standard_pct?: number;       // NEW: billable ÷ available hours
+    utilization_captured_pct?: number;       // NEW: explicit capture-based
+    available_hours?: number;                // NEW: headcount × workdays × 8
+    headcount?: number;                      // NEW
+    working_days?: number;                   // NEW
     active_clients: number;
   };
   rows: SummaryRow[];
@@ -197,6 +212,16 @@ export default function ReportsSummary({
     }
   };
 
+  // Lead with standard-hours utilization (billable ÷ available hours) — the
+  // number partners quote. Fall back to capture-based if the backend hasn't
+  // shipped the new field. Keep both so the tooltip can show the contrast.
+  const utilStandard = data?.totals.utilization_standard_pct;
+  const utilCaptured =
+    data?.totals.utilization_captured_pct ?? data?.totals.utilization_pct;
+  const utilHeadline =
+    utilStandard != null ? utilStandard : (utilCaptured ?? 0);
+  const utilIsStandard = utilStandard != null;
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* Header + period toggle */}
@@ -287,30 +312,63 @@ export default function ReportsSummary({
           <KPICard
             icon={<TrendingUp className="h-4 w-4" />}
             label="Utilization"
-            value={`${data.totals.utilization_pct}%`}
+            value={`${utilHeadline}%`}
             accent="emerald"
-            sub="Billable ÷ total captured"
+            sub={
+              utilIsStandard
+                ? `${fmtHours(data.totals.billable_hours)} of ${fmtHours(data.totals.available_hours)} available`
+                : "Billable ÷ total captured"
+            }
+            help={
+              utilIsStandard
+                ? {
+                    title: "Of the hours you pay for, how many were billable.",
+                    body: `Denominator is a standard 8-hour day per person across ${data.totals.working_days ?? "—"} working day(s) — so leaving the agent running late can't distort it.`,
+                    calc: "billable ÷ (headcount × working days × 8h)",
+                    extra: utilCaptured != null ? `Of captured time alone: ${utilCaptured}%` : undefined,
+                  }
+                : {
+                    title: "Of the time we tracked, how much was billable.",
+                    body: "This denominator moves with how long the agent ran. A standard-hours view is on the way.",
+                    calc: "billable ÷ total captured",
+                  }
+            }
           />
           <KPICard
             icon={<Briefcase className="h-4 w-4" />}
             label="Billable Hours"
             value={fmtHours(data.totals.billable_hours)}
             accent="blue"
-            sub="Surfaced this period"
+            sub="Invoice-ready this period"
+            help={{
+              title: "Time marked billable and tied to a client.",
+              body: "This is what you can put on an invoice — captured automatically, no timesheet entry.",
+              calc: "sum(minutes) where billable & client ≠ none",
+            }}
           />
           <KPICard
             icon={<Clock className="h-4 w-4" />}
             label="Total Captured"
             value={fmtHours(data.totals.total_hours)}
             accent="slate"
-            sub="Confirmed only"
+            sub="The full ledger"
+            help={{
+              title: "Every real minute the agent recorded this period.",
+              body: "The honest ledger. Idle time and overnight sleep/wake artifacts are excluded so the number stays trustworthy.",
+              calc: "all non-idle, non-anomalous block minutes",
+            }}
           />
           <KPICard
             icon={<AlertCircle className="h-4 w-4" />}
-            label="Uncategorized"
+            label="Needs review"
             value={fmtHours(data.totals.uncategorized_hours)}
             accent="amber"
-            sub="Needs review"
+            sub="A short to-do list"
+            help={{
+              title: "Blocks the AI wasn't confident about.",
+              body: "Not errors — a queue for an employee to confirm. The red clock in Daily Review points to the same blocks.",
+              calc: "low-confidence blocks not yet confirmed",
+            }}
           />
           <KPICard
             icon={<Users className="h-4 w-4" />}
@@ -377,7 +435,7 @@ export default function ReportsSummary({
                   Non-Bill
                 </Th>
                 <Th onClick={() => toggleSort("uncategorized_hours")} active={sortKey === "uncategorized_hours"} dir={sortDir} right>
-                  Uncategorized
+                  Needs review
                 </Th>
                 <Th onClick={() => toggleSort("utilization_pct")} active={sortKey === "utilization_pct"} dir={sortDir} right>
                   Util %
@@ -411,12 +469,14 @@ export default function ReportsSummary({
                           userId: groupBy === "employee" ? r.id : null,
                           userLabel: r.label,
                         })}
-                        className="text-amber-600 font-medium hover:underline"
+                        className="inline-flex items-center gap-1 text-amber-600 font-medium hover:underline"
+                        title="Open the blocks waiting on review"
                       >
+                        <Clock className="h-3 w-3" />
                         {fmtHours(r.uncategorized_hours)}
                       </button>
                     ) : (
-                      <span className="text-slate-300">{fmtHours(r.uncategorized_hours)}</span>
+                      <span className="text-slate-300">—</span>
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{r.utilization_pct}%</td>
@@ -439,14 +499,51 @@ export default function ReportsSummary({
 }
 
 // ── Small presentational helpers ──────────────────────────────────────────
+
+// The signature move: a why-pill that explains a metric in plain words, with
+// the actual formula. Transparency-on-demand — the glass-box thesis lives here.
+interface Help {
+  title: string;
+  body: string;
+  calc?: string;
+  extra?: string;
+}
+
+function WhyPill({ help }: { help: Help }) {
+  return (
+    <span className="relative inline-flex group/why align-middle">
+      <HelpCircle className="h-3.5 w-3.5 text-slate-300 hover:text-violet-500 cursor-help" />
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 w-60 -translate-x-1/2 translate-y-1
+                   rounded-lg bg-slate-900 px-3 py-2.5 text-left text-[11.5px] leading-relaxed text-slate-100
+                   opacity-0 shadow-xl transition-all duration-150
+                   group-hover/why:translate-y-0 group-hover/why:opacity-100"
+      >
+        <span className="font-semibold text-white">{help.title}</span>
+        <span className="mt-1 block text-slate-300">{help.body}</span>
+        {help.calc && (
+          <span className="mt-1.5 block border-t border-white/15 pt-1.5 font-mono text-[10.5px] text-slate-400">
+            {help.calc}
+          </span>
+        )}
+        {help.extra && (
+          <span className="mt-1 block text-[10.5px] text-slate-400">{help.extra}</span>
+        )}
+      </span>
+    </span>
+  );
+}
+
 function KPICard({
-  icon, label, value, sub, accent,
+  icon, label, value, sub, accent, help,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   sub?: string;
   accent: "emerald" | "blue" | "slate" | "violet" | "amber";
+  help?: Help;
 }) {
   const accentMap: Record<string, string> = {
     emerald: "text-emerald-600 bg-emerald-50",
@@ -461,7 +558,10 @@ function KPICard({
         <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${accentMap[accent]}`}>
           {icon}
         </span>
-        <span className="text-xs font-medium text-slate-500">{label}</span>
+        <span className="text-xs font-medium text-slate-500 inline-flex items-center gap-1">
+          {label}
+          {help && <WhyPill help={help} />}
+        </span>
       </div>
       <div className="mt-2 text-2xl font-semibold text-slate-900 tabular-nums">{value}</div>
       {sub && <div className="mt-0.5 text-[11px] text-slate-400">{sub}</div>}

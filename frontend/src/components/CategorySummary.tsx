@@ -89,7 +89,8 @@ type ProposedInline = {
   proposed_category: string;
 };
 
-type ParsedActivity = { blockId: number | null; title: string };
+type ParsedActivity = { blockId: number | null; blockIds: number[]; title: string };
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -102,10 +103,17 @@ const fmt = (hours: number): string => {
 };
 
 const parse = (activity: string): ParsedActivity => {
-  const match = activity.match(/\[id:(\d+)\]\s*/);
-  if (match)
-    return { blockId: parseInt(match[1]), title: activity.replace(/\[id:\d+\]\s*/, "").trim() };
-  return { blockId: null, title: activity };
+  // Supports multi-id rows: [id:44763,44767]
+  const match = activity.match(/\[id:([\d,]+)\]\s*/);
+  if (match) {
+    const ids = match[1].split(",").map((s) => parseInt(s)).filter((n) => !isNaN(n));
+    return {
+      blockId: ids[0] ?? null,        // first id (back-compat for single-id callers)
+      blockIds: ids,                   // ALL ids in this row
+      title: activity.replace(/\[id:[\d,]+\]\s*/, "").trim(),
+    };
+  }
+  return { blockId: null, blockIds: [], title: activity };
 };
 
 const isNonBillable = (name: string) => {
@@ -579,10 +587,10 @@ function ActivityList({
               // "Click to move" moves the whole title-group at once (e.g. all
               // 115 "Sacred Heart-Rome-Budgets" rows), not one block at a time.
               const thisTitle = parsed.title;
-              const siblingBlockIds = group.activities
-                .filter((a) => parse(a).title === thisTitle)
-                .map((a) => parse(a).blockId)
-                .filter((id): id is number => id !== null);
+              const parsedRow = parse(activity);
+              const siblingBlockIds = parsedRow.blockIds.length > 0
+                ? parsedRow.blockIds
+                : (parsedRow.blockId ? [parsedRow.blockId] : []);
 
               return (
                 <React.Fragment key={rowKey}>

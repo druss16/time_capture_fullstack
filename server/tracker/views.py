@@ -6591,7 +6591,17 @@ def recategorize_block(request, block_id):
     # end-start (idle-capped / merged blocks have category_hours != span).
     existing_total = sum((block.category_hours or {}).values())
     if existing_total <= 0:
-        existing_total = (block.end - block.start).total_seconds() / 3600 if block.end and block.start else 0
+        # Proposed/second-pass blocks have empty category_hours AND may have
+        # null start/end. Fall back to block.minutes (the real recorded
+        # duration) before giving up — otherwise we'd write a ZERO-hour
+        # category, which commits but contributes 0 to billable and never
+        # renders in today_time (which sums category_hours hours).
+        if block.end and block.start:
+            existing_total = (block.end - block.start).total_seconds() / 3600
+        elif getattr(block, 'minutes', None):
+            existing_total = block.minutes / 60.0
+        else:
+            existing_total = 0
     block.category_hours = {new_category: round(existing_total, 4)}
 
     # Client: distinguish "absent" (leave as-is) from "present & null" (No Client).

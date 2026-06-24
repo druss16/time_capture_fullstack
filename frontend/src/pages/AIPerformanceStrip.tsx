@@ -7,14 +7,21 @@
  *
  * Three metrics, all computed server-side from real classification data:
  *   - Auto-categorization rate: % of classified time the AI handled itself.
- *   - AI override rate: % of AI guesses a human corrected (low = trusted).
- *     Honest framing — "overridden", not "proven correct".
+ *   - Confirmed as proposed: % of AI guesses a human kept unchanged (the
+ *     inverse of override rate — "90.7% confirmed" sells where "9.3%
+ *     overridden" reads as a defect). Override count still shown in the sub.
+ *     Honest framing — unreviewed blocks count as neither right nor wrong.
  *   - Hours auto-captured: agent-recorded time that exists without manual entry.
+ *
+ * NEW: an override-rate trend line under the strip, fed by ?trend=N on the same
+ * endpoint. Real data only — periods with no AI decisions are skipped so the
+ * line never fabricates a slope. Renders only for Week/Month/Quarter/Year and
+ * only when ≥2 periods actually have data.
  *
  * Self-contained: own fetch + auth chain, mirrors UncategorizedPanel's style.
  */
-import { useCallback, useEffect, useState } from "react";
-import { Sparkles, ShieldCheck, Clock3, Info } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Sparkles, ShieldCheck, Clock3, Info, TrendingDown } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 function getAuthToken(): string | null {
@@ -34,9 +41,18 @@ function fmtH(h: number): string {
   return mm === 0 ? `${hh}h` : `${hh}h ${mm}m`;
 }
 
+interface TrendPoint {
+  bucket: string;
+  ai_override_rate: number | null;
+  ai_confirmation_rate: number | null;
+  ai_decisions: number;
+}
+
 interface AIPerf {
   auto_categorization_rate: number;
   ai_override_rate: number;
+  ai_confirmation_rate: number;
+  ai_confidence_rate: number | null;
   hours_auto_captured: number;
   counts: {
     automated_blocks: number;
@@ -45,7 +61,14 @@ interface AIPerf {
     ai_blocks: number;
     classified_total: number;
   };
+  trend: TrendPoint[] | null;
 }
+
+// How many periods of history to request per period type. Day is excluded —
+// no meaningful day-over-day trend for this metric at TL Wall's volume.
+const TREND_N: Record<string, number> = {
+  day: 0, week: 8, month: 6, quarter: 4, year: 3,
+};
 
 export default function AIPerformanceStrip({
   period, orgIdOverride,
@@ -60,6 +83,8 @@ export default function AIPerformanceStrip({
     setError(false);
     try {
       const p = new URLSearchParams({ period });
+      const n = TREND_N[period] || 0;
+      if (n >= 2) p.set("trend", String(n));
       const impersonatedOrg = localStorage.getItem("impersonating_org_id");
       const effectiveOrg = orgIdOverride || (impersonatedOrg ? Number(impersonatedOrg) : null);
       if (effectiveOrg) p.set("org_id", String(effectiveOrg));
@@ -77,6 +102,14 @@ export default function AIPerformanceStrip({
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Only points that actually have AI decisions — never draw a fake slope.
+  const trendPoints = useMemo(
+    () => (data?.trend || []).filter(
+      (pt) => pt.ai_decisions > 0 && pt.ai_override_rate != null
+    ),
+    [data]
+  );
+
   // Quietly render nothing if it fails — this is a value-add banner, not
   // core data; a failed fetch shouldn't break the page.
   if (error || !data) return null;
@@ -86,6 +119,9 @@ export default function AIPerformanceStrip({
   if (data.counts.classified_total === 0 && data.hours_auto_captured === 0) {
     return null;
   }
+
+  const aiDecisions = data.counts.ai_blocks + data.counts.correction_blocks;
+  const showTrend = trendPoints.length >= 2;
 
   return (
     <div className="rounded-xl border border-violet-100 bg-gradient-to-r from-violet-50/60 to-blue-50/40 p-4">
@@ -107,15 +143,15 @@ export default function AIPerformanceStrip({
         />
         <AIStat
           icon={<ShieldCheck className="h-4 w-4" />}
-          value={`${data.ai_override_rate}%`}
-          label="Override rate"
+          value={aiDecisions > 0 ? `${data.ai_confirmation_rate}%` : "—"}
+          label="Confirmed as proposed"
           sub={
-            data.counts.correction_blocks === 0
-              ? "No AI categorizations corrected"
-              : `${data.counts.correction_blocks} of ${data.counts.ai_blocks.toLocaleString()} AI calls changed`
+            aiDecisions === 0
+              ? "No AI calls reviewed yet"
+              : `${data.counts.correction_blocks} of ${aiDecisions.toLocaleString()} AI calls changed`
           }
           accent="emerald"
-          tip="Of the AI's categorizations this period, the share a person later changed. Lower is better. Note: blocks nobody has reviewed yet aren't counted as right or wrong — this measures overrides, not proven accuracy."
+          tip="Of the AI's categorizations a person reviewed, the share kept exactly as proposed. Higher is better — it's the inverse of override rate. Blocks nobody has reviewed yet aren't counted as right or wrong, so this measures confirmation, not proven accuracy."
         />
         <AIStat
           icon={<Clock3 className="h-4 w-4" />}
@@ -126,6 +162,9 @@ export default function AIPerformanceStrip({
           tip="Total time the agent recorded automatically this period (material blocks, overnight artifacts excluded) — time that exists without anyone manually starting a timer or writing it down."
         />
       </div>
+
+      {/* override-rate trend — only when there's real history to show */}
+      {showTrend && <OverrideTrend points={trendPoints} period={period} />}
     </div>
   );
 }
@@ -167,4 +206,110 @@ function AIStat({
       </div>
     </div>
   );
+}
+
+/**
+ * OverrideTrend — a compact SVG line of override rate over the last N periods.
+ * Lower is better, so a downward slope is the good story; we name the direction
+ * explicitly so it reads correctly at a glance. Pure SVG, no chart dependency.
+ */
+function OverrideTrend({ points, period }: { points: TrendPoint[]; period: string }) {
+  const W = 720, H = 150, padL = 34, padR = 12, padT = 14, padB = 24;
+  const rates = points.map((p) => p.ai_override_rate as number);
+  const maxRate = Math.max(5, Math.ceil(Math.max(...rates) / 5) * 5); // round up to 5
+  const n = points.length;
+
+  const x = (i: number) => padL + (i * (W - padL - padR)) / Math.max(1, n - 1);
+  const y = (r: number) => padT + (1 - r / maxRate) * (H - padT - padB);
+
+  const linePath = points
+    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.ai_override_rate as number).toFixed(1)}`)
+    .join(" ");
+  const areaPath =
+    `${linePath} L${x(n - 1).toFixed(1)},${(H - padB).toFixed(1)} L${x(0).toFixed(1)},${(H - padB).toFixed(1)} Z`;
+
+  const first = rates[0];
+  const last = rates[rates.length - 1];
+  const improving = last <= first;
+  const delta = Math.abs(last - first).toFixed(1);
+
+  const labelIdxs = n <= 3 ? points.map((_, i) => i) : [0, Math.floor((n - 1) / 2), n - 1];
+  const periodWord =
+    period === "week" ? "week" : period === "month" ? "month"
+      : period === "quarter" ? "quarter" : "year";
+
+  return (
+    <div className="mt-4 pt-4 border-t border-violet-100">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <TrendingDown className={`h-4 w-4 ${improving ? "text-emerald-600" : "text-rose-500"}`} />
+          <span className="text-sm font-semibold text-slate-800">
+            {improving
+              ? `Override rate is falling — down ${delta} pts`
+              : `Override rate up ${delta} pts this stretch`}
+          </span>
+        </div>
+        <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
+          <Info className="h-3 w-3" />
+          % of AI guesses a human corrected, by {periodWord}
+        </span>
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="ovrFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#0f7a5a" stopOpacity="0.16" />
+            <stop offset="1" stopColor="#0f7a5a" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {[0, maxRate / 2, maxRate].map((val, i) => (
+          <g key={i}>
+            <line x1={padL} y1={y(val)} x2={W - padR} y2={y(val)} stroke="#eef2f7" strokeWidth="1" />
+            <text x={padL - 6} y={y(val) + 3} textAnchor="end" fontSize="10" fill="#94a3b8">
+              {val}%
+            </text>
+          </g>
+        ))}
+
+        <path d={areaPath} fill="url(#ovrFill)" />
+        <path d={linePath} fill="none" stroke="#0f7a5a" strokeWidth="2.5" />
+
+        {points.map((p, i) => (
+          <circle
+            key={i}
+            cx={x(i)} cy={y(p.ai_override_rate as number)}
+            r={i === n - 1 ? 4.5 : 3}
+            fill="#0f7a5a"
+            stroke={i === n - 1 ? "#fff" : "none"}
+            strokeWidth={i === n - 1 ? 2 : 0}
+          >
+            <title>{p.bucket}: {p.ai_override_rate}% ({p.ai_decisions} AI calls)</title>
+          </circle>
+        ))}
+
+        {labelIdxs.map((i) => (
+          <text
+            key={i}
+            x={x(i)} y={H - 6}
+            textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}
+            fontSize="10" fill="#94a3b8"
+          >
+            {fmtBucket(points[i].bucket)}
+          </text>
+        ))}
+      </svg>
+
+      <p className="mt-2 text-[11px] text-slate-400 leading-relaxed">
+        The longer the firm uses TimeTracker, the more it learns these clients and
+        tax software — and the less anyone has to correct it.
+      </p>
+    </div>
+  );
+}
+
+function fmtBucket(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

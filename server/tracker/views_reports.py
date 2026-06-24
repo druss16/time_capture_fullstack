@@ -1057,62 +1057,12 @@ _NON_CLASSIFICATION_SOURCES = {"system", "import"}
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def reports_ai_performance(request):
+def _ai_perf_for_window(org, start_utc, end_utc, can_see_all, forced_user_id):
     """
-    GET /api/reports/ai-performance/
-      ?period=...&date=...&org_id=...   (same window params as summary)
-
-    The "is the tool earning its keep" story. We report THREE distinct things
-    that customers conflate if you let them:
-
-      1. AUTOMATED — how much work the tool did for you.
-         auto_categorization_rate: of blocks the system actually classified
-         (real-time flow, excluding admin/bulk backfills), what % was automated
-         vs. needed a human to categorize from scratch.
-
-      2. ACCURATE — how often you trust its guess.
-         ai_override_rate: of AI-categorized blocks, what % a human later
-         corrected. Low = guesses trusted as-is. We ALSO return its inverse,
-         ai_confirmation_rate, because "90.7% confirmed" sells where "9.3%
-         overridden" reads like a defect rate. Honest framing either way:
-         unreviewed blocks count as neither right nor wrong.
-
-      3. CONFIDENT — how sure the tool was up front.
-         ai_confidence_rate: share of blocks the AI placed WITHOUT flagging
-         uncertainty (no red clock). A low confidence rate flags a messy client
-         or a rules gap — a quality signal distinct from override.
-
-    Plus:
-      - hours_auto_captured: total agent-captured time — exists without anyone
-        typing it.
-      - blocks counts for transparency.
+    Compute the AI-performance numbers for ONE time window. Pulled out of the
+    endpoint so the trend series can call it once per historical period without
+    duplicating the counting logic. Returns a plain dict (not a Response).
     """
-    period = (request.GET.get("period") or "week").lower()
-    if period not in _TRUNC:
-        period = "week"
-
-    date_str = request.GET.get("date")
-    anchor = parse_date(date_str) if date_str else timezone.localdate()
-    if not anchor:
-        anchor = timezone.localdate()
-
-    org = get_request_org_override(request)
-    if not org:
-        return Response({"error": "No organization found"}, status=404)
-
-    can_see_all, forced_user_id = _resolve_scope(request, org)
-
-    # Custom range: if explicit start & end are passed, use them directly and
-    # ignore period/anchor. Powers the calendar start–end picker on the
-    # dashboard. Falls back to the named-period window otherwise.
-    custom_start = parse_date(request.GET.get("start") or "")
-    custom_end = parse_date(request.GET.get("end") or "")
-    if custom_start and custom_end and custom_start <= custom_end:
-        start_date, end_date = custom_start, custom_end
-    else:
-        start_date, end_date = _resolve_period_window(period, anchor)
-    start_utc, end_utc = _day_bounds_utc(start_date, end_date)
-    # All non-deleted blocks in the window (both committed and not), scoped.
     qs = Block.objects.filter(
         org=org,
         deleted_at__isnull=True,
@@ -1121,7 +1071,6 @@ def reports_ai_performance(request):
     )
     if not can_see_all and forced_user_id:
         qs = qs.filter(user_id=forced_user_id)
-
     qs = qs.select_related("client")
 
     automated_blocks = 0
@@ -1193,42 +1142,32 @@ def reports_ai_performance(request):
             # overridden. Counted in the denominator for override rate.
             correction_blocks += 1
 
-    # Auto-categorization rate: automated ÷ (automated + human-from-scratch +
-    # corrections). Excludes uncategorized (categorized_by is null) and
-    # admin/bulk. Answers "of what got classified, how much did the AI do."
     classified_total = automated_blocks + manual_blocks + correction_blocks
     auto_cat_rate = (
         round(100 * automated_blocks / classified_total, 1)
         if classified_total else 0.0
     )
 
-    # AI override rate: corrections ÷ (ai_blocks + corrections). Of the AI's
-    # guesses, how many a human flipped. Low is good.
     ai_decisions = ai_blocks + correction_blocks
     override_rate = (
         round(100 * correction_blocks / ai_decisions, 1)
         if ai_decisions else 0.0
     )
-    # Inverse — the framing that actually sells. "90.7% confirmed as proposed."
     confirmation_rate = round(100 - override_rate, 1) if ai_decisions else 0.0
 
-    # AI confidence rate: confident ÷ (confident + uncertain), over blocks where
-    # we could read a signal. None observed → return None so the frontend can
-    # hide the tile rather than show a misleading 100%.
     confidence_rate = (
         round(100 * confident_blocks / confidence_observed, 1)
         if confidence_observed else None
     )
 
-    return Response({
-        "org_id": org.id,
-        "period": period,
-        "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
-        "auto_categorization_rate": auto_cat_rate,      # e.g. 90.5 (%)
-        "ai_override_rate": override_rate,              # e.g. 9.3 (%)
-        "ai_confirmation_rate": confirmation_rate,      # e.g. 90.7 (%) — lead with this
-        "ai_confidence_rate": confidence_rate,          # e.g. 94.0 (%) or null
+    return {
+        "auto_categorization_rate": auto_cat_rate,
+        "ai_override_rate": override_rate,
+        "ai_confirmation_rate": confirmation_rate,
+        "ai_confidence_rate": confidence_rate,
         "hours_auto_captured": round(auto_captured_min / 60, 2),
+        "ai_decisions": ai_decisions,        # denominator size — lets the frontend
+                                             # hide trend points with no data.
         "counts": {
             "automated_blocks": automated_blocks,
             "manual_blocks": manual_blocks,
@@ -1239,6 +1178,117 @@ def reports_ai_performance(request):
             "uncertain_blocks": uncertain_blocks,
             "confidence_observed": confidence_observed,
         },
+    }
+
+
+def _prev_period_anchor(period: str, anchor):
+    """Step one whole period backwards from `anchor` (a date in the period)."""
+    if period == "day":
+        return anchor - timedelta(days=1)
+    if period == "week":
+        return anchor - timedelta(days=7)
+    if period == "month":
+        # go to the 1st, step back a day → previous month, keep day=1
+        first = anchor.replace(day=1)
+        return (first - timedelta(days=1)).replace(day=1)
+    if period == "quarter":
+        first = anchor.replace(day=1)
+        # back up 3 months by stepping to prior-month firsts
+        for _ in range(3):
+            first = (first - timedelta(days=1)).replace(day=1)
+        return first
+    if period == "year":
+        return anchor.replace(year=anchor.year - 1)
+    return anchor - timedelta(days=7)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def reports_ai_performance(request):
+    """
+    GET /api/reports/ai-performance/
+      ?period=...&date=...&org_id=...   (same window params as summary)
+      &trend=N                          (optional: also return the last N periods
+                                         as a time series, oldest → newest)
+
+    The "is the tool earning its keep" story. We report THREE distinct things
+    that customers conflate if you let them:
+
+      1. AUTOMATED — how much work the tool did for you.
+      2. ACCURATE  — how often you trust its guess (override / confirmation).
+      3. CONFIDENT — how sure the tool was up front (confidence rate).
+
+    When ?trend=N is passed we ALSO walk N periods back and return a `trend`
+    array of {bucket, ai_override_rate, ai_confirmation_rate, ai_decisions} so
+    the frontend can draw a real falling-override-rate line — using actual data,
+    not a fabricated slope. Points with ai_decisions=0 carry null rates so the
+    chart can skip empty periods honestly.
+    """
+    period = (request.GET.get("period") or "week").lower()
+    if period not in _TRUNC:
+        period = "week"
+
+    date_str = request.GET.get("date")
+    anchor = parse_date(date_str) if date_str else timezone.localdate()
+    if not anchor:
+        anchor = timezone.localdate()
+
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+
+    can_see_all, forced_user_id = _resolve_scope(request, org)
+
+    # Custom range: if explicit start & end are passed, use them directly and
+    # ignore period/anchor. (Trend is disabled for custom ranges — a custom
+    # window has no natural "previous period" to step back through.)
+    custom_start = parse_date(request.GET.get("start") or "")
+    custom_end = parse_date(request.GET.get("end") or "")
+    is_custom = bool(custom_start and custom_end and custom_start <= custom_end)
+    if is_custom:
+        start_date, end_date = custom_start, custom_end
+    else:
+        start_date, end_date = _resolve_period_window(period, anchor)
+    start_utc, end_utc = _day_bounds_utc(start_date, end_date)
+
+    current = _ai_perf_for_window(org, start_utc, end_utc, can_see_all, forced_user_id)
+
+    # ── Optional trend series ───────────────────────────────────────────
+    trend = None
+    trend_n = request.GET.get("trend")
+    if trend_n and not is_custom:
+        try:
+            n = max(2, min(int(trend_n), 26))  # clamp 2..26 to bound the work
+        except (ValueError, TypeError):
+            n = 8
+        series = []
+        a = anchor
+        for _ in range(n):
+            ws, we = _resolve_period_window(period, a)
+            wsu, weu = _day_bounds_utc(ws, we)
+            pt = _ai_perf_for_window(org, wsu, weu, can_see_all, forced_user_id)
+            has_data = pt["ai_decisions"] > 0
+            series.append({
+                "bucket": ws.isoformat(),
+                "ai_override_rate": pt["ai_override_rate"] if has_data else None,
+                "ai_confirmation_rate": pt["ai_confirmation_rate"] if has_data else None,
+                "ai_decisions": pt["ai_decisions"],
+            })
+            a = _prev_period_anchor(period, a)
+        series.reverse()  # oldest → newest for left-to-right charting
+        trend = series
+
+    return Response({
+        "org_id": org.id,
+        "period": period,
+        "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        "auto_categorization_rate": current["auto_categorization_rate"],
+        "ai_override_rate": current["ai_override_rate"],
+        "ai_confirmation_rate": current["ai_confirmation_rate"],
+        "ai_confidence_rate": current["ai_confidence_rate"],
+        "hours_auto_captured": current["hours_auto_captured"],
+        "counts": current["counts"],
+        "trend": trend,   # null unless ?trend=N was passed
     })
 
 

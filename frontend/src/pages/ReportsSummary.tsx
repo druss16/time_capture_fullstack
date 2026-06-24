@@ -32,6 +32,7 @@ import { safeFetchJson, API_BASE } from "@/lib/api";
 import DailyShapeChart from "./DailyShapeChart";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
 import AIPerformanceStrip from "./AIPerformanceStrip";
+import NeedsReviewQueue from "./NeedsReviewQueue";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -381,6 +382,13 @@ export default function ReportsSummary({
       )}
 
       {data && <DailyShapeChart data={data.timeseries as any} />}
+
+      {/* Phase 2 — what's still outstanding (per-employee review queue +
+          blind-spot callout). Only shows for team scope; a single member sees
+          their own pile in Daily Review already. */}
+      {data && data.scope === "all" && (
+        <NeedsReviewQueue period={period} orgIdOverride={orgIdOverride} />
+      )}
 
       {/* Group-by toggle */}
       <div className="flex items-center gap-2 text-xs">

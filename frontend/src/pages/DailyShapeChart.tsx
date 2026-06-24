@@ -4,13 +4,16 @@
  * Adapts to how many buckets the period has:
  *   • ONE bucket (Day view)        → horizontal 100% proportion bar.
  *       A single stacked column tells no story; a proportion bar reads as
- *       "61% of today is uncategorized" at a glance.
+ *       "61% of today needs review" at a glance.
  *   • MULTIPLE buckets (Week+)     → vertical stacked trend bars (recharts),
  *       where the shape across buckets is the insight.
  *
  * Three bands throughout: billable (emerald) / non-billable (slate) /
- * uncategorized (amber). Reads the `timeseries` array from reports_summary:
+ * needs review (amber). Reads the `timeseries` array from reports_summary:
  *   { bucket, billable_hours, non_billable_hours, uncategorized_hours, total_hours }
+ *
+ * NOTE: the API field is still `uncategorized_hours` — only the user-facing
+ * label is "Needs review". Don't rename the data key.
  */
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid,
@@ -29,6 +32,10 @@ const COLORS = {
   non_billable: "#94a3b8",
   uncategorized: "#d97706",
 };
+
+// User-facing band label for the amber band. Kept as a constant so the wording
+// lives in one place even though the data key stays `uncategorized_hours`.
+const NEEDS_REVIEW_LABEL = "Needs review";
 
 function fmtH(h: number): string {
   const m = Math.round((h || 0) * 60);
@@ -50,7 +57,7 @@ function BandLegend() {
   const items = [
     ["Billable", COLORS.billable],
     ["Non-billable", COLORS.non_billable],
-    ["Uncategorized", COLORS.uncategorized],
+    [NEEDS_REVIEW_LABEL, COLORS.uncategorized],
   ] as const;
   return (
     <div className="flex items-center justify-center gap-4 mt-3">
@@ -81,7 +88,7 @@ function ProportionBar({ point }: { point: ShapePoint }) {
   const segs = [
     { key: "billable", label: "Billable", hours: point.billable_hours, color: COLORS.billable },
     { key: "non_billable", label: "Non-billable", hours: point.non_billable_hours, color: COLORS.non_billable },
-    { key: "uncategorized", label: "Uncategorized", hours: point.uncategorized_hours, color: COLORS.uncategorized },
+    { key: "uncategorized", label: NEEDS_REVIEW_LABEL, hours: point.uncategorized_hours, color: COLORS.uncategorized },
   ].filter((s) => s.hours > 0);
 
   // Headline: the single biggest band, framed as a sentence.
@@ -175,7 +182,7 @@ function TrendBars({ data }: { data: ShapePoint[] }) {
           <Tooltip content={<TrendTooltip />} cursor={{ fill: "#f8fafc" }} />
           <Bar dataKey="billable_hours" name="Billable" stackId="a" fill={COLORS.billable} />
           <Bar dataKey="non_billable_hours" name="Non-billable" stackId="a" fill={COLORS.non_billable} />
-          <Bar dataKey="uncategorized_hours" name="Uncategorized" stackId="a" fill={COLORS.uncategorized} radius={[4, 4, 0, 0]} />
+          <Bar dataKey="uncategorized_hours" name={NEEDS_REVIEW_LABEL} stackId="a" fill={COLORS.uncategorized} radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -194,7 +201,7 @@ export default function DailyShapeChart({ data }: { data: ShapePoint[] }) {
         <h2 className="text-sm font-semibold text-slate-800">
           {single ? "Today at a glance" : "Shape of the period"}
         </h2>
-        <span className="text-[11px] text-slate-400">Billable · Non-billable · Uncategorized</span>
+        <span className="text-[11px] text-slate-400">Billable · Non-billable · {NEEDS_REVIEW_LABEL}</span>
       </div>
 
       {single ? <ProportionBar point={data[0]} /> : <TrendBars data={data} />}

@@ -4203,6 +4203,13 @@ def today_time(request):
         ):
             continue
 
+        # Proposed blocks belong in the PENDING list (red clock) ONLY — exclude
+        # their events from card totals so they don't double-render (showing in
+        # a card AND in pending). Once confirmed→committed, events flow into the
+        # card normally. Captured/committed blocks are unaffected.
+        if block and block.classification_state == 'proposed':
+            continue
+
         if block:
             client_id = block.client_id
             client_name = block.client.name if block.client else 'Unassigned'
@@ -4903,6 +4910,11 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
     user_org = None
     
     for block in blocks:
+        # Proposed blocks belong in the PENDING list (red clock) ONLY — skip
+        # them here so they don't double-render in card totals. (Mirrors the
+        # event-path guard in today_time.)
+        if block.classification_state == 'proposed':
+            continue
         client_name = block.client.name if block.client else 'Unassigned'
         client_id = block.client_id
         minutes = block.minutes or 0

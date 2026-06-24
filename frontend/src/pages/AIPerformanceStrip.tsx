@@ -21,7 +21,7 @@
  * Self-contained: own fetch + auth chain, mirrors UncategorizedPanel's style.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Sparkles, ShieldCheck, Clock3, Info, TrendingDown } from "lucide-react";
+import { Sparkles, ShieldCheck, Clock3, Info, TrendingDown, TrendingUp, Minus } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 function getAuthToken(): string | null {
@@ -228,10 +228,32 @@ function OverrideTrend({ points, period }: { points: TrendPoint[]; period: strin
   const areaPath =
     `${linePath} L${x(n - 1).toFixed(1)},${(H - padB).toFixed(1)} L${x(0).toFixed(1)},${(H - padB).toFixed(1)} Z`;
 
-  const first = rates[0];
+  // Direction read — but honestly. Early weeks often sit at 0% simply because
+  // nobody was reviewing yet (0 corrections ÷ few decisions), not because the
+  // AI was perfect. Comparing the very first week to the last would read that
+  // ramp-up as "getting worse." So we compare the latest point to the average
+  // of the prior points that actually had review volume, and we DON'T moralize
+  // the direction — we just state it and let the reader judge.
   const last = rates[rates.length - 1];
-  const improving = last <= first;
-  const delta = Math.abs(last - first).toFixed(1);
+  const prior = rates.slice(0, -1);
+  const priorAvg = prior.length
+    ? prior.reduce((s, r) => s + r, 0) / prior.length
+    : last;
+  const delta = Math.abs(last - priorAvg).toFixed(1);
+  const falling = last < priorAvg - 0.05;
+  const rising = last > priorAvg + 0.05;
+
+  // Headline: neutral and accurate in all three cases. Lower override is the
+  // goal, but a rise during adoption isn't failure, so we avoid "good/bad"
+  // language and report what the line shows.
+  let headline: string;
+  if (falling) {
+    headline = `Override rate is trending down — ${last}% (−${delta} pts vs recent avg)`;
+  } else if (rising) {
+    headline = `Override rate is climbing as review ramps up — now ${last}%`;
+  } else {
+    headline = `Override rate is holding steady — ${last}%`;
+  }
 
   const labelIdxs = n <= 3 ? points.map((_, i) => i) : [0, Math.floor((n - 1) / 2), n - 1];
   const periodWord =
@@ -242,12 +264,14 @@ function OverrideTrend({ points, period }: { points: TrendPoint[]; period: strin
     <div className="mt-4 pt-4 border-t border-violet-100">
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <TrendingDown className={`h-4 w-4 ${improving ? "text-emerald-600" : "text-rose-500"}`} />
-          <span className="text-sm font-semibold text-slate-800">
-            {improving
-              ? `Override rate is falling — down ${delta} pts`
-              : `Override rate up ${delta} pts this stretch`}
-          </span>
+          {falling ? (
+            <TrendingDown className="h-4 w-4 text-emerald-600" />
+          ) : rising ? (
+            <TrendingUp className="h-4 w-4 text-slate-400" />
+          ) : (
+            <Minus className="h-4 w-4 text-slate-400" />
+          )}
+          <span className="text-sm font-semibold text-slate-800">{headline}</span>
         </div>
         <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
           <Info className="h-3 w-3" />
@@ -301,8 +325,11 @@ function OverrideTrend({ points, period }: { points: TrendPoint[]; period: strin
       </svg>
 
       <p className="mt-2 text-[11px] text-slate-400 leading-relaxed">
-        The longer the firm uses TimeTracker, the more it learns these clients and
-        tax software — and the less anyone has to correct it.
+        {falling
+          ? "As TimeTracker learns these clients and tax software, fewer of its calls need correcting."
+          : rising
+            ? "Corrections rise at first as the team reviews more — the goal is for this to plateau, then fall as learned rules take hold."
+            : "A stable override rate means the AI's calls and the team's review habits are in a steady state."}
       </p>
     </div>
   );

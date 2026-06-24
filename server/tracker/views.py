@@ -4309,9 +4309,14 @@ def today_time(request):
 
         if clean_title in cat_data['by_activity']:
             cat_data['by_activity'][clean_title]['minutes'] += minutes
+            # Collect EVERY block id that merges into this activity row, so the
+            # frontend can move ALL of them together (not just the first).
+            if ev['block_id'] is not None:
+                cat_data['by_activity'][clean_title]['ids'].append(ev['block_id'])
         else:
             cat_data['by_activity'][clean_title] = {
                 'id':    ev['block_id'],
+                'ids':   [ev['block_id']] if ev['block_id'] is not None else [],
                 'title': clean_title,
                 'minutes': minutes,
             }
@@ -4346,8 +4351,13 @@ def today_time(request):
             for clean_title, info in sorted_activities:
                 mins = info['minutes']
                 time_str = format_duration(mins)
-                if info['id']:
-                    aggregated_samples.append(f"[id:{info['id']}] {clean_title} ({time_str})")
+                # Emit ALL merged block ids (dedup, preserve order) so the
+                # frontend moves the whole row's worth of blocks at once.
+                ids = info.get('ids') or ([info['id']] if info.get('id') else [])
+                seen = set(); ids = [i for i in ids if not (i in seen or seen.add(i))]
+                if ids:
+                    id_str = ",".join(str(i) for i in ids)
+                    aggregated_samples.append(f"[id:{id_str}] {clean_title} ({time_str})")
                 else:
                     aggregated_samples.append(f"{clean_title} ({time_str})")
 
@@ -4924,9 +4934,13 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
         
         if clean_title in cat_data['by_activity']:
             cat_data['by_activity'][clean_title]['minutes'] += minutes
+            # Collect EVERY block id merged into this activity row (fallback path)
+            if block.id is not None:
+                cat_data['by_activity'][clean_title]['ids'].append(block.id)
         else:
             cat_data['by_activity'][clean_title] = {
                 'id': block.id,
+                'ids': [block.id] if block.id is not None else [],
                 'title': clean_title,
                 'minutes': minutes,
             }
@@ -4950,8 +4964,13 @@ def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
             samples = []
             for clean_title, info in sorted(cat_data['by_activity'].items(), key=lambda x: -x[1]['minutes'])[:10]:
                 time_str = format_duration(info['minutes'])
-                if info['id']:
-                    samples.append(f"[id:{info['id']}] {clean_title} ({time_str})")
+                # Emit ALL merged block ids (dedup, preserve order) so the
+                # frontend moves the whole row's worth of blocks at once.
+                ids = info.get('ids') or ([info['id']] if info.get('id') else [])
+                seen = set(); ids = [i for i in ids if not (i in seen or seen.add(i))]
+                if ids:
+                    id_str = ",".join(str(i) for i in ids)
+                    samples.append(f"[id:{id_str}] {clean_title} ({time_str})")
                 else:
                     samples.append(f"{clean_title} ({time_str})")
             

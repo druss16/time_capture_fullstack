@@ -383,13 +383,6 @@ export default function ReportsSummary({
 
       {data && <DailyShapeChart data={data.timeseries as any} />}
 
-      {/* Phase 2 — what's still outstanding (per-employee review queue +
-          blind-spot callout). Only shows for team scope; a single member sees
-          their own pile in Daily Review already. */}
-      {data && data.scope === "all" && (
-        <NeedsReviewQueue period={period} orgIdOverride={orgIdOverride} />
-      )}
-
       {/* Group-by toggle */}
       <div className="flex items-center gap-2 text-xs">
         <span className="text-slate-500">Group by:</span>
@@ -497,6 +490,24 @@ export default function ReportsSummary({
           </table>
         </div>
       )}
+
+      {/* ── Distinct bottom section: Needs review ──────────────────────────
+          Moved here (below the table) so the page reads top-to-bottom as:
+          AI strip → KPIs → shape → team table → the review queue. Team scope
+          only; a single member sees their own pile in Daily Review already. */}
+      {data && data.scope === "all" && !loading && (
+        <section className="pt-6 mt-2 border-t border-slate-200 space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Review queue</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Blocks the AI flagged for a person to confirm — and the patterns
+              worth teaching it.
+            </p>
+          </div>
+          <NeedsReviewQueue period={period} orgIdOverride={orgIdOverride} />
+        </section>
+      )}
+
       <UncategorizedPanel
         open={!!panelParams}
         onClose={() => setPanelParams(null)}

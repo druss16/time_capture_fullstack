@@ -264,7 +264,7 @@ def _headcount_for_scope(org, can_see_all, forced_user_id) -> int:
     """
     if not can_see_all:
         return 1
-    qs = OrganizationMembership.objects.filter(org=org)
+    qs = OrganizationMembership.objects.filter(organization=org)
     # Honor an is_active flag if the model has one; otherwise count all members.
     try:
         qs = qs.filter(is_active=True)

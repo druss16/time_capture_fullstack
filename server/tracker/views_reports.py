@@ -1055,8 +1055,6 @@ _AUTOMATED_SOURCES = {
 _NON_CLASSIFICATION_SOURCES = {"system", "import"}
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
 def _ai_perf_for_window(org, start_utc, end_utc, can_see_all, forced_user_id):
     """
     Compute the AI-performance numbers for ONE time window. Pulled out of the

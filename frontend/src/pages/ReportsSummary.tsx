@@ -111,7 +111,7 @@ export default function ReportsSummary({
 }: {
   orgIdOverride?: number | null;
 }) {
-  const [period, setPeriod] = useState<Period>("week");
+  const [period, setPeriod] = useState<Period>("day");
   const [customMode, setCustomMode] = useState(false);
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");

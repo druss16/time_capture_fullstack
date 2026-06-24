@@ -18,8 +18,13 @@
  * something to take up space.
  */
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, ArrowRight, Lightbulb, Loader2 } from "lucide-react";
+import { AlertCircle, ArrowRight, ChevronLeft, ChevronRight, Lightbulb, Loader2 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
+
+// How many themed rows to show per page in the review queue. Keeps a long pile
+// (think tax season, hundreds of unreviewed signatures) from sprawling down the
+// page — the queue stays a scannable card, you page through the rest.
+const QUEUE_PAGE_SIZE = 8;
 
 function getAuthToken(): string | null {
   return (
@@ -72,6 +77,7 @@ export default function NeedsReviewQueue({
 }) {
   const [data, setData] = useState<UncatResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);   // 0-indexed page of the themed queue
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams({ period, group_by: "employee" });
@@ -83,6 +89,7 @@ export default function NeedsReviewQueue({
 
   useEffect(() => {
     let cancelled = false;
+    setPage(0);   // new period/org → back to the first page
     (async () => {
       setLoading(true);
       try {
@@ -127,6 +134,14 @@ export default function NeedsReviewQueue({
   const realGroups = data.groups.filter((g) => !g.is_immaterial);
   const totalBlocks = realGroups.reduce((s, g) => s + g.block_count, 0);
 
+  // Pagination over the themed rows. Clamp the page in case data shrank after a
+  // refetch (e.g. someone confirmed a chunk and there are now fewer pages).
+  const pageCount = Math.max(1, Math.ceil(realGroups.length / QUEUE_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageStart = safePage * QUEUE_PAGE_SIZE;
+  const pageGroups = realGroups.slice(pageStart, pageStart + QUEUE_PAGE_SIZE);
+  const showPager = realGroups.length > QUEUE_PAGE_SIZE;
+
   return (
     <div className="space-y-4">
       {/* the queue */}
@@ -166,8 +181,8 @@ export default function NeedsReviewQueue({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {realGroups.map((g, i) => (
-              <tr key={i} className="hover:bg-slate-50/60">
+            {pageGroups.map((g, i) => (
+              <tr key={pageStart + i} className="hover:bg-slate-50/60">
                 <td className="px-5 py-3 text-slate-700">{g.label}</td>
                 <td className="px-5 py-3 text-right tabular-nums text-slate-500">{g.user_count}</td>
                 <td className="px-5 py-3 text-right tabular-nums text-slate-500">{g.block_count}</td>
@@ -194,8 +209,9 @@ export default function NeedsReviewQueue({
               </tr>
             ))}
 
-            {/* rolled-up tiny activities, muted + non-actionable */}
-            {data.immaterial_count > 0 && (
+            {/* rolled-up tiny activities — show only on the last page, since
+                it's a footer summary of the whole pile, not a per-page row. */}
+            {data.immaterial_count > 0 && safePage === pageCount - 1 && (
               <tr className="bg-slate-50/40">
                 <td className="px-5 py-2.5 text-slate-400 text-xs" colSpan={3}>
                   {data.immaterial_count} small activities (under 2m each)
@@ -208,6 +224,35 @@ export default function NeedsReviewQueue({
             )}
           </tbody>
         </table>
+
+        {/* pager — only when the queue spills past one page */}
+        {showPager && (
+          <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50/40">
+            <span className="text-[11px] text-slate-400 tabular-nums">
+              {pageStart + 1}–{Math.min(pageStart + QUEUE_PAGE_SIZE, realGroups.length)} of{" "}
+              {realGroups.length} themes
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={safePage === 0}
+                className="inline-flex items-center gap-0.5 rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-white disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" /> Prev
+              </button>
+              <span className="text-[11px] text-slate-400 tabular-nums px-1">
+                {safePage + 1} / {pageCount}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                disabled={safePage >= pageCount - 1}
+                className="inline-flex items-center gap-0.5 rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-white disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                Next <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* blind-spot callout — the rule-learning loop */}

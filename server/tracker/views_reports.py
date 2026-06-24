@@ -1271,9 +1271,19 @@ def reports_ai_performance(request):
                 "ai_override_rate": pt["ai_override_rate"] if has_data else None,
                 "ai_confirmation_rate": pt["ai_confirmation_rate"] if has_data else None,
                 "ai_decisions": pt["ai_decisions"],
+                # Volume metric — immune to the review-ramp distortion that makes
+                # the accuracy %s misleading during onboarding. This is the clean
+                # "work nobody had to type" line; cumulative is filled in below.
+                "hours_auto_captured": pt["hours_auto_captured"],
+                "cumulative_hours": 0.0,   # set in the running pass after reverse
             })
             a = _prev_period_anchor(period, a)
         series.reverse()  # oldest → newest for left-to-right charting
+        # Running total, oldest → newest, so the frontend gets a monotonic line.
+        _run = 0.0
+        for _p in series:
+            _run = round(_run + (_p["hours_auto_captured"] or 0), 2)
+            _p["cumulative_hours"] = _run
         trend = series
 
     return Response({

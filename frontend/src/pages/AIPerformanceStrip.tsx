@@ -21,7 +21,7 @@
  * Self-contained: own fetch + auth chain, mirrors UncategorizedPanel's style.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Sparkles, ShieldCheck, Clock3, Info, TrendingDown, TrendingUp, Minus } from "lucide-react";
+import { Sparkles, ShieldCheck, Clock3, Info, TrendingUp } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 function getAuthToken(): string | null {
@@ -46,6 +46,8 @@ interface TrendPoint {
   ai_override_rate: number | null;
   ai_confirmation_rate: number | null;
   ai_decisions: number;
+  hours_auto_captured: number;
+  cumulative_hours: number;
 }
 
 interface AIPerf {
@@ -102,11 +104,10 @@ export default function AIPerformanceStrip({
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Only points that actually have AI decisions — never draw a fake slope.
+  // Points that actually have captured time — the success line is cumulative
+  // hours, which only grows, so we keep every point with real capture.
   const trendPoints = useMemo(
-    () => (data?.trend || []).filter(
-      (pt) => pt.ai_decisions > 0 && pt.ai_override_rate != null
-    ),
+    () => (data?.trend || []).filter((pt) => (pt.hours_auto_captured || 0) > 0),
     [data]
   );
 
@@ -163,8 +164,9 @@ export default function AIPerformanceStrip({
         />
       </div>
 
-      {/* override-rate trend — only when there's real history to show */}
-      {showTrend && <OverrideTrend points={trendPoints} period={period} />}
+      {/* cumulative captured-hours trend — the clean "work nobody typed" line.
+          Only when there's real history to show. */}
+      {showTrend && <CapturedTrend points={trendPoints} period={period} />}
     </div>
   );
 }
@@ -209,51 +211,35 @@ function AIStat({
 }
 
 /**
- * OverrideTrend — a compact SVG line of override rate over the last N periods.
- * Lower is better, so a downward slope is the good story; we name the direction
- * explicitly so it reads correctly at a glance. Pure SVG, no chart dependency.
+ * CapturedTrend — cumulative hours the agent captured that nobody had to type.
+ * The honest success line: it only grows, and it's immune to the review-ramp
+ * distortion that makes accuracy %s misleading during onboarding. Area chart
+ * climbing left→right, with the running total as the headline. Pure SVG.
  */
-function OverrideTrend({ points, period }: { points: TrendPoint[]; period: string }) {
-  const W = 720, H = 150, padL = 34, padR = 12, padT = 14, padB = 24;
-  const rates = points.map((p) => p.ai_override_rate as number);
-  const maxRate = Math.max(5, Math.ceil(Math.max(...rates) / 5) * 5); // round up to 5
+function CapturedTrend({ points, period }: { points: TrendPoint[]; period: string }) {
+  const W = 720, H = 150, padL = 40, padR = 12, padT = 16, padB = 24;
+  const cum = points.map((p) => p.cumulative_hours || 0);
   const n = points.length;
+  const maxCum = Math.max(1, ...cum);
+  // round the y-axis top up to a "nice" number for the gridline labels
+  const niceTop = (() => {
+    const raw = maxCum;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = mag / 2 || 1;
+    return Math.ceil(raw / step) * step;
+  })();
 
   const x = (i: number) => padL + (i * (W - padL - padR)) / Math.max(1, n - 1);
-  const y = (r: number) => padT + (1 - r / maxRate) * (H - padT - padB);
+  const y = (v: number) => padT + (1 - v / niceTop) * (H - padT - padB);
 
   const linePath = points
-    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.ai_override_rate as number).toFixed(1)}`)
+    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.cumulative_hours).toFixed(1)}`)
     .join(" ");
   const areaPath =
     `${linePath} L${x(n - 1).toFixed(1)},${(H - padB).toFixed(1)} L${x(0).toFixed(1)},${(H - padB).toFixed(1)} Z`;
 
-  // Direction read — but honestly. Early weeks often sit at 0% simply because
-  // nobody was reviewing yet (0 corrections ÷ few decisions), not because the
-  // AI was perfect. Comparing the very first week to the last would read that
-  // ramp-up as "getting worse." So we compare the latest point to the average
-  // of the prior points that actually had review volume, and we DON'T moralize
-  // the direction — we just state it and let the reader judge.
-  const last = rates[rates.length - 1];
-  const prior = rates.slice(0, -1);
-  const priorAvg = prior.length
-    ? prior.reduce((s, r) => s + r, 0) / prior.length
-    : last;
-  const delta = Math.abs(last - priorAvg).toFixed(1);
-  const falling = last < priorAvg - 0.05;
-  const rising = last > priorAvg + 0.05;
-
-  // Headline: neutral and accurate in all three cases. Lower override is the
-  // goal, but a rise during adoption isn't failure, so we avoid "good/bad"
-  // language and report what the line shows.
-  let headline: string;
-  if (falling) {
-    headline = `Override rate is trending down — ${last}% (−${delta} pts vs recent avg)`;
-  } else if (rising) {
-    headline = `Override rate is climbing as review ramps up — now ${last}%`;
-  } else {
-    headline = `Override rate is holding steady — ${last}%`;
-  }
+  const total = cum[cum.length - 1];
+  const totalLabel = total >= 100 ? Math.round(total).toLocaleString() : total.toFixed(1);
 
   const labelIdxs = n <= 3 ? points.map((_, i) => i) : [0, Math.floor((n - 1) / 2), n - 1];
   const periodWord =
@@ -264,51 +250,47 @@ function OverrideTrend({ points, period }: { points: TrendPoint[]; period: strin
     <div className="mt-4 pt-4 border-t border-violet-100">
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          {falling ? (
-            <TrendingDown className="h-4 w-4 text-emerald-600" />
-          ) : rising ? (
-            <TrendingUp className="h-4 w-4 text-slate-400" />
-          ) : (
-            <Minus className="h-4 w-4 text-slate-400" />
-          )}
-          <span className="text-sm font-semibold text-slate-800">{headline}</span>
+          <TrendingUp className="h-4 w-4 text-emerald-600" />
+          <span className="text-sm font-semibold text-slate-800">
+            {totalLabel} hours captured — time nobody had to type
+          </span>
         </div>
         <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
           <Info className="h-3 w-3" />
-          % of AI guesses a human corrected, by {periodWord}
+          Running total of auto-captured time, by {periodWord}
         </span>
       </div>
 
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="none">
         <defs>
-          <linearGradient id="ovrFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#0f7a5a" stopOpacity="0.16" />
+          <linearGradient id="capFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#0f7a5a" stopOpacity="0.18" />
             <stop offset="1" stopColor="#0f7a5a" stopOpacity="0" />
           </linearGradient>
         </defs>
 
-        {[0, maxRate / 2, maxRate].map((val, i) => (
+        {[0, niceTop / 2, niceTop].map((val, i) => (
           <g key={i}>
             <line x1={padL} y1={y(val)} x2={W - padR} y2={y(val)} stroke="#eef2f7" strokeWidth="1" />
             <text x={padL - 6} y={y(val) + 3} textAnchor="end" fontSize="10" fill="#94a3b8">
-              {val}%
+              {Math.round(val)}h
             </text>
           </g>
         ))}
 
-        <path d={areaPath} fill="url(#ovrFill)" />
+        <path d={areaPath} fill="url(#capFill)" />
         <path d={linePath} fill="none" stroke="#0f7a5a" strokeWidth="2.5" />
 
         {points.map((p, i) => (
           <circle
             key={i}
-            cx={x(i)} cy={y(p.ai_override_rate as number)}
+            cx={x(i)} cy={y(p.cumulative_hours)}
             r={i === n - 1 ? 4.5 : 3}
             fill="#0f7a5a"
             stroke={i === n - 1 ? "#fff" : "none"}
             strokeWidth={i === n - 1 ? 2 : 0}
           >
-            <title>{p.bucket}: {p.ai_override_rate}% ({p.ai_decisions} AI calls)</title>
+            <title>{p.bucket}: {Math.round(p.cumulative_hours)}h total (+{p.hours_auto_captured}h this {periodWord})</title>
           </circle>
         ))}
 
@@ -325,11 +307,8 @@ function OverrideTrend({ points, period }: { points: TrendPoint[]; period: strin
       </svg>
 
       <p className="mt-2 text-[11px] text-slate-400 leading-relaxed">
-        {falling
-          ? "As TimeTracker learns these clients and tax software, fewer of its calls need correcting."
-          : rising
-            ? "Corrections rise at first as the team reviews more — the goal is for this to plateau, then fall as learned rules take hold."
-            : "A stable override rate means the AI's calls and the team's review habits are in a steady state."}
+        Every hour here is time the agent recorded on its own — work the team would
+        otherwise have had to reconstruct and enter by hand.
       </p>
     </div>
   );

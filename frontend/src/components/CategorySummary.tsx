@@ -1396,6 +1396,29 @@ function ProposedGroupRow({
   const guessCategory = g.proposed_category || "General Client Work";
   const n = g.blockIds.length;
 
+  const [showActivity, setShowActivity] = useState(false);
+  const [activityCtx, setActivityCtx] = useState<{ dominant: string[]; brief: string[] } | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+
+  const toggleActivity = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = !showActivity;
+    setShowActivity(next);
+    if (next && activityCtx === null && g.blockIds.length > 0) {
+      setActivityLoading(true);
+      try {
+        const ctx = await safeFetchJson<{ dominant: string[]; brief: string[] }>(
+          `${API_BASE}/blocks/${g.blockIds[0]}/tab-context/`
+        );
+        setActivityCtx(ctx);
+      } catch {
+        setActivityCtx({ dominant: [], brief: [] });
+      } finally {
+        setActivityLoading(false);
+      }
+    }
+  }, [showActivity, activityCtx, g.blockIds]);
+
   return (
     <div ref={ref} className="flex items-center gap-2 px-3 py-1.5 ml-6 rounded-lg bg-amber-50/50 relative">
       <Clock className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
@@ -1467,6 +1490,45 @@ function ProposedGroupRow({
             className="px-2 py-0.5 text-[11px] font-semibold border border-slate-300 text-slate-500 hover:bg-slate-100 rounded-md transition-all flex-shrink-0"
           >No Client</button>
         </>
+      )}
+
+      {g.blockIds.length > 0 && (
+        <button
+          onClick={toggleActivity}
+          title="See what this block touched"
+          className="text-[11px] font-medium text-slate-400 hover:text-primary transition-colors flex-shrink-0"
+        >
+          {showActivity ? "hide" : "activity"}
+        </button>
+      )}
+
+      {showActivity && (
+        <div
+          className="basis-full mt-1.5 ml-6 mr-2 space-y-1 text-[11px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {activityLoading && <span className="text-slate-400">Loading…</span>}
+          {n > 1 && activityCtx &&
+            (activityCtx.dominant.length > 0 || activityCtx.brief.length > 0) && (
+              <div className="text-[10px] text-slate-400 italic">showing first of {n} blocks</div>
+            )}
+          {activityCtx?.dominant && activityCtx.dominant.length > 0 && (
+            <div className="text-slate-500">
+              <span className="font-semibold text-slate-600">Worked on:</span>{" "}
+              {activityCtx.dominant.join(" · ")}
+            </div>
+          )}
+          {activityCtx?.brief && activityCtx.brief.length > 0 && (
+            <div className="text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-1">
+              <span className="font-semibold">Also briefly:</span>{" "}
+              {activityCtx.brief.join(" · ")}
+            </div>
+          )}
+          {!activityLoading && activityCtx &&
+            activityCtx.dominant?.length === 0 && activityCtx.brief?.length === 0 && (
+              <span className="text-slate-400">No additional activity detail.</span>
+            )}
+        </div>
       )}
     </div>
   );
@@ -1655,14 +1717,19 @@ export default function CategorySummary({
   );
   const noClientGroups = groupsByClient.get(null) || [];
 
-  // Pending groups that have no real client card to live in:
-  //  - noClientGroups  (no guess at all)
-  //  - orphan guesses  (guessed client has no card today)
-  // Collect them so they render under a single "No Client" card at the bottom.
-  const homelessPendingGroups: ProposedGroup[] = [
-    ...noClientGroups,
-    ...orphanGuessIds.flatMap((cid) => groupsByClient.get(cid) || []),
-  ];
+  // Orphan guesses (a guessed client with no committed card today) get their
+  // OWN synthetic zero-time card so their pending proposals nest under the
+  // right client header (like a client that has committed time), instead of
+  // falling into the No-Client bucket. Only proposals with NO guessed client
+  // (noClientGroups) are truly homeless and render under No Client.
+  const orphanGuessCards: ClientTime[] = orphanGuessIds.map((cid) => {
+    const grp = groupsByClient.get(cid) || [];
+    const name = grp[0]?.proposed_client_name || "Client";
+    return { client_id: cid, client: name, total_hours: 0, categories: [] };
+  });
+
+  // Pending groups with no client card at all → render under No Client.
+  const homelessPendingGroups: ProposedGroup[] = [...noClientGroups];
 
   // Does timeSummary already contain an Unassigned/No-Client card?
   const hasUnassignedCard = timeSummary.some(
@@ -1671,10 +1738,13 @@ export default function CategorySummary({
 
   // Build the render list: real clients, plus a synthetic No-Client card
   // ONLY if there are homeless pending groups and no Unassigned card exists.
-  const renderClients: ClientTime[] =
-    (homelessPendingGroups.length > 0 && !hasUnassignedCard)
-      ? [...timeSummary, { client_id: null, client: "Unassigned", total_hours: 0, categories: [] }]
-      : timeSummary;
+  const renderClients: ClientTime[] = [
+    ...timeSummary,
+    ...orphanGuessCards,
+    ...((homelessPendingGroups.length > 0 && !hasUnassignedCard)
+      ? [{ client_id: null, client: "Unassigned", total_hours: 0, categories: [] } as ClientTime]
+      : []),
+  ];
 
   return (
     <div>

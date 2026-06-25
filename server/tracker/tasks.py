@@ -824,7 +824,17 @@ def ai_classify_uncategorized_blocks(self, limit=80):
         from tracker.models import Block
         from tracker.services.classification_service import ClassificationService
  
+        from django.db.models import Q
         cutoff = timezone.now() - timedelta(hours=24)
+        # Re-attempt throttle: a captured block that already went through
+        # Stage 10 and stayed captured is (usually) unclassifiable (PDF,
+        # payroll register, dialog). Without this, the 5-min task re-fired
+        # OpenAI on the SAME block every cycle = ~288 calls/block/day
+        # (one block hit 291 calls). Cap at 2 auto-attempts, >= 6h apart.
+        # A manual reclassify resets ai_attempt_count so a block made
+        # classifiable later (alias/fix/funded balance) can be retried.
+        AI_MAX_AUTO_ATTEMPTS = 2
+        ATTEMPT_CUTOFF = timezone.now() - timedelta(hours=6)
  
         # Only blocks still in 'captured' state — i.e., the real-time path
         # didn't successfully resolve them.
@@ -834,6 +844,11 @@ def ai_classify_uncategorized_blocks(self, limit=80):
                 start__gte=cutoff,
                 deleted_at__isnull=True,
                 is_categorized=False,
+            )
+            .filter(ai_attempt_count__lt=AI_MAX_AUTO_ATTEMPTS)
+            .filter(
+                Q(ai_last_attempt_at__isnull=True) |
+                Q(ai_last_attempt_at__lt=ATTEMPT_CUTOFF)
             )
             .select_related('user', 'client', 'org')
             .order_by('-start')[:limit]
@@ -871,6 +886,15 @@ def ai_classify_uncategorized_blocks(self, limit=80):
                     service = ClassificationService(org=org, user=user)
                     decision = service.classify(block)
                     service.apply(block, decision)
+ 
+                    # Record the attempt so this block isn't re-fired to
+                    # OpenAI every 5 min. .update() avoids the post_save
+                    # classify signal. F() increments atomically.
+                    from django.db.models import F
+                    Block.objects.filter(pk=block.pk).update(
+                        ai_attempt_count=F('ai_attempt_count') + 1,
+                        ai_last_attempt_at=timezone.now(),
+                    )
  
                     block.refresh_from_db()
                     final = block.classification_state

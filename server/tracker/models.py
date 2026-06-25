@@ -1259,6 +1259,18 @@ class Block(models.Model):
     proposed_reasoning = models.TextField(blank=True, default='')
 
     # ===============================
+    # AI attempt tracking (Stage 10 re-fire prevention)
+    # ===============================
+    # The 5-min safety-net task (ai_classify_uncategorized_blocks) re-queries
+    # all captured blocks every cycle. Without this, an unclassifiable block
+    # (PDF, payroll register, dialog) gets re-sent to OpenAI every 5 minutes
+    # for 24h = ~288 wasted calls/block/day. These fields let the task skip
+    # blocks already attempted N times / too recently. A manual reclassify
+    # resets the counter so a block made classifiable later can be re-tried.
+    ai_attempt_count = models.IntegerField(default=0)
+    ai_last_attempt_at = models.DateTimeField(null=True, blank=True)
+
+    # ===============================
     # AI vs Agent disagreement tracking (Stage 10 validation)
     # ===============================
     # When Stage 10 runs to validate the agent's deterministic client choice

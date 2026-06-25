@@ -1699,6 +1699,15 @@ class ClassificationService:
         best_client = None
         best_strength = 0.0
         best_match_type = ''
+
+        # Path B collision tracking: record every client that matches via the
+        # TITLE-ALIAS path and its score. After the loop, if 2+ distinct clients
+        # tie at the top title-alias score, the deterministic matcher cannot
+        # disambiguate a same-family collision (e.g. "Sacred Heart Basilica"
+        # matches Cicero/Basilica/NY-Mills/Rome all on shared "sacred heart").
+        # In that case we DEFER to AI (Stage 10), which reads the distinguishing
+        # token. URL/file_path matches are specific and excluded from this.
+        _title_alias_hits = []  # list of (client_id, score)
  
         for client in self._clients:
             # Skip meta-clients
@@ -1753,6 +1762,7 @@ class ClassificationService:
                 if self._alias_matches_safely(alias, haystack):
                     spec = self._alias_match_score(alias, haystack)
                     this_strength = 0.82 + (spec - 0.5) * 0.02
+                    _title_alias_hits.append((client.id, this_strength))
                     if this_strength > best_strength:
                         best_client = client
                         best_strength = this_strength
@@ -1762,6 +1772,27 @@ class ClassificationService:
         if not best_client or best_strength < 0.65:
             return
  
+        # Path B (collision deferral): if the winning match is a TITLE-ALIAS
+        # match AND 2+ distinct clients tied at the top title-alias score, the
+        # deterministic matcher is guessing among a same-name family (e.g.
+        # "Sacred Heart Basilica" matches Cicero/Basilica/NY-Mills/Rome all on
+        # the shared "sacred heart" tokens, every one scoring spec=0.0). Picking
+        # by iteration order silently mis-attributes. Defer to AI (Stage 10),
+        # which reads the distinguishing token ("Basilica" -> 175). Emit NO
+        # title signal so the AI client signal becomes dominant. The keystone
+        # SAFETY CAP ensures the resulting lone-AI pick PROPOSES (not commits)
+        # without corroboration. URL/file_path matches are specific and never
+        # reach here (best_match_type would differ from 'title_alias').
+        if best_match_type == 'title_alias' and _title_alias_hits:
+            _top = max(sc for _, sc in _title_alias_hits)
+            _tied = {cid for cid, sc in _title_alias_hits if abs(sc - _top) < 0.001}
+            if len(_tied) >= 2:
+                logger.info(
+                    f"[STAGE-3-COLLISION] {len(_tied)} clients tie for title "
+                    f"{haystack[:45]!r} (score {_top:.2f}) -- deferring to AI"
+                )
+                return
+
         decision.matched_signals.append(Signal(
             type=f'title_match_{best_match_type}',
             strength=best_strength,

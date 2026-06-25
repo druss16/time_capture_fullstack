@@ -4264,6 +4264,36 @@ class ClassificationService:
                 decision.confidence = max(s.strength for s in strong)
                 return decision
 
+            # SAFETY CAP (keystone): never auto-commit a LONE AI client
+            # identification. An ai_client signal alone -- with no deterministic,
+            # agent, mail, or rule signal corroborating the SAME client -- is a
+            # guess from a title that can be confidently wrong in ways the
+            # verification gate cannot catch (proven: "Mark Utica" -> "Mark
+            # Clary" on a shared first name, 0.85). Such picks must be PROPOSED
+            # for one-click human review, never auto-billed. Corroborated AI
+            # and all deterministic/agent paths still auto-commit unchanged.
+            if chosen_client_id:
+                non_ai_corroborates = any(
+                    s.proposed_client_id == chosen_client_id
+                    and not s.type.startswith('ai')
+                    for s in signals
+                )
+                strong_is_ai_only = all(s.type.startswith('ai') for s in strong)
+                if strong_is_ai_only and not non_ai_corroborates:
+                    decision.needs_review = True
+                    decision.review_reason = (
+                        'Lone AI client identification -- proposing for review '
+                        '(not auto-committed without corroboration)'
+                    )
+                    decision.recommended_state = 'proposed'
+                    decision.confidence = max(s.strength for s in strong)
+                    logger.info(
+                        f"[FINALIZE] Block {getattr(block, 'pk', '?')}: lone "
+                        f"ai_client proposing client {chosen_client_id} -- capped "
+                        f"to PROPOSED (no non-AI corroboration)"
+                    )
+                    return decision
+
             decision.recommended_state = 'committed'
             decision.confidence = max(s.strength for s in strong)
             return decision

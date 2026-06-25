@@ -3662,6 +3662,77 @@ class ClassificationService:
             f"AI={ai_client_id}({ai_client_name}) at {ai_confidence:.2f}"
         )
 
+    @staticmethod
+    def _prefilter_clients_for_ai(title, clients, max_candidates=25):
+        """
+        Shrink the client list to a rarity-ranked shortlist BEFORE the AI call.
+
+        gpt-4o-mini degrades to near-random with 300+ clients in one prompt
+        (observed: "St Ant-St Agnes" -> "The Artist Bullpen"). Given a short,
+        relevant list it reasons correctly ("St Agnes -> St. Anthony & St. Agnes").
+
+        Tokens are weighted by inverse document frequency so a rare, identifying
+        token outranks common ones ("saint", "church"). Distinctive matches
+        surface to the top of the cap.
+
+        SAFETY: only changes which candidates the AI SEES, never what gets
+        attributed -- the AI still chooses and the _finalize verification gate
+        still requires textual/corroborating evidence. An over-inclusive filter
+        is safe; dropping the right client is the only real failure, so we fall
+        back to the FULL list when nothing scores.
+        """
+        import re, math
+        from collections import Counter
+
+        def _toks(x):
+            x = (x or '').lower()
+            x = re.sub(r'\bst\.?\s', 'saint ', x)
+            x = re.sub(r'\bmt\.?\s', 'mount ', x)
+            x = re.sub(r"['\u2019]", '', x)
+            x = re.sub(r'[^a-z0-9]+', ' ', x)
+            return {t for t in x.split() if len(t) >= 3}
+
+        title_tokens = _toks(title)
+        if not title_tokens:
+            return clients[:max_candidates] if len(clients) > max_candidates else clients
+
+        df = Counter()
+        ctok = {}
+        for c in clients:
+            nt = _toks(c.name)
+            for a in (c.aliases or []):
+                nt |= _toks(a)
+            ctok[id(c)] = nt
+            for t in nt:
+                df[t] += 1
+        N = len(clients)
+
+        def _idf(t):
+            return math.log((N + 1) / (df.get(t, 0) + 1)) + 0.1
+
+        scored = []
+        for c in clients:
+            nt = ctok[id(c)]
+            if not nt:
+                continue
+            sc = 0.0
+            shared = title_tokens & nt
+            for t in shared:
+                sc += _idf(t) * 3
+            if not shared:
+                for x in title_tokens:
+                    for y in nt:
+                        if len(x) >= 3 and (y.startswith(x) or x.startswith(y)):
+                            sc += _idf(x)
+                            break
+            if sc > 0:
+                scored.append((sc, c))
+
+        if not scored:
+            return clients
+        scored.sort(key=lambda z: z[0], reverse=True)
+        return [c for _, c in scored[:max_candidates]]
+
     def _ai_classify_client(self, block, title):
         """
         Call OpenAI to identify the client. Returns Signal or None.
@@ -3717,9 +3788,14 @@ class ClassificationService:
                 'file_path': getattr(block, 'file_path', '') or '',
                 'additional_titles': additional_titles,
             }]
+            # Pre-filter to a rarity-ranked shortlist so the model isn't
+            # drowning in 300+ clients (observed: full list -> garbage pick;
+            # shortlist -> correct). Built from primary + additional titles.
+            _filter_text = ' '.join([title] + list(additional_titles or []))
+            _ai_clients = self._prefilter_clients_for_ai(_filter_text, self._clients)
             clients_payload = [
                 {'id': c.id, 'name': c.name, 'aliases': c.aliases or []}
-                for c in self._clients
+                for c in _ai_clients
             ]
 
             try:

@@ -4135,6 +4135,31 @@ class ClassificationService:
                             r'\b' + re.escape(words[0]) + r'\b', haystack
                         ):
                             has_textual_evidence = True
+                    # Distinctive-token path: client shares a rare, non-generic
+                    # token with the input (e.g. "agnes" for an abbreviated
+                    # "St Ant-St Agnes" title). Mirrors the views_ai_classify
+                    # gate. Proven safe via shadow: 110 passes on "agnes",
+                    # Artist Bullpen + generic-only "church" collisions reject.
+                    if not has_textual_evidence and client_obj:
+                        _GEN = {
+                            'saint','church','cemetery','parish','catholic',
+                            'school','fund','foundation','center','centre',
+                            'company','corp','inc','llc','ltd','group',
+                            'services','service','the','and','of','st',
+                            'associates','partners','holdings','enterprises',
+                            'community','ministry','chapel',
+                        }
+                        _hn = re.sub(r'\bst\.?\s', 'saint ', name_lower)
+                        _hn = re.sub(r"['\u2019]", '', _hn)
+                        _hn = re.sub(r'[^a-z0-9]+', ' ', _hn)
+                        _hh = re.sub(r'\bst\.?\s', 'saint ', haystack)
+                        _hh = re.sub(r"['\u2019]", '', _hh)
+                        _hh = re.sub(r'[^a-z0-9]+', ' ', _hh)
+                        _htoks = {t for t in _hh.split() if len(t) >= 4}
+                        for _tok in _hn.split():
+                            if len(_tok) >= 4 and _tok not in _GEN and _tok in _htoks:
+                                has_textual_evidence = True
+                                break
                 # Check 2: independent corroboration from non-AI signal
                 has_corroboration = any(
                     other is not sig

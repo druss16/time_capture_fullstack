@@ -313,9 +313,42 @@ def _call_openai(titles: list, clients: list) -> list:
             titles[i].get('file_path', '') or '',
         ]).lower()
 
+        # Generic words that are NOT identifying evidence on their own.
+        _GATE_GENERIC = {
+            'saint', 'church', 'cemetery', 'parish', 'catholic', 'school',
+            'fund', 'foundation', 'center', 'centre', 'company', 'corp',
+            'inc', 'llc', 'ltd', 'group', 'services', 'service', 'the',
+            'and', 'of', 'st', 'associates', 'partners', 'holdings',
+            'enterprises', 'community', 'ministry', 'chapel',
+        }
+
+        def _gate_norm(x):
+            import re as _re
+            x = (x or '').lower()
+            x = _re.sub(r'\bst\.?\s', 'saint ', x)
+            x = _re.sub(r"['\u2019]", '', x)
+            x = _re.sub(r'[^a-z0-9]+', ' ', x)
+            return x
+
+        _hay_tokens = {t for t in _gate_norm(haystack).split() if len(t) >= 4}
+
         def _names_in_haystack(c):
             names = [c.get('name') or ''] + list(c.get('aliases') or [])
-            return any(n and len(n) >= 4 and n.lower() in haystack for n in names)
+            # Path 1 (original): full name literally present.
+            if any(n and len(n) >= 4 and n.lower() in haystack for n in names):
+                return True
+            # Path 2: client shares a DISTINCTIVE (rare, non-generic) token
+            # with the input. Admits abbreviated/normalized refs like
+            # "St Ant-St Agnes" -> "...St. Agnes" (shares "agnes") and
+            # "St. James" -> "St.James Church" (shares "james"), while still
+            # rejecting picks that share only generic words or nothing
+            # (true hallucinations like "The Artist Bullpen"). Proven safe
+            # via shadow: 110 passes, 430/Grace reject.
+            for n in names:
+                for tok in _gate_norm(n).split():
+                    if len(tok) >= 4 and tok not in _GATE_GENERIC and tok in _hay_tokens:
+                        return True
+            return False
 
         if not claimed or not _names_in_haystack(claimed):
             # ID is mis-bound. Rescue: find clients whose real name appears in input.

@@ -258,6 +258,11 @@ class ClassificationDecision:
     needs_review: bool = False
     review_reason: str = ''
 
+    # Path B / #1b: client IDs that tied in a same-family title collision
+    # (Stage 3 deferred to AI). Stage 8 reads this to suppress agent stickiness
+    # pointing at a colliding family member, so the AI becomes the sole judge.
+    collision_client_ids: set = field(default_factory=set)
+
     # Special block types
     is_suppressed: bool = False
     is_meeting: bool = False
@@ -1785,8 +1790,18 @@ class ClassificationService:
         # reach here (best_match_type would differ from 'title_alias').
         if best_match_type == 'title_alias' and _title_alias_hits:
             _top = max(sc for _, sc in _title_alias_hits)
-            _tied = {cid for cid, sc in _title_alias_hits if abs(sc - _top) < 0.001}
+            # Near-tie margin (not exact-tie): family members differ only by a
+            # small specificity nudge (e.g. Cicero gets a 0.0067 contiguity
+            # bonus over Basilica on "Sacred Heart Basilica (Secondary)"). That
+            # nudge is noise, not real disambiguation — the title still matches
+            # multiple same-family clients. 0.05 covers the +/-0.02 spec-nudge
+            # band (base 0.82, range 0.81-0.83) without catching genuinely
+            # distinct matches (which differ by far more, or match different
+            # base types like file_path/domain).
+            _COLLISION_MARGIN = 0.05
+            _tied = {cid for cid, sc in _title_alias_hits if (_top - sc) < _COLLISION_MARGIN}
             if len(_tied) >= 2:
+                decision.collision_client_ids = set(_tied)
                 logger.info(
                     f"[STAGE-3-COLLISION] {len(_tied)} clients tie for title "
                     f"{haystack[:45]!r} (score {_top:.2f}) -- deferring to AI"
@@ -2944,7 +2959,28 @@ class ClassificationService:
         # emit a single 'agent_inference' signal at strength derived from
         # the agent's reported confidence. Legacy agent_current_client
         # emission is skipped to avoid double-counting.
-        inference_signal_fired = self._try_emit_inference_signal(block, decision)
+        # Path B / #1b: if Stage 3 deferred a same-family collision and the
+        # agent's client is one of the colliding family members, the agent's
+        # stickiness is an equally-unreliable family guess (e.g. agent stuck on
+        # Sacred Heart-Cicero 360 for a "Sacred Heart Basilica" block). Suppress
+        # BOTH agent signals (inference + current_client) so Stage 10's AI --
+        # which reads the distinguishing token -- becomes the sole client judge.
+        # Keystone then caps the lone-AI pick to 'proposed'. Without this, the
+        # stale agent client forces Stage 10 into validation mode and the AI's
+        # correct pick is never added as a signal (-> block lands None).
+        agent_client_in_collision = (
+            block.client_id is not None
+            and block.client_id in getattr(decision, 'collision_client_ids', set())
+        )
+        if agent_client_in_collision:
+            logger.info(
+                f"[STAGE-8-COLLISION-SKIP] Block {getattr(block,'pk','?')}: agent "
+                f"client {block.client_id} is a deferred collision member -- "
+                f"suppressing agent signals, letting AI decide"
+            )
+            inference_signal_fired = False
+        else:
+            inference_signal_fired = self._try_emit_inference_signal(block, decision)
 
         # Determine if this is an "idle" block — these should not receive
         # prior_block signals because the user wasn't working on anything.
@@ -2965,7 +3001,7 @@ class ClassificationService:
         # Skip on idle blocks: agent client is not meaningful when user is idle.
         # v1.4.0: Skip if inference signal already fired — avoids double-counting
         # the same underlying agent observation.
-        if block.client_id and not is_idle_block and not inference_signal_fired:
+        if block.client_id and not is_idle_block and not inference_signal_fired and not agent_client_in_collision:
             # v1.3.56: Browser blocks are the inheritance-bug magnet.
             # The agent's client sticks across alt-tabs to news, music,
             # personal browsing. Without independent corroboration from
@@ -3542,7 +3578,17 @@ class ClassificationService:
             (s.strength for s in decision.matched_signals if s.proposed_client_id),
             default=0.0,
         )
-        has_agent_client = bool(block.client_id)
+        # Path B / #1b: if the agent's client is a deferred collision member,
+        # treat it as NO agent client so Stage 10 runs in FREE mode (FLOW A) and
+        # ADDS the AI's pick as a client signal — instead of validation mode,
+        # which only records a disagreement and never adds the AI client (the
+        # block would then clear to None). The stale agent family-guess must not
+        # force validation here; the AI is the intended judge of the collision.
+        _agent_in_collision = (
+            block.client_id is not None
+            and block.client_id in getattr(decision, 'collision_client_ids', set())
+        )
+        has_agent_client = bool(block.client_id) and not _agent_in_collision
 
         if not has_agent_client and client_strength >= 0.65:
             # A strong CLIENT signal already exists and there's no agent client

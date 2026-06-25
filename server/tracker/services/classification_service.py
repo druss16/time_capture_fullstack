@@ -3497,18 +3497,25 @@ class ClassificationService:
         if not title:
             return
 
-        # Cost gate: skip if a strong-enough signal already exists AND there's no
-        # agent client to validate. If agent set a client, we always run Stage 10
-        # to validate it — that's the disagreement-detection feature.
-        max_strength = max(
-            (s.strength for s in decision.matched_signals),
+        # Cost gate: skip ONLY if a strong-enough CLIENT signal already exists
+        # AND there's no agent client to validate. Gate on client-signal
+        # strength, NOT max signal strength: a strong CATEGORY-only signal
+        # (e.g. Outlook -> tool_category 0.80) must NOT suppress AI *client*
+        # identification. Category (Email) and client (which client's email)
+        # are orthogonal — an Outlook block legitimately has a category but
+        # still needs AI to find the client. Without this, every email/Outlook
+        # block with a client name silently landed in No Client.
+        # Lone-AI picks are capped to 'proposed' downstream (see _finalize
+        # SAFETY CAP), so opening this gate for email is safe.
+        client_strength = max(
+            (s.strength for s in decision.matched_signals if s.proposed_client_id),
             default=0.0,
         )
         has_agent_client = bool(block.client_id)
 
-        if not has_agent_client and max_strength >= 0.65:
-            # No agent client to validate, and we already have a strong signal.
-            # Stage 10 wouldn't add value. Skip to save tokens.
+        if not has_agent_client and client_strength >= 0.65:
+            # A strong CLIENT signal already exists and there's no agent client
+            # to validate — Stage 10 wouldn't add value. Skip to save tokens.
             return
 
         try:

@@ -473,12 +473,16 @@ def _aggregate(blocks, group_by: str):
         )
         # Displayed Total = material + immaterial (the honest ledger).
         display_total_min = g["total_min"] + g["immaterial_min"]
+        # B: fold sub-threshold slivers into displayed non-billable so the row
+        # reads Total = Billable + Non-Bill. util above used material-only
+        # total (g["total_min"]), so the ratio is untouched.
+        display_non_billable_min = g["non_billable_min"] + g["immaterial_min"]
         rows.append({
             "id": g["id"],
             "label": g["label"],
             "total_hours": round(display_total_min / 60, 2),
             "billable_hours": round(g["billable_min"] / 60, 2),
-            "non_billable_hours": round(g["non_billable_min"] / 60, 2),
+            "non_billable_hours": round(display_non_billable_min / 60, 2),
             "utilization_pct": util,
             "top_client": top_client,
             "block_count": g["block_count"],
@@ -497,7 +501,7 @@ def _aggregate(blocks, group_by: str):
             # Total Captured = material + immaterial (full ledger, honest sum).
             "total_hours": round((total_min + immaterial_min) / 60, 2),
             "billable_hours": round(billable_min / 60, 2),
-            "non_billable_hours": round(non_billable_min / 60, 2),
+            "non_billable_hours": round((non_billable_min + immaterial_min) / 60, 2),
             "immaterial_hours": round(immaterial_min / 60, 2),
             "utilization_pct": util_overall,
             "active_clients": len(distinct_clients),

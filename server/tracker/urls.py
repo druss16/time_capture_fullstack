@@ -108,6 +108,7 @@ urlpatterns = [
     path("blocks/suggestions/", views.ai_suggestions_today, name="ai_suggestions_today"),
     path("blocks/<int:block_id>/classify/", views.save_block_classification, name="save_block_classification"),
     path("blocks/confirm-all/", views.confirm_all_blocks, name="confirm_all_blocks"),
+    path("blocks/<int:block_id>/tab-context/", views.block_tab_context_view, name="block_tab_context"),
     path("recent-blocks/", views.recent_classified_blocks, name="recent_classified_blocks"),
     path("label-block/", views.label_block, name="label_block"),
     path("blocks/<int:block_id>/delete/", views.delete_block, name="delete_block"),

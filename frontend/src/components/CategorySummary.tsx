@@ -683,6 +683,29 @@ function ActivityRow({
     onToggleSelect(false);
   };
 
+  const [showActivity, setShowActivity] = useState(false);
+  const [activityCtx, setActivityCtx] = useState<{ dominant: string[]; brief: string[] } | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+
+  const toggleActivity = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = !showActivity;
+    setShowActivity(next);
+    if (next && activityCtx === null && parsed.blockId) {
+      setActivityLoading(true);
+      try {
+        const ctx = await safeFetchJson<{ dominant: string[]; brief: string[] }>(
+          `${API_BASE}/blocks/${parsed.blockId}/tab-context/`
+        );
+        setActivityCtx(ctx);
+      } catch {
+        setActivityCtx({ dominant: [], brief: [] });
+      } finally {
+        setActivityLoading(false);
+      }
+    }
+  }, [showActivity, activityCtx, parsed.blockId]);
+
   return (
     <li
       ref={liRef}
@@ -763,6 +786,41 @@ function ActivityRow({
               onClose={() => setShowPopover(false)}
             />
           )}
+        </div>
+      )}
+
+      {parsed.blockId && (
+        <button
+          onClick={toggleActivity}
+          title="See what this block touched"
+          className="text-[11px] font-medium text-slate-300 hover:text-primary transition-colors flex-shrink-0 ml-1"
+        >
+          {showActivity ? "hide" : "activity"}
+        </button>
+      )}
+
+      {showActivity && (
+        <div
+          className="basis-full mt-1.5 ml-9 mr-2 space-y-1 text-[11px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {activityLoading && <span className="text-slate-400">Loading…</span>}
+          {activityCtx?.dominant && activityCtx.dominant.length > 0 && (
+            <div className="text-slate-500">
+              <span className="font-semibold text-slate-600">Worked on:</span>{" "}
+              {activityCtx.dominant.join(" · ")}
+            </div>
+          )}
+          {activityCtx?.brief && activityCtx.brief.length > 0 && (
+            <div className="text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-1">
+              <span className="font-semibold">Also briefly:</span>{" "}
+              {activityCtx.brief.join(" · ")}
+            </div>
+          )}
+          {!activityLoading && activityCtx &&
+            activityCtx.dominant?.length === 0 && activityCtx.brief?.length === 0 && (
+              <span className="text-slate-400">No additional activity detail.</span>
+            )}
         </div>
       )}
     </li>

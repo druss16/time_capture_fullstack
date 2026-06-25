@@ -4134,6 +4134,89 @@ def _humanize_mixed_content(review_reason):
 # The _today_time_from_blocks() helper this function calls is unchanged.
 
 
+# --- block activity context (tab/document names within a block) -----------
+_TABCTX_STOP = {
+    'this pc', 'program manager', '1 file conflict', 'file conflict', 'desktop',
+    'downloads', 'documents', 'quick access', 'home', 'control panel', 'settings',
+    'task manager', 'recycle bin', 'quickbooks desktop information',
+    'cs connect background services', 'untitled',
+}
+_TABCTX_STOP_PREFIX = ('company data (', 'local disk (', 'windows (', 'os (', 'skmbt_')
+_TABCTX_NOISE_SUB = ('background services', 'quickbooks desktop login', 'desktop information')
+
+
+def _tabctx_lead_name(t: str) -> str:
+    t = t or ''
+    m = re.search(r'-\s*\[([^\]]+)\]\s*$', t)
+    screen = m.group(1).strip() if m else None
+    t = re.sub(r'\s*-\s*QuickBooks Accountant Desktop.*$', '', t, flags=re.I)
+    t = re.sub(
+        r'\s*-\s*(File Explorer|Excel|Word|Google Chrome|Microsoft.*|Adobe.*|'
+        r'Outlook|Work|Compatibility Mode)\s*$', '', t, flags=re.I)
+    t = re.sub(r'\s+and\s+\d+\s+more\s+(tabs?|pages?)\s*$', '', t, flags=re.I)
+    t = t.strip(' -')
+    if screen and screen.lower() not in ('home',):
+        return screen
+    return t.strip()
+
+
+def _tabctx_is_noise(n: str) -> bool:
+    nl = n.lower()
+    if nl in _TABCTX_STOP:
+        return True
+    if any(nl.startswith(p) for p in _TABCTX_STOP_PREFIX):
+        return True
+    if any(sub in nl for sub in _TABCTX_NOISE_SUB):
+        return True
+    if re.match(r'^[a-z]:\\?$', nl):
+        return True
+    if re.match(r'^(skmbt_|0056_)', nl):
+        return True
+    return False
+
+
+def block_tab_context(block_id, primary_title='', max_dominant=5,
+                      dominant_min=2, max_brief=5):
+    """
+    Weighted activity context for a block: distinct tab/document names that
+    appeared across its RawEvents, split into 'dominant' (seen >= dominant_min
+    times) and 'brief' (seen once). Chrome / OS / scanner noise stripped.
+    Returns None when nothing is additive beyond the primary (single-app).
+
+    Makes NO claim about which CLIENT a name belongs to — naive token matching
+    produced false matches. We show honest names; the user judges the client.
+    """
+    from collections import Counter
+    titles = list(
+        RawEvent.objects.filter(block_id=block_id)
+        .exclude(window_title__exact='').exclude(window_title__isnull=True)
+        .values_list('window_title', flat=True)
+    )
+    names = Counter()
+    canon = {}  # lower -> first-seen display form, for case-insensitive merge
+    for t in titles:
+        n = _tabctx_lead_name(t)
+        if n and len(n) >= 2 and not _tabctx_is_noise(n):
+            key = n.lower()
+            display = canon.setdefault(key, n)
+            names[display] += 1
+    dominant = [n for n, c in names.most_common() if c >= dominant_min][:max_dominant]
+    brief = [n for n, c in names.most_common() if c < dominant_min][:max_brief]
+    if len(dominant) + len(brief) <= 1:
+        return None
+    return {'dominant': dominant, 'brief': brief}
+
+
+@api_view(["GET"])
+@permission_classes([PermUI])
+def block_tab_context_view(request, block_id: int):
+    """Lazy-loaded activity context for one block (called on row expand)."""
+    org = get_org_or_default(request)
+    b = get_object_or_404(Block, id=block_id, org=org)
+    ctx = block_tab_context(b.id, getattr(b, 'window_title', '') or '')
+    return Response(ctx or {'dominant': [], 'brief': []})
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def today_time(request):

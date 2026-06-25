@@ -181,6 +181,7 @@ export default function DailyReview() {
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
   const [aiInProgress, setAiInProgress] = useState(false);
   const [proposedInline, setProposedInline] = useState<ProposedInline[]>([]);
+  const [confirmingAll, setConfirmingAll] = useState(false);
 
 
 
@@ -366,6 +367,40 @@ export default function DailyReview() {
     runAIClassification();
   }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
+  const handleConfirmAll = async () => {
+    setConfirmingAll(true);
+    try {
+      const res = await safeFetchJson<{
+        ok: boolean;
+        confirmed_with_client: number;
+        confirmed_no_client: number;
+        skipped: number;
+        total: number;
+      }>(`${API_BASE}/blocks/confirm-all/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date }),
+      });
+      const wc = res.confirmed_with_client;
+      const nc = res.confirmed_no_client;
+      const total = res.total;
+      if (total === 0) {
+        showToast("Nothing to confirm", "success");
+      } else {
+        showToast(
+          `Confirmed ${total} ${total === 1 ? "block" : "blocks"} \u2014 ` +
+          `${wc} billable, ${nc} non-billable`,
+          "success"
+        );
+      }
+      loadTimeSummary();
+    } catch (err: any) {
+      showToast(err?.message || "Failed to confirm all", "error");
+    } finally {
+      setConfirmingAll(false);
+    }
+  };
+
   const handleCategorizationComplete = useCallback(() => {
     loadTimeSummary();
     loadUncategorizedCount();
@@ -461,6 +496,23 @@ export default function DailyReview() {
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Confirm all — accept every pending block at once */}
+            <button
+              onClick={handleConfirmAll}
+              disabled={confirmingAll || busy}
+              title="Confirm all pending blocks"
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                "bg-emerald-600 text-white hover:bg-emerald-700",
+                "disabled:opacity-50 disabled:cursor-not-allowed"
+              )}
+            >
+              {confirmingAll
+                ? <RefreshCw className="w-4 h-4 animate-spin" />
+                : <Check className="w-4 h-4" />}
+              {confirmingAll ? "Confirming\u2026" : "Confirm all"}
+            </button>
 
             {/* Refresh — ghost icon, no background until hover */}
             <button

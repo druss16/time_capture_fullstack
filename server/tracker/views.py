@@ -2721,6 +2721,65 @@ def save_block_classification(request, block_id: int):
     
     return Response(response_data)
 
+
+# -------------------------------------------------------------------
+# Bulk confirm — accept all proposed blocks for a user/date in one click
+# -------------------------------------------------------------------
+@api_view(["POST"])
+@permission_classes([PermUI])
+@transaction.atomic
+def confirm_all_blocks(request):
+    """
+    Bulk-confirm the requesting user's proposed blocks for a date.
+
+    Each block commits to its CURRENT proposed state via
+    ClassificationService.commit() (canonical path, writes a ClassificationAudit
+    row identical to the per-block Confirm button):
+      - proposed client -> committed, billable to that client
+      - no client       -> committed as No Client (already non-billable)
+
+    User-scoped (only the caller's own blocks), date-scoped (default today),
+    proposed-only (never touches committed/suppressed). Per-block try/except so
+    a single race doesn't abort the batch. Returns counts.
+    """
+    from tracker.services.classification_service import ClassificationService
+
+    user = request.user
+    org = get_org_or_default(request)
+
+    date_str = request.data.get("date") or request.query_params.get("date")
+    target_date = parse_date(date_str) if date_str else timezone.localdate()
+    day_start = timezone.make_aware(dt.combine(target_date, dt_time.min))
+    day_end = day_start + timedelta(days=1)
+
+    pending = list(Block.objects.filter(
+        org=org, user=user,
+        start__gte=day_start, start__lt=day_end,
+        classification_state="proposed",
+        deleted_at__isnull=True,
+    ))
+
+    svc = ClassificationService(org=org, user=user)
+    with_client = no_client = skipped = 0
+    for b in pending:
+        try:
+            svc.commit(b, user=user)
+            if b.client_id:
+                with_client += 1
+            else:
+                no_client += 1
+        except ValueError:
+            skipped += 1  # already committed/suppressed (race) — skip
+
+    return Response({
+        "ok": True,
+        "confirmed_with_client": with_client,
+        "confirmed_no_client": no_client,
+        "skipped": skipped,
+        "total": with_client + no_client,
+    })
+
+
 # -------------------------------------------------------------------
 # Bulk import (clients/projects) for onboarding
 # -------------------------------------------------------------------

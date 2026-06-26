@@ -1802,6 +1802,20 @@ class ClassificationService:
             _tied = {cid for cid, sc in _title_alias_hits if (_top - sc) < _COLLISION_MARGIN}
             if len(_tied) >= 2:
                 decision.collision_client_ids = set(_tied)
+                # ROOT FIX: the agent's stuck client_id, if it's one of these
+                # ambiguous family members, is an unreliable guess. Clear it
+                # in-memory NOW so NO downstream guard — Stage 8 stickiness,
+                # Stage 10 validation-mode, or the apply() disagreement check
+                # (which would otherwise "keep agent's pick" and revert the AI's
+                # correct disambiguation) — ever sees a conflicting agent client
+                # to protect. The AI becomes the sole judge; keystone caps it to
+                # proposed. This is purer than gating each guard separately.
+                if block.client_id in _tied:
+                    logger.info(
+                        f"[STAGE-3-COLLISION] clearing stale agent client "
+                        f"{block.client_id} (a colliding family member) so AI decides"
+                    )
+                    block.client_id = None
                 logger.info(
                     f"[STAGE-3-COLLISION] {len(_tied)} clients tie for title "
                     f"{haystack[:45]!r} (score {_top:.2f}) -- deferring to AI"

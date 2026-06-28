@@ -768,9 +768,29 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             # class as "Untitled" or "New Tab".
             GENERIC_TITLES = ("", "open", "untitled", "new tab", "open a company",
                               "loading", "blank", "save as", "save", "exit")
-            titles = [e["window_title"] for e in app_events if e["window_title"]]
-            titles = [t for t in titles if t.lower().strip() not in GENERIC_TITLES]
-            window_title = max(titles, key=len) if titles else app_events[0]["window_title"]
+            # Representative title = the title of the event the user spent the
+            # MOST TIME on, not the longest string. Previously `max(titles,
+            # key=len)` let a verbose throwaway (e.g. a long email subject seen
+            # for 11s) hijack the block title over the real work (e.g. "St Mark
+            # reports" seen for 26s). Pick by duration so the title reflects
+            # what the block actually mostly was.
+            def _ev_seconds(e):
+                ev = e.get("event")
+                st = getattr(ev, "start_ts", None)
+                en = getattr(ev, "end_ts", None)
+                if st and en:
+                    return (en - st).total_seconds()
+                return 0.0
+
+            titled_events = [
+                e for e in app_events
+                if e["window_title"]
+                and e["window_title"].lower().strip() not in GENERIC_TITLES
+            ]
+            if titled_events:
+                window_title = max(titled_events, key=_ev_seconds)["window_title"]
+            else:
+                window_title = app_events[0]["window_title"]
 
             urls = [e["url"] for e in app_events if e["url"]]
             paths = [e["file_path"] for e in app_events if e["file_path"]]

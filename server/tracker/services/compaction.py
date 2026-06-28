@@ -66,6 +66,29 @@ MIN_BLOCK_MINUTES = 0.5
 SESSION_GAP = timedelta(minutes=30)
 AUTO_CATEGORIZE_THRESHOLD = 0.70
 
+# Generic / system / login / idle window titles that must NEVER be chosen as a
+# block's representative title — they're not the work, just chrome the user
+# happened to sit on (a login screen, the desktop shell, an empty message).
+# EXACT-MATCH ONLY (compared against title.lower().strip()): substring matching
+# would wrongly catch real client work like "Eagles Landing Properties" or
+# "Print Reports". Verified against live 6/25 data before adding.
+GENERIC_TITLES = (
+    "", "open", "untitled", "new tab", "open a company",
+    "loading", "blank", "save as", "save", "exit",
+    # v1.x: expanded after duration-title fix exposed junk titles winning by
+    # dwell time (e.g. "QuickBooks Desktop Login" x49, "Program Manager" x63).
+    "untitled - message (html)", "program manager", "working", "print",
+    "save pdf file as", "quickbooks desktop login", "open microsoft excel file",
+    "adobe pdf document properties",
+    # Bare QuickBooks application chrome (no client name) — the client-named
+    # variants ("<Client>  - QuickBooks Accountant Desktop Plus 2024") are
+    # DIFFERENT strings and survive exact-match. Verified against 6/25 data.
+    "quickbooks accountant desktop plus 2024",
+    "(primary) quickbooks accountant desktop plus 2024",
+    "(secondary) quickbooks accountant desktop plus 2024",
+    "open or restore company",
+)
+
 # v1.3.62: QB company extraction for session continuity (see grouping loop).
 import re as _re_qb
 _QB_COMPACT_APPS = {'qbw', 'qbw.exe', 'qbw32', 'qbw32.exe'}
@@ -765,9 +788,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
 
             # v1.3.49: Expanded generic-title exclusion list. "Open a Company" is
             # the QB Desktop dialog name when no file is loaded — same low-info
-            # class as "Untitled" or "New Tab".
-            GENERIC_TITLES = ("", "open", "untitled", "new tab", "open a company",
-                              "loading", "blank", "save as", "save", "exit")
+            # class as "Untitled" or "New Tab". (GENERIC_TITLES is the
+            # module-level constant — single source of truth, shared with merge.)
             # Representative title = the title of the event the user spent the
             # MOST TIME on, not the longest string. Previously `max(titles,
             # key=len)` let a verbose throwaway (e.g. a long email subject seen
@@ -946,8 +968,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     # of the event the user spent the MOST TIME on (not the longest
                     # string — a verbose throwaway must not hijack the title over
                     # the dominant work). Mirrors the create-path rule above.
-                    GENERIC_TITLES = ("", "open", "untitled", "new tab", "open a company",
-                                      "loading", "blank", "save as", "save", "exit")
+                    # GENERIC_TITLES: module-level constant (shared with create path).
                     _rows = RawEvent.objects.filter(block=locked).values_list(
                         'window_title', 'start_ts', 'end_ts'
                     )

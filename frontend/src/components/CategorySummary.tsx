@@ -1101,7 +1101,11 @@ function FlaggedBanner({
       )}
  
       {/* AI disagreement flags — blue */}
-      {aiDisagreements.length > 0 && (
+      {/* Hidden: classifier reliability (collision deferral + keystone + root fix)
+          makes this review banner redundant — proposals are now resolved inline
+          in the main block list. Flip `false` to `aiDisagreements.length > 0`
+          to restore. */}
+      {false && aiDisagreements.length > 0 && (
         <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 overflow-hidden">
           <div className="px-4 py-2 bg-blue-100/70 border-b border-blue-200 flex items-center gap-2">
             <Sparkles className="w-3.5 h-3.5 text-blue-600" />

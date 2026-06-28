@@ -839,8 +839,9 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         app = _app_key(b)
         client_id = b.client_id or 0
         # Compute content_id for the existing block using its window_title/file_path/url.
-        # Note: a block has one window_title set at creation (the longest among its
-        # raw events). Using that as the content signature is approximate but matches
+        # Note: a block has one window_title set at creation (from the event the
+        # user spent the most time on). Using that as the content signature is
+        # approximate but matches
         # how the block was originally bucketed.
         existing_content_id = _content_identifier(
             b.window_title or "",
@@ -941,15 +942,22 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     # Desktop Plus 2024"). Block kept its 14-char "Open a Company" title.
                     # AI classifier saw only that, marked block as Personal/Non-Billable.
                     #
-                    # Fix: recalculate window_title at merge time using the longest non-
-                    # generic title from all events now linked to this block.
+                    # Fix: recalculate window_title at merge time using the title
+                    # of the event the user spent the MOST TIME on (not the longest
+                    # string — a verbose throwaway must not hijack the title over
+                    # the dominant work). Mirrors the create-path rule above.
                     GENERIC_TITLES = ("", "open", "untitled", "new tab", "open a company",
                                       "loading", "blank", "save as", "save", "exit")
-                    all_titles = list(RawEvent.objects.filter(block=locked).values_list(
-                        'window_title', flat=True
-                    ))
-                    candidates = [t for t in all_titles if t and t.lower().strip() not in GENERIC_TITLES]
-                    new_title = max(candidates, key=len) if candidates else locked.window_title
+                    _rows = RawEvent.objects.filter(block=locked).values_list(
+                        'window_title', 'start_ts', 'end_ts'
+                    )
+                    _scored = []
+                    for _t, _st, _en in _rows:
+                        if not _t or _t.lower().strip() in GENERIC_TITLES:
+                            continue
+                        _dur = (_en - _st).total_seconds() if (_st and _en) else 0.0
+                        _scored.append((_dur, _t))
+                    new_title = max(_scored, key=lambda x: x[0])[1] if _scored else locked.window_title
 
                     update_fields = {
                         "start": updated_start,

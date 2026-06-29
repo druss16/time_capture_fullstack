@@ -29,3 +29,5 @@ cryptography>=41.0.0
 django-eventstream
 
 pgvector>=0.3.0
+
+notion-client>=2.2.1

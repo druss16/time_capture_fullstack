@@ -210,3 +210,5 @@ tmp/.expo/
 security-reports/
 
 _scratch/
+server/tracker/utils/content_classifier_BACKUP.py
+server/tracker/utils/content_classifier_v2.py

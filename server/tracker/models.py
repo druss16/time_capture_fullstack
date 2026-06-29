@@ -3437,7 +3437,7 @@ class SupportDoc(models.Model):
     )
     content = models.TextField()
     # Dim must match your embedding model (voyage-3-lite / text-embedding-3-small = 1536).
-    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding = VectorField(dimensions=512, null=True, blank=True)
  
     # Global doc (org null) or org-specific.
     org = models.ForeignKey(

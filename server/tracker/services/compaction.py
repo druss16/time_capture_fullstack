@@ -51,6 +51,9 @@ from tracker.utils.content_classifier import (
     is_high_confidence_personal,
 )
 
+from tracker.utils.content_identity import content_identity
+from tracker.utils.grouping_key import grouping_key
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -245,6 +248,24 @@ def _content_identifier(window_title: str, file_path: str, url: str) -> str:
                 break
 
     return ""
+
+
+def _grouping_content_id(window_title: str, file_path: str, url: str) -> str:
+    """v2 (2026-06-29): coarse grouping identity that prevents fragmentation.
+
+    Combines the per-app content_identity extractor with the coarse
+    grouping_key mapper, so:
+      - browser work gets a real identity (the _content_identifier '' bug),
+      - scans/docs collapse to coarse buckets (no 90-block fragmentation),
+      - QBO-customer / Paychex-company stay split by client.
+
+    Falls back to the legacy _content_identifier when the new path yields
+    nothing, preserving all prior behavior (Office files, QB company).
+    """
+    gk = grouping_key(content_identity(window_title or "", url or "", file_path or ""))
+    if gk:
+        return gk
+    return _content_identifier(window_title, file_path, url)
 
 # =============================================================================
 # Meeting extraction (unchanged from v1.3.37 — already interval-aware)
@@ -765,14 +786,26 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             if _qb_comp:
                 content_id = _content_identifier(_qb_comp, "", "")
             else:
-                content_id = _content_identifier(
+                content_id = _grouping_content_id(
                     ev.get("window_title") or "",
                     ev.get("file_path") or "",
                     ev.get("url") or "",
                 )
+            
             content_part = f"|{content_id}" if content_id else ""
 
-            key = f"s{session_idx}|{app}|{client_id}|{content_bucket}{content_part}"
+            # v2 (2026-06-29): when there's a coarse content identity OR the
+            # event is personal, the CONTENT dominates grouping — the stale
+            # current_client_id must NOT re-split same-activity events. This is
+            # what stops e.g. Applebee's browsing from fragmenting across three
+            # different stale client_ids the AI switcher happened to flip
+            # through. Only when there is NO content signal (genuine app work,
+            # no identity, unknown bucket) does the agent's client pick remain
+            # the grouping signal.
+            if content_id or content_bucket == "personal":
+                key = f"s{session_idx}|{app}|{content_bucket}{content_part}"
+            else:
+                key = f"s{session_idx}|{app}|{client_id}|{content_bucket}"
             by_app_client.setdefault(key, []).append(ev)
 
         for key, app_events in by_app_client.items():
@@ -865,17 +898,21 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         # user spent the most time on). Using that as the content signature is
         # approximate but matches
         # how the block was originally bucketed.
-        existing_content_id = _content_identifier(
+        existing_content_id = _grouping_content_id(
             b.window_title or "",
             b.file_path or "",
             b.url or "",
         )
         existing_content_part = f"|{existing_content_id}" if existing_content_id else ""
-        # Note: we DON'T include content_bucket in the existing key because blocks
-        # don't store the bucket. New blocks computed below also omit bucket from
-        # the merge key — only (app, client, content_id). Content_bucket-based
-        # splitting already happened at the grouping stage.
-        key = f"{app}|{client_id}{existing_content_part}"
+        # v2 (2026-06-29): mirror the grouping-key rule — when a coarse content
+        # identity exists, it dominates and client_id is dropped from the merge
+        # key (so content-bearing blocks don't fail to merge just because their
+        # stale client_id differs). Only client-less, identity-less blocks key
+        # on client_id. Must stay in lockstep with the grouping key above.
+        if existing_content_id:
+            key = f"{app}|{existing_content_part}"
+        else:
+            key = f"{app}|{client_id}"
         existing_by_app_client.setdefault(key, []).append(b)
 
     created_count = 0
@@ -890,13 +927,18 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             new_client_id = block_data.get("current_client_id") or 0
             # v1.3.47: match the existing-block key shape — include content_id
             # so different-file blocks don't merge into each other.
-            new_content_id = _content_identifier(
+            new_content_id = _grouping_content_id(
                 block_data.get("window_title") or "",
                 block_data.get("file_path") or "",
                 block_data.get("url") or "",
             )
             new_content_part = f"|{new_content_id}" if new_content_id else ""
-            key = f"{app}|{new_client_id}{new_content_part}"
+            # v2 (2026-06-29): mirror grouping + existing-block keys — content
+            # identity dominates, drop client_id from the merge key when present.
+            if new_content_id:
+                key = f"{app}|{new_content_part}"
+            else:
+                key = f"{app}|{new_client_id}"
 
             merge_target = None
             for existing in existing_by_app_client.get(key, []):

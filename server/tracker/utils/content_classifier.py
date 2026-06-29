@@ -93,6 +93,13 @@ PERSONAL_TITLE_MARKERS = frozenset([
     # News brand markers
     'fox news -', 'cnn -', 'cnn.com', 'msnbc -', 'breaking news',
     'syracuse news', '9wsyr',
+    # News brand markers WITHOUT a trailing dash — real window titles read
+    # "Fox News apologizes..." or "MSN | Personalized News..." with the brand
+    # at the START, which the dash-suffixed markers above missed. High-confidence
+    # personal. Verified vs block 46880 (Eileen): catches the MSN/Fox news,
+    # ZERO false positives on the 10 parish-work events in the same block.
+    'fox news', 'msn |', 'msnbc', 'newsmax', 'breitbart', 'huffpost',
+    'yahoo news', 'usa today', 'maggie haberman', 'barron trump',
 
     # Sports markers
     ' nfl ', ' nba ', ' mlb ', ' nhl ', ' pga ', 'sports highlights',

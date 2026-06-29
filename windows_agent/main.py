@@ -41,6 +41,8 @@ from urllib.parse import urlparse
 
 from widget_state_tracker import get_widget_state_tracker
 
+from content_identity import content_identity
+
 from tracking_health import (
     progress_tick,
     record_window_change,
@@ -52,6 +54,7 @@ from tracking_health import (
     get_loop_stats,
     IdleKind,
 )
+
 
 # Windows-specific imports
 try:
@@ -2017,6 +2020,7 @@ def write_event(
         "window_title": title or "",
         "url": url,
         "file_path": fpath,
+        "content_identity": content_identity(title or "", url or "", fpath or ""),
         "hostname": hostname,
         "server_user_id": SERVER_USER_ID,
         "device_id": get_device_id(),

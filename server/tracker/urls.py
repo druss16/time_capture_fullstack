@@ -490,4 +490,5 @@ urlpatterns = [
     path("reports/suggestions/", views_reports.reports_list_suggestions),
     path("reports/suggestions/<int:suggestion_id>/status/", views_reports.reports_suggestion_set_status),
 
+
 ]

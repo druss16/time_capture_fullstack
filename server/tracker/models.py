@@ -9,6 +9,8 @@ import secrets  # ✅ add this import
 
 from tracker.industry_categories import INDUSTRY_CHOICES
 
+from pgvector.django import VectorField, HnswIndex
+
 # ===========================
 # ======  ORG MODELS  ======
 # ===========================
@@ -3421,6 +3423,154 @@ class ClassificationAudit(models.Model):
             models.Index(fields=['source']),
             models.Index(fields=['created_at']),
         ]
+
+
+class SupportDoc(models.Model):
+    """
+    A chunk of knowledge-base documentation, embedded for retrieval.
+    One markdown doc usually becomes several SupportDoc rows (one per chunk).
+    """
+    title = models.CharField(max_length=255)
+    source = models.CharField(
+        max_length=255,
+        help_text="Origin file/section, e.g. 'agent-install.md#windows'",
+    )
+    content = models.TextField()
+    # Dim must match your embedding model (voyage-3-lite / text-embedding-3-small = 1536).
+    embedding = VectorField(dimensions=1536, null=True, blank=True)
+ 
+    # Global doc (org null) or org-specific.
+    org = models.ForeignKey(
+        'Organization',
+        null=True, blank=True,
+        on_delete=models.CASCADE,
+        related_name='support_docs',
+        help_text='Null = global doc shown to all orgs. Set = org-specific.',
+    )
+    is_active = models.BooleanField(default=True)
+ 
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+ 
+    class Meta:
+        indexes = [
+            HnswIndex(
+                name="supportdoc_embedding_idx",
+                fields=["embedding"],
+                m=16,
+                ef_construction=64,
+                opclasses=["vector_cosine_ops"],
+            ),
+            models.Index(fields=['org', 'is_active']),
+        ]
+ 
+    def __str__(self):
+        return f"{self.title} ({self.source})"
+ 
+ 
+class SupportConversation(models.Model):
+    """A chat thread between one user and the AI assistant."""
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="support_conversations",
+    )
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='support_conversations',
+    )
+    title = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+ 
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=['user', '-updated_at']),
+            models.Index(fields=['org', '-updated_at']),
+        ]
+ 
+    def __str__(self):
+        return f"{self.user.username} — {self.title[:40] or 'support chat'}"
+ 
+ 
+class SupportMessage(models.Model):
+    """One turn in a SupportConversation."""
+    ROLE_CHOICES = [("user", "user"), ("assistant", "assistant")]
+ 
+    conversation = models.ForeignKey(
+        SupportConversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    role = models.CharField(max_length=16, choices=ROLE_CHOICES)
+    content = models.TextField()
+ 
+    # For assistant turns: which docs grounded the answer, and confidence.
+    cited_doc_ids = models.JSONField(default=list, blank=True)
+    was_grounded = models.BooleanField(
+        default=True,
+        help_text='False = classifier fell back / was unsure and escalated.',
+    )
+ 
+    created_at = models.DateTimeField(auto_now_add=True)
+ 
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=['conversation', 'created_at']),
+        ]
+ 
+    def __str__(self):
+        return f"{self.role}: {self.content[:40]}"
+ 
+ 
+class SupportTicket(models.Model):
+    """
+    Email-style ticket. Created when AI escalates, or user opts to email.
+    Replies handled in your inbox; this is the system-of-record + history.
+    """
+    STATUS_CHOICES = [
+        ("open", "Open"),
+        ("pending", "Pending"),
+        ("resolved", "Resolved"),
+    ]
+ 
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="support_tickets",
+    )
+    org = models.ForeignKey(
+        'Organization',
+        on_delete=models.CASCADE,
+        related_name='support_tickets',
+    )
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="open", db_index=True)
+ 
+    # Link back to the chat that spawned it, if any.
+    conversation = models.ForeignKey(
+        SupportConversation,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="tickets",
+    )
+ 
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+ 
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=['org', 'status', '-created_at']),
+            models.Index(fields=['user', '-created_at']),
+        ]
+ 
+    def __str__(self):
+        return f"#{self.pk} [{self.status}] {self.subject}"
 
 
 class TaxpayerBucket(models.Model):

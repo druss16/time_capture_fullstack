@@ -28,6 +28,8 @@ urlpatterns = [
     path('api/onboarding/', include('tracker.urls_onboarding')),
     path('api/billing/', include('tracker.urls_billing')),
 
+    path("api/support/", include("tracker.support.urls")),
+
     path(".well-known/microsoft-identity-association.json", ms_identity_association),
 
     path('eula/', TemplateView.as_view(template_name='legal/eula.html'), name='eula'),

@@ -1767,7 +1767,10 @@ class ClassificationService:
                 if self._alias_matches_safely(alias, haystack):
                     spec = self._alias_match_score(alias, haystack)
                     this_strength = 0.82 + (spec - 0.5) * 0.02
-                    _title_alias_hits.append((client.id, this_strength))
+                    # Store (id, strength, spec): strength drives the existing
+                    # collision margin (Basilica-safe); raw spec drives the
+                    # high-confidence shortcut below (St Matthew rescue).
+                    _title_alias_hits.append((client.id, this_strength, spec))
                     if this_strength > best_strength:
                         best_client = client
                         best_strength = this_strength
@@ -1789,18 +1792,31 @@ class ClassificationService:
         # without corroboration. URL/file_path matches are specific and never
         # reach here (best_match_type would differ from 'title_alias').
         if best_match_type == 'title_alias' and _title_alias_hits:
-            _top = max(sc for _, sc in _title_alias_hits)
-            # Near-tie margin (not exact-tie): family members differ only by a
-            # small specificity nudge (e.g. Cicero gets a 0.0067 contiguity
-            # bonus over Basilica on "Sacred Heart Basilica (Secondary)"). That
-            # nudge is noise, not real disambiguation — the title still matches
-            # multiple same-family clients. 0.05 covers the +/-0.02 spec-nudge
-            # band (base 0.82, range 0.81-0.83) without catching genuinely
-            # distinct matches (which differ by far more, or match different
-            # base types like file_path/domain).
+            # High-confidence shortcut (St Matthew rescue): if exactly ONE
+            # client FULLY owns the title (raw spec >= 0.9) and no other client
+            # comes close (next spec <= top - 0.1), it's a clear winner, NOT a
+            # family collision. Take it directly so we don't defer a confident
+            # match to an AI that may whiff (block 46203 "St Matthew East
+            # Syracuse" -> 412 at spec 1.0, rest at 0.0 -> previously deferred
+            # then landed None, losing 75 billable minutes). Basilica is
+            # unaffected: its clients top out at spec ~0.33, never reaching 0.9.
+            _spec_sorted = sorted((sp for _, _, sp in _title_alias_hits), reverse=True)
+            _clear_winner = (
+                len(_spec_sorted) >= 1
+                and _spec_sorted[0] >= 0.9
+                and (len(_spec_sorted) == 1 or _spec_sorted[1] <= _spec_sorted[0] - 0.1)
+            )
+            _top = max(strg for _, strg, _ in _title_alias_hits)
+            # Near-tie margin on compressed STRENGTH (0.81-0.83 band). The
+            # compression is load-bearing: it squashes a partial match (Cicero
+            # spec 0.333 -> strength 0.817) and a non-match (spec 0.0 -> 0.810)
+            # close enough to tie, which is what lets a same-family collision
+            # fire when the CORRECT client (Basilica, spec 0.0) scores LOWER than
+            # an incidental partial match (Cicero). Do NOT switch to raw spec —
+            # Basilica's correct answer is at the bottom, not the top.
             _COLLISION_MARGIN = 0.05
-            _tied = {cid for cid, sc in _title_alias_hits if (_top - sc) < _COLLISION_MARGIN}
-            if len(_tied) >= 2:
+            _tied = {cid for cid, strg, _ in _title_alias_hits if (_top - strg) < _COLLISION_MARGIN}
+            if len(_tied) >= 2 and not _clear_winner:
                 decision.collision_client_ids = set(_tied)
                 # ROOT FIX: the agent's stuck client_id, if it's one of these
                 # ambiguous family members, is an unreliable guess. Clear it

@@ -7,6 +7,7 @@ Both return 1536-dim with the models named here; if you pick a model with a
 different dim, update VectorField(dimensions=...) on SupportDoc.
 """
 import os
+import time
 import requests
 
 from tracker.models import SupportDoc
@@ -14,17 +15,32 @@ from tracker.models import SupportDoc
 
 EMBED_MODEL = "voyage-3-lite"  # or "text-embedding-3-small" on OpenAI
 
+# Voyage's free tier rate-limits requests-per-minute. Retry on 429 with
+# exponential backoff so bulk ingest doesn't fall over.
+_MAX_RETRIES = 5
+_BASE_DELAY = 2.0  # seconds; doubles each retry (2, 4, 8, 16, 32)
+
 
 def embed_text(text: str) -> list[float]:
-    """Return an embedding vector for a string. Voyage example."""
-    resp = requests.post(
-        "https://api.voyageai.com/v1/embeddings",
-        headers={"Authorization": f"Bearer {os.environ['VOYAGE_API_KEY']}"},
-        json={"model": EMBED_MODEL, "input": [text]},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["data"][0]["embedding"]
+    """
+    Return an embedding vector for a string. Retries on 429 (rate limit)
+    with exponential backoff. Raises on any other error or after max retries.
+    """
+    for attempt in range(_MAX_RETRIES):
+        resp = requests.post(
+            "https://api.voyageai.com/v1/embeddings",
+            headers={"Authorization": f"Bearer {os.environ['VOYAGE_API_KEY']}"},
+            json={"model": EMBED_MODEL, "input": [text]},
+            timeout=30,
+        )
+        if resp.status_code == 429:
+            if attempt == _MAX_RETRIES - 1:
+                resp.raise_for_status()  # give up, surface the 429
+            delay = _BASE_DELAY * (2 ** attempt)
+            time.sleep(delay)
+            continue
+        resp.raise_for_status()
+        return resp.json()["data"][0]["embedding"]
 
 
 def chunk_markdown(text: str, max_chars: int = 1200) -> list[str]:
@@ -48,23 +64,54 @@ def chunk_markdown(text: str, max_chars: int = 1200) -> list[str]:
     return blocks
 
 
+def embed_batch(texts: list[str]) -> list[list[float]]:
+    """
+    Embed multiple strings in ONE request. Voyage accepts up to 128 inputs
+    per call, so a whole doc's chunks usually fit in a single request —
+    far fewer calls than embedding one chunk at a time, which avoids the
+    rate limit. Retries on 429 with backoff, same as embed_text.
+    """
+    if not texts:
+        return []
+    for attempt in range(_MAX_RETRIES):
+        resp = requests.post(
+            "https://api.voyageai.com/v1/embeddings",
+            headers={"Authorization": f"Bearer {os.environ['VOYAGE_API_KEY']}"},
+            json={"model": EMBED_MODEL, "input": texts},
+            timeout=60,
+        )
+        if resp.status_code == 429:
+            if attempt == _MAX_RETRIES - 1:
+                resp.raise_for_status()
+            time.sleep(_BASE_DELAY * (2 ** attempt))
+            continue
+        resp.raise_for_status()
+        data = resp.json()["data"]
+        # Voyage returns results in input order, but sort by index to be safe.
+        data.sort(key=lambda d: d["index"])
+        return [d["embedding"] for d in data]
+
+
 def ingest_doc(title: str, source: str, markdown: str, org=None):
     """
-    Chunk a markdown doc, embed each chunk, upsert SupportDoc rows.
+    Chunk a markdown doc, embed all chunks in one batch, upsert SupportDoc rows.
 
     `org` is an Organization instance (or None for a global doc).
     Idempotent: clears existing chunks for this source+org before re-inserting.
     """
     SupportDoc.objects.filter(source__startswith=f"{source}#", org=org).delete()
-    rows = []
-    for i, chunk in enumerate(chunk_markdown(markdown)):
-        rows.append(SupportDoc(
+    chunks = chunk_markdown(markdown)
+    embeddings = embed_batch(chunks)  # one request for the whole doc
+    rows = [
+        SupportDoc(
             title=title,
             source=f"{source}#chunk{i}",
             content=chunk,
-            embedding=embed_text(chunk),
+            embedding=emb,
             org=org,
-        ))
+        )
+        for i, (chunk, emb) in enumerate(zip(chunks, embeddings))
+    ]
     SupportDoc.objects.bulk_create(rows)
     return len(rows)
 

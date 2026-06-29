@@ -18,6 +18,9 @@ import ProtectedRoute from "@/routes/ProtectedRoute";
 // Onboarding
 import OnboardingWizard from '@/components/onboarding/OnboardingWizard';
 
+import SupportWidget from "@/pages/SupportWidget";
+
+
 // Account settings pages
 import AccountLayout from '@/pages/account/AccountLayout';
 import ProfilePage from '@/pages/account/ProfilePage';
@@ -155,6 +158,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
       <ImpersonationBanner />
       <Navigation />
       <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+      <SupportWidget />   {/* ← floating Help button, every protected page */}
     </div>
   );
 }

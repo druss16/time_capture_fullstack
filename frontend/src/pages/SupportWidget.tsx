@@ -2,6 +2,12 @@ import { useState, useEffect, useRef } from "react";
 
 const AUTH_KEY = "auth_token"; // primary; matches TimeTracker convention
 
+// Resolve the backend API base the same way the rest of the app does, so calls
+// hit the Django service — NOT the frontend origin. A relative "/api/..." path
+// would resolve against the frontend domain and 404.
+const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
+const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
+
 // Role-aware starter questions. Each maps to a strong KB doc so the first
 // answer is a good one. The widget picks a set based on the user's role.
 const PROMPTS_BY_ROLE = {
@@ -60,7 +66,7 @@ export default function SupportWidget() {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetch("/api/whoami/", { headers: authHeaders() })
+    fetch(`${API_BASE}/whoami/`, { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (!cancelled && d?.role) setRole(d.role); })
       .catch(() => {});
@@ -81,7 +87,7 @@ export default function SupportWidget() {
     setMessages((m) => [...m, { role: "user", content: trimmed }]);
     setLoading(true);
     try {
-      const res = await fetch("/api/support/chat/", {
+      const res = await fetch(`${API_BASE}/support/chat/`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ conversation_id: convId, message: trimmed }),
@@ -131,7 +137,7 @@ export default function SupportWidget() {
       .join("\n\n");
 
     try {
-      await fetch("/api/support/ticket/", {
+      await fetch(`${API_BASE}/support/ticket/`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ subject, body, conversation_id: convId, role }),

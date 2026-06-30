@@ -1839,44 +1839,49 @@ class ClassificationService:
             _COLLISION_MARGIN = 0.05
             _tied = {cid for cid, strg, _ in _active_hits if (_top - strg) < _COLLISION_MARGIN}
             if len(_tied) >= 2 and not _clear_winner:
-                # DISTINGUISHING-TOKEN TIEBREAK (file paths only). The whole-name
-                # gate flattens every sibling to spec 0.0, so a "Sacred Heart
-                # Basilica" file ties Cicero/Basilica/NY-Mills/Rome — even though
-                # the FILE NAME usually carries the deciding word ("basilica",
-                # "ny mills", "rome", "boonville", "st peter"). Before giving up
-                # to the AI, pick the one client whose UNIQUE token is present in
-                # the path, preferring the file name over folder names. This
-                # resolves the clear cases deterministically (no AI cost, no
-                # mis-attribution) and defers ONLY genuine ambiguity — e.g. "St
-                # Patricks Jordan.xlsx" (church vs cemetery, no deciding word) or
-                # a folder naming two siblings at once. Titles still defer as
-                # before; this tiebreak is scoped to file paths, where the bug
-                # and the regressions both live.
+                # DISTINGUISHING-TOKEN TIEBREAK. The whole-name gate flattens
+                # every sibling to spec 0.0, so "Sacred Heart Basilica" ties
+                # Cicero/Basilica/NY-Mills/Rome — even though the text usually
+                # carries the deciding word ("basilica", "rome", "boonville").
+                # Before giving up to the AI, pick the one client whose UNIQUE
+                # token is present. For file paths the FILE NAME is the stronger
+                # signal, so we check it before the folders; for titles the whole
+                # title is both. This resolves the clear cases deterministically
+                # (no AI cost, no confirmation, no mis-attribution) and defers
+                # ONLY genuine ambiguity — e.g. "St Patricks Jordan.xlsx" (church
+                # vs cemetery, no deciding word) or text naming two siblings.
+                _winner_id = None
                 if best_match_type == 'file_path':
-                    _winner_id = self._disambiguate_file_path_collision(
-                        _tied, file_path_raw, file_path_searchable, self._clients
+                    _basename = re.split(r'[\\/]', (file_path_raw or '').strip())[-1]
+                    _winner_id = self._disambiguate_collision(
+                        _tied, _basename, file_path_searchable, self._clients
                     )
-                    if _winner_id is not None:
-                        _wc = next((c for c in self._clients if c.id == _winner_id), None)
-                        if _wc is not None:
-                            _ws = next((strg for cid, strg, _ in _active_hits
-                                        if cid == _winner_id), best_strength)
-                            logger.info(
-                                f"[STAGE-3-COLLISION] file-path tie among {sorted(_tied)} "
-                                f"broken to {_winner_id} ({_wc.name!r}) via distinguishing token"
-                            )
-                            decision.matched_signals.append(Signal(
-                                type='title_match_file_path',
-                                strength=_ws,
-                                evidence=(f"Client '{_wc.name}' matched via file_path "
-                                          f"(distinguishing-token tiebreak)"),
-                                detail={
-                                    'client_id':   _winner_id,
-                                    'client_name': _wc.name,
-                                    'match_type':  'file_path',
-                                },
-                            ))
-                            return
+                elif best_match_type == 'title_alias':
+                    _winner_id = self._disambiguate_collision(
+                        _tied, haystack, haystack, self._clients
+                    )
+                if _winner_id is not None:
+                    _wc = next((c for c in self._clients if c.id == _winner_id), None)
+                    if _wc is not None:
+                        _ws = next((strg for cid, strg, _ in _active_hits
+                                    if cid == _winner_id), best_strength)
+                        logger.info(
+                            f"[STAGE-3-COLLISION] {best_match_type} tie among "
+                            f"{sorted(_tied)} broken to {_winner_id} ({_wc.name!r}) "
+                            f"via distinguishing token"
+                        )
+                        decision.matched_signals.append(Signal(
+                            type=f'title_match_{best_match_type}',
+                            strength=_ws,
+                            evidence=(f"Client '{_wc.name}' matched via "
+                                      f"{best_match_type} (distinguishing-token tiebreak)"),
+                            detail={
+                                'client_id':   _winner_id,
+                                'client_name': _wc.name,
+                                'match_type':  best_match_type,
+                            },
+                        ))
+                        return
                 decision.collision_client_ids = set(_tied)
                 # ROOT FIX: the agent's stuck client_id, if it's one of these
                 # ambiguous family members, is an unreliable guess. Clear it
@@ -1910,24 +1915,24 @@ class ClassificationService:
         ))
 
     @staticmethod
-    def _disambiguate_file_path_collision(tied_ids, file_path_raw,
-                                          file_path_searchable, clients):
+    def _disambiguate_collision(tied_ids, primary_text, full_text, clients):
         """
-        Break a same-family file-path tie using a DISTINGUISHING token.
+        Break a same-family tie (title OR file path) using a DISTINGUISHING token.
 
         Several sibling clients can tie on shared tokens — e.g. all four
-        "Sacred Heart" parishes match "...\\Sacred Heart Basilica\\..." at an
-        identical score because the whole-name gate zeros everyone to spec 0.0.
-        But the file the user actually has open usually names the right one
-        ("...Basilica Client Information.xlsx", "...NY Mills...", "...Rome...").
+        "Sacred Heart" parishes match "Sacred Heart Basilica ..." at an identical
+        score because the whole-name gate zeros everyone to spec 0.0. But the
+        text the user has open usually names the right one ("...Basilica...",
+        "...NY Mills...", "...Rome...", "...Boonville...").
 
         Strategy: among the tied clients, find tokens that are UNIQUE to a
         single client (shared tokens like "sacred"/"heart" can't distinguish)
-        and look for them in the path — the FILE NAME first, then the full
-        path. Return the lone client whose unique token is present. Return
-        None when undecidable: no unique token anywhere (e.g. "St Patricks
-        Jordan.xlsx" — church vs cemetery), or two+ clients each have one
-        (a folder/file naming multiple siblings). The caller then defers to AI.
+        and look for them in `primary_text` first (the file NAME, or the title),
+        then `full_text` (the whole path; same as primary for titles). Return the
+        lone client whose unique token is present. Return None when undecidable:
+        no unique token anywhere (e.g. "St Patricks Jordan.xlsx" — church vs
+        cemetery), or two+ clients each have one (text naming multiple siblings).
+        The caller then defers to AI.
 
         Exact-token matching only (with the same stemming/normalization as the
         matcher) — deliberately conservative, so a tie is broken only on a real
@@ -1970,12 +1975,9 @@ class ClassificationService:
         for cid in dtok:
             dtok[cid] = {t for t in dtok[cid] if counts[t] == 1}
 
-        basename = re.split(r'[\\/]', (file_path_raw or '').strip())[-1]
-        name_toks = set(_norm(basename).split())
-        full_toks = set(_norm(file_path_searchable).split())
-
-        # File name first (stronger signal), then the full path.
-        for text_toks in (name_toks, full_toks):
+        # Primary text first (file name / the title), then the broader text.
+        for text in (primary_text, full_text):
+            text_toks = set(_norm(text).split())
             winners = [cid for cid in by_id if dtok[cid] & text_toks]
             if len(winners) == 1:
                 return winners[0]
@@ -3302,6 +3304,51 @@ class ClassificationService:
     # STAGE 9 — Learned patterns (UserWorkPattern)
     # -------------------------------------------------------------------------
 
+    def _learned_pattern_overruled_by_collision(self, client_id, pattern_key, decision):
+        """
+        True when a learned-pattern signal for `client_id` must be SUPPRESSED
+        because Stage 3 deferred a same-family collision and this pattern can't
+        distinguish the client from its tied siblings.
+
+        Stage 8 and Stage 10 already skip a collision-member client; Stage 9 did
+        not — so a learned FAMILY-LEVEL pattern (e.g. "sacred heart" -> Cicero)
+        could silently override the "don't guess among siblings" deferral and
+        re-commit the very mistake the deferral exists to prevent.
+
+        We suppress ONLY non-distinguishing patterns: if the pattern key contains
+        a token UNIQUE to this client among the colliding siblings — e.g.
+        "cemetery" for a cemetery vs its church, or "boonville" for the Boonville
+        parish — the pattern IS real evidence and is kept. Note: unlike the
+        tiebreak, entity words (church/cemetery/...) are NOT excluded here, so a
+        legitimately specific pattern keyed on them survives.
+        """
+        collision = getattr(decision, 'collision_client_ids', None) or set()
+        if client_id not in collision:
+            return False
+        import re
+        sib = {c.id: c for c in self._clients if c.id in collision}
+        if len(sib) < 2:
+            return False
+
+        def _toks(c):
+            out = set()
+            for nm in [c.name] + list(c.aliases or []):
+                for t in re.sub(r'[^a-z0-9]+', ' ', (nm or '').lower()).split():
+                    if len(t) >= 4 and t not in ALIAS_STOP_WORDS:
+                        out.add(t)
+            return out
+
+        mine = _toks(sib[client_id])
+        others = set()
+        for cid, c in sib.items():
+            if cid != client_id:
+                others |= _toks(c)
+        exclusive = mine - others
+        key = (pattern_key or '').lower()
+        # Keep if a UNIQUE token of this client appears in the key (distinguishes);
+        # otherwise it's a family-level guess during a deferral -> suppress.
+        return not any(t in key for t in exclusive)
+
     def _stage_9_learned_patterns(self, block, decision: ClassificationDecision):
         """
         Query UserWorkPattern for matches. v1.2.96 hardening + v1.3.70 optimization:
@@ -3345,6 +3392,9 @@ class ClassificationService:
                     continue
 
                 if key_lower in title_lower:
+                    if self._learned_pattern_overruled_by_collision(
+                            pattern.client.id, pattern.pattern_key, decision):
+                        continue
                     strength = self._learned_pattern_strength(pattern)
                     decision.matched_signals.append(Signal(
                         type='learned_pattern',
@@ -3381,6 +3431,9 @@ class ClassificationService:
                 if key_lower in LEARNED_PATTERN_BLACKLIST:
                     continue
                 if key_lower in file_path_lower:
+                    if self._learned_pattern_overruled_by_collision(
+                            pattern.client.id, pattern.pattern_key, decision):
+                        continue
                     strength = self._learned_pattern_strength(pattern)
                     decision.matched_signals.append(Signal(
                         type='learned_pattern',
@@ -3410,6 +3463,9 @@ class ClassificationService:
                     if not pattern.client:
                         continue
                     if pattern.pattern_key.lower() in domain:
+                        if self._learned_pattern_overruled_by_collision(
+                                pattern.client.id, pattern.pattern_key, decision):
+                            continue
                         strength = self._learned_pattern_strength(pattern)
                         decision.matched_signals.append(Signal(
                             type='learned_pattern',

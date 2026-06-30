@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
 
 const AUTH_KEY = "auth_token"; // primary; matches TimeTracker convention
 
@@ -164,7 +165,7 @@ export default function SupportWidget() {
       <button
         onClick={() => setOpen(true)}
         style={{
-          position: "fixed", bottom: 24, right: 24, borderRadius: 9999,
+          position: "fixed", bottom: 24, right: 24, zIndex: 2147483000, borderRadius: 9999,
           padding: "12px 20px", background: "#1e293b", color: "white",
           border: "none", cursor: "pointer", fontWeight: 600,
         }}
@@ -177,7 +178,7 @@ export default function SupportWidget() {
   return (
     <div
       style={{
-        position: "fixed", bottom: 24, right: 24, width: 380, height: 540,
+        position: "fixed", bottom: 24, right: 24, width: 420, height: 600, zIndex: 2147483000,
         background: "white", borderRadius: 12, boxShadow: "0 10px 40px rgba(0,0,0,.2)",
         display: "flex", flexDirection: "column", overflow: "hidden",
         border: "1px solid #e2e8f0",
@@ -217,11 +218,17 @@ export default function SupportWidget() {
         {messages.map((m, i) => (
           <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%" }}>
             <div style={{
-              padding: "8px 12px", borderRadius: 12, fontSize: 14, whiteSpace: "pre-wrap",
+              padding: "8px 12px", borderRadius: 12, fontSize: 14,
               background: m.role === "user" ? "#1e293b" : "#f1f5f9",
               color: m.role === "user" ? "white" : "#0f172a",
             }}>
-              {m.content}
+              {m.role === "assistant" ? (
+                <div className="tt-md" style={{ whiteSpace: "normal" }}>
+                  <ReactMarkdown>{m.content}</ReactMarkdown>
+                </div>
+              ) : (
+                <span style={{ whiteSpace: "pre-wrap" }}>{m.content}</span>
+              )}
             </div>
             {m.sources?.length > 0 && (
               <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>

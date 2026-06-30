@@ -1712,7 +1712,8 @@ class ClassificationService:
         # matches Cicero/Basilica/NY-Mills/Rome all on shared "sacred heart").
         # In that case we DEFER to AI (Stage 10), which reads the distinguishing
         # token. URL/file_path matches are specific and excluded from this.
-        _title_alias_hits = []  # list of (client_id, score)
+        _title_alias_hits = []  # list of (client_id, strength, spec) — title matches
+        _file_path_hits = []    # same shape — file-path matches (collision-checked too)
  
         for client in self._clients:
             # Skip meta-clients
@@ -1754,6 +1755,13 @@ class ClassificationService:
                     if self._alias_matches_safely(alias, file_path_searchable):
                         spec = self._alias_match_score(alias, file_path_searchable)
                         this_strength = 0.90 + (spec - 0.5) * 0.02
+                        # Record for the same-family collision check below. A
+                        # folder named for a client *family* (e.g. "Sacred Heart
+                        # Bascilica") matches every sibling on the shared tokens
+                        # at an identical score, exactly like an ambiguous title
+                        # — so file paths must defer to AI too, not silently
+                        # commit an arbitrary iteration-order winner.
+                        _file_path_hits.append((client.id, this_strength, spec))
                         if this_strength > best_strength:
                             best_client = client
                             best_strength = this_strength
@@ -1780,18 +1788,32 @@ class ClassificationService:
         if not best_client or best_strength < 0.65:
             return
  
-        # Path B (collision deferral): if the winning match is a TITLE-ALIAS
-        # match AND 2+ distinct clients tied at the top title-alias score, the
-        # deterministic matcher is guessing among a same-name family (e.g.
-        # "Sacred Heart Basilica" matches Cicero/Basilica/NY-Mills/Rome all on
-        # the shared "sacred heart" tokens, every one scoring spec=0.0). Picking
-        # by iteration order silently mis-attributes. Defer to AI (Stage 10),
-        # which reads the distinguishing token ("Basilica" -> 175). Emit NO
+        # Path B (collision deferral): if the winning match is a TITLE-ALIAS or
+        # FILE-PATH match AND 2+ distinct clients tied at the top score for that
+        # signal, the deterministic matcher is guessing among a same-name family
+        # (e.g. "Sacred Heart Basilica" matches Cicero/Basilica/NY-Mills/Rome all
+        # on the shared "sacred heart" tokens, every one scoring spec=0.0).
+        # Picking by iteration order silently mis-attributes. Defer to AI (Stage
+        # 10), which reads the distinguishing token ("Basilica" -> 175). Emit NO
         # title signal so the AI client signal becomes dominant. The keystone
         # SAFETY CAP ensures the resulting lone-AI pick PROPOSES (not commits)
-        # without corroboration. URL/file_path matches are specific and never
-        # reach here (best_match_type would differ from 'title_alias').
-        if best_match_type == 'title_alias' and _title_alias_hits:
+        # without corroboration.
+        #
+        # File paths were ORIGINALLY excluded here on the assumption they are
+        # always specific. That broke on shared-family folders: a file stored at
+        # "...\Client File Notes\Sacred Heart Bascilica\..." matched all four
+        # Sacred Heart siblings at an identical 0.89 and committed Cicero (block
+        # 48006, billable) with NO deferral. A folder named for the family is as
+        # ambiguous as a title, so the same collision logic now covers it. A
+        # path that names ONE client (".../Clients/Acme Corp/...") still yields a
+        # single hit, no tie, and commits exactly as before — no regression.
+        # URL matches remain specific and are still excluded.
+        _active_hits = (
+            _title_alias_hits if best_match_type == 'title_alias'
+            else _file_path_hits if best_match_type == 'file_path'
+            else []
+        )
+        if best_match_type in ('title_alias', 'file_path') and _active_hits:
             # High-confidence shortcut (St Matthew rescue): if exactly ONE
             # client FULLY owns the title (raw spec >= 0.9) and no other client
             # comes close (next spec <= top - 0.1), it's a clear winner, NOT a
@@ -1800,13 +1822,13 @@ class ClassificationService:
             # Syracuse" -> 412 at spec 1.0, rest at 0.0 -> previously deferred
             # then landed None, losing 75 billable minutes). Basilica is
             # unaffected: its clients top out at spec ~0.33, never reaching 0.9.
-            _spec_sorted = sorted((sp for _, _, sp in _title_alias_hits), reverse=True)
+            _spec_sorted = sorted((sp for _, _, sp in _active_hits), reverse=True)
             _clear_winner = (
                 len(_spec_sorted) >= 1
                 and _spec_sorted[0] >= 0.9
                 and (len(_spec_sorted) == 1 or _spec_sorted[1] <= _spec_sorted[0] - 0.1)
             )
-            _top = max(strg for _, strg, _ in _title_alias_hits)
+            _top = max(strg for _, strg, _ in _active_hits)
             # Near-tie margin on compressed STRENGTH (0.81-0.83 band). The
             # compression is load-bearing: it squashes a partial match (Cicero
             # spec 0.333 -> strength 0.817) and a non-match (spec 0.0 -> 0.810)
@@ -1815,8 +1837,46 @@ class ClassificationService:
             # an incidental partial match (Cicero). Do NOT switch to raw spec —
             # Basilica's correct answer is at the bottom, not the top.
             _COLLISION_MARGIN = 0.05
-            _tied = {cid for cid, strg, _ in _title_alias_hits if (_top - strg) < _COLLISION_MARGIN}
+            _tied = {cid for cid, strg, _ in _active_hits if (_top - strg) < _COLLISION_MARGIN}
             if len(_tied) >= 2 and not _clear_winner:
+                # DISTINGUISHING-TOKEN TIEBREAK (file paths only). The whole-name
+                # gate flattens every sibling to spec 0.0, so a "Sacred Heart
+                # Basilica" file ties Cicero/Basilica/NY-Mills/Rome — even though
+                # the FILE NAME usually carries the deciding word ("basilica",
+                # "ny mills", "rome", "boonville", "st peter"). Before giving up
+                # to the AI, pick the one client whose UNIQUE token is present in
+                # the path, preferring the file name over folder names. This
+                # resolves the clear cases deterministically (no AI cost, no
+                # mis-attribution) and defers ONLY genuine ambiguity — e.g. "St
+                # Patricks Jordan.xlsx" (church vs cemetery, no deciding word) or
+                # a folder naming two siblings at once. Titles still defer as
+                # before; this tiebreak is scoped to file paths, where the bug
+                # and the regressions both live.
+                if best_match_type == 'file_path':
+                    _winner_id = self._disambiguate_file_path_collision(
+                        _tied, file_path_raw, file_path_searchable, self._clients
+                    )
+                    if _winner_id is not None:
+                        _wc = next((c for c in self._clients if c.id == _winner_id), None)
+                        if _wc is not None:
+                            _ws = next((strg for cid, strg, _ in _active_hits
+                                        if cid == _winner_id), best_strength)
+                            logger.info(
+                                f"[STAGE-3-COLLISION] file-path tie among {sorted(_tied)} "
+                                f"broken to {_winner_id} ({_wc.name!r}) via distinguishing token"
+                            )
+                            decision.matched_signals.append(Signal(
+                                type='title_match_file_path',
+                                strength=_ws,
+                                evidence=(f"Client '{_wc.name}' matched via file_path "
+                                          f"(distinguishing-token tiebreak)"),
+                                detail={
+                                    'client_id':   _winner_id,
+                                    'client_name': _wc.name,
+                                    'match_type':  'file_path',
+                                },
+                            ))
+                            return
                 decision.collision_client_ids = set(_tied)
                 # ROOT FIX: the agent's stuck client_id, if it's one of these
                 # ambiguous family members, is an unreliable guess. Clear it
@@ -1848,6 +1908,80 @@ class ClassificationService:
                 'match_type':  best_match_type,
             },
         ))
+
+    @staticmethod
+    def _disambiguate_file_path_collision(tied_ids, file_path_raw,
+                                          file_path_searchable, clients):
+        """
+        Break a same-family file-path tie using a DISTINGUISHING token.
+
+        Several sibling clients can tie on shared tokens — e.g. all four
+        "Sacred Heart" parishes match "...\\Sacred Heart Basilica\\..." at an
+        identical score because the whole-name gate zeros everyone to spec 0.0.
+        But the file the user actually has open usually names the right one
+        ("...Basilica Client Information.xlsx", "...NY Mills...", "...Rome...").
+
+        Strategy: among the tied clients, find tokens that are UNIQUE to a
+        single client (shared tokens like "sacred"/"heart" can't distinguish)
+        and look for them in the path — the FILE NAME first, then the full
+        path. Return the lone client whose unique token is present. Return
+        None when undecidable: no unique token anywhere (e.g. "St Patricks
+        Jordan.xlsx" — church vs cemetery), or two+ clients each have one
+        (a folder/file naming multiple siblings). The caller then defers to AI.
+
+        Exact-token matching only (with the same stemming/normalization as the
+        matcher) — deliberately conservative, so a tie is broken only on a real
+        verbatim distinguishing word, never a fuzzy coincidence.
+        """
+        import re
+        from collections import Counter
+
+        def _norm(s):
+            s = (s or '').lower()
+            s = re.sub(r'\bst\.?\s', 'saint ', s)
+            s = re.sub(r'\bmt\.?\s', 'mount ', s)
+            s = re.sub(r'\bft\.?\s', 'fort ', s)
+            s = s.replace("'", "").replace("’", "")
+            s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
+            # NB: split underscores too, so "Summary_StMary_2026" tokenizes
+            s = re.sub(r'[._,()&/\\|:;!?"*–—\-\[\]{}]+', ' ', s)
+            return re.sub(r'\s+', ' ', s).strip()
+
+        by_id = {c.id: c for c in clients if c.id in tied_ids}
+        if len(by_id) < 2:
+            return None
+
+        # Distinctive tokens per tied client (name + aliases): real words that
+        # aren't stop-words, legal suffixes, or domain-common ("church", etc).
+        dtok = {}
+        for cid, c in by_id.items():
+            toks = set()
+            for nm in [c.name] + list(c.aliases or []):
+                for t in _norm(nm).split():
+                    if (len(t) >= 4
+                            and t not in ALIAS_STOP_WORDS
+                            and t not in ALIAS_GENERIC_SUFFIXES
+                            and t not in DOMAIN_COMMON_WORDS):
+                        toks.add(t)
+            dtok[cid] = toks
+
+        # Keep only tokens unique to ONE tied client — shared ones can't decide.
+        counts = Counter(t for toks in dtok.values() for t in toks)
+        for cid in dtok:
+            dtok[cid] = {t for t in dtok[cid] if counts[t] == 1}
+
+        basename = re.split(r'[\\/]', (file_path_raw or '').strip())[-1]
+        name_toks = set(_norm(basename).split())
+        full_toks = set(_norm(file_path_searchable).split())
+
+        # File name first (stronger signal), then the full path.
+        for text_toks in (name_toks, full_toks):
+            winners = [cid for cid in by_id if dtok[cid] & text_toks]
+            if len(winners) == 1:
+                return winners[0]
+            if len(winners) >= 2:
+                return None  # names two+ siblings — genuinely ambiguous
+        return None  # no distinguishing token present anywhere
 
     @staticmethod
     def _alias_is_safe(alias: str) -> bool:

@@ -97,6 +97,21 @@ import re as _re_qb
 _QB_COMPACT_APPS = {'qbw', 'qbw.exe', 'qbw32', 'qbw32.exe'}
 _QB_TITLE_RE = _re_qb.compile(r'^(?P<company>.+?)\s+[-\u2013]\s+quickbooks\b', _re_qb.IGNORECASE)
 
+# v1.3.66: QB company-switch boundaries. These titles mean the user is
+# between companies (login screen, open-company dialog). The forward-fill
+# MUST reset here — carrying the previous company across a login is what
+# glued 8 parishes into one block (block 47586, Eileen, 2026-06-30).
+_QB_BOUNDARY_TITLES = (
+    "quickbooks desktop login",
+    "open or restore company",
+    "open a company",
+    "quickbooks desktop information",
+)
+
+def _is_qb_boundary(title: str) -> bool:
+    t = (title or "").strip().lower()
+    return any(b in t for b in _QB_BOUNDARY_TITLES)
+
 def _extract_qb_company_for_compaction(title: str):
     """'{Company} - QuickBooks ...' -> 'Company', else None (modals, bare chrome)."""
     if not title:
@@ -750,22 +765,38 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         # 1-2 min blocks, none attributable. Within one session (time-ordered),
         # forward-fill the most recent QB company (and its client_id) onto
         # company-less QB events so the whole run groups into ONE block with
-        # the company-titled work. Fill resets whenever a NEW company title
-        # appears, so cross-company bleed is impossible within a session.
-        # NOTE: this pass runs BEFORE the grouping loop below, because the
-        # grouping loop reads _qb_company_fill when computing content_id.
+        # company-titled work. The fill resets on (a) a new company title AND
+        # (b) a company-switch boundary (login / open-company screen — see
+        # _is_qb_boundary). The boundary reset (v1.3.66) is essential: without
+        # it the previous company bridged across the login between two
+        # companies, gluing many parishes into one block attributed to whoever
+        # led the group (block 47586, Eileen, 2026-06-30 — 8 parishes merged
+        # under St. John the Baptist). NOTE: runs BEFORE the grouping loop,
+        # which reads _qb_company_fill when computing content_id.
         _last_qb_company = None
         _last_qb_client_id = None
         for fill_ev in session:
             app_l = (fill_ev.get("app_name") or "").strip().lower()
             if app_l not in _QB_COMPACT_APPS:
                 continue
-            comp = _extract_qb_company_for_compaction(fill_ev.get("window_title") or "")
+            title = fill_ev.get("window_title") or ""
+            # v1.3.66: a login / open-company screen is a COMPANY-SWITCH
+            # boundary. Reset the fill so the previous company never bridges
+            # across it onto the next company's events. This is the fix for
+            # block 47586 (8 parishes merged under St. John the Baptist).
+            if _is_qb_boundary(title):
+                _last_qb_company = None
+                _last_qb_client_id = None
+                continue
+            comp = _extract_qb_company_for_compaction(title)
             if comp:
                 _last_qb_company = comp
                 _last_qb_client_id = fill_ev.get("current_client_id") or _last_qb_client_id
             elif _last_qb_company:
                 fill_ev["_qb_company_fill"] = _last_qb_company
+                # Only fill the client when the event has NONE and the fill
+                # client matches the filled company's session — never override
+                # an event that already carries its own (correct) client.
                 if not fill_ev.get("current_client_id") and _last_qb_client_id:
                     fill_ev["current_client_id"] = _last_qb_client_id
 

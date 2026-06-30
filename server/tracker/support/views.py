@@ -25,23 +25,40 @@ from .embeddings import retrieve
 
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-sonnet-4-6"
 
-SYSTEM_TEMPLATE = """You are the in-app support assistant for TimeTracker, \
+# ── Cost / quality knobs ──────────────────────────────────────────────────────
+# Flip this ONE line to A/B quality vs. cost:
+#   "claude-haiku-4-5"   → ~5-10x cheaper, great for grounded Q&A (default)
+#   "claude-sonnet-4-6"  → smoother writing on complex questions, pricier
+SUPPORT_CHAT_MODEL = "claude-haiku-4-5"
+
+# Support answers should be short. Capping output tokens caps the priciest
+# part of each call (output costs more than input) and keeps replies tight.
+SUPPORT_MAX_TOKENS = 600
+
+# How many KB chunks to retrieve. Fewer = cheaper input + tighter answers.
+SUPPORT_RETRIEVAL_K = 3
+
+# Prompt caching: the instruction block below is identical on every call, so
+# we mark it cache-eligible. Anthropic then doesn't re-bill those tokens on
+# repeat calls within the cache window — meaningful savings at volume.
+ANTHROPIC_VERSION = "2023-06-01"
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Split the system prompt into a STABLE part (cacheable) and a DYNAMIC part
+# (the retrieved docs, which change per question and can't be cached).
+SYSTEM_INSTRUCTIONS = """You are the in-app support assistant for TimeTracker, \
 an AI time-capture and billing product for CPA firms.
 
-Answer the user's question using ONLY the documentation provided below. \
-Be concise and concrete. Use the product's own terms (Daily Review, \
-Approvals, Client Billing, agent, classification).
+Answer the user's question using ONLY the documentation provided. \
+Be concise, friendly, and concrete. Use the product's own terms (Daily Review, \
+Billing, Reports, Analytics, Settings, agent, classification). Prefer short \
+numbered steps for "how do I" questions.
 
 If the documentation does not contain the answer, do NOT guess. Instead say \
 you're not certain and that you can open an email ticket to the team. End \
 that reply with the exact token [[ESCALATE]] on its own line so the app can \
-offer the handoff.
-
-DOCUMENTATION:
-{context}
-"""
+offer the handoff."""
 
 
 def _resolve_org(request) -> Organization:
@@ -87,7 +104,7 @@ def support_chat(request):
     SupportMessage.objects.create(conversation=conv, role="user", content=user_msg)
 
     # Retrieve grounding chunks (org-scoped + global).
-    docs = retrieve(user_msg, org_id=org.id, k=5)
+    docs = retrieve(user_msg, org_id=org.id, k=SUPPORT_RETRIEVAL_K)
     context = "\n\n---\n\n".join(
         f"[{d.title} | {d.source}]\n{d.content}" for d in docs
     ) or "(no documentation found)"
@@ -97,17 +114,32 @@ def support_chat(request):
         for m in conv.messages.order_by("created_at")
     ]
 
+    # System prompt as a list of blocks so we can cache the stable instructions
+    # while letting the per-question documentation vary. Only the first block
+    # carries cache_control; the docs block is fresh each time.
+    system_blocks = [
+        {
+            "type": "text",
+            "text": SYSTEM_INSTRUCTIONS,
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "type": "text",
+            "text": f"DOCUMENTATION:\n{context}",
+        },
+    ]
+
     resp = requests.post(
         ANTHROPIC_URL,
         headers={
             "x-api-key": os.environ["ANTHROPIC_API_KEY"],
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": ANTHROPIC_VERSION,
             "content-type": "application/json",
         },
         json={
-            "model": MODEL,
-            "max_tokens": 1024,
-            "system": SYSTEM_TEMPLATE.format(context=context),
+            "model": SUPPORT_CHAT_MODEL,
+            "max_tokens": SUPPORT_MAX_TOKENS,
+            "system": system_blocks,
             "messages": history,
         },
         timeout=60,

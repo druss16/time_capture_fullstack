@@ -2043,6 +2043,36 @@ class ClassificationService:
         return True
 
     @staticmethod
+    def _normalize_name(s: str) -> str:
+        """
+        Canonical name normalization — the SINGLE source of truth for both the
+        client matcher (_alias_matches_safely) and the specificity scorer
+        (_alias_match_score). Applied identically to client names and block text.
+
+        Consolidated from two identical nested copies whose drift caused the
+        "St.James" (no space) vs "St. James" mismatch. Keep this as the one place
+        this logic lives — future stages (ClientNameResolver) route through it.
+
+          - expand St./Mt./Ft. abbreviations, WITH or WITHOUT a trailing space
+            ("St.James" and "St. James" both -> "saint james"); the period is
+            required in the no-space branch so "start"/"stone" are untouched
+          - strip apostrophes ("Mary's" == "Marys")
+          - stem possessive 's on 4+ char words ("theresas" -> "theresa")
+          - split punctuation/&/hyphens/brackets so distinctive tokens are reachable
+          - collapse whitespace
+        """
+        import re
+        s = s.lower()
+        s = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', s)
+        s = re.sub(r'\bmt\.?\s', 'mount ', s)
+        s = re.sub(r'\bft\.?\s', 'fort ', s)
+        s = s.replace("'", "").replace("’", "")
+        s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
+        s = re.sub(r'[.,()&/\\|:;!?"*–—\-\[\]{}]+', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    @staticmethod
     def _alias_match_score(alias: str, haystack: str) -> float:
         """
         v1.3.48: Position- and contiguity-aware specificity score.
@@ -2076,15 +2106,7 @@ class ClassificationService:
             return 0.0
 
         def _normalize(s: str) -> str:
-            s = s.lower()
-            s = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', s)
-            s = re.sub(r'\bmt\.?\s', 'mount ', s)
-            s = re.sub(r'\bft\.?\s', 'fort ', s)
-            s = s.replace("'", "").replace("\u2019", "")
-            s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
-            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014\-\[\]{}]+', ' ', s)
-            s = re.sub(r'\s+', ' ', s).strip()
-            return s
+            return ClassificationService._normalize_name(s)
 
         alias_n = _normalize(alias)
         haystack_n = _normalize(haystack)
@@ -2234,21 +2256,7 @@ class ClassificationService:
             return False
 
         def _normalize(s: str) -> str:
-            s = s.lower()
-            # Common abbreviation expansions
-            s = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', s)
-            s = re.sub(r'\bmt\.?\s', 'mount ', s)
-            s = re.sub(r'\bft\.?\s', 'fort ', s)
-            # Strip apostrophes — "Mary's" == "Marys"
-            s = s.replace("'", "").replace("\u2019", "")
-            # Stem possessive 's on 4+ char words so "theresas" matches "theresa"
-            s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
-            # Strip punctuation + hyphens + brackets — "Church-Hamilton"
-            # splits into "church hamilton" so distinctive tokens are reachable
-            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014\-\[\]{}]+', ' ', s)
-            # Collapse whitespace
-            s = re.sub(r'\s+', ' ', s).strip()
-            return s
+            return ClassificationService._normalize_name(s)
 
         alias_n = _normalize(a)
         haystack_n = _normalize(haystack)

@@ -1248,11 +1248,23 @@ class ClassificationService:
                 getattr(block, 'window_title', '') or '',
                 getattr(block, 'file_path', '') or '',
             ]).lower()
+            # Detect a client with the SAME matcher Stage 3 uses — not a naive
+            # full-name substring. The old substring check missed short/reordered
+            # forms: a QB window "Sacred Heart Basilica - ... - [Enter Payroll
+            # Information]" never contains the literal registered name "Basilica
+            # of The Sacred Heart of Jesus", so the guard failed and "payroll"
+            # mislabelled real client payroll work as internal (No Client).
             _client_hit = None
             for _c in self._clients:
+                if _c.name.lower().strip() in META_CLIENT_NAMES:
+                    continue
                 _names = [_c.name] + list(getattr(_c, 'aliases', None) or [])
-                if any(n and len(n) >= 4 and n.lower() in _hay for n in _names):
-                    _client_hit = _c
+                for _n in _names:
+                    _al = (_n or '').lower()
+                    if _al and self._alias_is_safe(_al) and self._alias_matches_safely(_al, _hay):
+                        _client_hit = _c
+                        break
+                if _client_hit:
                     break
             if _client_hit:
                 decision.matched_signals.append(Signal(

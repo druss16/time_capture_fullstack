@@ -316,30 +316,51 @@ export default function ReportsSummary({
     [data]
   );
 
-  // Headline "where the billable hours went" — top billable clients.
-  // Uses client rows when grouped by client; otherwise derives a light rollup
-  // from each employee's top_client + billable hours (best-effort until the
-  // client query is loaded).
+  // Headline "where the billable hours went" — top billable clients, rolled up
+  // across every employee. When the backend sends per-employee `breakdown`
+  // (exact per-client splits), we sum those for an ACCURATE rollup. Until that
+  // ships we fall back to each employee's single top_client (approximate — a
+  // client only shows if it's someone's #1). Employee view only.
   const headlineClients = useMemo(() => {
     if (!data) return [];
-    if (data.group_by === "client") {
-      return clientRowsSorted.filter((r) => r.billable_hours > 0).slice(0, 6);
+    const map = new Map<string, { id: number | null; label: string; billable_hours: number; people: Set<string | number> }>();
+
+    const hasBreakdown = data.rows.some(
+      (r) => Array.isArray(r.breakdown) && r.breakdown.length > 0
+    );
+
+    if (hasBreakdown) {
+      // Exact: sum each person's per-client billable split.
+      for (const r of data.rows) {
+        if (!Array.isArray(r.breakdown)) continue;
+        for (const b of r.breakdown) {
+          if (b.name === "Unassigned" || b.name === "Internal / Admin") continue;
+          if ((b.billable_hours || 0) <= 0) continue;
+          const key = b.name;
+          const cur = map.get(key) || { id: b.id ?? null, label: b.name, billable_hours: 0, people: new Set() };
+          cur.billable_hours += b.billable_hours;
+          cur.people.add(r.id ?? r.label);
+          map.set(key, cur);
+        }
+      }
+    } else {
+      // Approximate fallback: each employee's single top client.
+      for (const r of data.rows) {
+        const key = r.top_client;
+        if (!key || key === "—") continue;
+        const cur = map.get(key) || { id: null, label: key, billable_hours: 0, people: new Set() };
+        cur.billable_hours += r.billable_hours;
+        cur.people.add(r.id ?? r.label);
+        map.set(key, cur);
+      }
     }
-    const map = new Map<string, { label: string; billable_hours: number; people: number }>();
-    for (const r of data.rows) {
-      const key = r.top_client;
-      if (!key || key === "—") continue;
-      const cur = map.get(key) || { label: key, billable_hours: 0, people: 0 };
-      cur.billable_hours += r.billable_hours;
-      cur.people += 1;
-      map.set(key, cur);
-    }
+
     return Array.from(map.values())
       .filter((c) => c.billable_hours > 0)
       .sort((a, b) => b.billable_hours - a.billable_hours)
       .slice(0, 6)
       .map((c) => ({
-        id: null,
+        id: c.id,
         label: c.label,
         total_hours: c.billable_hours,
         billable_hours: c.billable_hours,
@@ -347,9 +368,9 @@ export default function ReportsSummary({
         utilization_pct: 0,
         top_client: null,
         block_count: 0,
-        _people: c.people,
+        _people: c.people.size,
       })) as (SummaryRow & { _people?: number })[];
-  }, [data, clientRowsSorted]);
+  }, [data]);
 
   // Filtered + paginated client list for the Client view.
   const filteredClients = useMemo(() => {
@@ -472,8 +493,13 @@ export default function ReportsSummary({
         </div>
       )}
 
-      {/* ── HEADLINE: where the billable hours went (client billing first) ── */}
-      {data && data.scope === "all" && headlineClients.length > 0 && (
+      {/* ── HEADLINE: where the billable hours went ──────────────────────────
+          Employee view only. In Client view the table below IS the client
+          rollup (with non-bill / review / total), so bars there would just
+          duplicate it and push the table down. Here the bars are additive:
+          they answer "which clients got the billable time?" that the per-person
+          cards can't. */}
+      {data && data.scope === "all" && data.group_by === "employee" && headlineClients.length > 0 && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
           <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-4">
             Where the billable hours went {windowPhrase}
@@ -496,11 +522,7 @@ export default function ReportsSummary({
                       className="flex h-full items-center rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 pl-2.5 text-[11px] font-bold text-white"
                       style={{ width: `${Math.max((c.billable_hours / maxHeadlineBill) * 100, 6)}%` }}
                     >
-                      {data.group_by === "client"
-                        ? `${c.block_count > 0 ? c.block_count + " blocks" : ""}`
-                        : people != null
-                        ? `${people} ${people > 1 ? "people" : "person"}`
-                        : ""}
+                      {people != null ? `${people} ${people > 1 ? "people" : "person"}` : ""}
                     </span>
                   </span>
                   <span className="text-right text-sm font-bold tabular-nums text-slate-800">

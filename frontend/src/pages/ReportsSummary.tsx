@@ -30,13 +30,11 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle,
-  AlertCircle, HelpCircle, ChevronDown, Search, X, CheckCircle2, ArrowRight,
+  Loader2, Download, Clock, AlertTriangle,
+  ChevronDown, Search, X, CheckCircle2, ArrowRight,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
-import DailyShapeChart from "./DailyShapeChart";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
-import AIPerformanceStrip from "./AIPerformanceStrip";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -148,6 +146,7 @@ export default function ReportsSummary({
   const [clientSearch, setClientSearch] = useState("");
   const [clientPage, setClientPage] = useState(0);
   const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams({ group_by: groupBy });
@@ -187,6 +186,66 @@ export default function ReportsSummary({
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Open the client drill-down from anywhere (headline bar, client table row,
+  // or an employee card's breakdown). If we're already grouped by client and
+  // the row has its people breakdown, use it directly. Otherwise fetch the
+  // client-grouped summary on demand so "who worked it" is always populated —
+  // this is what makes clients clickable in Employee mode too.
+  const openClientDetail = useCallback(
+    async (client: { id: number | null; label: string; breakdown?: BreakdownItem[] }) => {
+      // Fast path: a real client row that already carries its breakdown.
+      if (client.breakdown && client.breakdown.length > 0) {
+        setDetail(client as SummaryRow);
+        return;
+      }
+      // Show the modal immediately with what we know, then hydrate.
+      setDetail({
+        id: client.id,
+        label: client.label,
+        total_hours: 0,
+        billable_hours: 0,
+        non_billable_hours: 0,
+        utilization_pct: 0,
+        top_client: null,
+        block_count: 0,
+      });
+      setDetailLoading(true);
+      try {
+        const token = getAuthToken();
+        const p = new URLSearchParams({ group_by: "client" });
+        if (customMode && customStart && customEnd) {
+          p.set("start", customStart);
+          p.set("end", customEnd);
+        } else {
+          p.set("period", period);
+        }
+        const impOrg = localStorage.getItem("impersonating_org_id");
+        const effOrg = orgIdOverride || (impOrg ? Number(impOrg) : null);
+        if (effOrg) p.set("org_id", String(effOrg));
+
+        const res = await fetch(`${API_BASE}/reports/summary/?${p.toString()}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          credentials: "include",
+        });
+        if (res.ok) {
+          const clientData: SummaryResponse = await res.json();
+          const match = clientData.rows.find(
+            (r) =>
+              (client.id != null && r.id === client.id) ||
+              r.label === client.label
+          );
+          if (match) setDetail(match);
+        }
+      } catch {
+        // Leave the modal showing the header we already set; the body will
+        // show the graceful "detail isn't available" fallback.
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [period, customMode, customStart, customEnd, orgIdOverride]
+  );
 
   // Reset view-local state when the query changes.
   useEffect(() => {
@@ -288,12 +347,6 @@ export default function ReportsSummary({
       return next;
     });
 
-  // Utilization headline (unchanged logic).
-  const utilStandard = data?.totals.utilization_standard_pct;
-  const utilCaptured = data?.totals.utilization_captured_pct ?? data?.totals.utilization_pct;
-  const utilHeadline = utilStandard != null ? utilStandard : utilCaptured ?? 0;
-  const utilIsStandard = utilStandard != null;
-
   const maxHeadlineBill = Math.max(1, ...headlineClients.map((c) => c.billable_hours));
 
   return (
@@ -367,114 +420,22 @@ export default function ReportsSummary({
         </div>
       </div>
 
-      {data && <AIPerformanceStrip period={period} orgIdOverride={orgIdOverride} />}
-
-      {data && data.scope === "all" && (
-        <div className="flex justify-end -mt-2">
-          <a
-            href="/reports/blind-spots"
-            className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 hover:text-violet-700 hover:underline"
-          >
-            View AI blind spots →
-          </a>
-        </div>
-      )}
-
-      {/* KPI strip (unchanged) */}
-      {data && (
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          <KPICard
-            icon={<TrendingUp className="h-4 w-4" />}
-            label="Utilization"
-            value={`${utilHeadline}%`}
-            accent="emerald"
-            sub={
-              utilIsStandard
-                ? `${fmtHours(data.totals.billable_hours)} of ${fmtHours(data.totals.available_hours)} available`
-                : "Billable ÷ total captured"
-            }
-            help={
-              utilIsStandard
-                ? {
-                    title: "Of the hours you pay for, how many were billable.",
-                    body: `Denominator is a standard 8-hour day per person across ${data.totals.working_days ?? "—"} working day(s) — so leaving the agent running late can't distort it.`,
-                    calc: "billable ÷ (headcount × working days × 8h)",
-                    extra: utilCaptured != null ? `Of captured time alone: ${utilCaptured}%` : undefined,
-                  }
-                : {
-                    title: "Of the time we tracked, how much was billable.",
-                    body: "This denominator moves with how long the agent ran. A standard-hours view is on the way.",
-                    calc: "billable ÷ total captured",
-                  }
-            }
-          />
-          <KPICard
-            icon={<Briefcase className="h-4 w-4" />}
-            label="Billable Hours"
-            value={fmtHours(data.totals.billable_hours)}
-            accent="blue"
-            sub="Invoice-ready this period"
-            help={{
-              title: "Time marked billable and tied to a client.",
-              body: "This is what you can put on an invoice — captured automatically, no timesheet entry.",
-              calc: "sum(minutes) where billable & client ≠ none",
-            }}
-          />
-          <KPICard
-            icon={<Clock className="h-4 w-4" />}
-            label="Total Captured"
-            value={fmtHours(data.totals.total_hours)}
-            accent="slate"
-            sub="The full ledger"
-            help={{
-              title: "Every real minute the agent recorded this period.",
-              body: "The honest ledger. Idle time and overnight sleep/wake artifacts are excluded so the number stays trustworthy.",
-              calc: "all non-idle, non-anomalous block minutes",
-            }}
-          />
-          <KPICard
-            icon={<AlertCircle className="h-4 w-4" />}
-            label="Needs review"
-            value={fmtHours(data.totals.uncategorized_hours)}
-            accent="amber"
-            sub="A short to-do list"
-            help={{
-              title: "Blocks the AI wasn't confident about.",
-              body: "Not errors — a queue for an employee to confirm. The red clock in Daily Review points to the same blocks.",
-              calc: "low-confidence blocks not yet confirmed",
-            }}
-          />
-          <KPICard
-            icon={<Users className="h-4 w-4" />}
-            label="Active Clients"
-            value={`${data.totals.active_clients}`}
-            accent="violet"
-            sub={`${fmtHours(data.totals.non_billable_hours)} non-billable`}
-          />
-        </div>
-      )}
-
       {/* ── HEADLINE: where the billable hours went (client billing first) ── */}
       {data && data.scope === "all" && headlineClients.length > 0 && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
           <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-4">
             Where the billable hours went
-            {data.group_by === "client" && (
-              <span className="normal-case font-medium text-slate-400"> — click a client for detail</span>
-            )}
+            <span className="normal-case font-medium text-slate-400"> — click a client for detail</span>
           </h2>
           <div className="space-y-3">
             {headlineClients.map((c) => {
               const people = (c as any)._people as number | undefined;
-              const clickable = data.group_by === "client";
               return (
                 <button
                   key={c.label}
-                  disabled={!clickable}
-                  onClick={() => clickable && setDetail(c)}
+                  onClick={() => openClientDetail(c)}
                   className={
-                    "w-full grid grid-cols-[minmax(0,1fr)_84px] sm:grid-cols-[220px_minmax(0,1fr)_84px] items-center gap-3 rounded-lg px-1.5 py-1 text-left " +
-                    (clickable ? "hover:bg-slate-50 cursor-pointer" : "cursor-default")
+                    "w-full grid grid-cols-[minmax(0,1fr)_84px] sm:grid-cols-[220px_minmax(0,1fr)_84px] items-center gap-3 rounded-lg px-1.5 py-1 text-left hover:bg-slate-50 cursor-pointer"
                   }
                 >
                   <span className="truncate text-sm font-semibold text-slate-800">{c.label}</span>
@@ -483,7 +444,7 @@ export default function ReportsSummary({
                       className="flex h-full items-center rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 pl-2.5 text-[11px] font-bold text-white"
                       style={{ width: `${Math.max((c.billable_hours / maxHeadlineBill) * 100, 6)}%` }}
                     >
-                      {clickable
+                      {data.group_by === "client"
                         ? `${c.block_count > 0 ? c.block_count + " blocks" : ""}`
                         : people != null
                         ? `${people} ${people > 1 ? "people" : "person"}`
@@ -498,19 +459,8 @@ export default function ReportsSummary({
               );
             })}
           </div>
-
-          {/* team mix strip */}
-          <div className="mt-5 pt-4 border-t border-slate-100">
-            <MixStrip
-              billable={data.totals.billable_hours}
-              nonBillable={data.totals.non_billable_hours}
-              review={data.totals.uncategorized_hours || 0}
-            />
-          </div>
         </div>
       )}
-
-      {data && <DailyShapeChart data={data.timeseries as any} />}
 
       {/* Group-by toggle + (client) search */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -572,6 +522,7 @@ export default function ReportsSummary({
                 row={r}
                 expanded={expanded.has(`${r.id}-${r.label}`)}
                 onToggle={() => toggleExpand(`${r.id}-${r.label}`)}
+                onOpenClient={(cid, cname) => openClientDetail({ id: cid, label: cname })}
                 onOpenReview={() =>
                   setPanelParams({
                     period, group_by: "employee", orgId: orgIdOverride,
@@ -609,7 +560,7 @@ export default function ReportsSummary({
               {clientSlice.map((r) => (
                 <tr
                   key={`${r.id}-${r.label}`}
-                  onClick={() => setDetail(r)}
+                  onClick={() => openClientDetail(r)}
                   className="hover:bg-slate-50/60 cursor-pointer"
                 >
                   <td className="px-4 py-3 font-semibold text-slate-800">{r.label}</td>
@@ -666,7 +617,8 @@ export default function ReportsSummary({
       {detail && (
         <ClientDetailModal
           row={detail}
-          onClose={() => setDetail(null)}
+          loading={detailLoading}
+          onClose={() => { setDetail(null); setDetailLoading(false); }}
         />
       )}
 
@@ -681,12 +633,13 @@ export default function ReportsSummary({
 
 // ── Employee card ─────────────────────────────────────────────────────────
 function EmployeeCard({
-  row, expanded, onToggle, onOpenReview,
+  row, expanded, onToggle, onOpenReview, onOpenClient,
 }: {
   row: SummaryRow;
   expanded: boolean;
   onToggle: () => void;
   onOpenReview: () => void;
+  onOpenClient: (clientId: number | null, clientName: string) => void;
 }) {
   const total = row.total_hours || 0.0001;
   const billPct = (row.billable_hours / total) * 100;
@@ -768,8 +721,18 @@ function EmployeeCard({
               {row.breakdown!
                 .slice()
                 .sort((a, b) => b.total_hours - a.total_hours)
-                .map((b, i) => (
-                  <div key={`${b.id}-${b.name}-${i}`}>
+                .map((b, i) => {
+                  const isClient = b.name !== "Unassigned" && b.name !== "Internal / Admin";
+                  return (
+                  <button
+                    key={`${b.id}-${b.name}-${i}`}
+                    onClick={() => isClient && onOpenClient(b.id, b.name)}
+                    disabled={!isClient}
+                    className={
+                      "w-full text-left rounded-md -mx-1 px-1 py-0.5 " +
+                      (isClient ? "hover:bg-slate-50 cursor-pointer" : "cursor-default")
+                    }
+                  >
                     <div className="flex items-center justify-between gap-3">
                       <span className="truncate text-sm font-medium text-slate-700">{b.name}</span>
                       <span className="shrink-0 text-sm font-bold tabular-nums text-slate-800">
@@ -792,8 +755,9 @@ function EmployeeCard({
                         style={{ width: `${(b.total_hours / maxItem) * 100}%` }}
                       />
                     </div>
-                  </div>
-                ))}
+                  </button>
+                  );
+                })}
             </div>
           ) : (
             <p className="text-xs text-slate-400">
@@ -808,7 +772,7 @@ function EmployeeCard({
 }
 
 // ── Client drill-down modal ─────────────────────────────────────────────────
-function ClientDetailModal({ row, onClose }: { row: SummaryRow; onClose: () => void }) {
+function ClientDetailModal({ row, loading, onClose }: { row: SummaryRow; loading?: boolean; onClose: () => void }) {
   const people = Array.isArray(row.breakdown) ? row.breakdown : [];
   return (
     <div
@@ -849,7 +813,12 @@ function ClientDetailModal({ row, onClose }: { row: SummaryRow; onClose: () => v
           </div>
 
           <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1">Who worked it</h4>
-          {people.length > 0 ? (
+          {loading ? (
+            <div className="flex items-center gap-2 py-4 text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-xs">Loading detail…</span>
+            </div>
+          ) : people.length > 0 ? (
             <div className="divide-y divide-slate-100">
               {people
                 .slice()
@@ -888,31 +857,6 @@ function ClientDetailModal({ row, onClose }: { row: SummaryRow; onClose: () => v
 }
 
 // ── Small presentational helpers ──────────────────────────────────────────
-function MixStrip({ billable, nonBillable, review }: { billable: number; nonBillable: number; review: number }) {
-  const grand = billable + nonBillable + review || 1;
-  const pct = (v: number) => Math.round((v / grand) * 100);
-  return (
-    <div>
-      <div className="flex h-11 overflow-hidden rounded-xl text-[13px] font-bold text-white">
-        <span className="flex items-center justify-center bg-emerald-600" style={{ width: `${pct(billable)}%` }}>
-          {pct(billable) >= 8 ? `${pct(billable)}%` : ""}
-        </span>
-        <span className="flex items-center justify-center bg-slate-400" style={{ width: `${pct(nonBillable)}%` }}>
-          {pct(nonBillable) >= 8 ? `${pct(nonBillable)}%` : ""}
-        </span>
-        <span className="flex items-center justify-center bg-amber-500" style={{ width: `${pct(review)}%` }}>
-          {pct(review) >= 8 ? `${pct(review)}%` : ""}
-        </span>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-slate-500">
-        <span><span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-emerald-600 align-middle" />Billable <b className="text-slate-800">{fmtHours(billable)}</b></span>
-        <span><span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-slate-400 align-middle" />Non-billable <b className="text-slate-800">{fmtHours(nonBillable)}</b></span>
-        <span><span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-amber-500 align-middle" />Needs review <b className="text-slate-800">{fmtHours(review)}</b></span>
-      </div>
-    </div>
-  );
-}
-
 function StatBox({
   label, value, tone, big,
 }: {
@@ -939,71 +883,6 @@ function EmptyState({ label }: { label: string }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-400">
       {label}
-    </div>
-  );
-}
-
-interface Help {
-  title: string;
-  body: string;
-  calc?: string;
-  extra?: string;
-}
-
-function WhyPill({ help }: { help: Help }) {
-  return (
-    <span className="relative inline-flex group/why align-middle">
-      <HelpCircle className="h-3.5 w-3.5 text-slate-300 hover:text-violet-500 cursor-help" />
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 w-60 -translate-x-1/2 translate-y-1
-                   rounded-lg bg-slate-900 px-3 py-2.5 text-left text-[11.5px] leading-relaxed text-slate-100
-                   opacity-0 shadow-xl transition-all duration-150
-                   group-hover/why:translate-y-0 group-hover/why:opacity-100"
-      >
-        <span className="font-semibold text-white">{help.title}</span>
-        <span className="mt-1 block text-slate-300">{help.body}</span>
-        {help.calc && (
-          <span className="mt-1.5 block border-t border-white/15 pt-1.5 font-mono text-[10.5px] text-slate-400">
-            {help.calc}
-          </span>
-        )}
-        {help.extra && <span className="mt-1 block text-[10.5px] text-slate-400">{help.extra}</span>}
-      </span>
-    </span>
-  );
-}
-
-function KPICard({
-  icon, label, value, sub, accent, help,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sub?: string;
-  accent: "emerald" | "blue" | "slate" | "violet" | "amber";
-  help?: Help;
-}) {
-  const accentMap: Record<string, string> = {
-    emerald: "text-emerald-600 bg-emerald-50",
-    blue: "text-blue-600 bg-blue-50",
-    slate: "text-slate-600 bg-slate-100",
-    violet: "text-violet-600 bg-violet-50",
-    amber: "text-amber-600 bg-amber-50",
-  };
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex items-center gap-2">
-        <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${accentMap[accent]}`}>
-          {icon}
-        </span>
-        <span className="text-xs font-medium text-slate-500 inline-flex items-center gap-1">
-          {label}
-          {help && <WhyPill help={help} />}
-        </span>
-      </div>
-      <div className="mt-2 text-2xl font-semibold text-slate-900 tabular-nums">{value}</div>
-      {sub && <div className="mt-0.5 text-[11px] text-slate-400">{sub}</div>}
     </div>
   );
 }

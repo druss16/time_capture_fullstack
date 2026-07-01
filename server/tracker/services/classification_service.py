@@ -1943,7 +1943,7 @@ class ClassificationService:
 
         def _norm(s):
             s = (s or '').lower()
-            s = re.sub(r'\bst\.?\s', 'saint ', s)
+            s = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', s)
             s = re.sub(r'\bmt\.?\s', 'mount ', s)
             s = re.sub(r'\bft\.?\s', 'fort ', s)
             s = s.replace("'", "").replace("’", "")
@@ -2065,7 +2065,7 @@ class ClassificationService:
 
         def _normalize(s: str) -> str:
             s = s.lower()
-            s = re.sub(r'\bst\.?\s', 'saint ', s)
+            s = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', s)
             s = re.sub(r'\bmt\.?\s', 'mount ', s)
             s = re.sub(r'\bft\.?\s', 'fort ', s)
             s = s.replace("'", "").replace("\u2019", "")
@@ -2224,7 +2224,7 @@ class ClassificationService:
         def _normalize(s: str) -> str:
             s = s.lower()
             # Common abbreviation expansions
-            s = re.sub(r'\bst\.?\s', 'saint ', s)
+            s = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', s)
             s = re.sub(r'\bmt\.?\s', 'mount ', s)
             s = re.sub(r'\bft\.?\s', 'fort ', s)
             # Strip apostrophes — "Mary's" == "Marys"
@@ -3990,7 +3990,7 @@ class ClassificationService:
 
         def _toks(x):
             x = (x or '').lower()
-            x = re.sub(r'\bst\.?\s', 'saint ', x)
+            x = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', x)
             x = re.sub(r'\bmt\.?\s', 'mount ', x)
             x = re.sub(r"['\u2019]", '', x)
             x = re.sub(r'[^a-z0-9]+', ' ', x)
@@ -4453,10 +4453,10 @@ class ClassificationService:
                             'associates','partners','holdings','enterprises',
                             'community','ministry','chapel',
                         }
-                        _hn = re.sub(r'\bst\.?\s', 'saint ', name_lower)
+                        _hn = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', name_lower)
                         _hn = re.sub(r"['\u2019]", '', _hn)
                         _hn = re.sub(r'[^a-z0-9]+', ' ', _hn)
-                        _hh = re.sub(r'\bst\.?\s', 'saint ', haystack)
+                        _hh = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', haystack)
                         _hh = re.sub(r"['\u2019]", '', _hh)
                         _hh = re.sub(r'[^a-z0-9]+', ' ', _hh)
                         _htoks = {t for t in _hh.split() if len(t) >= 4}

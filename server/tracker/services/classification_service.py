@@ -1248,11 +1248,23 @@ class ClassificationService:
                 getattr(block, 'window_title', '') or '',
                 getattr(block, 'file_path', '') or '',
             ]).lower()
+            # Detect a client with the SAME matcher Stage 3 uses — not a naive
+            # full-name substring. The old substring check missed short/reordered
+            # forms: a QB window "Sacred Heart Basilica - ... - [Enter Payroll
+            # Information]" never contains the literal registered name "Basilica
+            # of The Sacred Heart of Jesus", so the guard failed and "payroll"
+            # mislabelled real client payroll work as internal (No Client).
             _client_hit = None
             for _c in self._clients:
+                if _c.name.lower().strip() in META_CLIENT_NAMES:
+                    continue
                 _names = [_c.name] + list(getattr(_c, 'aliases', None) or [])
-                if any(n and len(n) >= 4 and n.lower() in _hay for n in _names):
-                    _client_hit = _c
+                for _n in _names:
+                    _al = (_n or '').lower()
+                    if _al and self._alias_is_safe(_al) and self._alias_matches_safely(_al, _hay):
+                        _client_hit = _c
+                        break
+                if _client_hit:
                     break
             if _client_hit:
                 decision.matched_signals.append(Signal(
@@ -1943,7 +1955,7 @@ class ClassificationService:
 
         def _norm(s):
             s = (s or '').lower()
-            s = re.sub(r'\bst\.?\s', 'saint ', s)
+            s = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', s)
             s = re.sub(r'\bmt\.?\s', 'mount ', s)
             s = re.sub(r'\bft\.?\s', 'fort ', s)
             s = s.replace("'", "").replace("’", "")
@@ -2031,6 +2043,36 @@ class ClassificationService:
         return True
 
     @staticmethod
+    def _normalize_name(s: str) -> str:
+        """
+        Canonical name normalization — the SINGLE source of truth for both the
+        client matcher (_alias_matches_safely) and the specificity scorer
+        (_alias_match_score). Applied identically to client names and block text.
+
+        Consolidated from two identical nested copies whose drift caused the
+        "St.James" (no space) vs "St. James" mismatch. Keep this as the one place
+        this logic lives — future stages (ClientNameResolver) route through it.
+
+          - expand St./Mt./Ft. abbreviations, WITH or WITHOUT a trailing space
+            ("St.James" and "St. James" both -> "saint james"); the period is
+            required in the no-space branch so "start"/"stone" are untouched
+          - strip apostrophes ("Mary's" == "Marys")
+          - stem possessive 's on 4+ char words ("theresas" -> "theresa")
+          - split punctuation/&/hyphens/brackets so distinctive tokens are reachable
+          - collapse whitespace
+        """
+        import re
+        s = s.lower()
+        s = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', s)
+        s = re.sub(r'\bmt\.?\s', 'mount ', s)
+        s = re.sub(r'\bft\.?\s', 'fort ', s)
+        s = s.replace("'", "").replace("’", "")
+        s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
+        s = re.sub(r'[.,()&/\\|:;!?"*–—\-\[\]{}]+', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    @staticmethod
     def _alias_match_score(alias: str, haystack: str) -> float:
         """
         v1.3.48: Position- and contiguity-aware specificity score.
@@ -2064,15 +2106,7 @@ class ClassificationService:
             return 0.0
 
         def _normalize(s: str) -> str:
-            s = s.lower()
-            s = re.sub(r'\bst\.?\s', 'saint ', s)
-            s = re.sub(r'\bmt\.?\s', 'mount ', s)
-            s = re.sub(r'\bft\.?\s', 'fort ', s)
-            s = s.replace("'", "").replace("\u2019", "")
-            s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
-            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014\-\[\]{}]+', ' ', s)
-            s = re.sub(r'\s+', ' ', s).strip()
-            return s
+            return ClassificationService._normalize_name(s)
 
         alias_n = _normalize(alias)
         haystack_n = _normalize(haystack)
@@ -2222,21 +2256,7 @@ class ClassificationService:
             return False
 
         def _normalize(s: str) -> str:
-            s = s.lower()
-            # Common abbreviation expansions
-            s = re.sub(r'\bst\.?\s', 'saint ', s)
-            s = re.sub(r'\bmt\.?\s', 'mount ', s)
-            s = re.sub(r'\bft\.?\s', 'fort ', s)
-            # Strip apostrophes — "Mary's" == "Marys"
-            s = s.replace("'", "").replace("\u2019", "")
-            # Stem possessive 's on 4+ char words so "theresas" matches "theresa"
-            s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
-            # Strip punctuation + hyphens + brackets — "Church-Hamilton"
-            # splits into "church hamilton" so distinctive tokens are reachable
-            s = re.sub(r'[.,()&/\\|:;!?"*\u2013\u2014\-\[\]{}]+', ' ', s)
-            # Collapse whitespace
-            s = re.sub(r'\s+', ' ', s).strip()
-            return s
+            return ClassificationService._normalize_name(s)
 
         alias_n = _normalize(a)
         haystack_n = _normalize(haystack)
@@ -3990,7 +4010,7 @@ class ClassificationService:
 
         def _toks(x):
             x = (x or '').lower()
-            x = re.sub(r'\bst\.?\s', 'saint ', x)
+            x = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', x)
             x = re.sub(r'\bmt\.?\s', 'mount ', x)
             x = re.sub(r"['\u2019]", '', x)
             x = re.sub(r'[^a-z0-9]+', ' ', x)
@@ -4453,10 +4473,10 @@ class ClassificationService:
                             'associates','partners','holdings','enterprises',
                             'community','ministry','chapel',
                         }
-                        _hn = re.sub(r'\bst\.?\s', 'saint ', name_lower)
+                        _hn = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', name_lower)
                         _hn = re.sub(r"['\u2019]", '', _hn)
                         _hn = re.sub(r'[^a-z0-9]+', ' ', _hn)
-                        _hh = re.sub(r'\bst\.?\s', 'saint ', haystack)
+                        _hh = re.sub(r'\bst\.?\s|\bst\.(?=[a-z])', 'saint ', haystack)
                         _hh = re.sub(r"['\u2019]", '', _hh)
                         _hh = re.sub(r'[^a-z0-9]+', ' ', _hh)
                         _htoks = {t for t in _hh.split() if len(t) >= 4}

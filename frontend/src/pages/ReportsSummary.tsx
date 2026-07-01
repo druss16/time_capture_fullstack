@@ -64,6 +64,21 @@ function initials(label: string): string {
     .join("");
 }
 
+// Human phrase for the active window, used in headline + modal copy so the
+// page reads "this week" / "this month" / "in this range" instead of a frozen
+// "today". `custom` is true when a start–end range is active.
+function periodPhrase(period: Period, custom: boolean): string {
+  if (custom) return "in this range";
+  switch (period) {
+    case "day": return "today";
+    case "week": return "this week";
+    case "month": return "this month";
+    case "quarter": return "this quarter";
+    case "year": return "this year";
+    default: return "this period";
+  }
+}
+
 type Period = "day" | "week" | "month" | "quarter" | "year";
 type GroupBy = "employee" | "client";
 
@@ -133,8 +148,12 @@ export default function ReportsSummary({
 }) {
   const [period, setPeriod] = useState<Period>("day");
   const [customMode, setCustomMode] = useState(false);
+  // Draft values bound to the date inputs — typing here does NOT fetch.
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
+  // Applied values — only these drive the fetch, set when the user clicks Apply.
+  const [appliedStart, setAppliedStart] = useState<string>("");
+  const [appliedEnd, setAppliedEnd] = useState<string>("");
   const [groupBy, setGroupBy] = useState<GroupBy>("employee");
   const [data, setData] = useState<SummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -150,9 +169,9 @@ export default function ReportsSummary({
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams({ group_by: groupBy });
-    if (customMode && customStart && customEnd) {
-      p.set("start", customStart);
-      p.set("end", customEnd);
+    if (customMode && appliedStart && appliedEnd) {
+      p.set("start", appliedStart);
+      p.set("end", appliedEnd);
     } else {
       p.set("period", period);
     }
@@ -160,7 +179,7 @@ export default function ReportsSummary({
     const effOrg = orgIdOverride || (impOrg ? Number(impOrg) : null);
     if (effOrg) p.set("org_id", String(effOrg));
     return p.toString();
-  }, [period, groupBy, orgIdOverride, customMode, customStart, customEnd]);
+  }, [period, groupBy, orgIdOverride, customMode, appliedStart, appliedEnd]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -214,9 +233,9 @@ export default function ReportsSummary({
       try {
         const token = getAuthToken();
         const p = new URLSearchParams({ group_by: "client" });
-        if (customMode && customStart && customEnd) {
-          p.set("start", customStart);
-          p.set("end", customEnd);
+        if (customMode && appliedStart && appliedEnd) {
+          p.set("start", appliedStart);
+          p.set("end", appliedEnd);
         } else {
           p.set("period", period);
         }
@@ -244,7 +263,7 @@ export default function ReportsSummary({
         setDetailLoading(false);
       }
     },
-    [period, customMode, customStart, customEnd, orgIdOverride]
+    [period, customMode, appliedStart, appliedEnd, orgIdOverride]
   );
 
   // Reset view-local state when the query changes.
@@ -252,7 +271,12 @@ export default function ReportsSummary({
     setExpanded(new Set());
     setClientPage(0);
     setDetail(null);
-  }, [period, groupBy, customMode, customStart, customEnd, orgIdOverride]);
+  }, [period, groupBy, customMode, appliedStart, appliedEnd, orgIdOverride]);
+
+  // Active-window phrase for copy. A custom range only counts as "applied" when
+  // both endpoints are filled (matches the fetch guard).
+  const customApplied = customMode && !!appliedStart && !!appliedEnd;
+  const windowPhrase = periodPhrase(period, customApplied);
 
   const handleExport = useCallback(() => {
     const token = getAuthToken();
@@ -266,12 +290,14 @@ export default function ReportsSummary({
         const a = document.createElement("a");
         const href = URL.createObjectURL(blob);
         a.href = href;
-        a.download = `time_summary_${period}.csv`;
+        a.download = customApplied
+          ? `time_summary_${appliedStart}_to_${appliedEnd}.csv`
+          : `time_summary_${period}.csv`;
         a.click();
         URL.revokeObjectURL(href);
       })
       .catch(() => setError("Export failed"));
-  }, [buildParams, period]);
+  }, [buildParams, period, customApplied, appliedStart, appliedEnd]);
 
   // ── Derived: employee + client rows straight from the API rows ──────────
   const employeeRows = useMemo(
@@ -368,7 +394,12 @@ export default function ReportsSummary({
             {PERIODS.map((p) => (
               <button
                 key={p.key}
-                onClick={() => { setCustomMode(false); setPeriod(p.key); }}
+                onClick={() => {
+                  setCustomMode(false);
+                  setAppliedStart("");
+                  setAppliedEnd("");
+                  setPeriod(p.key);
+                }}
                 className={
                   "px-3 py-1.5 text-xs font-medium rounded-md transition-colors " +
                   (!customMode && period === p.key
@@ -407,6 +438,21 @@ export default function ReportsSummary({
                 onChange={(e) => setCustomEnd(e.target.value)}
                 className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700"
               />
+              <button
+                onClick={() => {
+                  if (customStart && customEnd && customStart <= customEnd) {
+                    setAppliedStart(customStart);
+                    setAppliedEnd(customEnd);
+                  }
+                }}
+                disabled={
+                  !customStart || !customEnd || customStart > customEnd ||
+                  (customStart === appliedStart && customEnd === appliedEnd)
+                }
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-default"
+              >
+                Apply
+              </button>
             </div>
           )}
           <button
@@ -420,11 +466,17 @@ export default function ReportsSummary({
         </div>
       </div>
 
+      {customMode && !customApplied && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
+          Pick a start and end date, then choose <span className="font-semibold text-slate-700">Apply</span> to load that range.
+        </div>
+      )}
+
       {/* ── HEADLINE: where the billable hours went (client billing first) ── */}
       {data && data.scope === "all" && headlineClients.length > 0 && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
           <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-4">
-            Where the billable hours went
+            Where the billable hours went {windowPhrase}
             <span className="normal-case font-medium text-slate-400"> — click a client for detail</span>
           </h2>
           <div className="space-y-3">
@@ -618,6 +670,7 @@ export default function ReportsSummary({
         <ClientDetailModal
           row={detail}
           loading={detailLoading}
+          windowPhrase={windowPhrase}
           onClose={() => { setDetail(null); setDetailLoading(false); }}
         />
       )}
@@ -772,7 +825,7 @@ function EmployeeCard({
 }
 
 // ── Client drill-down modal ─────────────────────────────────────────────────
-function ClientDetailModal({ row, loading, onClose }: { row: SummaryRow; loading?: boolean; onClose: () => void }) {
+function ClientDetailModal({ row, loading, windowPhrase, onClose }: { row: SummaryRow; loading?: boolean; windowPhrase: string; onClose: () => void }) {
   const people = Array.isArray(row.breakdown) ? row.breakdown : [];
   return (
     <div
@@ -788,8 +841,8 @@ function ClientDetailModal({ row, loading, onClose }: { row: SummaryRow; loading
             <h3 className="text-xl font-bold text-slate-900">{row.label}</h3>
             <p className="mt-1 text-xs text-slate-500">
               {people.length > 0
-                ? `${people.length} ${people.length > 1 ? "people" : "person"} worked this client · ${fmtHours(row.total_hours)} total`
-                : `${fmtHours(row.total_hours)} total this period`}
+                ? `${people.length} ${people.length > 1 ? "people" : "person"} worked this client ${windowPhrase} · ${fmtHours(row.total_hours)} total`
+                : `${fmtHours(row.total_hours)} total ${windowPhrase}`}
             </p>
           </div>
           <button

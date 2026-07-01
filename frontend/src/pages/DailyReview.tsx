@@ -5,7 +5,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   RefreshCw,
-  Edit3,
   BarChart3,
   Check,
   X,
@@ -439,23 +438,9 @@ export default function DailyReview() {
                 <BarChart3 className="w-3.5 h-3.5" />
                 Summary
               </button>
-              <button
-                onClick={() => setActiveTab("categorize")}
-                className={cn(
-                  "flex items-center gap-1.5 px-3 text-sm font-semibold transition-all border-b-2 -mb-px",
-                  activeTab === "categorize"
-                    ? "border-primary text-primary"
-                    : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
-                )}
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                Categorize
-                {uncategorizedCount > 0 && (
-                  <span className="bg-amber-400 text-white text-[10px] font-bold rounded-full px-1.5 py-px leading-none">
-                    {uncategorizedCount}
-                  </span>
-                )}
-              </button>
+              {/* Categorize tab removed — the Summary page is the single review
+                  surface (it already shows the same pending blocks inline). The
+                  one-at-a-time SimpleReview flow was a redundant second view. */}
             </div>
 
             {/* Divider */}

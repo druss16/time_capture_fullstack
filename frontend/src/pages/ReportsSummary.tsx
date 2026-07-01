@@ -1,38 +1,42 @@
 /**
- * ReportsSummary.tsx — simple high-level time reporting for customer firms.
+ * ReportsSummary.tsx — high-level time reporting for customer firms (redesigned).
  *
- * Sits BELOW the C-level DashboardV2. Deliberately flat: five KPI tiles,
- * a period toggle, one sortable table, and a CSV export button. No drilldowns.
+ * Sits BELOW the C-level DashboardV2. Goal of this pass: a manager should get a
+ * clear, synced picture of (1) which CLIENTS are getting billed and for how long,
+ * (2) each employee's daily time card, and (3) where everyone spent their time —
+ * readable at a glance, no jargon.
  *
- * Role-gating is enforced server-side (members see only their own numbers),
- * so this component just renders whatever scope the API returns and shows a
- * small "Your time" vs "Team" indicator.
+ * WHAT CHANGED (readability + drill-down pass):
+ *  - Client billing is the HEADLINE: a "Where the billable hours went" panel at
+ *    the top, biggest client first. Tap a client to see who worked it.
+ *  - Group-by toggle (default Employee) now renders two real views:
+ *      • Employee → per-person CARDS with a billable/non-billable/review bar,
+ *        three plain stat boxes, a review flag, and an expandable per-client
+ *        breakdown (chevron).
+ *      • Client   → a searchable, paginated table; click a row for detail.
+ *  - Client drill-down modal: totals + who worked it + each person's minutes.
+ *  - Review queue REMOVED from this page (Daily Review owns that workflow).
+ *  - KPI strip, AI strip, daily-shape chart, CSV export, custom range, the
+ *    why-pills, auth chain, and orgIdOverride/impersonation wiring are UNCHANGED.
  *
- * MavOps admin reuse: pass an `orgIdOverride` prop (wired from MavOpsAdmin's
- * org selector) and it's appended as ?org_id= — the backend only honors it
- * for staff/superusers.
+ * Drill-down data: the API's flat `group_by` rows don't include cross-breakdown
+ * (employee→clients, client→employees). This component reads an OPTIONAL
+ * `row.breakdown` array if the backend sends it, and gracefully hides the
+ * drill-down affordances when it's absent — so nothing breaks before that field
+ * ships. See BreakdownItem below for the shape it expects.
  *
- * Auth: uses the same localStorage token chain as the rest of the app.
- *
- * WHAT CHANGED (value-framing pass):
- *  - "Uncategorized" → "Needs review" everywhere (it's a queue, not a defect).
- *  - Utilization leads with the STANDARD-HOURS number (billable ÷ available
- *    hours), the figure partners actually quote — with the capture-based number
- *    available in its tooltip. Falls back to capture-based if the backend hasn't
- *    sent the new field yet.
- *  - Every defensible metric carries a small "?" that explains, in plain words,
- *    exactly how it's calculated. Transparency-on-demand is the product thesis
- *    (glass box vs black box), so it lives in the UI, not a help doc.
+ * Role-gating stays server-side. scope==="self" hides team-only affordances.
+ * Auth: same localStorage token chain as the rest of the app.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle, AlertCircle, HelpCircle,
+  Loader2, Download, Clock, TrendingUp, Users, Briefcase, AlertTriangle,
+  AlertCircle, HelpCircle, ChevronDown, Search, X, CheckCircle2, ArrowRight,
 } from "lucide-react";
-import { safeFetchJson, API_BASE } from "@/lib/api";
+import { API_BASE } from "@/lib/api";
 import DailyShapeChart from "./DailyShapeChart";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
 import AIPerformanceStrip from "./AIPerformanceStrip";
-import NeedsReviewQueue from "./NeedsReviewQueue";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -44,8 +48,7 @@ function getAuthToken(): string | null {
   );
 }
 
-// Format decimal hours as "1h 18m" / "27m" / "2h". Display-only — the raw
-// numeric value is still used for sorting, so this doesn't affect ordering.
+// Format decimal hours as "1h 18m" / "27m" / "2h". Display-only.
 function fmtHours(hours: number | undefined): string {
   const totalMin = Math.round((hours || 0) * 60);
   if (totalMin < 60) return `${totalMin}m`;
@@ -54,8 +57,29 @@ function fmtHours(hours: number | undefined): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+function initials(label: string): string {
+  return label
+    .split(/[\s]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() || "")
+    .join("");
+}
+
 type Period = "day" | "week" | "month" | "quarter" | "year";
 type GroupBy = "employee" | "client";
+
+// Optional cross-breakdown the backend MAY attach to each row.
+//  - On an employee row: the clients that person worked (name = client).
+//  - On a client row:    the people who worked it   (name = employee, id = userId).
+interface BreakdownItem {
+  id: number | null;
+  name: string;
+  total_hours: number;
+  billable_hours: number;
+  non_billable_hours: number;
+  uncategorized_hours?: number;
+}
 
 interface SummaryRow {
   id: number | null;
@@ -67,6 +91,7 @@ interface SummaryRow {
   utilization_pct: number;
   top_client: string | null;
   block_count: number;
+  breakdown?: BreakdownItem[];    // OPTIONAL — drill-down lights up when present
 }
 
 interface SummaryResponse {
@@ -81,12 +106,12 @@ interface SummaryResponse {
     billable_hours: number;
     non_billable_hours: number;
     uncategorized_hours?: number;
-    utilization_pct: number;                 // legacy / capture-based
-    utilization_standard_pct?: number;       // NEW: billable ÷ available hours
-    utilization_captured_pct?: number;       // NEW: explicit capture-based
-    available_hours?: number;                // NEW: headcount × workdays × 8
-    headcount?: number;                      // NEW
-    working_days?: number;                   // NEW
+    utilization_pct: number;
+    utilization_standard_pct?: number;
+    utilization_captured_pct?: number;
+    available_hours?: number;
+    headcount?: number;
+    working_days?: number;
     active_clients: number;
   };
   rows: SummaryRow[];
@@ -101,10 +126,7 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "year", label: "Year" },
 ];
 
-type SortKey = keyof Pick<
-  SummaryRow,
-  "label" | "total_hours" | "billable_hours" | "non_billable_hours" | "uncategorized_hours" | "utilization_pct"
->;
+const CLIENT_PAGE_SIZE = 8;
 
 export default function ReportsSummary({
   orgIdOverride,
@@ -119,14 +141,17 @@ export default function ReportsSummary({
   const [data, setData] = useState<SummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>("total_hours");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [panelParams, setPanelParams] = useState<UncatPanelParams | null>(null);
+
+  // Redesign state
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [clientSearch, setClientSearch] = useState("");
+  const [clientPage, setClientPage] = useState(0);
+  const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams({ group_by: groupBy });
     if (customMode && customStart && customEnd) {
-      // Backend uses explicit start/end when both are present, ignoring period.
       p.set("start", customStart);
       p.set("end", customEnd);
     } else {
@@ -143,13 +168,10 @@ export default function ReportsSummary({
     setError(null);
     try {
       const token = getAuthToken();
-      const res = await fetch(
-        `${API_BASE}/reports/summary/?${buildParams()}`,
-        {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          credentials: "include",
-        }
-      );
+      const res = await fetch(`${API_BASE}/reports/summary/?${buildParams()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `Request failed (${res.status})`);
@@ -166,11 +188,16 @@ export default function ReportsSummary({
     fetchData();
   }, [fetchData]);
 
+  // Reset view-local state when the query changes.
+  useEffect(() => {
+    setExpanded(new Set());
+    setClientPage(0);
+    setDetail(null);
+  }, [period, groupBy, customMode, customStart, customEnd, orgIdOverride]);
+
   const handleExport = useCallback(() => {
     const token = getAuthToken();
     const url = `${API_BASE}/reports/summary/export/?${buildParams()}`;
-    // Token in querystring isn't used here — export relies on session cookie
-    // via credentials. For token-only clients, fetch+blob instead:
     fetch(url, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       credentials: "include",
@@ -187,41 +214,87 @@ export default function ReportsSummary({
       .catch(() => setError("Export failed"));
   }, [buildParams, period]);
 
-  const sortedRows = useMemo(() => {
+  // ── Derived: employee + client rows straight from the API rows ──────────
+  const employeeRows = useMemo(
+    () =>
+      data && data.group_by === "employee"
+        ? [...data.rows].sort((a, b) => b.total_hours - a.total_hours)
+        : [],
+    [data]
+  );
+
+  const clientRowsSorted = useMemo(
+    () =>
+      data && data.group_by === "client"
+        ? [...data.rows].sort((a, b) => b.billable_hours - a.billable_hours)
+        : [],
+    [data]
+  );
+
+  // Headline "where the billable hours went" — top billable clients.
+  // Uses client rows when grouped by client; otherwise derives a light rollup
+  // from each employee's top_client + billable hours (best-effort until the
+  // client query is loaded).
+  const headlineClients = useMemo(() => {
     if (!data) return [];
-    const rows = [...data.rows];
-    rows.sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
-      let cmp: number;
-      if (typeof av === "string" && typeof bv === "string") {
-        cmp = av.localeCompare(bv);
-      } else {
-        cmp = ((av as number) || 0) - ((bv as number) || 0);
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-    return rows;
-  }, [data, sortKey, sortDir]);
-
-  const toggleSort = (key: SortKey) => {
-    if (key === sortKey) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir("desc");
+    if (data.group_by === "client") {
+      return clientRowsSorted.filter((r) => r.billable_hours > 0).slice(0, 6);
     }
-  };
+    const map = new Map<string, { label: string; billable_hours: number; people: number }>();
+    for (const r of data.rows) {
+      const key = r.top_client;
+      if (!key || key === "—") continue;
+      const cur = map.get(key) || { label: key, billable_hours: 0, people: 0 };
+      cur.billable_hours += r.billable_hours;
+      cur.people += 1;
+      map.set(key, cur);
+    }
+    return Array.from(map.values())
+      .filter((c) => c.billable_hours > 0)
+      .sort((a, b) => b.billable_hours - a.billable_hours)
+      .slice(0, 6)
+      .map((c) => ({
+        id: null,
+        label: c.label,
+        total_hours: c.billable_hours,
+        billable_hours: c.billable_hours,
+        non_billable_hours: 0,
+        utilization_pct: 0,
+        top_client: null,
+        block_count: 0,
+        _people: c.people,
+      })) as (SummaryRow & { _people?: number })[];
+  }, [data, clientRowsSorted]);
 
-  // Lead with standard-hours utilization (billable ÷ available hours) — the
-  // number partners quote. Fall back to capture-based if the backend hasn't
-  // shipped the new field. Keep both so the tooltip can show the contrast.
+  // Filtered + paginated client list for the Client view.
+  const filteredClients = useMemo(() => {
+    const q = clientSearch.trim().toLowerCase();
+    return q
+      ? clientRowsSorted.filter((r) => r.label.toLowerCase().includes(q))
+      : clientRowsSorted;
+  }, [clientRowsSorted, clientSearch]);
+
+  const clientPageCount = Math.max(1, Math.ceil(filteredClients.length / CLIENT_PAGE_SIZE));
+  const clientPageSafe = Math.min(clientPage, clientPageCount - 1);
+  const clientSlice = filteredClients.slice(
+    clientPageSafe * CLIENT_PAGE_SIZE,
+    clientPageSafe * CLIENT_PAGE_SIZE + CLIENT_PAGE_SIZE
+  );
+
+  const toggleExpand = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+
+  // Utilization headline (unchanged logic).
   const utilStandard = data?.totals.utilization_standard_pct;
-  const utilCaptured =
-    data?.totals.utilization_captured_pct ?? data?.totals.utilization_pct;
-  const utilHeadline =
-    utilStandard != null ? utilStandard : (utilCaptured ?? 0);
+  const utilCaptured = data?.totals.utilization_captured_pct ?? data?.totals.utilization_pct;
+  const utilHeadline = utilStandard != null ? utilStandard : utilCaptured ?? 0;
   const utilIsStandard = utilStandard != null;
+
+  const maxHeadlineBill = Math.max(1, ...headlineClients.map((c) => c.billable_hours));
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
@@ -294,12 +367,12 @@ export default function ReportsSummary({
         </div>
       </div>
 
-
       {data && <AIPerformanceStrip period={period} orgIdOverride={orgIdOverride} />}
 
       {data && data.scope === "all" && (
-      <div className="flex justify-end -mt-2">
-            <a href="/reports/blind-spots"
+        <div className="flex justify-end -mt-2">
+          <a
+            href="/reports/blind-spots"
             className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 hover:text-violet-700 hover:underline"
           >
             View AI blind spots →
@@ -307,7 +380,7 @@ export default function ReportsSummary({
         </div>
       )}
 
-      {/* KPI strip */}
+      {/* KPI strip (unchanged) */}
       {data && (
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <KPICard
@@ -381,25 +454,95 @@ export default function ReportsSummary({
         </div>
       )}
 
+      {/* ── HEADLINE: where the billable hours went (client billing first) ── */}
+      {data && data.scope === "all" && headlineClients.length > 0 && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
+          <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-4">
+            Where the billable hours went
+            {data.group_by === "client" && (
+              <span className="normal-case font-medium text-slate-400"> — click a client for detail</span>
+            )}
+          </h2>
+          <div className="space-y-3">
+            {headlineClients.map((c) => {
+              const people = (c as any)._people as number | undefined;
+              const clickable = data.group_by === "client";
+              return (
+                <button
+                  key={c.label}
+                  disabled={!clickable}
+                  onClick={() => clickable && setDetail(c)}
+                  className={
+                    "w-full grid grid-cols-[minmax(0,1fr)_84px] sm:grid-cols-[220px_minmax(0,1fr)_84px] items-center gap-3 rounded-lg px-1.5 py-1 text-left " +
+                    (clickable ? "hover:bg-slate-50 cursor-pointer" : "cursor-default")
+                  }
+                >
+                  <span className="truncate text-sm font-semibold text-slate-800">{c.label}</span>
+                  <span className="hidden sm:block h-[26px] rounded-lg bg-slate-100 overflow-hidden">
+                    <span
+                      className="flex h-full items-center rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 pl-2.5 text-[11px] font-bold text-white"
+                      style={{ width: `${Math.max((c.billable_hours / maxHeadlineBill) * 100, 6)}%` }}
+                    >
+                      {clickable
+                        ? `${c.block_count > 0 ? c.block_count + " blocks" : ""}`
+                        : people != null
+                        ? `${people} ${people > 1 ? "people" : "person"}`
+                        : ""}
+                    </span>
+                  </span>
+                  <span className="text-right text-sm font-bold tabular-nums text-slate-800">
+                    {fmtHours(c.billable_hours)}
+                    <span className="block text-[11px] font-semibold text-slate-400">billable</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* team mix strip */}
+          <div className="mt-5 pt-4 border-t border-slate-100">
+            <MixStrip
+              billable={data.totals.billable_hours}
+              nonBillable={data.totals.non_billable_hours}
+              review={data.totals.uncategorized_hours || 0}
+            />
+          </div>
+        </div>
+      )}
+
       {data && <DailyShapeChart data={data.timeseries as any} />}
 
-      {/* Group-by toggle */}
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-slate-500">Group by:</span>
-        {(["employee", "client"] as GroupBy[]).map((g) => (
-          <button
-            key={g}
-            onClick={() => setGroupBy(g)}
-            className={
-              "px-2.5 py-1 rounded-md font-medium capitalize transition-colors " +
-              (groupBy === g
-                ? "bg-slate-100 text-slate-900"
-                : "text-slate-500 hover:text-slate-700")
-            }
-          >
-            {g}
-          </button>
-        ))}
+      {/* Group-by toggle + (client) search */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-slate-500">Group by:</span>
+          {(["employee", "client"] as GroupBy[]).map((g) => (
+            <button
+              key={g}
+              onClick={() => setGroupBy(g)}
+              className={
+                "px-2.5 py-1 rounded-md font-medium capitalize transition-colors " +
+                (groupBy === g
+                  ? "bg-slate-100 text-slate-900"
+                  : "text-slate-500 hover:text-slate-700")
+              }
+            >
+              {g}
+            </button>
+          ))}
+        </div>
+
+        {groupBy === "client" && data && !loading && (
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+            <input
+              value={clientSearch}
+              onChange={(e) => { setClientSearch(e.target.value); setClientPage(0); }}
+              placeholder="Search clients…"
+              className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+            />
+          </div>
+        )}
       </div>
 
       {/* States */}
@@ -417,95 +560,114 @@ export default function ReportsSummary({
         </div>
       )}
 
-      {/* Table */}
-      {data && !loading && (
+      {/* ── EMPLOYEE VIEW: cards ─────────────────────────────────────────── */}
+      {data && !loading && groupBy === "employee" && (
+        employeeRows.length === 0 ? (
+          <EmptyState label="No committed time in this period yet." />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {employeeRows.map((r) => (
+              <EmployeeCard
+                key={`${r.id}-${r.label}`}
+                row={r}
+                expanded={expanded.has(`${r.id}-${r.label}`)}
+                onToggle={() => toggleExpand(`${r.id}-${r.label}`)}
+                onOpenReview={() =>
+                  setPanelParams({
+                    period, group_by: "employee", orgId: orgIdOverride,
+                    userId: r.id, userLabel: r.label,
+                  })
+                }
+              />
+            ))}
+          </div>
+        )
+      )}
+
+      {/* ── CLIENT VIEW: searchable, paginated table ─────────────────────── */}
+      {data && !loading && groupBy === "client" && (
         <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
-                <Th onClick={() => toggleSort("label")} active={sortKey === "label"} dir={sortDir}>
-                  {groupBy === "employee" ? "Employee" : "Client"}
-                </Th>
-                <Th onClick={() => toggleSort("total_hours")} active={sortKey === "total_hours"} dir={sortDir} right>
-                  Total
-                </Th>
-                <Th onClick={() => toggleSort("billable_hours")} active={sortKey === "billable_hours"} dir={sortDir} right>
-                  Billable
-                </Th>
-                <Th onClick={() => toggleSort("non_billable_hours")} active={sortKey === "non_billable_hours"} dir={sortDir} right>
-                  Non-Bill
-                </Th>
-                <Th onClick={() => toggleSort("uncategorized_hours")} active={sortKey === "uncategorized_hours"} dir={sortDir} right>
-                  Needs review
-                </Th>
-                <Th onClick={() => toggleSort("utilization_pct")} active={sortKey === "utilization_pct"} dir={sortDir} right>
-                  Util %
-                </Th>
-                {groupBy === "employee" && (
-                  <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">
-                    Top Client
-                  </th>
-                )}
+                <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wide text-slate-500">Client</th>
+                <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Billable</th>
+                <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Non-bill</th>
+                <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Needs review</th>
+                <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Total</th>
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {sortedRows.length === 0 && (
+              {clientSlice.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-400">
-                    No committed time in this period yet.
+                  <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">
+                    {clientSearch ? `No clients match “${clientSearch}”.` : "No client time in this period yet."}
                   </td>
                 </tr>
               )}
-              {sortedRows.map((r) => (
-                <tr key={`${r.id}-${r.label}`} className="hover:bg-slate-50/60">
-                  <td className="px-4 py-2.5 font-medium text-slate-800">{r.label}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{fmtHours(r.total_hours)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700">{fmtHours(r.billable_hours)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-400">{fmtHours(r.non_billable_hours)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">
+              {clientSlice.map((r) => (
+                <tr
+                  key={`${r.id}-${r.label}`}
+                  onClick={() => setDetail(r)}
+                  className="hover:bg-slate-50/60 cursor-pointer"
+                >
+                  <td className="px-4 py-3 font-semibold text-slate-800">{r.label}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-emerald-700 font-medium">{fmtHours(r.billable_hours)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-slate-400">{fmtHours(r.non_billable_hours)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">
                     {(r.uncategorized_hours || 0) > 0 ? (
-                      <button
-                        onClick={() => setPanelParams({
-                          period, group_by: groupBy, orgId: orgIdOverride,
-                          userId: groupBy === "employee" ? r.id : null,
-                          userLabel: r.label,
-                        })}
-                        className="inline-flex items-center gap-1 text-amber-600 font-medium hover:underline"
-                        title="Open the blocks waiting on review"
-                      >
+                      <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-amber-600 font-medium">
                         <Clock className="h-3 w-3" />
                         {fmtHours(r.uncategorized_hours)}
-                      </button>
+                      </span>
                     ) : (
                       <span className="text-slate-300">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{r.utilization_pct}%</td>
-                  {groupBy === "employee" && (
-                    <td className="px-4 py-2.5 text-slate-500 text-xs">{r.top_client || "—"}</td>
-                  )}
+                  <td className="px-4 py-3 text-right tabular-nums font-semibold text-slate-700">{fmtHours(r.total_hours)}</td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                      View <ArrowRight className="h-3 w-3" />
+                    </span>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+
+          {/* pager */}
+          <div className="flex items-center justify-between gap-2 px-4 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
+            <span>
+              Showing {clientSlice.length} of {filteredClients.length} client{filteredClients.length === 1 ? "" : "s"}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                disabled={clientPageSafe === 0}
+                onClick={() => setClientPage(clientPageSafe - 1)}
+                className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+              >
+                ← Prev
+              </button>
+              <span className="px-1.5">{clientPageSafe + 1} / {clientPageCount}</span>
+              <button
+                disabled={clientPageSafe >= clientPageCount - 1}
+                onClick={() => setClientPage(clientPageSafe + 1)}
+                className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* ── Distinct bottom section: Needs review ──────────────────────────
-          Moved here (below the table) so the page reads top-to-bottom as:
-          AI strip → KPIs → shape → team table → the review queue. Team scope
-          only; a single member sees their own pile in Daily Review already. */}
-      {data && data.scope === "all" && !loading && (
-        <section className="pt-6 mt-2 border-t border-slate-200 space-y-4">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">Review queue</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Blocks the AI flagged for a person to confirm — and the patterns
-              worth teaching it.
-            </p>
-          </div>
-          <NeedsReviewQueue period={period} orgIdOverride={orgIdOverride} />
-        </section>
+      {/* Client drill-down modal */}
+      {detail && (
+        <ClientDetailModal
+          row={detail}
+          onClose={() => setDetail(null)}
+        />
       )}
 
       <UncategorizedPanel
@@ -517,10 +679,270 @@ export default function ReportsSummary({
   );
 }
 
-// ── Small presentational helpers ──────────────────────────────────────────
+// ── Employee card ─────────────────────────────────────────────────────────
+function EmployeeCard({
+  row, expanded, onToggle, onOpenReview,
+}: {
+  row: SummaryRow;
+  expanded: boolean;
+  onToggle: () => void;
+  onOpenReview: () => void;
+}) {
+  const total = row.total_hours || 0.0001;
+  const billPct = (row.billable_hours / total) * 100;
+  const nonPct = (row.non_billable_hours / total) * 100;
+  const revPct = ((row.uncategorized_hours || 0) / total) * 100;
+  const review = row.uncategorized_hours || 0;
+  const hasBreakdown = Array.isArray(row.breakdown) && row.breakdown.length > 0;
+  const maxItem = hasBreakdown
+    ? Math.max(1, ...row.breakdown!.map((b) => b.total_hours))
+    : 1;
 
-// The signature move: a why-pill that explains a metric in plain words, with
-// the actual formula. Transparency-on-demand — the glass-box thesis lives here.
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5">
+      {/* header */}
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between gap-3 text-left"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-700 text-sm font-bold text-white">
+            {initials(row.label)}
+          </span>
+          <div className="min-w-0">
+            <div className="text-base font-bold leading-tight text-slate-900 truncate">{row.label}</div>
+            <div className="text-xs text-slate-500 mt-0.5 truncate">
+              Most time on {row.top_client || "Internal / Admin"}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="text-right">
+            <div className="text-lg font-bold tabular-nums text-slate-900">{fmtHours(row.total_hours)}</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Total</div>
+          </div>
+          <ChevronDown
+            className={"h-4 w-4 text-slate-400 transition-transform " + (expanded ? "rotate-180" : "")}
+          />
+        </div>
+      </button>
+
+      {/* mix bar */}
+      <div className="mt-3 mb-3 flex h-3.5 overflow-hidden rounded-md">
+        <span className="h-full bg-emerald-600" style={{ width: `${billPct}%` }} />
+        <span className="h-full bg-slate-400" style={{ width: `${nonPct}%` }} />
+        <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
+      </div>
+
+      {/* stat boxes */}
+      <div className="grid grid-cols-3 gap-2">
+        <StatBox label="Billable" value={fmtHours(row.billable_hours)} tone="emerald" />
+        <StatBox label="Non-bill" value={fmtHours(row.non_billable_hours)} />
+        <StatBox label="Review" value={review > 0 ? fmtHours(review) : "—"} tone={review > 0 ? "amber" : undefined} />
+      </div>
+
+      {/* review flag */}
+      {review > 0 ? (
+        <button
+          onClick={onOpenReview}
+          className="mt-3 w-full flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[13px] font-semibold text-amber-600 hover:bg-amber-100"
+        >
+          <Clock className="h-3.5 w-3.5" />
+          {fmtHours(review)} still needs a quick look
+        </button>
+      ) : (
+        <div className="mt-3 w-full flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[13px] font-semibold text-emerald-700">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          All time reviewed — nothing pending
+        </div>
+      )}
+
+      {/* expandable per-client breakdown */}
+      {expanded && (
+        <div className="mt-3.5 pt-3.5 border-t border-slate-100">
+          <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2.5">
+            Clients worked this period
+          </h4>
+          {hasBreakdown ? (
+            <div className="space-y-2.5">
+              {row.breakdown!
+                .slice()
+                .sort((a, b) => b.total_hours - a.total_hours)
+                .map((b, i) => (
+                  <div key={`${b.id}-${b.name}-${i}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="truncate text-sm font-medium text-slate-700">{b.name}</span>
+                      <span className="shrink-0 text-sm font-bold tabular-nums text-slate-800">
+                        {fmtHours(b.total_hours)}
+                        {b.billable_hours > 0 && (
+                          <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-emerald-700">
+                            {fmtHours(b.billable_hours)} bill
+                          </span>
+                        )}
+                        {(b.uncategorized_hours || 0) > 0 && (
+                          <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-amber-600">
+                            {fmtHours(b.uncategorized_hours)} review
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1.5 rounded bg-slate-100 overflow-hidden">
+                      <span
+                        className="block h-full bg-emerald-500"
+                        style={{ width: `${(b.total_hours / maxItem) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400">
+              Per-client detail isn't available for this row yet. The top client is{" "}
+              <span className="font-medium text-slate-600">{row.top_client || "Internal / Admin"}</span>.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Client drill-down modal ─────────────────────────────────────────────────
+function ClientDetailModal({ row, onClose }: { row: SummaryRow; onClose: () => void }) {
+  const people = Array.isArray(row.breakdown) ? row.breakdown : [];
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-slate-900/40 px-4 py-16"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl rounded-2xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <h3 className="text-xl font-bold text-slate-900">{row.label}</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              {people.length > 0
+                ? `${people.length} ${people.length > 1 ? "people" : "person"} worked this client · ${fmtHours(row.total_hours)} total`
+                : `${fmtHours(row.total_hours)} total this period`}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          <div className="grid grid-cols-3 gap-2.5 mb-5">
+            <StatBox label="Billable" value={fmtHours(row.billable_hours)} tone="emerald" big />
+            <StatBox label="Non-billable" value={fmtHours(row.non_billable_hours)} big />
+            <StatBox
+              label="Needs review"
+              value={(row.uncategorized_hours || 0) > 0 ? fmtHours(row.uncategorized_hours) : "—"}
+              tone={(row.uncategorized_hours || 0) > 0 ? "amber" : undefined}
+              big
+            />
+          </div>
+
+          <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1">Who worked it</h4>
+          {people.length > 0 ? (
+            <div className="divide-y divide-slate-100">
+              {people
+                .slice()
+                .sort((a, b) => b.total_hours - a.total_hours)
+                .map((p, i) => (
+                  <div key={`${p.id}-${p.name}-${i}`} className="flex items-center gap-3 py-2.5">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-700 text-xs font-bold text-white">
+                      {initials(p.name)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-slate-800 truncate">{p.name}</div>
+                      {(p.uncategorized_hours || 0) > 0 && (
+                        <div className="text-xs font-medium text-amber-600 mt-0.5">
+                          {fmtHours(p.uncategorized_hours)} needs review
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-sm font-bold tabular-nums text-slate-800">{fmtHours(p.total_hours)}</div>
+                      <div className="text-[11px] font-semibold text-slate-400">
+                        {p.billable_hours > 0 ? `${fmtHours(p.billable_hours)} billable` : "non-billable"}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400 py-2">
+              Per-person detail for this client isn't available yet.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Small presentational helpers ──────────────────────────────────────────
+function MixStrip({ billable, nonBillable, review }: { billable: number; nonBillable: number; review: number }) {
+  const grand = billable + nonBillable + review || 1;
+  const pct = (v: number) => Math.round((v / grand) * 100);
+  return (
+    <div>
+      <div className="flex h-11 overflow-hidden rounded-xl text-[13px] font-bold text-white">
+        <span className="flex items-center justify-center bg-emerald-600" style={{ width: `${pct(billable)}%` }}>
+          {pct(billable) >= 8 ? `${pct(billable)}%` : ""}
+        </span>
+        <span className="flex items-center justify-center bg-slate-400" style={{ width: `${pct(nonBillable)}%` }}>
+          {pct(nonBillable) >= 8 ? `${pct(nonBillable)}%` : ""}
+        </span>
+        <span className="flex items-center justify-center bg-amber-500" style={{ width: `${pct(review)}%` }}>
+          {pct(review) >= 8 ? `${pct(review)}%` : ""}
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-slate-500">
+        <span><span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-emerald-600 align-middle" />Billable <b className="text-slate-800">{fmtHours(billable)}</b></span>
+        <span><span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-slate-400 align-middle" />Non-billable <b className="text-slate-800">{fmtHours(nonBillable)}</b></span>
+        <span><span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-amber-500 align-middle" />Needs review <b className="text-slate-800">{fmtHours(review)}</b></span>
+      </div>
+    </div>
+  );
+}
+
+function StatBox({
+  label, value, tone, big,
+}: {
+  label: string;
+  value: string;
+  tone?: "emerald" | "amber";
+  big?: boolean;
+}) {
+  const toneMap: Record<string, string> = {
+    emerald: "text-emerald-700",
+    amber: "text-amber-600",
+  };
+  return (
+    <div className="rounded-xl bg-slate-50 px-3 py-2.5">
+      <div className={(big ? "text-lg " : "text-base ") + "font-bold tabular-nums " + (tone ? toneMap[tone] : "text-slate-900")}>
+        {value}
+      </div>
+      <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+    </div>
+  );
+}
+
+function EmptyState({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-400">
+      {label}
+    </div>
+  );
+}
+
 interface Help {
   title: string;
   body: string;
@@ -546,9 +968,7 @@ function WhyPill({ help }: { help: Help }) {
             {help.calc}
           </span>
         )}
-        {help.extra && (
-          <span className="mt-1 block text-[10.5px] text-slate-400">{help.extra}</span>
-        )}
+        {help.extra && <span className="mt-1 block text-[10.5px] text-slate-400">{help.extra}</span>}
       </span>
     </span>
   );
@@ -585,28 +1005,5 @@ function KPICard({
       <div className="mt-2 text-2xl font-semibold text-slate-900 tabular-nums">{value}</div>
       {sub && <div className="mt-0.5 text-[11px] text-slate-400">{sub}</div>}
     </div>
-  );
-}
-
-function Th({
-  children, onClick, active, dir, right,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  active: boolean;
-  dir: "asc" | "desc";
-  right?: boolean;
-}) {
-  return (
-    <th
-      onClick={onClick}
-      className={
-        "px-4 py-2.5 text-xs font-medium text-slate-500 cursor-pointer select-none hover:text-slate-700 " +
-        (right ? "text-right" : "text-left")
-      }
-    >
-      {children}
-      {active && <span className="ml-1 text-slate-400">{dir === "asc" ? "↑" : "↓"}</span>}
-    </th>
   );
 }

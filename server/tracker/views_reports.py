@@ -393,6 +393,17 @@ def _aggregate(blocks, group_by: str):
         "immaterial_min": 0,     # sub-threshold, shown in Total but not utilization
         "top_client": defaultdict(int),   # client name -> minutes (employee view)
         "block_count": 0,
+        # Cross-breakdown for the drill-downs (employee card / client modal):
+        #   employee mode → keyed by client_id, one entry per client worked
+        #   client mode   → keyed by user_id,   one entry per person who worked it
+        # Built from committed blocks only, so items sum to committed minutes.
+        "breakdown": defaultdict(lambda: {
+            "id": None,
+            "name": "",
+            "total_min": 0,
+            "billable_min": 0,
+            "non_billable_min": 0,
+        }),
     })
 
     distinct_clients = set()
@@ -459,6 +470,30 @@ def _aggregate(blocks, group_by: str):
         if group_by == "employee" and b.client_id:
             g["top_client"][client_name] += minutes
 
+        # Cross-breakdown accumulation. In employee mode we split this person's
+        # time by client; in client mode we split this client's time by person.
+        # Unassigned client / unknown user fall into an explicit bucket so the
+        # split still sums to the row total instead of silently dropping time.
+        if group_by == "employee":
+            bkey = b.client_id or "unassigned"
+            bname = client_name                      # "Unassigned" when no client
+            bid = b.client_id
+        else:
+            bkey = b.user_id or "unknown"
+            bname = (
+                (b.user.get_full_name().strip() or b.user.username)
+                if b.user_id else "Unknown"
+            )
+            bid = b.user_id
+        bd = g["breakdown"][bkey]
+        bd["id"] = bid
+        bd["name"] = bname
+        bd["total_min"] += minutes
+        if billable:
+            bd["billable_min"] += minutes
+        else:
+            bd["non_billable_min"] += minutes
+
     # build rows
     rows = []
     for key, g in groups.items():
@@ -477,6 +512,23 @@ def _aggregate(blocks, group_by: str):
         # reads Total = Billable + Non-Bill. util above used material-only
         # total (g["total_min"]), so the ratio is untouched.
         display_non_billable_min = g["non_billable_min"] + g["immaterial_min"]
+
+        # Serialize the cross-breakdown (drill-down source). Committed minutes
+        # only; drop empty buckets; biggest first so the UI shows the top
+        # client/person at the top of the list.
+        breakdown = []
+        for _bk, bd in g["breakdown"].items():
+            if bd["total_min"] <= 0:
+                continue
+            breakdown.append({
+                "id": bd["id"],
+                "name": bd["name"],
+                "total_hours": round(bd["total_min"] / 60, 2),
+                "billable_hours": round(bd["billable_min"] / 60, 2),
+                "non_billable_hours": round(bd["non_billable_min"] / 60, 2),
+            })
+        breakdown.sort(key=lambda x: x["total_hours"], reverse=True)
+
         rows.append({
             "id": g["id"],
             "label": g["label"],
@@ -486,6 +538,7 @@ def _aggregate(blocks, group_by: str):
             "utilization_pct": util,
             "top_client": top_client,
             "block_count": g["block_count"],
+            "breakdown": breakdown,
         })
 
     rows.sort(key=lambda r: r["total_hours"], reverse=True)

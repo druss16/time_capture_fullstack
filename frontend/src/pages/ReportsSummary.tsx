@@ -140,6 +140,7 @@ const PERIODS: { key: Period; label: string }[] = [
 ];
 
 const CLIENT_PAGE_SIZE = 8;
+const HEADLINE_PAGE_SIZE = 6;
 
 export default function ReportsSummary({
   orgIdOverride,
@@ -164,6 +165,7 @@ export default function ReportsSummary({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [clientSearch, setClientSearch] = useState("");
   const [clientPage, setClientPage] = useState(0);
+  const [headlinePage, setHeadlinePage] = useState(0);
   const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
   const [detailLoading, setDetailLoading] = useState(false);
 
@@ -270,6 +272,7 @@ export default function ReportsSummary({
   useEffect(() => {
     setExpanded(new Set());
     setClientPage(0);
+    setHeadlinePage(0);
     setDetail(null);
   }, [period, groupBy, customMode, appliedStart, appliedEnd, orgIdOverride]);
 
@@ -358,7 +361,6 @@ export default function ReportsSummary({
     return Array.from(map.values())
       .filter((c) => c.billable_hours > 0)
       .sort((a, b) => b.billable_hours - a.billable_hours)
-      .slice(0, 6)
       .map((c) => ({
         id: c.id,
         label: c.label,
@@ -395,6 +397,12 @@ export default function ReportsSummary({
     });
 
   const maxHeadlineBill = Math.max(1, ...headlineClients.map((c) => c.billable_hours));
+  const headlinePageCount = Math.max(1, Math.ceil(headlineClients.length / HEADLINE_PAGE_SIZE));
+  const headlinePageSafe = Math.min(headlinePage, headlinePageCount - 1);
+  const headlineSlice = headlineClients.slice(
+    headlinePageSafe * HEADLINE_PAGE_SIZE,
+    headlinePageSafe * HEADLINE_PAGE_SIZE + HEADLINE_PAGE_SIZE
+  );
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
@@ -506,7 +514,7 @@ export default function ReportsSummary({
             <span className="normal-case font-medium text-slate-400"> — click a client for detail</span>
           </h2>
           <div className="space-y-3">
-            {headlineClients.map((c) => {
+            {headlineSlice.map((c) => {
               const people = (c as any)._people as number | undefined;
               return (
                 <button
@@ -533,6 +541,31 @@ export default function ReportsSummary({
               );
             })}
           </div>
+
+          {headlinePageCount > 1 && (
+            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500">
+              <span>
+                Showing {headlineSlice.length} of {headlineClients.length} clients
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  disabled={headlinePageSafe === 0}
+                  onClick={() => setHeadlinePage(headlinePageSafe - 1)}
+                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <span className="px-1.5">{headlinePageSafe + 1} / {headlinePageCount}</span>
+                <button
+                  disabled={headlinePageSafe >= headlinePageCount - 1}
+                  onClick={() => setHeadlinePage(headlinePageSafe + 1)}
+                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

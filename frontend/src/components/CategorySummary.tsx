@@ -242,15 +242,17 @@ function MovePopover({
 // ─── Inline Move Picker ───────────────────────────────────────────────────────
 
 function InlineMovePicker({
-  clients, categories, count, onApply, onClose,
+  clients, categories, count, currentClientId, currentCategory, onApply, onClose,
 }: {
   clients: ClientOption[]; categories: string[];
   count: number;
+  currentClientId: number | null;
+  currentCategory: string;
   onApply: (clientId: number | null, category: string) => void;
   onClose: () => void;
 }) {
-  const [selClient, setSelClient] = useState<number | null>(null);
-  const [selCat, setSelCat] = useState(categories[0] ?? "");
+  const [selClient, setSelClient] = useState<number | null>(currentClientId);
+  const [selCat, setSelCat] = useState(currentCategory || categories[0] || "");
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -303,11 +305,13 @@ function InlineMovePicker({
 // ─── Floating Selection Bar ───────────────────────────────────────────────────
 
 function SelectionBar({
-  count, clients, categories, onMove, onClear,
+  count, clients, categories, currentClientId, currentCategory, onMove, onClear,
 }: {
   count: number;
   clients: ClientOption[];
   categories: string[];
+  currentClientId: number | null;
+  currentCategory: string;
   onMove: (clientId: number | null, category: string) => void;
   onClear: () => void;
 }) {
@@ -336,6 +340,8 @@ function SelectionBar({
             clients={clients}
             categories={categories}
             count={count}
+            currentClientId={currentClientId}
+            currentCategory={currentCategory}
             onApply={(clientId, category) => { setShowPopover(false); onMove(clientId, category); }}
             onClose={() => setShowPopover(false)}
           />
@@ -1593,6 +1599,41 @@ export default function CategorySummary({
     return () => document.removeEventListener("dragend", onEnd);
   }, []);
 
+  // Resolve the current client/category shared by the current selection.
+  // Selection keys are `${blockId}-${idx}`; map each block id back to the
+  // client/category it currently lives in. If the whole selection shares one
+  // client (and/or one category), pre-populate the move picker with it;
+  // otherwise leave that field neutral (mixed selection).
+  const selectionCurrent = React.useMemo(() => {
+    const selectedBlockIds = new Set(
+      Array.from(selectedIds)
+        .map((k) => parseInt(k.split("-")[0]))
+        .filter((n) => !isNaN(n) && n > 0)
+    );
+    if (selectedBlockIds.size === 0) return { clientId: null, category: "" };
+
+    const clientIds = new Set<number | null>();
+    const categories = new Set<string>();
+
+    for (const client of timeSummary) {
+      for (const cat of client.categories) {
+        for (const a of cat.sample_activities) {
+          const p = parse(a);
+          const ids = p.blockIds.length > 0 ? p.blockIds : (p.blockId ? [p.blockId] : []);
+          if (ids.some((id) => selectedBlockIds.has(id))) {
+            clientIds.add(client.client_id);
+            categories.add(cat.name);
+          }
+        }
+      }
+    }
+
+    return {
+      clientId: clientIds.size === 1 ? [...clientIds][0] : null,
+      category: categories.size === 1 ? [...categories][0] : "",
+    };
+  }, [selectedIds, timeSummary]);
+
   const toggleClient = (key: string) =>
     setCollapsedClients((prev) => {
       const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s;
@@ -2071,6 +2112,8 @@ export default function CategorySummary({
         count={selectedIds.size}
         clients={availableClients}
         categories={availableCategories}
+        currentClientId={selectionCurrent.clientId}
+        currentCategory={selectionCurrent.category}
         onMove={(clientId, category) => moveMany(Array.from(selectedIds) as any, clientId, category)}
         onClear={clearSelection}
       />

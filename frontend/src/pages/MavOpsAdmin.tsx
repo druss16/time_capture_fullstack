@@ -1009,12 +1009,15 @@ function SuggestionsTab({ apiFetch, flash, onManageOrgRules }: SuggestionsTabPro
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 // Paste into MavOpsAdmin.tsx after SuggestionsTab. Reuses the same `T`, `mono`,
-// `card`, `Btn`, `Badge`, `OrgPill`, `StatCard`, `timeAgo` already defined there.
+// `card`, `Btn`, `Badge`, `OrgPill`, `StatCard` already defined there.
 //
 // Reads: GET /api/mavops/mismatches/?org_id=&days=   (via apiFetch)
-// Surfaces blocks whose window title fingerprints a DIFFERENT client than the
-// one the time is booked to — a classification-accuracy detector. The per-day
-// histogram answers "is this historical (already fixed) or ongoing?"
+// The response splits into two buckets:
+//   client   — real client<->client mismatches (billing-impacting, e.g. UltraTax
+//              forward-fill). The verdict + histogram lead with THIS.
+//   internal — firm/admin bucket noise (Internal - Tax ↔ Internal - Accounting,
+//              CS Connect firm window). Real + accurate, but not a billing error;
+//              shown collapsed below so it never inflates the client signal.
 
 interface MismatchRow {
   block_id: number;
@@ -1028,6 +1031,7 @@ interface MismatchRow {
   booked_client_name: string;
   looks_like_client_id: number;
   looks_like_client_name: string;
+  bucket: "client" | "internal";
   confidence: {
     looks_like_coverage: number;
     abs_hit: number;
@@ -1035,14 +1039,18 @@ interface MismatchRow {
     top_token_weight: number;
   };
 }
-interface MismatchResponse {
-  params: { org_id: number | null; days: number };
-  scanned_blocks: number;
-  total_mismatches: number;
+interface MismatchBucket {
+  total: number;
   returned: number;
   histogram: { date: string; count: number }[];
   top_pairs: { pair: string; count: number }[];
   mismatches: MismatchRow[];
+}
+interface MismatchResponse {
+  params: { org_id: number | null; days: number };
+  scanned_blocks: number;
+  client: MismatchBucket;
+  internal: MismatchBucket;
 }
 
 interface MismatchesTabProps {
@@ -1051,10 +1059,87 @@ interface MismatchesTabProps {
   filterOrg: number | null;
 }
 
+// Shared renderer for one bucket's histogram + pairs + flagged list.
+function BucketDetail({ bucket, tone }: { bucket: MismatchBucket; tone: string }) {
+  const peak = bucket.histogram.length ? Math.max(...bucket.histogram.map(h => h.count)) : 1;
+  return (
+    <>
+      {bucket.histogram.length > 0 && (
+        <div style={{ ...card, marginBottom: 20 }}>
+          <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 14, fontWeight: 600 }}>
+            Mismatches per day — clustering in the past = already fixed
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 90 }}>
+            {bucket.histogram.map(h => (
+              <div key={h.date} title={`${h.date}: ${h.count}`}
+                style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                <div style={{ width: "100%", height: `${Math.max(6, (h.count / peak) * 74)}px`, background: tone, borderRadius: "2px 2px 0 0", minWidth: 3 }} />
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, color: T.textMuted, fontSize: 10, ...mono }}>
+            <span>{bucket.histogram[0].date}</span>
+            <span>{bucket.histogram[bucket.histogram.length - 1].date}</span>
+          </div>
+        </div>
+      )}
+
+      {bucket.top_pairs.length > 0 && (
+        <div style={{ ...card, marginBottom: 20 }}>
+          <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>
+            Worst pairs — booked → looks like
+          </div>
+          {bucket.top_pairs.map((p, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderBottom: i < bucket.top_pairs.length - 1 ? `1px solid ${T.border}` : "none" }}>
+              <span style={{ fontSize: 13, color: T.textSub, ...mono }}>{p.pair}</span>
+              <span style={{ ...mono, fontSize: 13, color: tone, fontWeight: 700 }}>{p.count}×</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {bucket.mismatches.length > 0 && (
+        <>
+          <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 10, fontWeight: 600, ...mono }}>
+            Flagged blocks ({bucket.returned} of {bucket.total})
+          </div>
+          {bucket.mismatches.map(m => (
+            <div key={m.block_id} style={{ ...card, padding: "14px 20px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
+                {m.org_name && <OrgPill name={m.org_name} />}
+                <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>block {m.block_id}</span>
+                <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{m.date}</span>
+                {m.user && <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{m.user}</span>}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
+                <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>booked</span>
+                <Badge label={m.booked_client_name} color={T.yellow} />
+                <span style={{ color: tone, fontSize: 14 }}>→</span>
+                <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>title says</span>
+                <Badge label={m.looks_like_client_name} color={tone} />
+              </div>
+              <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
+                {m.app_name && <span style={{ color: T.textMuted }}>{m.app_name} — </span>}
+                {m.window_title}
+              </code>
+              <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 10, color: T.textMuted, ...mono }}>
+                <span>coverage {(m.confidence.looks_like_coverage * 100).toFixed(0)}%</span>
+                <span>vs booked {(m.confidence.booked_coverage * 100).toFixed(0)}%</span>
+                <span>strength {m.confidence.abs_hit.toFixed(1)}</span>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
 function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [data, setData] = useState<MismatchResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [days, setDays] = useState(60);
+  const [days, setDays] = useState(120);
+  const [showInternal, setShowInternal] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1072,29 +1157,23 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Verdict: how recent is the newest mismatch? Drives the historical-vs-ongoing
-  // banner. Compared against today.
+  // Verdict runs on the CLIENT bucket only — the money bucket. Internal noise
+  // must never trigger the "ongoing" alarm.
   const verdict = (() => {
-    if (!data || data.histogram.length === 0) return null;
-    const newest = data.histogram[data.histogram.length - 1].date;
+    if (!data || data.client.histogram.length === 0) return null;
+    const newest = data.client.histogram[data.client.histogram.length - 1].date;
     const ageDays = Math.floor((Date.now() - new Date(newest).getTime()) / 86400000);
     return { newest, ageDays, ongoing: ageDays <= 3 };
   })();
 
-  const peak = data && data.histogram.length
-    ? Math.max(...data.histogram.map(h => h.count)) : 1;
-
   return (
     <div>
-      {/* Controls */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
-        <span style={{ color: T.textSub, fontSize: 13, ...mono, fontWeight: 600 }}>
-          Client-name mismatches
-        </span>
+        <span style={{ color: T.textSub, fontSize: 13, ...mono, fontWeight: 600 }}>Client-name mismatches</span>
         {filterOrg && <OrgPill name={`org ${filterOrg}`} />}
         <div style={{ flex: 1 }} />
         <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>lookback</span>
-        {[30, 60, 90, 180].map(d => (
+        {[30, 60, 90, 120, 180].map(d => (
           <button key={d} onClick={() => setDays(d)}
             style={{
               background: days === d ? T.teal + "25" : "transparent",
@@ -1115,12 +1194,11 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
             <StatCard label="Blocks Scanned" value={data.scanned_blocks.toLocaleString()} color={T.text} />
-            <StatCard label="Mismatches" value={data.total_mismatches} color={data.total_mismatches > 0 ? T.red : T.green} />
-            <StatCard label="Client Pairs" value={data.top_pairs.length} color={T.purple} />
+            <StatCard label="Client Mismatches" value={data.client.total} color={data.client.total > 0 ? T.red : T.green} />
+            <StatCard label="Internal (noise)" value={data.internal.total} color={T.textMuted} />
             <StatCard label="Lookback" value={`${data.params.days}d`} color={T.teal} />
           </div>
 
-          {/* Historical-vs-ongoing verdict */}
           {verdict && (
             <div style={{
               ...card, marginBottom: 20,
@@ -1129,100 +1207,36 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             }}>
               <div style={{ fontSize: 13, color: verdict.ongoing ? T.red : T.green, ...mono, fontWeight: 600 }}>
                 {verdict.ongoing
-                  ? `⚠ ONGOING — most recent mismatch was ${verdict.ageDays}d ago (${verdict.newest}). Needs a live classifier fix.`
-                  : `✓ Likely HISTORICAL — newest mismatch was ${verdict.ageDays}d ago (${verdict.newest}). No recent recurrences; consider a one-time recategorization cleanup rather than a live fix.`}
+                  ? `⚠ ONGOING — most recent CLIENT mismatch was ${verdict.ageDays}d ago (${verdict.newest}). Needs a live classifier fix.`
+                  : `✓ Likely HISTORICAL — newest CLIENT mismatch was ${verdict.ageDays}d ago (${verdict.newest}). No recent recurrences; consider a one-time recategorization cleanup.`}
               </div>
             </div>
           )}
 
-          {/* Per-day histogram */}
-          {data.histogram.length > 0 && (
-            <div style={{ ...card, marginBottom: 20 }}>
-              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 14, fontWeight: 600 }}>
-                Mismatches per day — clustering in the past = already fixed
-              </div>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 90 }}>
-                {data.histogram.map(h => (
-                  <div key={h.date} title={`${h.date}: ${h.count}`}
-                    style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                    <div style={{
-                      width: "100%",
-                      height: `${Math.max(6, (h.count / peak) * 74)}px`,
-                      background: T.teal, borderRadius: "2px 2px 0 0", minWidth: 3,
-                    }} />
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, color: T.textMuted, fontSize: 10, ...mono }}>
-                <span>{data.histogram[0].date}</span>
-                <span>{data.histogram[data.histogram.length - 1].date}</span>
-              </div>
-            </div>
-          )}
-
-          {/* Worst client pairs */}
-          {data.top_pairs.length > 0 && (
-            <div style={{ ...card, marginBottom: 20 }}>
-              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>
-                Worst client pairs — booked → looks like
-              </div>
-              {data.top_pairs.map((p, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderBottom: i < data.top_pairs.length - 1 ? `1px solid ${T.border}` : "none" }}>
-                  <span style={{ fontSize: 13, color: T.textSub, ...mono }}>{p.pair}</span>
-                  <span style={{ ...mono, fontSize: 13, color: T.red, fontWeight: 700 }}>{p.count}×</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* The flagged blocks */}
-          {data.mismatches.length === 0 ? (
-            <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
-              <div style={{ color: T.green, fontSize: 14, ...mono }}>
-                no client-name mismatches in this window ✓
-              </div>
-            </div>
+          {/* CLIENT bucket — the money bucket */}
+          {data.client.total > 0 ? (
+            <BucketDetail bucket={data.client} tone={T.red} />
           ) : (
-            <>
-              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 10, fontWeight: 600, ...mono }}>
-                Flagged blocks ({data.returned} of {data.total_mismatches})
-              </div>
-              {data.mismatches.map(m => (
-                <div key={m.block_id} style={{ ...card, padding: "14px 20px" }}>
-                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
-                        {m.org_name && <OrgPill name={m.org_name} />}
-                        <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>block {m.block_id}</span>
-                        <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{m.date}</span>
-                        {m.user && <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{m.user}</span>}
-                      </div>
+            <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
+              <div style={{ color: T.green, fontSize: 14, ...mono }}>no client-name mismatches in this window ✓</div>
+            </div>
+          )}
 
-                      {/* booked → looks-like */}
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
-                        <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>booked</span>
-                        <Badge label={m.booked_client_name} color={T.yellow} />
-                        <span style={{ color: T.red, fontSize: 14 }}>→</span>
-                        <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>title says</span>
-                        <Badge label={m.looks_like_client_name} color={T.red} />
-                      </div>
-
-                      {/* the actual title */}
-                      <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
-                        {m.app_name && <span style={{ color: T.textMuted }}>{m.app_name} — </span>}
-                        {m.window_title}
-                      </code>
-
-                      <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 10, color: T.textMuted, ...mono }}>
-                        <span>coverage {(m.confidence.looks_like_coverage * 100).toFixed(0)}%</span>
-                        <span>vs booked {(m.confidence.booked_coverage * 100).toFixed(0)}%</span>
-                        <span>strength {m.confidence.abs_hit.toFixed(1)}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </>
+          {/* INTERNAL bucket — collapsed, secondary */}
+          {data.internal.total > 0 && (
+            <div style={{ marginTop: 24 }}>
+              <button onClick={() => setShowInternal(v => !v)}
+                style={{ width: "100%", ...card, marginBottom: showInternal ? 20 : 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, textAlign: "left" as const, border: `1px solid ${T.border}` }}>
+                <span style={{ fontSize: 13, color: T.textSub, ...mono, fontWeight: 600 }}>
+                  {showInternal ? "▾" : "▸"} Internal / admin mismatches ({data.internal.total})
+                  <span style={{ color: T.textMuted, marginLeft: 10, fontWeight: 400 }}>
+                    — firm buckets & CS Connect; real but not billing errors
+                  </span>
+                </span>
+                <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showInternal ? "hide" : "show"}</span>
+              </button>
+              {showInternal && <BucketDetail bucket={data.internal} tone={T.textMuted} />}
+            </div>
           )}
         </>
       )}

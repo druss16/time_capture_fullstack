@@ -47,6 +47,48 @@ _STOPish = {
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
+# Names that represent the firm's own internal/admin buckets rather than a real
+# external client. A mismatch touching one of these is real (worth seeing) but
+# belongs in a SEPARATE bucket from client<->client billing errors, so the
+# money-losing cases aren't drowned by internal bookkeeping noise.
+#
+# Detection is prefix/substring based on the normalized name. Kept deliberately
+# small and explicit; extend per-org if new internal buckets appear.
+_INTERNAL_MARKERS = (
+    "internal",           # "Internal - Tax", "Internal - Accounting", "Internal"
+    "admin",              # admin buckets
+    "non-billable",
+    "nonbillable",
+    "overhead",
+    "pto",
+    "training",
+)
+
+
+def is_internal_client(name: str, firm_name: str | None = None) -> bool:
+    """
+    True if `name` is an internal/admin bucket (or the firm itself) rather than a
+    real external client. `firm_name`, when supplied, catches the firm's own name
+    appearing as a pseudo-client (e.g. the CS Connect 'TL Wall Accounting and Tax
+    Corp' window that classifies to an internal record).
+    """
+    n = (name or "").strip().lower()
+    if not n:
+        return False
+    for marker in _INTERNAL_MARKERS:
+        if marker in n:
+            return True
+    if firm_name:
+        fn = firm_name.strip().lower()
+        # Compare on distinctive firm tokens (drop generic corp words) so
+        # "TL Wall Accounting and Tax Corp" matches "TL Wall".
+        fn_tokens = {t for t in _TOKEN_RE.findall(fn) if len(t) > 2 and t not in _STOPish}
+        n_tokens = set(_TOKEN_RE.findall(n))
+        if fn_tokens and fn_tokens <= n_tokens:
+            return True
+    return False
+
+
 def _tokenize(name: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall((name or "").lower()) if len(t) > 1]
 
@@ -135,12 +177,19 @@ def detect_mismatch(
     booked_cid: int,
     index: dict,
     client_names: dict[int, str],
+    firm_name: str | None = None,
 ) -> dict | None:
     """
     Returns a mismatch record if the title fingerprints a DIFFERENT client more
     strongly than the booked one; otherwise None. Ranking is by ABSOLUTE
     distinctive mass matched, which distinguishes a full name in the title from
     a thin generic token that merely happens to be some client's main word.
+
+    The record carries a `bucket`:
+      "client"   — both sides are real external clients (billing-impacting;
+                   e.g. UltraTax forward-fill). THIS is the money bucket.
+      "internal" — either side is an internal/admin bucket or the firm itself
+                   (real, worth seeing, but not a client billing error).
     """
     title_tokens = set(_tokenize(title))
     if not title_tokens:
@@ -177,13 +226,22 @@ def detect_mismatch(
         and best_topw >= MIN_TOP_TOKEN
         and (best_cov - booked_cov) >= COVERAGE_MARGIN
     ):
+        booked_name = client_names[booked_cid]
+        looks_name = client_names[best_cid]
+        bucket = (
+            "internal"
+            if is_internal_client(booked_name, firm_name)
+            or is_internal_client(looks_name, firm_name)
+            else "client"
+        )
         return {
             "looks_like_client_id": best_cid,
-            "looks_like_client_name": client_names[best_cid],
+            "looks_like_client_name": looks_name,
             "looks_like_coverage": round(best_cov, 3),
             "looks_like_abs_hit": round(best_abs, 3),
             "booked_coverage": round(booked_cov, 3),
             "runner_up_abs_hit": round(second_abs, 3),
             "top_token_weight": round(best_topw, 3),
+            "bucket": bucket,
         }
     return None

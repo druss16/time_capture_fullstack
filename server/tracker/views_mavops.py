@@ -891,6 +891,12 @@ def mavops_copy_routing_rules(request, org_id):
     })
 
 
+from collections import defaultdict
+from datetime import timedelta
+
+from tracker.utils.client_name_match import build_token_index, detect_mismatch
+
+
 @api_view(['GET'])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])
@@ -900,14 +906,14 @@ def mavops_client_mismatches(request):
       ?org_id=<id>       (optional — scope to one org; default: all orgs)
       &days=<int>        (lookback window; default 60, max 365)
       &limit=<int>       (max flagged rows returned; default 500, max 2000)
- 
+
     Returns high-confidence client-name mismatches, each with the offending
     block's title, the booked client, and the client the title actually looks
     like — plus a per-day histogram so you can see if the problem is historical
     or ongoing.
     """
     from tracker.models import Block, Client
- 
+
     org_id = request.GET.get('org_id')
     try:
         days = min(int(request.GET.get('days', 60)), 365)
@@ -917,9 +923,9 @@ def mavops_client_mismatches(request):
         limit = min(int(request.GET.get('limit', 500)), 2000)
     except (ValueError, TypeError):
         limit = 500
- 
+
     cutoff = timezone.now() - timedelta(days=days)
- 
+
     # Build a per-org client-name index once, so tokens' distinctiveness is
     # computed within each org's own roster (cross-org names shouldn't dilute
     # each other's df).
@@ -930,7 +936,17 @@ def mavops_client_mismatches(request):
     for c in client_qs.only('id', 'name', 'org_id'):
         names_by_org[c.org_id][c.id] = c.name
     index_by_org = {oid: build_token_index(names) for oid, names in names_by_org.items()}
- 
+
+    # Firm name per org — lets the matcher recognize the firm's own name showing
+    # up as a pseudo-client (e.g. the CS Connect window) and bucket it internal.
+    from tracker.models import Organization
+    firm_by_org = {}
+    org_qs = Organization.objects.all()
+    if org_id:
+        org_qs = org_qs.filter(id=org_id)
+    for o in org_qs.only('id', 'name'):
+        firm_by_org[o.id] = o.name
+
     # Committed blocks with a client assigned + a usable window title.
     blocks = (
         Block.objects
@@ -946,12 +962,15 @@ def mavops_client_mismatches(request):
     )
     if org_id:
         blocks = blocks.filter(org_id=org_id)
- 
-    flagged = []
-    by_day = defaultdict(int)          # date iso → count
-    by_client_pair = defaultdict(int)  # "booked → looks_like" → count
+
+    # Split everything by bucket: "client" = real billing-impacting mismatches,
+    # "internal" = firm/admin bucket noise (real but not a client billing error).
+    flagged = {"client": [], "internal": []}
+    by_day = {"client": defaultdict(int), "internal": defaultdict(int)}
+    by_pair = {"client": defaultdict(int), "internal": defaultdict(int)}
+    counts = {"client": 0, "internal": 0}
     scanned = 0
- 
+
     for b in blocks.iterator(chunk_size=1000):
         scanned += 1
         oid = b.org_id
@@ -959,18 +978,22 @@ def mavops_client_mismatches(request):
         names = names_by_org.get(oid)
         if not index or not names or b.client_id not in names:
             continue
- 
-        m = detect_mismatch(b.window_title, b.client_id, index, names)
+
+        m = detect_mismatch(
+            b.window_title, b.client_id, index, names,
+            firm_name=firm_by_org.get(oid),
+        )
         if not m:
             continue
- 
+
+        bucket = m.get("bucket", "client")
         day = timezone.localtime(b.start).date().isoformat()
-        by_day[day] += 1
-        pair = f'{names[b.client_id]} → {m["looks_like_client_name"]}'
-        by_client_pair[pair] += 1
- 
-        if len(flagged) < limit:
-            flagged.append({
+        by_day[bucket][day] += 1
+        by_pair[bucket][f'{names[b.client_id]} → {m["looks_like_client_name"]}'] += 1
+        counts[bucket] += 1
+
+        if len(flagged[bucket]) < limit:
+            flagged[bucket].append({
                 'block_id': b.id,
                 'org_id': oid,
                 'org_name': b.org.name if b.org_id else None,
@@ -982,6 +1005,7 @@ def mavops_client_mismatches(request):
                 'booked_client_name': names[b.client_id],
                 'looks_like_client_id': m['looks_like_client_id'],
                 'looks_like_client_name': m['looks_like_client_name'],
+                'bucket': bucket,
                 'confidence': {
                     'looks_like_coverage': m['looks_like_coverage'],
                     'abs_hit': m['looks_like_abs_hit'],
@@ -989,26 +1013,36 @@ def mavops_client_mismatches(request):
                     'top_token_weight': m['top_token_weight'],
                 },
             })
- 
-    # Sort the day histogram chronologically for the frontend sparkline.
-    histogram = [{'date': d, 'count': by_day[d]} for d in sorted(by_day.keys())]
- 
-    # Most common offending pairs, worst first — the "which clients bleed into
-    # which" summary.
-    top_pairs = sorted(
-        ({'pair': k, 'count': v} for k, v in by_client_pair.items()),
-        key=lambda x: -x['count'],
-    )[:25]
- 
-    total_flagged = sum(by_day.values())
- 
+
+    def _histogram(bucket):
+        d = by_day[bucket]
+        return [{'date': k, 'count': d[k]} for k in sorted(d.keys())]
+
+    def _pairs(bucket):
+        return sorted(
+            ({'pair': k, 'count': v} for k, v in by_pair[bucket].items()),
+            key=lambda x: -x['count'],
+        )[:25]
+
     return Response({
         'params': {'org_id': int(org_id) if org_id else None, 'days': days},
         'scanned_blocks': scanned,
-        'total_mismatches': total_flagged,
-        'returned': len(flagged),
-        'histogram': histogram,      # per-day counts → is it historical or ongoing?
-        'top_pairs': top_pairs,      # booked → looks_like, worst first
-        'mismatches': flagged,
+        # The money bucket — real client<->client mismatches (e.g. UltraTax
+        # forward-fill). The verdict/histogram the UI leads with is THIS one.
+        'client': {
+            'total': counts['client'],
+            'returned': len(flagged['client']),
+            'histogram': _histogram('client'),
+            'top_pairs': _pairs('client'),
+            'mismatches': flagged['client'],
+        },
+        # Firm/admin bucket noise — surfaced separately so it's visible and
+        # accurate, but never inflates the client count or the verdict.
+        'internal': {
+            'total': counts['internal'],
+            'returned': len(flagged['internal']),
+            'histogram': _histogram('internal'),
+            'top_pairs': _pairs('internal'),
+            'mismatches': flagged['internal'],
+        },
     })
- 

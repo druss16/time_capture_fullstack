@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Loader2, Download, Clock, AlertTriangle,
-  ChevronDown, Search, X, ArrowRight,
+  ChevronDown, Search, X,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
@@ -313,6 +313,9 @@ export default function ReportsSummary({
     clientPageSafe * CLIENT_PAGE_SIZE,
     clientPageSafe * CLIENT_PAGE_SIZE + CLIENT_PAGE_SIZE
   );
+  // Scale bars against the busiest client in the full filtered set, so widths
+  // stay comparable across pages instead of re-normalizing each page.
+  const maxClientBill = Math.max(1, ...filteredClients.map((c) => c.billable_hours));
 
   const toggleExpand = (key: string) =>
     setExpanded((prev) => {
@@ -433,11 +436,11 @@ export default function ReportsSummary({
         </div>
       )}
 
-      {/* ══ CLIENTS SECTION ══════════════════════════════════════════════ */}
+      {/* ══ CLIENTS SECTION (bar graph) ══════════════════════════════════ */}
       {!loading && !error && (
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-base font-bold text-slate-900">Clients</h2>
+            <h2 className="text-base font-bold text-slate-900">Where the billable hours went {windowPhrase}</h2>
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
               <input
@@ -449,59 +452,44 @@ export default function ReportsSummary({
             </div>
           </div>
 
-          {/* ── CLIENT TABLE: searchable, paginated ── */}
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wide text-slate-500">Client</th>
-                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Billable</th>
-                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Non-bill</th>
-                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Needs review</th>
-                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Total</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {clientSlice.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">
-                      {clientSearch ? `No clients match “${clientSearch}”.` : "No client time in this period yet."}
-                    </td>
-                  </tr>
-                )}
-                {clientSlice.map((r) => (
-                  <tr
-                    key={`${r.id}-${r.label}`}
-                    onClick={() => openClientDetail(r)}
-                    className="hover:bg-slate-50/60 cursor-pointer"
-                  >
-                    <td className="px-4 py-3 font-semibold text-slate-800">{r.label}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-emerald-700 font-medium">{fmtHours(r.billable_hours)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-slate-400">{fmtHours(r.non_billable_hours)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {(r.uncategorized_hours || 0) > 0 ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-amber-600 font-medium">
-                          <Clock className="h-3 w-3" />
-                          {fmtHours(r.uncategorized_hours)}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
+            <p className="text-[11px] font-medium text-slate-400 mb-4">Click a client for detail</p>
+
+            {clientSlice.length === 0 ? (
+              <div className="py-10 text-center text-sm text-slate-400">
+                {clientSearch ? `No clients match “${clientSearch}”.` : "No client time in this period yet."}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {clientSlice.map((c) => {
+                  const people = Array.isArray(c.breakdown) ? c.breakdown.length : undefined;
+                  return (
+                    <button
+                      key={`${c.id}-${c.label}`}
+                      onClick={() => openClientDetail(c)}
+                      className="w-full grid grid-cols-[minmax(0,1fr)_84px] sm:grid-cols-[220px_minmax(0,1fr)_84px] items-center gap-3 rounded-lg px-1.5 py-1 text-left hover:bg-slate-50 cursor-pointer"
+                    >
+                      <span className="truncate text-sm font-semibold text-slate-800">{c.label}</span>
+                      <span className="hidden sm:block h-[26px] rounded-full bg-slate-100 overflow-hidden">
+                        <span
+                          className="flex h-full items-center rounded-full bg-gradient-to-r from-emerald-600 to-emerald-500 pl-2.5 text-[11px] font-bold text-white"
+                          style={{ width: `${Math.max((c.billable_hours / maxClientBill) * 100, 6)}%` }}
+                        >
+                          {people != null ? `${people} ${people > 1 ? "people" : "person"}` : ""}
                         </span>
-                      ) : (
-                        <span className="text-slate-300">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums font-semibold text-slate-700">{fmtHours(r.total_hours)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                        View <ArrowRight className="h-3 w-3" />
                       </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <span className="text-right text-sm font-bold tabular-nums text-slate-800">
+                        {fmtHours(c.billable_hours)}
+                        <span className="block text-[11px] font-semibold text-slate-400">billable</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {/* pager */}
-            <div className="flex items-center justify-between gap-2 px-4 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
+            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500">
               <span>
                 Showing {clientSlice.length} of {filteredClients.length} client{filteredClients.length === 1 ? "" : "s"}
               </span>

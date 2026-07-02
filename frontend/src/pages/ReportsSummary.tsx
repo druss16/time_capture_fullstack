@@ -140,7 +140,6 @@ const PERIODS: { key: Period; label: string }[] = [
 ];
 
 const CLIENT_PAGE_SIZE = 8;
-const HEADLINE_PAGE_SIZE = 6;
 
 export default function ReportsSummary({
   orgIdOverride,
@@ -167,7 +166,6 @@ export default function ReportsSummary({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [clientSearch, setClientSearch] = useState("");
   const [clientPage, setClientPage] = useState(0);
-  const [headlinePage, setHeadlinePage] = useState(0);
   const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
 
   const buildParams = useCallback((group: GroupBy) => {
@@ -255,7 +253,6 @@ export default function ReportsSummary({
   useEffect(() => {
     setExpanded(new Set());
     setClientPage(0);
-    setHeadlinePage(0);
     setDetail(null);
   }, [period, customMode, appliedStart, appliedEnd, orgIdOverride]);
 
@@ -302,65 +299,6 @@ export default function ReportsSummary({
     [clientData]
   );
 
-  // Headline "where the billable hours went" — top billable clients.
-  // Now that we load client-grouped data directly, use those exact rows: real
-  // billable per client, and the people count comes from each client's
-  // breakdown (who worked it). Falls back to an employee-side rollup only if
-  // client data didn't load.
-  const headlineClients = useMemo(() => {
-    if (clientData && clientData.rows.length > 0) {
-      return clientData.rows
-        .filter((r) => r.billable_hours > 0)
-        .sort((a, b) => b.billable_hours - a.billable_hours)
-        .map((r) => ({
-          ...r,
-          _people: Array.isArray(r.breakdown) ? r.breakdown.length : undefined,
-        })) as (SummaryRow & { _people?: number })[];
-    }
-    if (!data) return [];
-    const map = new Map<string, { id: number | null; label: string; billable_hours: number; people: Set<string | number> }>();
-    const hasBreakdown = data.rows.some(
-      (r) => Array.isArray(r.breakdown) && r.breakdown.length > 0
-    );
-    if (hasBreakdown) {
-      for (const r of data.rows) {
-        if (!Array.isArray(r.breakdown)) continue;
-        for (const b of r.breakdown) {
-          if (b.name === "Unassigned" || b.name === "Internal / Admin") continue;
-          if ((b.billable_hours || 0) <= 0) continue;
-          const key = b.name;
-          const cur = map.get(key) || { id: b.id ?? null, label: b.name, billable_hours: 0, people: new Set() };
-          cur.billable_hours += b.billable_hours;
-          cur.people.add(r.id ?? r.label);
-          map.set(key, cur);
-        }
-      }
-    } else {
-      for (const r of data.rows) {
-        const key = r.top_client;
-        if (!key || key === "—") continue;
-        const cur = map.get(key) || { id: null, label: key, billable_hours: 0, people: new Set() };
-        cur.billable_hours += r.billable_hours;
-        cur.people.add(r.id ?? r.label);
-        map.set(key, cur);
-      }
-    }
-    return Array.from(map.values())
-      .filter((c) => c.billable_hours > 0)
-      .sort((a, b) => b.billable_hours - a.billable_hours)
-      .map((c) => ({
-        id: c.id,
-        label: c.label,
-        total_hours: c.billable_hours,
-        billable_hours: c.billable_hours,
-        non_billable_hours: 0,
-        utilization_pct: 0,
-        top_client: null,
-        block_count: 0,
-        _people: c.people.size,
-      })) as (SummaryRow & { _people?: number })[];
-  }, [data, clientData]);
-
   // Filtered + paginated client list for the Client view.
   const filteredClients = useMemo(() => {
     const q = clientSearch.trim().toLowerCase();
@@ -382,14 +320,6 @@ export default function ReportsSummary({
       next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
-
-  const maxHeadlineBill = Math.max(1, ...headlineClients.map((c) => c.billable_hours));
-  const headlinePageCount = Math.max(1, Math.ceil(headlineClients.length / HEADLINE_PAGE_SIZE));
-  const headlinePageSafe = Math.min(headlinePage, headlinePageCount - 1);
-  const headlineSlice = headlineClients.slice(
-    headlinePageSafe * HEADLINE_PAGE_SIZE,
-    headlinePageSafe * HEADLINE_PAGE_SIZE + HEADLINE_PAGE_SIZE
-  );
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
@@ -485,72 +415,6 @@ export default function ReportsSummary({
       {customMode && !customApplied && (
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
           Pick a start and end date, then choose <span className="font-semibold text-slate-700">Apply</span> to load that range.
-        </div>
-      )}
-
-      {/* ── HEADLINE: where the billable hours went ──────────────────────────
-          Top billable clients as bars, above both stacked sections. Additive
-          to the client table (bars = quick visual ranking; table = full detail
-          with non-bill / review / total and search). */}
-      {data && data.scope === "all" && headlineClients.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
-          <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-4">
-            Where the billable hours went {windowPhrase}
-            <span className="normal-case font-medium text-slate-400"> — click a client for detail</span>
-          </h2>
-          <div className="space-y-3">
-            {headlineSlice.map((c) => {
-              const people = (c as any)._people as number | undefined;
-              return (
-                <button
-                  key={c.label}
-                  onClick={() => openClientDetail(c)}
-                  className={
-                    "w-full grid grid-cols-[minmax(0,1fr)_84px] sm:grid-cols-[220px_minmax(0,1fr)_84px] items-center gap-3 rounded-lg px-1.5 py-1 text-left hover:bg-slate-50 cursor-pointer"
-                  }
-                >
-                  <span className="truncate text-sm font-semibold text-slate-800">{c.label}</span>
-                  <span className="hidden sm:block h-[26px] rounded-lg bg-slate-100 overflow-hidden">
-                    <span
-                      className="flex h-full items-center rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 pl-2.5 text-[11px] font-bold text-white"
-                      style={{ width: `${Math.max((c.billable_hours / maxHeadlineBill) * 100, 6)}%` }}
-                    >
-                      {people != null ? `${people} ${people > 1 ? "people" : "person"}` : ""}
-                    </span>
-                  </span>
-                  <span className="text-right text-sm font-bold tabular-nums text-slate-800">
-                    {fmtHours(c.billable_hours)}
-                    <span className="block text-[11px] font-semibold text-slate-400">billable</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {headlinePageCount > 1 && (
-            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500">
-              <span>
-                Showing {headlineSlice.length} of {headlineClients.length} clients
-              </span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  disabled={headlinePageSafe === 0}
-                  onClick={() => setHeadlinePage(headlinePageSafe - 1)}
-                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
-                >
-                  ← Prev
-                </button>
-                <span className="px-1.5">{headlinePageSafe + 1} / {headlinePageCount}</span>
-                <button
-                  disabled={headlinePageSafe >= headlinePageCount - 1}
-                  onClick={() => setHeadlinePage(headlinePageSafe + 1)}
-                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
-                >
-                  Next →
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       )}
 

@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Loader2, Download, Clock, AlertTriangle,
-  ChevronDown, Search, X, CheckCircle2, ArrowRight,
+  ChevronDown, Search, X, ArrowRight,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
@@ -617,27 +617,40 @@ export default function ReportsSummary({
         </div>
       )}
 
-      {/* ── EMPLOYEE VIEW: cards ─────────────────────────────────────────── */}
+      {/* ── EMPLOYEE VIEW: dense rows ────────────────────────────────────── */}
       {data && !loading && groupBy === "employee" && (
         employeeRows.length === 0 ? (
           <EmptyState label="No committed time in this period yet." />
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {employeeRows.map((r) => (
-              <EmployeeCard
-                key={`${r.id}-${r.label}`}
-                row={r}
-                expanded={expanded.has(`${r.id}-${r.label}`)}
-                onToggle={() => toggleExpand(`${r.id}-${r.label}`)}
-                onOpenClient={(cid, cname) => openClientDetail({ id: cid, label: cname })}
-                onOpenReview={() =>
-                  setPanelParams({
-                    period, group_by: "employee", orgId: orgIdOverride,
-                    userId: r.id, userLabel: r.label,
-                  })
-                }
-              />
-            ))}
+          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            {/* column header — hidden on narrow screens where columns stack */}
+            <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-[10.5px] font-bold uppercase tracking-wide text-slate-500">
+              <span />
+              <span>Employee</span>
+              <span>Mix</span>
+              <span className="text-right">Billable</span>
+              <span className="text-right">Non-bill</span>
+              <span className="text-right">Review</span>
+              <span className="text-right">Util %</span>
+              <span />
+            </div>
+            <div className="divide-y divide-slate-100">
+              {employeeRows.map((r) => (
+                <EmployeeRow
+                  key={`${r.id}-${r.label}`}
+                  row={r}
+                  expanded={expanded.has(`${r.id}-${r.label}`)}
+                  onToggle={() => toggleExpand(`${r.id}-${r.label}`)}
+                  onOpenClient={(cid, cname) => openClientDetail({ id: cid, label: cname })}
+                  onOpenReview={() =>
+                    setPanelParams({
+                      period, group_by: "employee", orgId: orgIdOverride,
+                      userId: r.id, userLabel: r.label,
+                    })
+                  }
+                />
+              ))}
+            </div>
           </div>
         )
       )}
@@ -740,7 +753,12 @@ export default function ReportsSummary({
 }
 
 // ── Employee card ─────────────────────────────────────────────────────────
-function EmployeeCard({
+// ── Employee dense row (option B) ──────────────────────────────────────────
+// One row per person: avatar + name + "most time on", a thin mix bar, then
+// Billable / Non-bill / Review / Util % columns, and an expand chevron.
+// Clicking the row toggles an inline per-client breakdown below it. On narrow
+// screens the columns collapse into a wrapped stat strip so nothing is lost.
+function EmployeeRow({
   row, expanded, onToggle, onOpenReview, onOpenClient,
 }: {
   row: SummaryRow;
@@ -754,125 +772,157 @@ function EmployeeCard({
   const nonPct = (row.non_billable_hours / total) * 100;
   const revPct = ((row.uncategorized_hours || 0) / total) * 100;
   const review = row.uncategorized_hours || 0;
+  const util = row.utilization_pct ?? 0;
   const hasBreakdown = Array.isArray(row.breakdown) && row.breakdown.length > 0;
   const maxItem = hasBreakdown
     ? Math.max(1, ...row.breakdown!.map((b) => b.total_hours))
     : 1;
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5">
-      {/* header */}
+    <div className={expanded ? "bg-slate-50/40" : ""}>
+      {/* ── the row itself ── */}
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between gap-3 text-left"
+        className="w-full text-left px-4 py-3 hover:bg-slate-50/60 transition-colors"
       >
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-700 text-sm font-bold text-white">
+        {/* desktop: aligned columns */}
+        <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-700 text-xs font-bold text-white">
             {initials(row.label)}
           </span>
           <div className="min-w-0">
-            <div className="text-base font-bold leading-tight text-slate-900 truncate">{row.label}</div>
-            <div className="text-xs text-slate-500 mt-0.5 truncate">
+            <div className="text-sm font-bold text-slate-900 truncate">{row.label}</div>
+            <div className="text-[11px] text-slate-400 truncate">
               Most time on {row.top_client || "Internal / Admin"}
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex h-2.5 overflow-hidden rounded-full">
+            <span className="h-full bg-emerald-600" style={{ width: `${billPct}%` }} />
+            <span className="h-full bg-slate-400" style={{ width: `${nonPct}%` }} />
+            <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
+          </div>
           <div className="text-right">
-            <div className="text-lg font-bold tabular-nums text-slate-900">{fmtHours(row.total_hours)}</div>
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Total</div>
+            <div className="text-sm font-bold tabular-nums text-emerald-700">{fmtHours(row.billable_hours)}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-sm font-bold tabular-nums text-slate-500">{fmtHours(row.non_billable_hours)}</div>
+          </div>
+          <div className="text-right">
+            {review > 0 ? (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); onOpenReview(); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onOpenReview(); } }}
+                className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-sm font-bold tabular-nums text-amber-600 hover:bg-amber-100 cursor-pointer"
+                title="Open the blocks waiting on review"
+              >
+                <Clock className="h-3 w-3" />
+                {fmtHours(review)}
+              </span>
+            ) : (
+              <span className="text-sm text-slate-300">—</span>
+            )}
+          </div>
+          <div className="text-right">
+            <div className="text-sm font-bold tabular-nums text-slate-700">{util}%</div>
           </div>
           <ChevronDown
-            className={"h-4 w-4 text-slate-400 transition-transform " + (expanded ? "rotate-180" : "")}
+            className={"h-4 w-4 text-slate-400 transition-transform justify-self-end " + (expanded ? "rotate-180" : "")}
           />
+        </div>
+
+        {/* mobile: name row + wrapped stat strip */}
+        <div className="md:hidden">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-700 text-xs font-bold text-white">
+                {initials(row.label)}
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-slate-900 truncate">{row.label}</div>
+                <div className="text-[11px] text-slate-400 truncate">
+                  Most time on {row.top_client || "Internal / Admin"}
+                </div>
+              </div>
+            </div>
+            <ChevronDown
+              className={"h-4 w-4 shrink-0 text-slate-400 transition-transform " + (expanded ? "rotate-180" : "")}
+            />
+          </div>
+          <div className="mt-2 flex h-2.5 overflow-hidden rounded-full">
+            <span className="h-full bg-emerald-600" style={{ width: `${billPct}%` }} />
+            <span className="h-full bg-slate-400" style={{ width: `${nonPct}%` }} />
+            <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            <span className="tabular-nums"><b className="text-emerald-700 font-bold">{fmtHours(row.billable_hours)}</b> <span className="text-slate-400">bill</span></span>
+            <span className="tabular-nums"><b className="text-slate-600 font-bold">{fmtHours(row.non_billable_hours)}</b> <span className="text-slate-400">non-bill</span></span>
+            {review > 0 && (
+              <span className="tabular-nums text-amber-600"><b className="font-bold">{fmtHours(review)}</b> review</span>
+            )}
+            <span className="tabular-nums"><b className="text-slate-700 font-bold">{util}%</b> <span className="text-slate-400">util</span></span>
+          </div>
         </div>
       </button>
 
-      {/* mix bar */}
-      <div className="mt-3 mb-3 flex h-3.5 overflow-hidden rounded-md">
-        <span className="h-full bg-emerald-600" style={{ width: `${billPct}%` }} />
-        <span className="h-full bg-slate-400" style={{ width: `${nonPct}%` }} />
-        <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
-      </div>
-
-      {/* stat boxes */}
-      <div className="grid grid-cols-3 gap-2">
-        <StatBox label="Billable" value={fmtHours(row.billable_hours)} tone="emerald" />
-        <StatBox label="Non-bill" value={fmtHours(row.non_billable_hours)} />
-        <StatBox label="Review" value={review > 0 ? fmtHours(review) : "—"} tone={review > 0 ? "amber" : undefined} />
-      </div>
-
-      {/* review flag */}
-      {review > 0 ? (
-        <button
-          onClick={onOpenReview}
-          className="mt-3 w-full flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[13px] font-semibold text-amber-600 hover:bg-amber-100"
-        >
-          <Clock className="h-3.5 w-3.5" />
-          {fmtHours(review)} still needs a quick look
-        </button>
-      ) : (
-        <div className="mt-3 w-full flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[13px] font-semibold text-emerald-700">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          All time reviewed — nothing pending
-        </div>
-      )}
-
-      {/* expandable per-client breakdown */}
+      {/* ── inline expand: per-client breakdown ── */}
       {expanded && (
-        <div className="mt-3.5 pt-3.5 border-t border-slate-100">
-          <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2.5">
-            Clients worked this period
-          </h4>
-          {hasBreakdown ? (
-            <div className="space-y-2.5">
-              {row.breakdown!
-                .slice()
-                .sort((a, b) => b.total_hours - a.total_hours)
-                .map((b, i) => {
-                  const isClient = b.name !== "Unassigned" && b.name !== "Internal / Admin";
-                  return (
-                  <button
-                    key={`${b.id}-${b.name}-${i}`}
-                    onClick={() => isClient && onOpenClient(b.id, b.name)}
-                    disabled={!isClient}
-                    className={
-                      "w-full text-left rounded-md -mx-1 px-1 py-0.5 " +
-                      (isClient ? "hover:bg-slate-50 cursor-pointer" : "cursor-default")
-                    }
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="truncate text-sm font-medium text-slate-700">{b.name}</span>
-                      <span className="shrink-0 text-sm font-bold tabular-nums text-slate-800">
-                        {fmtHours(b.total_hours)}
-                        {b.billable_hours > 0 && (
-                          <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-emerald-700">
-                            {fmtHours(b.billable_hours)} bill
+        <div className="px-4 pb-4 pt-1">
+          <div className="rounded-lg bg-white border border-slate-200 p-3.5">
+            <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2.5">
+              Clients worked this period
+            </h4>
+            {hasBreakdown ? (
+              <div className="space-y-2.5">
+                {row.breakdown!
+                  .slice()
+                  .sort((a, b) => b.total_hours - a.total_hours)
+                  .map((b, i) => {
+                    const isClient = b.name !== "Unassigned" && b.name !== "Internal / Admin";
+                    return (
+                      <button
+                        key={`${b.id}-${b.name}-${i}`}
+                        onClick={() => isClient && onOpenClient(b.id, b.name)}
+                        disabled={!isClient}
+                        className={
+                          "w-full text-left rounded-md -mx-1 px-1 py-0.5 " +
+                          (isClient ? "hover:bg-slate-50 cursor-pointer" : "cursor-default")
+                        }
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="truncate text-sm font-medium text-slate-700">{b.name}</span>
+                          <span className="shrink-0 text-sm font-bold tabular-nums text-slate-800">
+                            {fmtHours(b.total_hours)}
+                            {b.billable_hours > 0 && (
+                              <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-emerald-700">
+                                {fmtHours(b.billable_hours)} bill
+                              </span>
+                            )}
+                            {(b.uncategorized_hours || 0) > 0 && (
+                              <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-amber-600">
+                                {fmtHours(b.uncategorized_hours)} review
+                              </span>
+                            )}
                           </span>
-                        )}
-                        {(b.uncategorized_hours || 0) > 0 && (
-                          <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-amber-600">
-                            {fmtHours(b.uncategorized_hours)} review
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                    <div className="mt-1 h-1.5 rounded bg-slate-100 overflow-hidden">
-                      <span
-                        className="block h-full bg-emerald-500"
-                        style={{ width: `${(b.total_hours / maxItem) * 100}%` }}
-                      />
-                    </div>
-                  </button>
-                  );
-                })}
-            </div>
-          ) : (
-            <p className="text-xs text-slate-400">
-              Per-client detail isn't available for this row yet. The top client is{" "}
-              <span className="font-medium text-slate-600">{row.top_client || "Internal / Admin"}</span>.
-            </p>
-          )}
+                        </div>
+                        <div className="mt-1 h-1.5 rounded bg-slate-100 overflow-hidden">
+                          <span
+                            className="block h-full bg-emerald-500"
+                            style={{ width: `${(b.total_hours / maxItem) * 100}%` }}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400">
+                Per-client detail isn't available for this row yet. The top client is{" "}
+                <span className="font-medium text-slate-600">{row.top_client || "Internal / Admin"}</span>.
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>

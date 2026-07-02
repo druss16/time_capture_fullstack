@@ -492,5 +492,7 @@ urlpatterns = [
 
     path("reports/activity/", views_reports.reports_activity, name="reports_activity"),
 
+    path("mavops/mismatches/", views_mavops.mavops_client_mismatches, name="mavops_client_mismatches"),
+
 
 ]

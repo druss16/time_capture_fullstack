@@ -1005,6 +1005,232 @@ function SuggestionsTab({ apiFetch, flash, onManageOrgRules }: SuggestionsTabPro
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ─── Mismatches Tab — client-name QA (title names a different client than booked) ─
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Paste into MavOpsAdmin.tsx after SuggestionsTab. Reuses the same `T`, `mono`,
+// `card`, `Btn`, `Badge`, `OrgPill`, `StatCard`, `timeAgo` already defined there.
+//
+// Reads: GET /api/mavops/mismatches/?org_id=&days=   (via apiFetch)
+// Surfaces blocks whose window title fingerprints a DIFFERENT client than the
+// one the time is booked to — a classification-accuracy detector. The per-day
+// histogram answers "is this historical (already fixed) or ongoing?"
+
+interface MismatchRow {
+  block_id: number;
+  org_id: number;
+  org_name: string | null;
+  user: string | null;
+  date: string;
+  window_title: string;
+  app_name: string;
+  booked_client_id: number;
+  booked_client_name: string;
+  looks_like_client_id: number;
+  looks_like_client_name: string;
+  confidence: {
+    looks_like_coverage: number;
+    abs_hit: number;
+    booked_coverage: number;
+    top_token_weight: number;
+  };
+}
+interface MismatchResponse {
+  params: { org_id: number | null; days: number };
+  scanned_blocks: number;
+  total_mismatches: number;
+  returned: number;
+  histogram: { date: string; count: number }[];
+  top_pairs: { pair: string; count: number }[];
+  mismatches: MismatchRow[];
+}
+
+interface MismatchesTabProps {
+  apiFetch: (path: string, opts?: RequestInit) => Promise<any>;
+  flash: (msg: string, type?: "ok" | "err") => void;
+  filterOrg: number | null;
+}
+
+function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
+  const [data, setData] = useState<MismatchResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [days, setDays] = useState(60);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const p = new URLSearchParams({ days: String(days) });
+      if (filterOrg) p.set("org_id", String(filterOrg));
+      const d = await apiFetch(`/mavops/mismatches/?${p}`);
+      setData(d);
+    } catch {
+      flash("Failed to load mismatches.", "err");
+    } finally {
+      setLoading(false);
+    }
+  }, [apiFetch, flash, filterOrg, days]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Verdict: how recent is the newest mismatch? Drives the historical-vs-ongoing
+  // banner. Compared against today.
+  const verdict = (() => {
+    if (!data || data.histogram.length === 0) return null;
+    const newest = data.histogram[data.histogram.length - 1].date;
+    const ageDays = Math.floor((Date.now() - new Date(newest).getTime()) / 86400000);
+    return { newest, ageDays, ongoing: ageDays <= 3 };
+  })();
+
+  const peak = data && data.histogram.length
+    ? Math.max(...data.histogram.map(h => h.count)) : 1;
+
+  return (
+    <div>
+      {/* Controls */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
+        <span style={{ color: T.textSub, fontSize: 13, ...mono, fontWeight: 600 }}>
+          Client-name mismatches
+        </span>
+        {filterOrg && <OrgPill name={`org ${filterOrg}`} />}
+        <div style={{ flex: 1 }} />
+        <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>lookback</span>
+        {[30, 60, 90, 180].map(d => (
+          <button key={d} onClick={() => setDays(d)}
+            style={{
+              background: days === d ? T.teal + "25" : "transparent",
+              border: `1px solid ${days === d ? T.teal : T.border}`,
+              color: days === d ? T.teal : T.textSub,
+              padding: "5px 12px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono,
+              fontWeight: days === d ? 600 : 400,
+            }}>
+            {d}d
+          </button>
+        ))}
+        <Btn label="↻ rescan" onClick={load} outline color={T.textSub} small />
+      </div>
+
+      {loading && <div style={{ color: T.textMuted, ...mono, fontSize: 13, paddingTop: 12 }}>scanning…</div>}
+
+      {data && !loading && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
+            <StatCard label="Blocks Scanned" value={data.scanned_blocks.toLocaleString()} color={T.text} />
+            <StatCard label="Mismatches" value={data.total_mismatches} color={data.total_mismatches > 0 ? T.red : T.green} />
+            <StatCard label="Client Pairs" value={data.top_pairs.length} color={T.purple} />
+            <StatCard label="Lookback" value={`${data.params.days}d`} color={T.teal} />
+          </div>
+
+          {/* Historical-vs-ongoing verdict */}
+          {verdict && (
+            <div style={{
+              ...card, marginBottom: 20,
+              borderColor: verdict.ongoing ? T.red + "66" : T.green + "66",
+              background: verdict.ongoing ? T.red + "12" : T.green + "12",
+            }}>
+              <div style={{ fontSize: 13, color: verdict.ongoing ? T.red : T.green, ...mono, fontWeight: 600 }}>
+                {verdict.ongoing
+                  ? `⚠ ONGOING — most recent mismatch was ${verdict.ageDays}d ago (${verdict.newest}). Needs a live classifier fix.`
+                  : `✓ Likely HISTORICAL — newest mismatch was ${verdict.ageDays}d ago (${verdict.newest}). No recent recurrences; consider a one-time recategorization cleanup rather than a live fix.`}
+              </div>
+            </div>
+          )}
+
+          {/* Per-day histogram */}
+          {data.histogram.length > 0 && (
+            <div style={{ ...card, marginBottom: 20 }}>
+              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 14, fontWeight: 600 }}>
+                Mismatches per day — clustering in the past = already fixed
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 90 }}>
+                {data.histogram.map(h => (
+                  <div key={h.date} title={`${h.date}: ${h.count}`}
+                    style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                    <div style={{
+                      width: "100%",
+                      height: `${Math.max(6, (h.count / peak) * 74)}px`,
+                      background: T.teal, borderRadius: "2px 2px 0 0", minWidth: 3,
+                    }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, color: T.textMuted, fontSize: 10, ...mono }}>
+                <span>{data.histogram[0].date}</span>
+                <span>{data.histogram[data.histogram.length - 1].date}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Worst client pairs */}
+          {data.top_pairs.length > 0 && (
+            <div style={{ ...card, marginBottom: 20 }}>
+              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>
+                Worst client pairs — booked → looks like
+              </div>
+              {data.top_pairs.map((p, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderBottom: i < data.top_pairs.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                  <span style={{ fontSize: 13, color: T.textSub, ...mono }}>{p.pair}</span>
+                  <span style={{ ...mono, fontSize: 13, color: T.red, fontWeight: 700 }}>{p.count}×</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* The flagged blocks */}
+          {data.mismatches.length === 0 ? (
+            <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
+              <div style={{ color: T.green, fontSize: 14, ...mono }}>
+                no client-name mismatches in this window ✓
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 10, fontWeight: 600, ...mono }}>
+                Flagged blocks ({data.returned} of {data.total_mismatches})
+              </div>
+              {data.mismatches.map(m => (
+                <div key={m.block_id} style={{ ...card, padding: "14px 20px" }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
+                        {m.org_name && <OrgPill name={m.org_name} />}
+                        <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>block {m.block_id}</span>
+                        <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{m.date}</span>
+                        {m.user && <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{m.user}</span>}
+                      </div>
+
+                      {/* booked → looks-like */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
+                        <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>booked</span>
+                        <Badge label={m.booked_client_name} color={T.yellow} />
+                        <span style={{ color: T.red, fontSize: 14 }}>→</span>
+                        <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>title says</span>
+                        <Badge label={m.looks_like_client_name} color={T.red} />
+                      </div>
+
+                      {/* the actual title */}
+                      <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
+                        {m.app_name && <span style={{ color: T.textMuted }}>{m.app_name} — </span>}
+                        {m.window_title}
+                      </code>
+
+                      <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 10, color: T.textMuted, ...mono }}>
+                        <span>coverage {(m.confidence.looks_like_coverage * 100).toFixed(0)}%</span>
+                        <span>vs booked {(m.confidence.booked_coverage * 100).toFixed(0)}%</span>
+                        <span>strength {m.confidence.abs_hit.toFixed(1)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1013,7 +1239,7 @@ export default function MavOpsAdmin() {
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
-  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "suggestions">("orgs");
+  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "suggestions" | "mismatches">("orgs");
 
   const [filterOrg, setFilterOrg] = useState<number | null>(null);
   const [filterHostname, setFilterHostname] = useState("");
@@ -1184,7 +1410,7 @@ export default function MavOpsAdmin() {
     return [d.machine_name, d.user, d.org_name].some(s => s.toLowerCase().includes(search.toLowerCase()));
   });
 
-  const TABS = ["orgs", "devices", "logs", "errors", "rules", "suggestions"] as const;
+  const TABS = ["orgs", "devices", "logs", "errors", "rules", "suggestions", "mismatches"] as const;
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'DM Sans', sans-serif" }}>
@@ -1650,6 +1876,11 @@ export default function MavOpsAdmin() {
             setFilterOrg={setFilterOrg}
           />
         )}
+
+        {tab === "mismatches" && (
+          <MismatchesTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} />
+        )}
+        
         {/* ══ SUGGESTIONS ══ */}
         {tab === "suggestions" && (
           <SuggestionsTab

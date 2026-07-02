@@ -22,6 +22,13 @@ from django.db import transaction
 from tracker.utils.client_name_match import build_token_index, detect_mismatch
 
 
+# The category that reassigned tax work should carry so it lands billable under
+# the client. SET THIS to your system's actual value (e.g. "Tax Prep" / "Tax" /
+# "Taxes"). If left None, the block's existing category is preserved and only
+# the client is changed (safe fallback — never sets a stale/blank category).
+RECONCILE_TAX_CATEGORY = None    # <-- set to your tax category string, or leave None
+ 
+
 class IsStaff(BasePermission):
     """Only Django staff/superusers can access MavOps internal endpoints."""
     def has_permission(self, request, view):
@@ -897,152 +904,152 @@ from datetime import timedelta
 from tracker.utils.client_name_match import build_token_index, detect_mismatch
 
 
-@api_view(['GET'])
+@api_view(['POST'])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])
-def mavops_client_mismatches(request):
+def mavops_reconcile_mismatches(request):
     """
-    GET /api/mavops/mismatches/
-      ?org_id=<id>       (optional — scope to one org; default: all orgs)
-      &days=<int>        (lookback window; default 60, max 365)
-      &limit=<int>       (max flagged rows returned; default 500, max 2000)
-
-    Returns high-confidence client-name mismatches, each with the offending
-    block's title, the booked client, and the client the title actually looks
-    like — plus a per-day histogram so you can see if the problem is historical
-    or ongoing.
+    POST /api/mavops/mismatches/reconcile/
+      body: {
+        "org_id": 21,                 (required)
+        "block_ids": [123, 456, ...], (required — the blocks to reconcile)
+        "confirm": false              (default false = dry-run)
+      }
+ 
+    For each block: re-derive the client from its title. If the title
+    distinctively names ONE business client, reassign the block there (and set
+    the tax category if RECONCILE_TAX_CATEGORY is configured). Dry-run by
+    default — returns the plan and changes nothing unless confirm=true.
     """
-    from tracker.models import Block, Client
-
-    org_id = request.GET.get('org_id')
-    try:
-        days = min(int(request.GET.get('days', 60)), 365)
-    except (ValueError, TypeError):
-        days = 60
-    try:
-        limit = min(int(request.GET.get('limit', 500)), 2000)
-    except (ValueError, TypeError):
-        limit = 500
-
-    cutoff = timezone.now() - timedelta(days=days)
-
-    # Build a per-org client-name index once, so tokens' distinctiveness is
-    # computed within each org's own roster (cross-org names shouldn't dilute
-    # each other's df).
-    client_qs = Client.objects.all()
-    if org_id:
-        client_qs = client_qs.filter(org_id=org_id)
-    names_by_org = defaultdict(dict)
-    for c in client_qs.only('id', 'name', 'org_id'):
-        names_by_org[c.org_id][c.id] = c.name
-    index_by_org = {oid: build_token_index(names) for oid, names in names_by_org.items()}
-
-    # Firm name per org — lets the matcher recognize the firm's own name showing
-    # up as a pseudo-client (e.g. the CS Connect window) and bucket it internal.
-    from tracker.models import Organization
-    firm_by_org = {}
-    org_qs = Organization.objects.all()
-    if org_id:
-        org_qs = org_qs.filter(id=org_id)
-    for o in org_qs.only('id', 'name'):
-        firm_by_org[o.id] = o.name
-
-    # Committed blocks with a client assigned + a usable window title.
+    from tracker.models import Block, Client, Organization, ClassificationAudit
+ 
+    org_id = request.data.get('org_id')
+    block_ids = request.data.get('block_ids') or []
+    confirm = bool(request.data.get('confirm', False))
+ 
+    if not org_id:
+        return Response({"error": "org_id is required."}, status=400)
+    if not isinstance(block_ids, list) or not block_ids:
+        return Response({"error": "block_ids (non-empty list) is required."}, status=400)
+    # Guardrail: cap batch size so a runaway request can't rewrite everything.
+    if len(block_ids) > 1000:
+        return Response({"error": "Too many block_ids (max 1000 per call)."}, status=400)
+ 
+    # Build the org's client index once.
+    names = {}
+    for c in Client.objects.filter(org_id=org_id).only('id', 'name'):
+        names[c.id] = c.name
+    if not names:
+        return Response({"error": "No clients for this org."}, status=404)
+    index = build_token_index(names)
+ 
+    firm = None
+    o = Organization.objects.filter(id=org_id).only('name').first()
+    if o:
+        firm = o.name
+ 
     blocks = (
         Block.objects
-        .filter(
-            deleted_at__isnull=True,
-            client_id__isnull=False,
-            start__gte=cutoff,
-        )
-        .exclude(window_title__isnull=True)
-        .exclude(window_title='')
-        .select_related('client', 'user', 'org')
-        .order_by('-start')
+        .filter(id__in=block_ids, org_id=org_id, deleted_at__isnull=True)
+        .select_related('client')
     )
-    if org_id:
-        blocks = blocks.filter(org_id=org_id)
-
-    # Split everything by bucket: "client" = real billing-impacting mismatches,
-    # "internal" = firm/admin bucket noise (real but not a client billing error).
-    flagged = {"client": [], "internal": []}
-    by_day = {"client": defaultdict(int), "internal": defaultdict(int)}
-    by_pair = {"client": defaultdict(int), "internal": defaultdict(int)}
-    counts = {"client": 0, "internal": 0}
-    scanned = 0
-
-    for b in blocks.iterator(chunk_size=1000):
-        scanned += 1
-        oid = b.org_id
-        index = index_by_org.get(oid)
-        names = names_by_org.get(oid)
-        if not index or not names or b.client_id not in names:
-            continue
-
-        m = detect_mismatch(
-            b.window_title, b.client_id, index, names,
-            firm_name=firm_by_org.get(oid),
-        )
-        if not m:
-            continue
-
-        bucket = m.get("bucket", "client")
-        day = timezone.localtime(b.start).date().isoformat()
-        by_day[bucket][day] += 1
-        by_pair[bucket][f'{names[b.client_id]} → {m["looks_like_client_name"]}'] += 1
-        counts[bucket] += 1
-
-        if len(flagged[bucket]) < limit:
-            flagged[bucket].append({
+ 
+    planned = []
+    skipped = []
+    for b in blocks:
+        det = detect_title_client(b.window_title or '', index, names, firm_name=firm)
+        if not det:
+            skipped.append({
                 'block_id': b.id,
-                'org_id': oid,
-                'org_name': b.org.name if b.org_id else None,
-                'user': (b.user.get_full_name().strip() or b.user.username) if b.user_id else None,
-                'date': day,
-                'window_title': b.window_title[:200],
-                'app_name': getattr(b, 'app_name', '') or '',
-                'booked_client_id': b.client_id,
-                'booked_client_name': names[b.client_id],
-                'looks_like_client_id': m['looks_like_client_id'],
-                'looks_like_client_name': m['looks_like_client_name'],
-                'bucket': bucket,
-                'confidence': {
-                    'looks_like_coverage': m['looks_like_coverage'],
-                    'abs_hit': m['looks_like_abs_hit'],
-                    'booked_coverage': m['booked_coverage'],
-                    'top_token_weight': m['top_token_weight'],
-                },
+                'reason': 'title no longer distinctively names a client',
+                'window_title': (b.window_title or '')[:160],
             })
-
-    def _histogram(bucket):
-        d = by_day[bucket]
-        return [{'date': k, 'count': d[k]} for k in sorted(d.keys())]
-
-    def _pairs(bucket):
-        return sorted(
-            ({'pair': k, 'count': v} for k, v in by_pair[bucket].items()),
-            key=lambda x: -x['count'],
-        )[:25]
-
+            continue
+        target_cid = det['client_id']
+        if b.client_id == target_cid:
+            skipped.append({
+                'block_id': b.id,
+                'reason': 'already booked to the detected client',
+                'client_name': names.get(target_cid),
+            })
+            continue
+        planned.append({
+            'block_id': b.id,
+            'from_client_id': b.client_id,
+            'from_client_name': names.get(b.client_id) or (b.client.name if b.client_id else None),
+            'to_client_id': target_cid,
+            'to_client_name': det['client_name'],
+            'window_title': (b.window_title or '')[:160],
+            'confidence': {'coverage': det['coverage'], 'abs_hit': det['abs_hit']},
+        })
+ 
+    if not confirm:
+        return Response({
+            'dry_run': True,
+            'org_id': int(org_id),
+            'would_reassign': len(planned),
+            'skipped': len(skipped),
+            'category_will_be_set': RECONCILE_TAX_CATEGORY,
+            'plan': planned,
+            'skips': skipped[:100],
+        })
+ 
+    # ── commit ──────────────────────────────────────────────────────────────
+    from django.db import transaction
+    from tracker.services.classification_service import ClassificationService
+    changed = 0
+    with transaction.atomic():
+        # Re-fetch for update to avoid races on the committed rows.
+        by_id = {p['block_id']: p for p in planned}
+        for b in Block.objects.select_for_update().filter(id__in=list(by_id.keys())):
+            p = by_id.get(b.id)
+            if not p:
+                continue
+            old_client = b.client_id
+            cat_before = ClassificationService._extract_dominant_category(b)
+ 
+            b.client_id = p['to_client_id']
+            update_fields = ['client_id']
+            if RECONCILE_TAX_CATEGORY:
+                b.category = RECONCILE_TAX_CATEGORY
+                update_fields.append('category')
+            if hasattr(b, 'is_billable'):
+                b.is_billable = True
+                update_fields.append('is_billable')
+            b.save(update_fields=update_fields)
+ 
+            cat_after = ClassificationService._extract_dominant_category(b)
+ 
+            ClassificationAudit.objects.create(
+                block=b,
+                source='manual',
+                client_before_id=old_client,
+                client_after_id=p['to_client_id'],
+                category_before=cat_before,
+                category_after=cat_after,
+                confidence_client=1.0,
+                confidence_category=1.0,
+                overall_confidence=1.0,
+                matched_signals=[{
+                    'type': 'mismatch_reconcile',
+                    'strength': p['confidence']['coverage'],
+                    'evidence': (
+                        f"Title distinctively names {p['to_client_name']!r} "
+                        f"(coverage {p['confidence']['coverage']}, "
+                        f"mass {p['confidence']['abs_hit']}); reassigned from "
+                        f"{p['from_client_name']!r}."
+                    ),
+                    'detail': (b.window_title or '')[:200],
+                }],
+                corrected_by_user=True,   # the client actually changed
+            )
+            changed += 1
+ 
     return Response({
-        'params': {'org_id': int(org_id) if org_id else None, 'days': days},
-        'scanned_blocks': scanned,
-        # The money bucket — real client<->client mismatches (e.g. UltraTax
-        # forward-fill). The verdict/histogram the UI leads with is THIS one.
-        'client': {
-            'total': counts['client'],
-            'returned': len(flagged['client']),
-            'histogram': _histogram('client'),
-            'top_pairs': _pairs('client'),
-            'mismatches': flagged['client'],
-        },
-        # Firm/admin bucket noise — surfaced separately so it's visible and
-        # accurate, but never inflates the client count or the verdict.
-        'internal': {
-            'total': counts['internal'],
-            'returned': len(flagged['internal']),
-            'histogram': _histogram('internal'),
-            'top_pairs': _pairs('internal'),
-            'mismatches': flagged['internal'],
-        },
+        'dry_run': False,
+        'org_id': int(org_id),
+        'reassigned': changed,
+        'skipped': len(skipped),
+        'category_set': RECONCILE_TAX_CATEGORY,
     })
+ 

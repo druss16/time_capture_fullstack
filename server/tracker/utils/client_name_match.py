@@ -245,3 +245,64 @@ def detect_mismatch(
             "bucket": bucket,
         }
     return None
+
+def detect_title_client(
+    title: str,
+    index: dict,
+    client_names: dict[int, str],
+    firm_name: str | None = None,
+    skip_internal: bool = True,
+) -> dict | None:
+    """
+    Pure client detection from a title — NOT compared to any booked client.
+
+    Used by the reconcile path: "does this title distinctively name a business
+    client, and which one?" Unlike detect_mismatch (which only fires when the
+    title names a DIFFERENT client than booked), this just returns the single
+    distinctive business client the title points at, or None.
+
+    Same strict distinctive-token discipline: strong coverage, real absolute
+    mass, a genuinely distinctive top token, and no ambiguity between two
+    clients. Internal/admin/firm clients are skipped by default (a title that
+    only fingerprints "Internal - Tax" is not a reroute target).
+
+    Returns {client_id, client_name, coverage, abs_hit, top_token_weight} or None.
+    """
+    title_tokens = set(_tokenize(title))
+    if not title_tokens:
+        return None
+
+    best_cid = None
+    best_cov = best_topw = best_abs = 0.0
+    second_abs = 0.0
+    for cid, name in client_names.items():
+        if skip_internal and is_internal_client(name, firm_name):
+            continue
+        cov, topw, abs_hit = score_title_against_client(title_tokens, cid, index)
+        if abs_hit > best_abs:
+            second_abs = best_abs
+            best_abs, best_cid, best_cov, best_topw = abs_hit, cid, cov, topw
+        elif abs_hit > second_abs:
+            second_abs = abs_hit
+
+    if best_cid is None or best_abs <= 0:
+        return None
+
+    # Ambiguity gate — must fingerprint ONE client clearly.
+    if second_abs >= AMBIGUITY_RATIO * best_abs:
+        return None
+
+    # Strength gates (same bar as detect_mismatch, minus the booked comparison).
+    if (
+        best_cov >= STRONG_COVERAGE
+        and best_abs >= MIN_ABS_HIT
+        and best_topw >= MIN_TOP_TOKEN
+    ):
+        return {
+            "client_id": best_cid,
+            "client_name": client_names[best_cid],
+            "coverage": round(best_cov, 3),
+            "abs_hit": round(best_abs, 3),
+            "top_token_weight": round(best_topw, 3),
+        }
+    return None

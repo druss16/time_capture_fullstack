@@ -4437,6 +4437,27 @@ class ClassificationService:
                     getattr(block, 'url', '') or '',
                     getattr(block, 'file_path', '') or '',
                 ]).lower()
+                # UNIVERSAL GUARD: in a browser / consumed-content block, a client
+                # word in the page (a news headline, weather page, search result)
+                # is NOT evidence of client work — it's what the user is READING.
+                # "Basilica" in QuickBooks means doing that client's books;
+                # "Oswego"/"Syracuse" in a Yelp/weather tab means nothing (same
+                # word rarity, opposite meaning — so this can't be a frequency
+                # gate, it must be context). So the WEAK single-token evidence
+                # paths below are disabled for browser blocks; they then need the
+                # FULL client name in the input, or an independent non-AI work
+                # signal (file/domain/deterministic match). Generalizes the
+                # Stage-8 browser-corroboration guard to the AI client — kills
+                # "Syracuse Weather -> Syracuse Fitness" and the whole class.
+                _app = (getattr(block, 'app_name', '') or '').lower().replace('.exe', '').strip()
+                _is_browser = _app in {'msedge', 'chrome', 'firefox', 'brave',
+                                       'safari', 'opera', 'iexplore', 'arc'}
+                # But a DOCUMENT open in the browser (a client's PDF/Excel) IS a
+                # work surface — CPAs view client files in Edge. Only a genuine
+                # WEB PAGE (news/weather/search, no document) is consumed content.
+                _looks_like_document = bool(re.search(
+                    r'\.(pdf|xlsx?|xlsm|xlsb|docx?|csv|pptx?|txt)\b', haystack))
+                _consumed_content = _is_browser and not _looks_like_document
                 has_textual_evidence = False
                 if client_obj:
                     name_lower = client_obj.name.lower()
@@ -4446,11 +4467,12 @@ class ClassificationService:
                         r'incorporated|corporation|company|limited)\.?$',
                         '', name_lower,
                     ).strip(' .,')
-                    # Try full stripped name as substring
+                    # Try full stripped name as substring (trusted anywhere)
                     if stripped and len(stripped) >= 4 and stripped in haystack:
                         has_textual_evidence = True
-                    else:
-                        # Try first distinctive word (>=5 chars)
+                    elif not _consumed_content:
+                        # Weak: first distinctive word (>=5 chars). Work surface
+                        # only — a lone word in a browsed page isn't client work.
                         words = re.findall(
                             r'\b[a-z][a-z0-9\-&]{4,}\b',
                             stripped or name_lower,
@@ -4464,7 +4486,7 @@ class ClassificationService:
                     # "St Ant-St Agnes" title). Mirrors the views_ai_classify
                     # gate. Proven safe via shadow: 110 passes on "agnes",
                     # Artist Bullpen + generic-only "church" collisions reject.
-                    if not has_textual_evidence and client_obj:
+                    if not has_textual_evidence and client_obj and not _consumed_content:
                         _GEN = {
                             'saint','church','cemetery','parish','catholic',
                             'school','fund','foundation','center','centre',

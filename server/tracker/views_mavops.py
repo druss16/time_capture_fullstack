@@ -904,6 +904,157 @@ from datetime import timedelta
 from tracker.utils.client_name_match import build_token_index, detect_mismatch
 
 
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_client_mismatches(request):
+    """
+    GET /api/mavops/mismatches/
+      ?org_id=<id>       (optional — scope to one org; default: all orgs)
+      &days=<int>        (lookback window; default 60, max 365)
+      &limit=<int>       (max flagged rows returned; default 500, max 2000)
+
+    Returns high-confidence client-name mismatches, each with the offending
+    block's title, the booked client, and the client the title actually looks
+    like — plus a per-day histogram so you can see if the problem is historical
+    or ongoing.
+    """
+    from tracker.models import Block, Client
+
+    org_id = request.GET.get('org_id')
+    try:
+        days = min(int(request.GET.get('days', 60)), 365)
+    except (ValueError, TypeError):
+        days = 60
+    try:
+        limit = min(int(request.GET.get('limit', 500)), 2000)
+    except (ValueError, TypeError):
+        limit = 500
+
+    cutoff = timezone.now() - timedelta(days=days)
+
+    # Build a per-org client-name index once, so tokens' distinctiveness is
+    # computed within each org's own roster (cross-org names shouldn't dilute
+    # each other's df).
+    client_qs = Client.objects.all()
+    if org_id:
+        client_qs = client_qs.filter(org_id=org_id)
+    names_by_org = defaultdict(dict)
+    for c in client_qs.only('id', 'name', 'org_id'):
+        names_by_org[c.org_id][c.id] = c.name
+    index_by_org = {oid: build_token_index(names) for oid, names in names_by_org.items()}
+
+    # Firm name per org — lets the matcher recognize the firm's own name showing
+    # up as a pseudo-client (e.g. the CS Connect window) and bucket it internal.
+    from tracker.models import Organization
+    firm_by_org = {}
+    org_qs = Organization.objects.all()
+    if org_id:
+        org_qs = org_qs.filter(id=org_id)
+    for o in org_qs.only('id', 'name'):
+        firm_by_org[o.id] = o.name
+
+    # Committed blocks with a client assigned + a usable window title.
+    blocks = (
+        Block.objects
+        .filter(
+            deleted_at__isnull=True,
+            client_id__isnull=False,
+            start__gte=cutoff,
+        )
+        .exclude(window_title__isnull=True)
+        .exclude(window_title='')
+        .select_related('client', 'user', 'org')
+        .order_by('-start')
+    )
+    if org_id:
+        blocks = blocks.filter(org_id=org_id)
+
+    # Split everything by bucket: "client" = real billing-impacting mismatches,
+    # "internal" = firm/admin bucket noise (real but not a client billing error).
+    flagged = {"client": [], "internal": []}
+    by_day = {"client": defaultdict(int), "internal": defaultdict(int)}
+    by_pair = {"client": defaultdict(int), "internal": defaultdict(int)}
+    counts = {"client": 0, "internal": 0}
+    scanned = 0
+
+    for b in blocks.iterator(chunk_size=1000):
+        scanned += 1
+        oid = b.org_id
+        index = index_by_org.get(oid)
+        names = names_by_org.get(oid)
+        if not index or not names or b.client_id not in names:
+            continue
+
+        m = detect_mismatch(
+            b.window_title, b.client_id, index, names,
+            firm_name=firm_by_org.get(oid),
+        )
+        if not m:
+            continue
+
+        bucket = m.get("bucket", "client")
+        day = timezone.localtime(b.start).date().isoformat()
+        by_day[bucket][day] += 1
+        by_pair[bucket][f'{names[b.client_id]} → {m["looks_like_client_name"]}'] += 1
+        counts[bucket] += 1
+
+        if len(flagged[bucket]) < limit:
+            flagged[bucket].append({
+                'block_id': b.id,
+                'org_id': oid,
+                'org_name': b.org.name if b.org_id else None,
+                'user': (b.user.get_full_name().strip() or b.user.username) if b.user_id else None,
+                'date': day,
+                'window_title': b.window_title[:200],
+                'app_name': getattr(b, 'app_name', '') or '',
+                'booked_client_id': b.client_id,
+                'booked_client_name': names[b.client_id],
+                'looks_like_client_id': m['looks_like_client_id'],
+                'looks_like_client_name': m['looks_like_client_name'],
+                'bucket': bucket,
+                'confidence': {
+                    'looks_like_coverage': m['looks_like_coverage'],
+                    'abs_hit': m['looks_like_abs_hit'],
+                    'booked_coverage': m['booked_coverage'],
+                    'top_token_weight': m['top_token_weight'],
+                },
+            })
+
+    def _histogram(bucket):
+        d = by_day[bucket]
+        return [{'date': k, 'count': d[k]} for k in sorted(d.keys())]
+
+    def _pairs(bucket):
+        return sorted(
+            ({'pair': k, 'count': v} for k, v in by_pair[bucket].items()),
+            key=lambda x: -x['count'],
+        )[:25]
+
+    return Response({
+        'params': {'org_id': int(org_id) if org_id else None, 'days': days},
+        'scanned_blocks': scanned,
+        # The money bucket — real client<->client mismatches (e.g. UltraTax
+        # forward-fill). The verdict/histogram the UI leads with is THIS one.
+        'client': {
+            'total': counts['client'],
+            'returned': len(flagged['client']),
+            'histogram': _histogram('client'),
+            'top_pairs': _pairs('client'),
+            'mismatches': flagged['client'],
+        },
+        # Firm/admin bucket noise — surfaced separately so it's visible and
+        # accurate, but never inflates the client count or the verdict.
+        'internal': {
+            'total': counts['internal'],
+            'returned': len(flagged['internal']),
+            'histogram': _histogram('internal'),
+            'top_pairs': _pairs('internal'),
+            'mismatches': flagged['internal'],
+        },
+    })
+
+
 @api_view(['POST'])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])

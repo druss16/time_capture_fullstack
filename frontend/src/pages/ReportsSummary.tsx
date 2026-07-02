@@ -155,8 +155,10 @@ export default function ReportsSummary({
   // Applied values — only these drive the fetch, set when the user clicks Apply.
   const [appliedStart, setAppliedStart] = useState<string>("");
   const [appliedEnd, setAppliedEnd] = useState<string>("");
-  const [groupBy, setGroupBy] = useState<GroupBy>("employee");
+  // Both groupings are shown stacked (no toggle), so we hold both datasets.
+  // `data` = employee-grouped response, `clientData` = client-grouped response.
   const [data, setData] = useState<SummaryResponse | null>(null);
+  const [clientData, setClientData] = useState<SummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [panelParams, setPanelParams] = useState<UncatPanelParams | null>(null);
@@ -167,10 +169,9 @@ export default function ReportsSummary({
   const [clientPage, setClientPage] = useState(0);
   const [headlinePage, setHeadlinePage] = useState(0);
   const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
-  const [detailLoading, setDetailLoading] = useState(false);
 
-  const buildParams = useCallback(() => {
-    const p = new URLSearchParams({ group_by: groupBy });
+  const buildParams = useCallback((group: GroupBy) => {
+    const p = new URLSearchParams({ group_by: group });
     if (customMode && appliedStart && appliedEnd) {
       p.set("start", appliedStart);
       p.set("end", appliedEnd);
@@ -181,22 +182,30 @@ export default function ReportsSummary({
     const effOrg = orgIdOverride || (impOrg ? Number(impOrg) : null);
     if (effOrg) p.set("org_id", String(effOrg));
     return p.toString();
-  }, [period, groupBy, orgIdOverride, customMode, appliedStart, appliedEnd]);
+  }, [period, orgIdOverride, customMode, appliedStart, appliedEnd]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const token = getAuthToken();
-      const res = await fetch(`${API_BASE}/reports/summary/?${buildParams()}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Request failed (${res.status})`);
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+      const [empRes, cliRes] = await Promise.all([
+        fetch(`${API_BASE}/reports/summary/?${buildParams("employee")}`, { headers, credentials: "include" }),
+        fetch(`${API_BASE}/reports/summary/?${buildParams("client")}`, { headers, credentials: "include" }),
+      ]);
+      if (!empRes.ok) {
+        const body = await empRes.json().catch(() => ({}));
+        throw new Error(body.error || `Request failed (${empRes.status})`);
       }
-      setData(await res.json());
+      setData(await empRes.json());
+      // Client grouping is best-effort — if it fails, the employee section and
+      // headline still render; the client table just shows its empty state.
+      if (cliRes.ok) {
+        setClientData(await cliRes.json());
+      } else {
+        setClientData(null);
+      }
     } catch (e: any) {
       setError(e.message || "Failed to load report");
     } finally {
@@ -209,63 +218,37 @@ export default function ReportsSummary({
   }, [fetchData]);
 
   // Open the client drill-down from anywhere (headline bar, client table row,
-  // or an employee card's breakdown). If we're already grouped by client and
-  // the row has its people breakdown, use it directly. Otherwise fetch the
-  // client-grouped summary on demand so "who worked it" is always populated —
-  // this is what makes clients clickable in Employee mode too.
+  // or an employee row's breakdown). We already hold the client-grouped data,
+  // so resolve the row with its people breakdown directly — no extra fetch.
   const openClientDetail = useCallback(
-    async (client: { id: number | null; label: string; breakdown?: BreakdownItem[] }) => {
-      // Fast path: a real client row that already carries its breakdown.
+    (client: { id: number | null; label: string; breakdown?: BreakdownItem[] }) => {
+      // Fast path: caller passed a row that already carries its breakdown.
       if (client.breakdown && client.breakdown.length > 0) {
         setDetail(client as SummaryRow);
         return;
       }
-      // Show the modal immediately with what we know, then hydrate.
-      setDetail({
-        id: client.id,
-        label: client.label,
-        total_hours: 0,
-        billable_hours: 0,
-        non_billable_hours: 0,
-        utilization_pct: 0,
-        top_client: null,
-        block_count: 0,
-      });
-      setDetailLoading(true);
-      try {
-        const token = getAuthToken();
-        const p = new URLSearchParams({ group_by: "client" });
-        if (customMode && appliedStart && appliedEnd) {
-          p.set("start", appliedStart);
-          p.set("end", appliedEnd);
-        } else {
-          p.set("period", period);
-        }
-        const impOrg = localStorage.getItem("impersonating_org_id");
-        const effOrg = orgIdOverride || (impOrg ? Number(impOrg) : null);
-        if (effOrg) p.set("org_id", String(effOrg));
-
-        const res = await fetch(`${API_BASE}/reports/summary/?${p.toString()}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          credentials: "include",
+      // Resolve against the loaded client dataset for the "who worked it" list.
+      const match = clientData?.rows.find(
+        (r) =>
+          (client.id != null && r.id === client.id) || r.label === client.label
+      );
+      if (match) {
+        setDetail(match);
+      } else {
+        // Fallback: show header with what we know.
+        setDetail({
+          id: client.id,
+          label: client.label,
+          total_hours: 0,
+          billable_hours: 0,
+          non_billable_hours: 0,
+          utilization_pct: 0,
+          top_client: null,
+          block_count: 0,
         });
-        if (res.ok) {
-          const clientData: SummaryResponse = await res.json();
-          const match = clientData.rows.find(
-            (r) =>
-              (client.id != null && r.id === client.id) ||
-              r.label === client.label
-          );
-          if (match) setDetail(match);
-        }
-      } catch {
-        // Leave the modal showing the header we already set; the body will
-        // show the graceful "detail isn't available" fallback.
-      } finally {
-        setDetailLoading(false);
       }
     },
-    [period, customMode, appliedStart, appliedEnd, orgIdOverride]
+    [clientData]
   );
 
   // Reset view-local state when the query changes.
@@ -274,7 +257,7 @@ export default function ReportsSummary({
     setClientPage(0);
     setHeadlinePage(0);
     setDetail(null);
-  }, [period, groupBy, customMode, appliedStart, appliedEnd, orgIdOverride]);
+  }, [period, customMode, appliedStart, appliedEnd, orgIdOverride]);
 
   // Active-window phrase for copy. A custom range only counts as "applied" when
   // both endpoints are filled (matches the fetch guard).
@@ -283,7 +266,7 @@ export default function ReportsSummary({
 
   const handleExport = useCallback(() => {
     const token = getAuthToken();
-    const url = `${API_BASE}/reports/summary/export/?${buildParams()}`;
+    const url = `${API_BASE}/reports/summary/export/?${buildParams("employee")}`;
     fetch(url, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       credentials: "include",
@@ -313,27 +296,33 @@ export default function ReportsSummary({
 
   const clientRowsSorted = useMemo(
     () =>
-      data && data.group_by === "client"
-        ? [...data.rows].sort((a, b) => b.billable_hours - a.billable_hours)
+      clientData && clientData.group_by === "client"
+        ? [...clientData.rows].sort((a, b) => b.billable_hours - a.billable_hours)
         : [],
-    [data]
+    [clientData]
   );
 
-  // Headline "where the billable hours went" — top billable clients, rolled up
-  // across every employee. When the backend sends per-employee `breakdown`
-  // (exact per-client splits), we sum those for an ACCURATE rollup. Until that
-  // ships we fall back to each employee's single top_client (approximate — a
-  // client only shows if it's someone's #1). Employee view only.
+  // Headline "where the billable hours went" — top billable clients.
+  // Now that we load client-grouped data directly, use those exact rows: real
+  // billable per client, and the people count comes from each client's
+  // breakdown (who worked it). Falls back to an employee-side rollup only if
+  // client data didn't load.
   const headlineClients = useMemo(() => {
+    if (clientData && clientData.rows.length > 0) {
+      return clientData.rows
+        .filter((r) => r.billable_hours > 0)
+        .sort((a, b) => b.billable_hours - a.billable_hours)
+        .map((r) => ({
+          ...r,
+          _people: Array.isArray(r.breakdown) ? r.breakdown.length : undefined,
+        })) as (SummaryRow & { _people?: number })[];
+    }
     if (!data) return [];
     const map = new Map<string, { id: number | null; label: string; billable_hours: number; people: Set<string | number> }>();
-
     const hasBreakdown = data.rows.some(
       (r) => Array.isArray(r.breakdown) && r.breakdown.length > 0
     );
-
     if (hasBreakdown) {
-      // Exact: sum each person's per-client billable split.
       for (const r of data.rows) {
         if (!Array.isArray(r.breakdown)) continue;
         for (const b of r.breakdown) {
@@ -347,7 +336,6 @@ export default function ReportsSummary({
         }
       }
     } else {
-      // Approximate fallback: each employee's single top client.
       for (const r of data.rows) {
         const key = r.top_client;
         if (!key || key === "—") continue;
@@ -357,7 +345,6 @@ export default function ReportsSummary({
         map.set(key, cur);
       }
     }
-
     return Array.from(map.values())
       .filter((c) => c.billable_hours > 0)
       .sort((a, b) => b.billable_hours - a.billable_hours)
@@ -372,7 +359,7 @@ export default function ReportsSummary({
         block_count: 0,
         _people: c.people.size,
       })) as (SummaryRow & { _people?: number })[];
-  }, [data]);
+  }, [data, clientData]);
 
   // Filtered + paginated client list for the Client view.
   const filteredClients = useMemo(() => {
@@ -502,12 +489,10 @@ export default function ReportsSummary({
       )}
 
       {/* ── HEADLINE: where the billable hours went ──────────────────────────
-          Employee view only. In Client view the table below IS the client
-          rollup (with non-bill / review / total), so bars there would just
-          duplicate it and push the table down. Here the bars are additive:
-          they answer "which clients got the billable time?" that the per-person
-          cards can't. */}
-      {data && data.scope === "all" && data.group_by === "employee" && headlineClients.length > 0 && (
+          Top billable clients as bars, above both stacked sections. Additive
+          to the client table (bars = quick visual ranking; table = full detail
+          with non-bill / review / total and search). */}
+      {data && data.scope === "all" && headlineClients.length > 0 && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
           <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-4">
             Where the billable hours went {windowPhrase}
@@ -569,39 +554,6 @@ export default function ReportsSummary({
         </div>
       )}
 
-      {/* Group-by toggle + (client) search */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-slate-500">Group by:</span>
-          {(["employee", "client"] as GroupBy[]).map((g) => (
-            <button
-              key={g}
-              onClick={() => setGroupBy(g)}
-              className={
-                "px-2.5 py-1 rounded-md font-medium capitalize transition-colors " +
-                (groupBy === g
-                  ? "bg-slate-100 text-slate-900"
-                  : "text-slate-500 hover:text-slate-700")
-              }
-            >
-              {g}
-            </button>
-          ))}
-        </div>
-
-        {groupBy === "client" && data && !loading && (
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-            <input
-              value={clientSearch}
-              onChange={(e) => { setClientSearch(e.target.value); setClientPage(0); }}
-              placeholder="Search clients…"
-              className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
-            />
-          </div>
-        )}
-      </div>
-
       {/* States */}
       {loading && (
         <div className="flex items-center justify-center py-20 text-slate-400">
@@ -617,142 +569,159 @@ export default function ReportsSummary({
         </div>
       )}
 
-      {/* ── EMPLOYEE VIEW: dense rows ────────────────────────────────────── */}
-      {data && !loading && groupBy === "employee" && (
-        employeeRows.length === 0 ? (
-          <EmptyState label="No committed time in this period yet." />
-        ) : (
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            {/* column header — hidden on narrow screens where columns stack */}
-            <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-[10.5px] font-bold uppercase tracking-wide text-slate-500">
-              <span />
-              <span>Employee</span>
-              <span>Mix</span>
-              <span className="text-right">Billable</span>
-              <span className="text-right">Non-bill</span>
-              <span className="text-right">Review</span>
-              <span className="text-right">Util %</span>
-              <span />
-            </div>
-            <div className="divide-y divide-slate-100">
-              {employeeRows.map((r) => (
-                <EmployeeRow
-                  key={`${r.id}-${r.label}`}
-                  row={r}
-                  expanded={expanded.has(`${r.id}-${r.label}`)}
-                  onToggle={() => toggleExpand(`${r.id}-${r.label}`)}
-                  onOpenClient={(cid, cname) => openClientDetail({ id: cid, label: cname })}
-                  onOpenReview={() =>
-                    setPanelParams({
-                      period, group_by: "employee", orgId: orgIdOverride,
-                      userId: r.id, userLabel: r.label,
-                    })
-                  }
-                />
-              ))}
+      {/* ══ CLIENTS SECTION ══════════════════════════════════════════════ */}
+      {!loading && !error && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="text-base font-bold text-slate-900">Clients</h2>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+              <input
+                value={clientSearch}
+                onChange={(e) => { setClientSearch(e.target.value); setClientPage(0); }}
+                placeholder="Search clients…"
+                className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+              />
             </div>
           </div>
-        )
+
+          {/* ── CLIENT TABLE: searchable, paginated ── */}
+          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wide text-slate-500">Client</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Billable</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Non-bill</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Needs review</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Total</th>
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {clientSlice.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">
+                      {clientSearch ? `No clients match “${clientSearch}”.` : "No client time in this period yet."}
+                    </td>
+                  </tr>
+                )}
+                {clientSlice.map((r) => (
+                  <tr
+                    key={`${r.id}-${r.label}`}
+                    onClick={() => openClientDetail(r)}
+                    className="hover:bg-slate-50/60 cursor-pointer"
+                  >
+                    <td className="px-4 py-3 font-semibold text-slate-800">{r.label}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-emerald-700 font-medium">{fmtHours(r.billable_hours)}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-slate-400">{fmtHours(r.non_billable_hours)}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {(r.uncategorized_hours || 0) > 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-amber-600 font-medium">
+                          <Clock className="h-3 w-3" />
+                          {fmtHours(r.uncategorized_hours)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums font-semibold text-slate-700">{fmtHours(r.total_hours)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                        View <ArrowRight className="h-3 w-3" />
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* pager */}
+            <div className="flex items-center justify-between gap-2 px-4 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
+              <span>
+                Showing {clientSlice.length} of {filteredClients.length} client{filteredClients.length === 1 ? "" : "s"}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  disabled={clientPageSafe === 0}
+                  onClick={() => setClientPage(clientPageSafe - 1)}
+                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <span className="px-1.5">{clientPageSafe + 1} / {clientPageCount}</span>
+                <button
+                  disabled={clientPageSafe >= clientPageCount - 1}
+                  onClick={() => setClientPage(clientPageSafe + 1)}
+                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
       )}
 
-      {/* ── CLIENT VIEW: searchable, paginated table ─────────────────────── */}
-      {data && !loading && groupBy === "client" && (
-        <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wide text-slate-500">Client</th>
-                <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Billable</th>
-                <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Non-bill</th>
-                <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Needs review</th>
-                <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Total</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {clientSlice.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">
-                    {clientSearch ? `No clients match “${clientSearch}”.` : "No client time in this period yet."}
-                  </td>
-                </tr>
-              )}
-              {clientSlice.map((r) => (
-                <tr
-                  key={`${r.id}-${r.label}`}
-                  onClick={() => openClientDetail(r)}
-                  className="hover:bg-slate-50/60 cursor-pointer"
-                >
-                  <td className="px-4 py-3 font-semibold text-slate-800">{r.label}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-emerald-700 font-medium">{fmtHours(r.billable_hours)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-slate-400">{fmtHours(r.non_billable_hours)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">
-                    {(r.uncategorized_hours || 0) > 0 ? (
-                      <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-amber-600 font-medium">
-                        <Clock className="h-3 w-3" />
-                        {fmtHours(r.uncategorized_hours)}
-                      </span>
-                    ) : (
-                      <span className="text-slate-300">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums font-semibold text-slate-700">{fmtHours(r.total_hours)}</td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                      View <ArrowRight className="h-3 w-3" />
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {/* pager */}
-          <div className="flex items-center justify-between gap-2 px-4 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
-            <span>
-              Showing {clientSlice.length} of {filteredClients.length} client{filteredClients.length === 1 ? "" : "s"}
-            </span>
-            <div className="flex items-center gap-1.5">
-              <button
-                disabled={clientPageSafe === 0}
-                onClick={() => setClientPage(clientPageSafe - 1)}
-                className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
-              >
-                ← Prev
-              </button>
-              <span className="px-1.5">{clientPageSafe + 1} / {clientPageCount}</span>
-              <button
-                disabled={clientPageSafe >= clientPageCount - 1}
-                onClick={() => setClientPage(clientPageSafe + 1)}
-                className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
-              >
-                Next →
-              </button>
+      {/* ══ EMPLOYEES SECTION ════════════════════════════════════════════ */}
+      {data && !loading && !error && (
+        <section className="space-y-3 pt-2">
+          <h2 className="text-base font-bold text-slate-900">Employees</h2>
+          {employeeRows.length === 0 ? (
+            <EmptyState label="No committed time in this period yet." />
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+              {/* column header — hidden on narrow screens where columns stack */}
+              <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-[10.5px] font-bold uppercase tracking-wide text-slate-500">
+                <span />
+                <span>Employee</span>
+                <span>Mix</span>
+                <span className="text-right">Billable</span>
+                <span className="text-right">Non-bill</span>
+                <span className="text-right">Review</span>
+                <span className="text-right">Util %</span>
+                <span />
+              </div>
+              <div className="divide-y divide-slate-100">
+                {employeeRows.map((r) => (
+                  <EmployeeRow
+                    key={`${r.id}-${r.label}`}
+                    row={r}
+                    expanded={expanded.has(`${r.id}-${r.label}`)}
+                    onToggle={() => toggleExpand(`${r.id}-${r.label}`)}
+                    onOpenClient={(cid, cname) => openClientDetail({ id: cid, label: cname })}
+                    onOpenReview={() =>
+                      setPanelParams({
+                        period, group_by: "employee", orgId: orgIdOverride,
+                        userId: r.id, userLabel: r.label,
+                      })
+                    }
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        </div>
+          )}
+        </section>
       )}
 
       {/* Client drill-down modal */}
       {detail && (
         <ClientDetailModal
           row={detail}
-          loading={detailLoading}
           windowPhrase={windowPhrase}
-          onClose={() => { setDetail(null); setDetailLoading(false); }}
+          onClose={() => setDetail(null)}
         />
       )}
 
       <UncategorizedPanel
         open={!!panelParams}
         onClose={() => setPanelParams(null)}
-        params={panelParams || { period, group_by: groupBy }}
+        params={panelParams || { period, group_by: "employee" }}
       />
     </div>
   );
 }
 
-// ── Employee card ─────────────────────────────────────────────────────────
 // ── Employee dense row (option B) ──────────────────────────────────────────
 // One row per person: avatar + name + "most time on", a thin mix bar, then
 // Billable / Non-bill / Review / Util % columns, and an expand chevron.
@@ -930,7 +899,7 @@ function EmployeeRow({
 }
 
 // ── Client drill-down modal ─────────────────────────────────────────────────
-function ClientDetailModal({ row, loading, windowPhrase, onClose }: { row: SummaryRow; loading?: boolean; windowPhrase: string; onClose: () => void }) {
+function ClientDetailModal({ row, windowPhrase, onClose }: { row: SummaryRow; windowPhrase: string; onClose: () => void }) {
   const people = Array.isArray(row.breakdown) ? row.breakdown : [];
   return (
     <div
@@ -971,12 +940,7 @@ function ClientDetailModal({ row, loading, windowPhrase, onClose }: { row: Summa
           </div>
 
           <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1">Who worked it</h4>
-          {loading ? (
-            <div className="flex items-center gap-2 py-4 text-slate-400">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-xs">Loading detail…</span>
-            </div>
-          ) : people.length > 0 ? (
+          {people.length > 0 ? (
             <div className="divide-y divide-slate-100">
               {people
                 .slice()

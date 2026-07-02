@@ -1279,6 +1279,23 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
         <Btn label="↻ rescan" onClick={load} outline color={T.textSub} small />
       </div>
 
+      {/* No org selected → point at the navbar selector (reconcile is per-org). */}
+      {!filterOrg && (
+        <div style={{
+          ...card, marginBottom: 18, padding: "12px 16px",
+          borderColor: T.yellow + "55", background: T.yellow + "0e",
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <span style={{ fontSize: 16 }}>↗</span>
+          <span style={{ color: T.yellow, fontSize: 13, ...mono, fontWeight: 600 }}>
+            Pick an org in the selector at the top of the page to enable reconcile.
+          </span>
+          <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>
+            Viewing all orgs — reconcile acts on one org at a time.
+          </span>
+        </div>
+      )}
+
       {loading && <div style={{ color: T.textMuted, ...mono, fontSize: 13, paddingTop: 12 }}>scanning…</div>}
 
       {data && !loading && (

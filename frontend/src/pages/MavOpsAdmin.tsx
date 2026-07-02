@@ -1064,13 +1064,14 @@ interface MismatchesTabProps {
 // never reconciled). `clientFilter` narrows the flagged list to one booked
 // client name (or "" for all).
 function BucketDetail({
-  bucket, tone, clientFilter, onReconcile, reconcileBusy,
+  bucket, tone, clientFilter, onReconcile, reconcileBusy, hideBulkButton,
 }: {
   bucket: MismatchBucket;
   tone: string;
   clientFilter?: string;
   onReconcile?: (blockIds: number[], label: string) => void;
   reconcileBusy?: boolean;
+  hideBulkButton?: boolean;
 }) {
   const peak = bucket.histogram.length ? Math.max(...bucket.histogram.map(h => h.count)) : 1;
   const rows = clientFilter
@@ -1119,7 +1120,7 @@ function BucketDetail({
             <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, fontWeight: 600, ...mono }}>
               Flagged blocks ({rows.length}{clientFilter ? ` · ${clientFilter}` : ` of ${bucket.total}`})
             </div>
-            {onReconcile && rowIds.length > 0 && (
+            {onReconcile && rowIds.length > 0 && !hideBulkButton && (
               <button
                 disabled={reconcileBusy}
                 onClick={() => onReconcile(rowIds, clientFilter || "all shown")}
@@ -1182,7 +1183,6 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [loading, setLoading] = useState(false);
   const [days, setDays] = useState(120);
   const [showInternal, setShowInternal] = useState(false);
-  const [clientFilter, setClientFilter] = useState("");
   const [reconcileBusy, setReconcileBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -1304,36 +1304,40 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             </div>
           )}
 
-          {/* CLIENT bucket — the money bucket */}
+          {/* CLIENT bucket — the money bucket. Scope is driven by the top org
+              selector (filterOrg); no per-client dropdown needed. */}
           {data.client.total > 0 ? (
             <>
-              {/* Filter by booked client + reconcile-all-shown */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" as const }}>
-                <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>filter client</span>
-                <select
-                  value={clientFilter}
-                  onChange={e => setClientFilter(e.target.value)}
-                  style={{
-                    background: T.surface, border: `1px solid ${T.border}`, color: T.text,
-                    padding: "6px 10px", fontSize: 12, borderRadius: 4, ...mono, minWidth: 220,
-                  }}>
-                  <option value="">All clients ({data.client.total})</option>
-                  {Array.from(new Set(data.client.mismatches.map(m => m.booked_client_name)))
-                    .sort()
-                    .map(name => {
-                      const count = data.client.mismatches.filter(m => m.booked_client_name === name).length;
-                      return <option key={name} value={name}>{name} ({count})</option>;
-                    })}
-                </select>
-                {clientFilter && (
-                  <button onClick={() => setClientFilter("")}
-                    style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textSub, padding: "5px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, ...mono }}>
-                    clear
+              {/* ── Prominent reconcile action bar (top of the money bucket) ── */}
+              <div style={{
+                ...card, marginBottom: 20,
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                gap: 16, flexWrap: "wrap" as const,
+                borderColor: filterOrg ? T.red + "55" : T.border,
+                background: filterOrg ? T.red + "0e" : T.surface,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, color: T.text, ...mono, fontWeight: 700 }}>
+                    {data.client.total} client mismatch{data.client.total === 1 ? "" : "es"} to reconcile
+                  </div>
+                  <div style={{ fontSize: 12, color: T.textMuted, ...mono, marginTop: 3 }}>
+                    Reassigns each block to the client its title names, and logs an audit.
+                  </div>
+                </div>
+                {filterOrg ? (
+                  <button
+                    disabled={reconcileBusy}
+                    onClick={() => reconcile(data.client.mismatches.map(m => m.block_id), "all client mismatches")}
+                    style={{
+                      background: T.red, border: `1px solid ${T.red}`, color: "#fff",
+                      padding: "10px 20px", fontSize: 13, cursor: reconcileBusy ? "default" : "pointer",
+                      borderRadius: 6, ...mono, fontWeight: 700, opacity: reconcileBusy ? 0.5 : 1, whiteSpace: "nowrap" as const,
+                    }}>
+                    {reconcileBusy ? "reconciling…" : `⟲ Reconcile all ${data.client.mismatches.length}`}
                   </button>
-                )}
-                {!filterOrg && (
-                  <span style={{ color: T.yellow, fontSize: 11, ...mono }}>
-                    · pick a single org above to enable reconcile
+                ) : (
+                  <span style={{ color: T.yellow, fontSize: 12, ...mono, fontWeight: 600, whiteSpace: "nowrap" as const }}>
+                    ↑ pick a single org above to reconcile
                   </span>
                 )}
               </div>
@@ -1341,9 +1345,9 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               <BucketDetail
                 bucket={data.client}
                 tone={T.red}
-                clientFilter={clientFilter}
                 onReconcile={filterOrg ? reconcile : undefined}
                 reconcileBusy={reconcileBusy}
+                hideBulkButton
               />
             </>
           ) : (

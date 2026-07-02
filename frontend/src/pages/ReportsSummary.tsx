@@ -94,6 +94,33 @@ interface BreakdownItem {
   uncategorized_hours?: number;
 }
 
+// Stage C — GET /api/reports/activity/ shape.
+interface ActivityItem {
+  app: string;
+  title: string;
+  minutes: number;
+  hours: number;
+  block_count: number;
+  billable: boolean;
+  needs_review: boolean;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+interface ActivityResponse {
+  user_id: number | null;
+  user_label: string;
+  client_id: number | null;
+  client_label: string;
+  range: { start: string; end: string };
+  totals: {
+    billable_hours: number;
+    non_billable_hours: number;
+    needs_review_hours: number;
+    total_hours: number;
+  };
+  activities: ActivityItem[];
+}
+
 interface SummaryRow {
   id: number | null;
   label: string;
@@ -167,6 +194,17 @@ export default function ReportsSummary({
   const [clientSearch, setClientSearch] = useState("");
   const [clientPage, setClientPage] = useState(0);
   const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
+  // When a client is opened from inside an employee's breakdown, this carries
+  // the employee context so the modal can lead with "this person on this client".
+  // null → opened from the top bars (firm-wide view).
+  const [detailScope, setDetailScope] = useState<{
+    employeeId: number | null;
+    employeeLabel: string;
+    scoped: BreakdownItem;
+  } | null>(null);
+  // Stage C: activity list for the scoped person+client, fetched on open.
+  const [scopeActivity, setScopeActivity] = useState<ActivityResponse | null>(null);
+  const [scopeActivityLoading, setScopeActivityLoading] = useState(false);
 
   const buildParams = useCallback((group: GroupBy) => {
     const p = new URLSearchParams({ group_by: group });
@@ -220,6 +258,8 @@ export default function ReportsSummary({
   // so resolve the row with its people breakdown directly — no extra fetch.
   const openClientDetail = useCallback(
     (client: { id: number | null; label: string; breakdown?: BreakdownItem[] }) => {
+      setDetailScope(null); // firm-wide view
+      setScopeActivity(null);
       // Fast path: caller passed a row that already carries its breakdown.
       if (client.breakdown && client.breakdown.length > 0) {
         setDetail(client as SummaryRow);
@@ -247,6 +287,80 @@ export default function ReportsSummary({
       }
     },
     [clientData]
+  );
+
+  // Open a client scoped to a specific employee (clicked inside their
+  // breakdown). Leads with "this person on this client" using the per-person
+  // numbers we already have, and still resolves the firm-wide client row so the
+  // modal can show "who else worked it" underneath for context.
+  const openScopedClientDetail = useCallback(
+    (args: {
+      clientId: number | null;
+      clientName: string;
+      employeeId: number | null;
+      employeeLabel: string;
+      scoped: BreakdownItem;
+    }) => {
+      setDetailScope({
+        employeeId: args.employeeId,
+        employeeLabel: args.employeeLabel,
+        scoped: args.scoped,
+      });
+      const match = clientData?.rows.find(
+        (r) =>
+          (args.clientId != null && r.id === args.clientId) ||
+          r.label === args.clientName
+      );
+      setDetail(
+        match || {
+          id: args.clientId,
+          label: args.clientName,
+          total_hours: 0,
+          billable_hours: 0,
+          non_billable_hours: 0,
+          utilization_pct: 0,
+          top_client: null,
+          block_count: 0,
+        }
+      );
+
+      // Stage C — fetch the actual work for this person on this client.
+      setScopeActivity(null);
+      if (args.employeeId != null) {
+        setScopeActivityLoading(true);
+        (async () => {
+          try {
+            const token = getAuthToken();
+            const p = new URLSearchParams({
+              user_id: String(args.employeeId),
+              client_id: String(args.clientId ?? 0),
+            });
+            if (customMode && appliedStart && appliedEnd) {
+              p.set("start", appliedStart);
+              p.set("end", appliedEnd);
+            } else {
+              p.set("period", period);
+            }
+            const impOrg = localStorage.getItem("impersonating_org_id");
+            const effOrg = orgIdOverride || (impOrg ? Number(impOrg) : null);
+            if (effOrg) p.set("org_id", String(effOrg));
+
+            const res = await fetch(`${API_BASE}/reports/activity/?${p.toString()}`, {
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+              credentials: "include",
+            });
+            if (res.ok) {
+              setScopeActivity(await res.json());
+            }
+          } catch {
+            // Leave activity null — modal falls back to the totals-only view.
+          } finally {
+            setScopeActivityLoading(false);
+          }
+        })();
+      }
+    },
+    [clientData, period, customMode, appliedStart, appliedEnd, orgIdOverride]
   );
 
   // Reset view-local state when the query changes.
@@ -541,7 +655,9 @@ export default function ReportsSummary({
                     row={r}
                     expanded={expanded.has(`${r.id}-${r.label}`)}
                     onToggle={() => toggleExpand(`${r.id}-${r.label}`)}
-                    onOpenClient={(cid, cname) => openClientDetail({ id: cid, label: cname })}
+                    onOpenClient={({ clientId, clientName, employeeId, employeeLabel, scoped }) =>
+                      openScopedClientDetail({ clientId, clientName, employeeId, employeeLabel, scoped })
+                    }
                     onOpenReview={() =>
                       setPanelParams({
                         period, group_by: "employee", orgId: orgIdOverride,
@@ -561,7 +677,10 @@ export default function ReportsSummary({
         <ClientDetailModal
           row={detail}
           windowPhrase={windowPhrase}
-          onClose={() => setDetail(null)}
+          scope={detailScope}
+          activity={scopeActivity}
+          activityLoading={scopeActivityLoading}
+          onClose={() => { setDetail(null); setDetailScope(null); setScopeActivity(null); }}
         />
       )}
 
@@ -586,8 +705,18 @@ function EmployeeRow({
   expanded: boolean;
   onToggle: () => void;
   onOpenReview: () => void;
-  onOpenClient: (clientId: number | null, clientName: string) => void;
+  // Called when a client inside this person's breakdown is clicked. Passes the
+  // employee context so the modal can scope to "this person on this client".
+  onOpenClient: (args: {
+    clientId: number | null;
+    clientName: string;
+    employeeId: number | null;
+    employeeLabel: string;
+    scoped: BreakdownItem;
+  }) => void;
 }) {
+  const [bdPage, setBdPage] = useState(0);
+  const BD_PAGE_SIZE = 6;
   const total = row.total_hours || 0.0001;
   const billPct = (row.billable_hours / total) * 100;
   const nonPct = (row.non_billable_hours / total) * 100;
@@ -595,9 +724,18 @@ function EmployeeRow({
   const review = row.uncategorized_hours || 0;
   const util = row.utilization_pct ?? 0;
   const hasBreakdown = Array.isArray(row.breakdown) && row.breakdown.length > 0;
+  const sortedBreakdown = hasBreakdown
+    ? [...row.breakdown!].sort((a, b) => b.total_hours - a.total_hours)
+    : [];
   const maxItem = hasBreakdown
     ? Math.max(1, ...row.breakdown!.map((b) => b.total_hours))
     : 1;
+  const bdPageCount = Math.max(1, Math.ceil(sortedBreakdown.length / BD_PAGE_SIZE));
+  const bdPageSafe = Math.min(bdPage, bdPageCount - 1);
+  const bdSlice = sortedBreakdown.slice(
+    bdPageSafe * BD_PAGE_SIZE,
+    bdPageSafe * BD_PAGE_SIZE + BD_PAGE_SIZE
+  );
 
   return (
     <div className={expanded ? "bg-slate-50/40" : ""}>
@@ -695,16 +833,23 @@ function EmployeeRow({
               Clients worked this period
             </h4>
             {hasBreakdown ? (
-              <div className="space-y-2.5">
-                {row.breakdown!
-                  .slice()
-                  .sort((a, b) => b.total_hours - a.total_hours)
-                  .map((b, i) => {
+              <>
+                <div className="space-y-2.5">
+                  {bdSlice.map((b, i) => {
                     const isClient = b.name !== "Unassigned" && b.name !== "Internal / Admin";
                     return (
                       <button
                         key={`${b.id}-${b.name}-${i}`}
-                        onClick={() => isClient && onOpenClient(b.id, b.name)}
+                        onClick={() =>
+                          isClient &&
+                          onOpenClient({
+                            clientId: b.id,
+                            clientName: b.name,
+                            employeeId: row.id,
+                            employeeLabel: row.label,
+                            scoped: b,
+                          })
+                        }
                         disabled={!isClient}
                         className={
                           "w-full text-left rounded-md -mx-1 px-1 py-0.5 " +
@@ -736,7 +881,32 @@ function EmployeeRow({
                       </button>
                     );
                   })}
-              </div>
+                </div>
+                {bdPageCount > 1 && (
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500">
+                    <span>
+                      Showing {bdSlice.length} of {sortedBreakdown.length} clients
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        disabled={bdPageSafe === 0}
+                        onClick={(e) => { e.stopPropagation(); setBdPage(bdPageSafe - 1); }}
+                        className="px-2 py-0.5 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                      >
+                        ← Prev
+                      </button>
+                      <span className="px-1">{bdPageSafe + 1} / {bdPageCount}</span>
+                      <button
+                        disabled={bdPageSafe >= bdPageCount - 1}
+                        onClick={(e) => { e.stopPropagation(); setBdPage(bdPageSafe + 1); }}
+                        className="px-2 py-0.5 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
             ) : (
               <p className="text-xs text-slate-400">
                 Per-client detail isn't available for this row yet. The top client is{" "}
@@ -751,8 +921,18 @@ function EmployeeRow({
 }
 
 // ── Client drill-down modal ─────────────────────────────────────────────────
-function ClientDetailModal({ row, windowPhrase, onClose }: { row: SummaryRow; windowPhrase: string; onClose: () => void }) {
+function ClientDetailModal({
+  row, windowPhrase, scope, activity, activityLoading, onClose,
+}: {
+  row: SummaryRow;
+  windowPhrase: string;
+  scope: { employeeId: number | null; employeeLabel: string; scoped: BreakdownItem } | null;
+  activity: ActivityResponse | null;
+  activityLoading: boolean;
+  onClose: () => void;
+}) {
   const people = Array.isArray(row.breakdown) ? row.breakdown : [];
+  const s = scope?.scoped;
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-slate-900/40 px-4 py-16"
@@ -764,12 +944,24 @@ function ClientDetailModal({ row, windowPhrase, onClose }: { row: SummaryRow; wi
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
           <div>
-            <h3 className="text-xl font-bold text-slate-900">{row.label}</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              {people.length > 0
-                ? `${people.length} ${people.length > 1 ? "people" : "person"} worked this client ${windowPhrase} · ${fmtHours(row.total_hours)} total`
-                : `${fmtHours(row.total_hours)} total ${windowPhrase}`}
-            </p>
+            {scope ? (
+              <>
+                <div className="text-[11px] font-bold uppercase tracking-wide text-emerald-700">{scope.employeeLabel}</div>
+                <h3 className="text-xl font-bold text-slate-900">{row.label}</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  {scope.employeeLabel}&rsquo;s time on this client {windowPhrase}
+                </p>
+              </>
+            ) : (
+              <>
+                <h3 className="text-xl font-bold text-slate-900">{row.label}</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  {people.length > 0
+                    ? `${people.length} ${people.length > 1 ? "people" : "person"} worked this client ${windowPhrase} · ${fmtHours(row.total_hours)} total`
+                    : `${fmtHours(row.total_hours)} total ${windowPhrase}`}
+                </p>
+              </>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -780,16 +972,63 @@ function ClientDetailModal({ row, windowPhrase, onClose }: { row: SummaryRow; wi
         </div>
 
         <div className="px-6 py-5">
+          {/* Stat trio — scoped to the person if opened from their row, else the
+              whole client. */}
           <div className="grid grid-cols-3 gap-2.5 mb-5">
-            <StatBox label="Billable" value={fmtHours(row.billable_hours)} tone="emerald" big />
-            <StatBox label="Non-billable" value={fmtHours(row.non_billable_hours)} big />
+            <StatBox label="Billable" value={fmtHours(s ? s.billable_hours : row.billable_hours)} tone="emerald" big />
+            <StatBox label="Non-billable" value={fmtHours(s ? s.non_billable_hours : row.non_billable_hours)} big />
             <StatBox
               label="Needs review"
-              value={(row.uncategorized_hours || 0) > 0 ? fmtHours(row.uncategorized_hours) : "—"}
-              tone={(row.uncategorized_hours || 0) > 0 ? "amber" : undefined}
+              value={((s ? s.uncategorized_hours : row.uncategorized_hours) || 0) > 0
+                ? fmtHours(s ? s.uncategorized_hours : row.uncategorized_hours)
+                : "—"}
+              tone={((s ? s.uncategorized_hours : row.uncategorized_hours) || 0) > 0 ? "amber" : undefined}
               big
             />
           </div>
+
+          {scope && (
+            <div className="mb-5">
+              <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2">
+                What {scope.employeeLabel} worked on
+              </h4>
+              {activityLoading ? (
+                <div className="flex items-center gap-2 py-3 text-slate-400">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span className="text-xs">Loading activity…</span>
+                </div>
+              ) : activity && activity.activities.length > 0 ? (
+                <div className="space-y-1.5">
+                  {activity.activities.map((a, i) => (
+                    <div
+                      key={`${a.title}-${i}`}
+                      className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-slate-800 truncate">{a.title}</div>
+                        <div className="text-[11px] text-slate-400">
+                          {a.block_count} {a.block_count === 1 ? "session" : "sessions"}
+                        </div>
+                      </div>
+                      <div className="shrink-0 flex items-center gap-2">
+                        {a.billable && (
+                          <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">billable</span>
+                        )}
+                        {a.needs_review && (
+                          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-600">review</span>
+                        )}
+                        <span className="text-sm font-bold tabular-nums text-slate-800">{fmtHours(a.hours)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 py-2">
+                  No detailed activity recorded for {scope.employeeLabel} on this client in this period.
+                </p>
+              )}
+            </div>
+          )}
 
           <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1">Who worked it</h4>
           {people.length > 0 ? (
@@ -797,13 +1036,21 @@ function ClientDetailModal({ row, windowPhrase, onClose }: { row: SummaryRow; wi
               {people
                 .slice()
                 .sort((a, b) => b.total_hours - a.total_hours)
-                .map((p, i) => (
-                  <div key={`${p.id}-${p.name}-${i}`} className="flex items-center gap-3 py-2.5">
+                .map((p, i) => {
+                  const isScoped = scope != null && p.name === scope.employeeLabel;
+                  return (
+                  <div
+                    key={`${p.id}-${p.name}-${i}`}
+                    className={"flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg " + (isScoped ? "bg-emerald-50" : "")}
+                  >
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-700 text-xs font-bold text-white">
                       {initials(p.name)}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-slate-800 truncate">{p.name}</div>
+                      <div className="text-sm font-medium text-slate-800 truncate">
+                        {p.name}
+                        {isScoped && <span className="ml-1.5 text-[10px] font-bold text-emerald-700">• selected</span>}
+                      </div>
                       {(p.uncategorized_hours || 0) > 0 && (
                         <div className="text-xs font-medium text-amber-600 mt-0.5">
                           {fmtHours(p.uncategorized_hours)} needs review
@@ -817,7 +1064,8 @@ function ClientDetailModal({ row, windowPhrase, onClose }: { row: SummaryRow; wi
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
             </div>
           ) : (
             <p className="text-xs text-slate-400 py-2">

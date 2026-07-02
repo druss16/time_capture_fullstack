@@ -1847,3 +1847,228 @@ def reports_suggestion_set_status(request, suggestion_id):
     s.save(update_fields=["status", "reviewed_at", "reviewed_by"])
 
     return Response({"updated": True, "id": s.id, "status": s.status})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def reports_activity(request):
+    """
+    GET /api/reports/activity/
+      ?period=day|week|month|quarter|year   (default: week)
+      &date=YYYY-MM-DD                       (anchor; default: today)
+      &start=YYYY-MM-DD&end=YYYY-MM-DD       (custom range; overrides period)
+      &user_id=<int>                         (REQUIRED — the employee)
+      &client_id=<int>                       (REQUIRED — the client; 0/blank = Unassigned)
+      &org_id=<id>                           (staff-only impersonation)
+ 
+    Returns that person's activity on that client for the window, collapsed to
+    an "App — Document" list (newest activity first), each with minutes, block
+    count, billable/review flags, and first/last seen. Totals reconcile with the
+    breakdown row that opened this view:
+      billable   = committed billable minutes on this client
+      non_billable = committed non-billable minutes on this client
+      needs_review = uncommitted (is_categorized=False) minutes on this client
+ 
+    Role-gating: members can only ever pull their own user_id; managers/staff
+    may pull any user in the org (same pattern as reports_uncategorized_detail).
+    """
+    period = (request.GET.get("period") or "week").lower()
+    if period not in _TRUNC:
+        period = "week"
+ 
+    date_str = request.GET.get("date")
+    anchor = parse_date(date_str) if date_str else timezone.localdate()
+    if not anchor:
+        anchor = timezone.localdate()
+ 
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+ 
+    # ── user_id is required and drives the scope narrowing ──────────────────
+    user_id_raw = request.GET.get("user_id")
+    if not user_id_raw:
+        return Response({"error": "user_id is required."}, status=400)
+    try:
+        req_user_id = int(user_id_raw)
+    except (ValueError, TypeError):
+        return Response({"error": "user_id must be an integer."}, status=400)
+ 
+    can_see_all, forced_user_id = _resolve_scope(request, org)
+    # Managers/staff may target any user; narrow the queryset to that person.
+    # Members are already locked to their own forced_user_id — if they ask for
+    # someone else, we ignore it and keep them scoped to themselves.
+    if can_see_all:
+        forced_user_id = req_user_id
+        can_see_all = False
+    elif forced_user_id and forced_user_id != req_user_id:
+        # A member requesting another user's activity — deny rather than
+        # silently return their own (avoids a confusing mismatch in the UI).
+        return Response({"error": "Not permitted to view this user."}, status=403)
+ 
+    # ── client_id (required; 0/blank means the Unassigned bucket) ───────────
+    client_id_raw = request.GET.get("client_id")
+    if client_id_raw is None or client_id_raw == "":
+        client_id = None          # Unassigned
+        client_is_unassigned = True
+    else:
+        try:
+            cid = int(client_id_raw)
+        except (ValueError, TypeError):
+            return Response({"error": "client_id must be an integer."}, status=400)
+        if cid <= 0:
+            client_id = None
+            client_is_unassigned = True
+        else:
+            client_id = cid
+            client_is_unassigned = False
+ 
+    # ── window (custom range overrides named period), same as summary ───────
+    custom_start = parse_date(request.GET.get("start") or "")
+    custom_end = parse_date(request.GET.get("end") or "")
+    if custom_start and custom_end and custom_start <= custom_end:
+        start_date, end_date = custom_start, custom_end
+    else:
+        start_date, end_date = _resolve_period_window(period, anchor)
+    start_utc, end_utc = _day_bounds_utc(start_date, end_date)
+ 
+    def _client_filter(qs):
+        return qs.filter(client_id__isnull=True) if client_is_unassigned \
+            else qs.filter(client_id=client_id)
+ 
+    # Committed (billable / non-billable) + uncommitted (needs review), both
+    # narrowed to this one user (via forced_user_id) and this one client.
+    committed = _client_filter(_block_queryset(
+        org, start_utc, end_utc, can_see_all, forced_user_id, committed_only=True
+    ))
+    uncommitted = _client_filter(_block_queryset(
+        org, start_utc, end_utc, can_see_all, forced_user_id, committed_only=False
+    ))
+ 
+    # Resolve a display label for the client (best-effort; the row already knows
+    # it, but returning it keeps the endpoint self-describing).
+    client_label = "Unassigned"
+    if not client_is_unassigned:
+        c = Client.objects.filter(id=client_id, org=org).first()
+        client_label = c.name if c else f"Client {client_id}"
+ 
+    # Resolve the user label from the first block we see (avoids an extra query).
+    user_label = None
+ 
+    # ── collapse to activities keyed by normalized signature ────────────────
+    activities: dict = defaultdict(lambda: {
+        "app": "",
+        "title": "",
+        "minutes": 0,
+        "block_count": 0,
+        "billable": False,
+        "needs_review": False,
+        "first_seen": None,
+        "last_seen": None,
+    })
+ 
+    billable_min = 0
+    non_billable_min = 0
+    review_min = 0
+    immaterial_min = 0
+ 
+    def _touch_times(entry, b):
+        # Track first/last activity timestamps for the group.
+        if b.start:
+            if entry["first_seen"] is None or b.start < entry["first_seen"]:
+                entry["first_seen"] = b.start
+            end_ts = b.end or b.start
+            if entry["last_seen"] is None or end_ts > entry["last_seen"]:
+                entry["last_seen"] = end_ts
+ 
+    # Committed blocks → billable / non-billable buckets.
+    for b in committed:
+        minutes = _block_minutes(b)
+        if minutes <= 0:
+            continue
+        if user_label is None and b.user_id:
+            user_label = (b.user.get_full_name().strip() or b.user.username)
+ 
+        billable = _is_billable_block(b)
+        # Mirror _aggregate's immaterial handling: non-billable sub-2min slivers
+        # are noise; billable-with-client sub-2min still counts.
+        if not _is_material(b) and not billable:
+            immaterial_min += minutes
+            continue
+ 
+        label, key = _normalize_signature(b.app_name, b.window_title, b.url)
+        e = activities[key]
+        e["app"] = (b.app_name or "Unknown").strip()
+        e["title"] = label
+        e["minutes"] += minutes
+        e["block_count"] += 1
+        if billable:
+            e["billable"] = True
+            billable_min += minutes
+        else:
+            non_billable_min += minutes
+        _touch_times(e, b)
+ 
+    # Uncommitted blocks → needs-review bucket (skip idle + immaterial, same as
+    # the uncategorized endpoint).
+    for b in uncommitted:
+        minutes = _block_minutes(b)
+        if minutes <= 0:
+            continue
+        cat = _dominant_category(b).lower()
+        if cat == "idle":
+            continue
+        if (b.bundle_id or "").lower() == "__idle__":
+            continue
+        if not _is_material(b):
+            immaterial_min += minutes
+            continue
+        if user_label is None and b.user_id:
+            user_label = (b.user.get_full_name().strip() or b.user.username)
+ 
+        label, key = _normalize_signature(b.app_name, b.window_title, b.url)
+        e = activities[key]
+        e["app"] = (b.app_name or "Unknown").strip()
+        e["title"] = label
+        e["minutes"] += minutes
+        e["block_count"] += 1
+        e["needs_review"] = True
+        review_min += minutes
+        _touch_times(e, b)
+ 
+    # Serialize, newest activity first (by last_seen, then minutes).
+    out = []
+    for key, e in activities.items():
+        out.append({
+            "app": e["app"],
+            "title": e["title"],
+            "minutes": e["minutes"],
+            "hours": round(e["minutes"] / 60, 2),
+            "block_count": e["block_count"],
+            "billable": e["billable"],
+            "needs_review": e["needs_review"],
+            "first_seen": e["first_seen"].isoformat() if e["first_seen"] else None,
+            "last_seen": e["last_seen"].isoformat() if e["last_seen"] else None,
+        })
+    out.sort(
+        key=lambda a: (a["last_seen"] or "", a["minutes"]),
+        reverse=True,
+    )
+ 
+    return Response({
+        "org_id": org.id,
+        "user_id": forced_user_id,
+        "user_label": user_label or "Unknown",
+        "client_id": None if client_is_unassigned else client_id,
+        "client_label": client_label,
+        "period": period,
+        "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        "totals": {
+            "billable_hours": round(billable_min / 60, 2),
+            "non_billable_hours": round((non_billable_min + immaterial_min) / 60, 2),
+            "needs_review_hours": round(review_min / 60, 2),
+            "total_hours": round((billable_min + non_billable_min + immaterial_min + review_min) / 60, 2),
+        },
+        "activities": out,
+    })
+ 

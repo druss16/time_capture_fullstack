@@ -1160,7 +1160,7 @@ def mavops_reconcile_mismatches(request):
             if hasattr(b, 'is_billable'):
                 b.is_billable = True
                 update_fields.append('is_billable')
-            b.save(update_fields=update_fields)
+            b.save(update_fields=update_fields, force_classifier=True)
  
             cat_after = ClassificationService._extract_dominant_category(b)
  

@@ -19,8 +19,7 @@ from tracker.models import (
 
 from django.db import transaction
  
-from tracker.utils.client_name_match import build_token_index, detect_mismatch
-
+from tracker.utils.client_name_match import build_token_index, detect_mismatch, detect_title_client
 
 # The category that reassigned tax work should carry so it lands billable under
 # the client. SET THIS to your system's actual value (e.g. "Tax Prep" / "Tax" /
@@ -896,12 +895,6 @@ def mavops_copy_routing_rules(request, org_id):
         'skipped_missing_client': skipped_missing_client,
         'source_org_name': source_org.name,
     })
-
-
-from collections import defaultdict
-from datetime import timedelta
-
-from tracker.utils.client_name_match import build_token_index, detect_mismatch
 
 
 @api_view(['GET'])

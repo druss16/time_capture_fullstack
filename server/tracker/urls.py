@@ -494,5 +494,7 @@ urlpatterns = [
 
     path("mavops/mismatches/", views_mavops.mavops_client_mismatches, name="mavops_client_mismatches"),
 
+    path("mavops/mismatches/reconcile/", views_mavops.mavops_reconcile_mismatches, name="mavops_reconcile_mismatches"),
+
 
 ]

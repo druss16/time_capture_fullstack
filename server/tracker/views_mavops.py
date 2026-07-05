@@ -1219,4 +1219,9 @@ def mavops_reconcile_mismatches(request):
             changed += 1
  
     return Response({
- 
+         'dry_run': False,
+        'org_id': int(org_id),
+        'reassigned': changed,
+        'skipped': len(skipped),
+        'category_set': RECONCILE_TAX_CATEGORY,
+    })

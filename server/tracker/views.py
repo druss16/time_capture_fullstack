@@ -2658,7 +2658,8 @@ def save_block_classification(request, block_id: int):
     if user and clean_categories:
         try:
             # Learn from this confirmed classification
-            PatternLearningService.learn_from_block(b, user)
+            _learn_src = 'correction' if getattr(b, 'categorized_by', '') == 'correction' else 'manual'
+            PatternLearningService.learn_from_block(b, user, source=_learn_src)
             
             # Log what we learned
             learned_details = []
@@ -5757,7 +5758,9 @@ def save_categorization(request):
             # ✅ Learn from this manual categorization
             try:
                 from tracker.services.pattern_learning import PatternLearningService
-                PatternLearningService.learn_from_block(block, user)
+                # Bulk group-assign — one client stamped across many varied
+                # blocks. Rubber-stamp risk, so do NOT teach patterns from it.
+                PatternLearningService.learn_from_block(block, user, source='bulk_move')
                 logger.info(f"[LEARNING] Learned patterns from block {block.id}")
             except Exception as e:
                 # Don't fail the save if learning fails
@@ -6796,6 +6799,15 @@ def recategorize_block(request, block_id):
     block.classification_state = 'committed'
 
     block.save(force_update=True)
+
+    # NOTE: intentionally NOT teaching the pattern learner here. This endpoint
+    # handles single corrections AND multi-select bulk-moves identically (one
+    # recategorize call per block), so the backend can't tell a deliberate
+    # single fix from a bulk rubber-stamp without a frontend 'source' flag.
+    # Teaching here would reintroduce the bulk-poisoning we gate against. Reliable
+    # per-client memory comes from the human-approved alias tool
+    # (management/commands/suggest_aliases.py) instead. Wire gated teaching here
+    # only alongside a frontend source flag (single_confirm vs bulk_move).
     return Response({
         "success": True,
         "block_id": block.id,

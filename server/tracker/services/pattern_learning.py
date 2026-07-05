@@ -318,12 +318,22 @@ class PatternLearningService:
     # LEARN FROM USER ACTIONS
     # =========================================================================
 
+    # Only DELIBERATE, per-block signals teach. Bulk actions (bulk-move,
+    # "Confirm all") rubber-stamp many blocks on one decision and would poison
+    # Stage-9 patterns + the AI prompt after 2+ repeats.
+    LEARNING_SOURCES = {'correction', 'single_confirm', 'manual'}
+
     @staticmethod
-    def learn_from_block(block, user):
+    def learn_from_block(block, user, source='single_confirm'):
         """
         Extract and store all patterns from a confirmed/categorized block.
         Called when user manually categorizes or confirms AI suggestion.
-        
+
+        source: who triggered this — only 'correction' | 'single_confirm' |
+        'manual' teach. Anything else (e.g. 'bulk_move', 'confirm_all') is a
+        rubber-stamp and is IGNORED. Gates ONLY what feeds UserWorkPattern;
+        classification behavior is unchanged.
+
         KEY BEHAVIORS:
         - Creates new patterns on first occurrence
         - Boosts confidence on repeat occurrences (same client/category)
@@ -331,7 +341,11 @@ class PatternLearningService:
         - Updates client/category to match the correction
         """
         from tracker.models import UserWorkPattern
-        
+
+        if source not in PatternLearningService.LEARNING_SOURCES:
+            logger.info(f"[PATTERN] skip learning for block {block.id} (source={source})")
+            return
+
         if not block.client and not PatternLearningService._get_category_from_block(block):
             return  # Nothing to learn from
         

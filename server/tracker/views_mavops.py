@@ -14,7 +14,7 @@ from datetime import timedelta
 
 from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
 from tracker.models import (
-    AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client
+    AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client, MismatchFlag
 )
 
 from django.db import transaction
@@ -1187,13 +1187,36 @@ def mavops_reconcile_mismatches(request):
                 }],
                 corrected_by_user=True,   # the client actually changed
             )
+
+            # v1.4.1: record this fix in MismatchFlag so the history/trend table
+            # captures manual same-day reconciles, not just what the nightly scan
+            # finds still-broken at 3am. Upsert: if the nightly scan already
+            # opened a flag for this block, resolve THAT one; otherwise create a
+            # resolved flag directly. One row per open occurrence — respects the
+            # partial-unique (open) constraint.
+            _existing_open = (
+                MismatchFlag.objects
+                .filter(block=b, resolved_at__isnull=True)
+                .first()
+            )
+            if _existing_open:
+                _existing_open.resolved_at = timezone.now()
+                _existing_open.resolved_reason = 'reconciled'
+                _existing_open.save(update_fields=['resolved_at', 'resolved_reason'])
+            else:
+                MismatchFlag.objects.create(
+                    org_id=int(org_id),
+                    block=b,
+                    booked_client_id=old_client,          # the wrong client it was on
+                    title_client_id=p['to_client_id'],    # the client the title names
+                    title_client_name=p['to_client_name'],
+                    bucket='client',
+                    match_score=p['confidence']['coverage'],
+                    window_title=(b.window_title or '')[:512],
+                    resolved_at=timezone.now(),
+                    resolved_reason='reconciled',
+                )
             changed += 1
  
     return Response({
-        'dry_run': False,
-        'org_id': int(org_id),
-        'reassigned': changed,
-        'skipped': len(skipped),
-        'category_set': RECONCILE_TAX_CATEGORY,
-    })
  

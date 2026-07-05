@@ -3886,6 +3886,40 @@ class UserIntegration(models.Model):
         self.save()
 
 
+# tracker/models.py
+class MismatchFlag(models.Model):
+    """A block whose window title names a different client than it's booked to.
+    Written by the nightly scan; read by the pre-invoice gate and admin review.
+    Detection-only — never mutates the block."""
+    org = models.ForeignKey('Organization', on_delete=models.CASCADE, related_name='mismatch_flags')
+    block = models.ForeignKey('Block', on_delete=models.CASCADE, related_name='mismatch_flags')
+    booked_client = models.ForeignKey('Client', on_delete=models.CASCADE, related_name='+')
+    title_client_id = models.IntegerField(null=True, blank=True)   # client the title points to (may be null: detector returns name)
+    title_client_name = models.CharField(max_length=255, blank=True)
+    bucket = models.CharField(max_length=16, default='client')     # 'client' (billing-impacting) | 'internal' (noise)
+    match_score = models.FloatField(default=0.0)
+    window_title = models.CharField(max_length=512, blank=True)
+    detected_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_reason = models.CharField(max_length=64, blank=True)  # 'reconciled' | 'confirmed_correct' | 'invoiced_anyway'
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['org', 'resolved_at']),
+            models.Index(fields=['block']),
+        ]
+        constraints = [
+            # One OPEN flag per block at a time; resolved flags stay as history.
+            models.UniqueConstraint(
+                fields=['block'],
+                condition=models.Q(resolved_at__isnull=True),
+                name='uniq_open_mismatch_flag_per_block',
+            ),
+        ]
+
+    def __str__(self):
+        return f"MismatchFlag(block={self.block_id}, {self.booked_client_id}→{self.title_client_name!r}, {'open' if not self.resolved_at else 'resolved'})"
+
 
 # Calendar matching rules
 from tracker.models_calendar_rules import OrgCalendarRule  # noqa: F401, E402
@@ -3893,3 +3927,5 @@ from tracker.models_task_type_sets import (
     TaskTypeSet, TaskTypeSetMember, ClientTaskType,
     ExternalClientMapping, ExternalTaskTypeMapping, ExternalStaffMapping,
 )
+
+

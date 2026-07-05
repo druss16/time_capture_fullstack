@@ -1778,3 +1778,96 @@ def second_pass_categorize_all(self):
             log.info(f"[SECOND-PASS] org {oid}: {s}")
         except Exception as e:
             log.exception(f"[SECOND-PASS] org {oid} failed: {e}")
+
+
+@shared_task(name='tracker.tasks.scan_org_mismatches')
+def scan_org_mismatches(days=7, org_id=None):
+    """
+    Nightly client-name mismatch scan (detection-only backstop).
+
+    Scans committed, non-deleted, client-booked blocks in a rolling window and
+    reconciles MismatchFlag rows:
+      - opens a flag for each NEW client-bucket mismatch,
+      - marks a previously-open flag resolved ('reconciled') when its block no
+        longer mismatches.
+
+    Never mutates a Block. Read by the pre-invoice gate and MavOps Admin
+    org-health. Default 7-day window matches the review-and-approve cycle; use
+    the `detect_client_mismatches` management command for deep historical sweeps.
+    """
+    from tracker.models import Block, MismatchFlag, Organization
+    from tracker.services.mismatch_scan import _indexes_for_orgs, scan_blocks
+
+    cutoff = timezone.now() - timedelta(days=days)
+
+    org_ids = [org_id] if org_id else list(
+        Organization.objects.values_list('id', flat=True)
+    )
+    if not org_ids:
+        return {'orgs': 0, 'opened': 0, 'resolved': 0}
+
+    names_by_org, index_by_org, firm_by_org = _indexes_for_orgs(org_ids)
+
+    blocks = (
+        Block.objects
+        .filter(deleted_at__isnull=True, client_id__isnull=False,
+                start__gte=cutoff, org_id__in=org_ids)
+        .exclude(window_title__isnull=True)
+        .exclude(window_title='')
+        .select_related('client')
+        .order_by('start')
+    )
+
+    # Current mismatches in-window, keyed by block_id (client bucket only).
+    current = {}
+    for row in scan_blocks(blocks.iterator(chunk_size=1000),
+                           names_by_org, index_by_org, firm_by_org):
+        if row['bucket'] == 'client':
+            current[row['block_id']] = row
+
+    opened = 0
+    resolved = 0
+
+    # Open flags for new mismatches (skip blocks that already have an open flag).
+    existing_open = set(
+        MismatchFlag.objects
+        .filter(block_id__in=current.keys(), resolved_at__isnull=True)
+        .values_list('block_id', flat=True)
+    )
+    to_create = []
+    for block_id, row in current.items():
+        if block_id in existing_open:
+            continue
+        to_create.append(MismatchFlag(
+            org_id=row['org_id'],
+            block_id=block_id,
+            booked_client_id=row['booked_client_id'],
+            title_client_id=row['looks_like_client_id'],
+            title_client_name=row['looks_like_client_name'],
+            bucket='client',
+            match_score=row['score'],
+            window_title=row['window_title'],
+        ))
+    if to_create:
+        MismatchFlag.objects.bulk_create(to_create, ignore_conflicts=True)
+        opened = len(to_create)
+
+    # Resolve any open flag whose block is no longer mismatching in this window.
+    stale_open = (
+        MismatchFlag.objects
+        .filter(org_id__in=org_ids, resolved_at__isnull=True,
+                block__start__gte=cutoff)
+        .exclude(block_id__in=current.keys())
+    )
+    resolved = stale_open.update(
+        resolved_at=timezone.now(),
+        resolved_reason='reconciled',
+    )
+
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"[MISMATCH-SCAN] orgs={len(org_ids)} window={days}d "
+        f"current={len(current)} opened={opened} resolved={resolved}"
+    )
+    return {'orgs': len(org_ids), 'current': len(current),
+            'opened': opened, 'resolved': resolved}

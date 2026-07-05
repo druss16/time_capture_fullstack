@@ -1131,10 +1131,29 @@ def mark_invoiced(request):
     
     block_ids = request.data.get('block_ids', [])
     invoice_reference = request.data.get('invoice_reference', '')
-    
+    override = request.data.get('override_mismatches', False)
+
     if not block_ids:
         return Response({'error': 'block_ids required'}, status=400)
-    
+
+    # Pre-invoice mismatch gate (non-blocking review). Unless the caller has
+    # acknowledged with override_mismatches=true, refuse to bill blocks whose
+    # window title names a different client than they're booked to. Same
+    # detector as the nightly scan.
+    if not override:
+        from tracker.services.mismatch_scan import check_invoice_mismatches
+        mismatches = check_invoice_mismatches(org, block_ids)
+        if mismatches:
+            return Response({
+                'error': 'client_mismatch',
+                'mismatches': mismatches,
+                'message': (
+                    f'{len(mismatches)} block(s) have a title/booked-client '
+                    f'mismatch. Reconcile them, or resend with '
+                    f'override_mismatches=true to bill anyway.'
+                ),
+            }, status=409)
+
     updated = Block.objects.filter(
         id__in=block_ids,
         org=org,
@@ -1145,7 +1164,19 @@ def mark_invoiced(request):
         invoiced_at=timezone.now(),
         invoice_reference=invoice_reference,
     )
-    
+
+    # If billed over an acknowledged mismatch, record it on the flags for audit.
+    if override:
+        from tracker.models import MismatchFlag
+        MismatchFlag.objects.filter(
+            block_id__in=block_ids,
+            org=org,
+            resolved_at__isnull=True,
+        ).update(
+            resolved_at=timezone.now(),
+            resolved_reason='invoiced_anyway',
+        )
+
     return Response({
         'updated': updated,
         'block_ids': block_ids,

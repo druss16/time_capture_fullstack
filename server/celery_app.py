@@ -72,6 +72,17 @@ app.conf.beat_schedule = {
         'task': 'tracker.tasks.second_pass_categorize_all',
         'schedule': crontab(hour=2, minute=30),
     },
+
+    # ✅ NIGHTLY 3:00 AM: Client-name mismatch backstop scan.
+    # Detection-only — opens/resolves MismatchFlag rows over a 7-day rolling
+    # window. Watched in MavOps Admin org-health; feeds the pre-invoice gate.
+    'scan-mismatches-nightly': {
+        'task': 'tracker.tasks.scan_org_mismatches',
+        'schedule': crontab(hour=3, minute=0),
+        'options': {
+            'expires': 3600,
+        }
+    },
     
     # =========================================================================
     # DAILY NOTIFICATIONS (Mon-Fri)

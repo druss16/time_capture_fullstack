@@ -3073,22 +3073,93 @@ class ClassificationService:
             )
             return False
 
+        evidence_sources = [
+            e.get('source', '?') for e in best_inference.get('evidence', [])
+        ]
+
+        # v1.4.1 FORWARD-FILL GUARD.
+        # An agent inference sourced from a CARRIED signal — a QB company file
+        # still open from prior work, or plain agent stickiness — is the
+        # dominant mis-attribution mode (the St. John / Sacred Heart reconcile
+        # family). Two defenses:
+        #   (a) if such an inference names client Y but an AUTHORITATIVE Stage 3
+        #       signal (title_alias/file_path/domain) already named a DIFFERENT
+        #       client X, the window literally shows X — cap the inference below
+        #       the propose gate so it can't outrank or corroborate around X;
+        #   (b) on a browser block with no independent corroboration, suppress
+        #       the carry-prone inference entirely (alt-tab-to-news leak).
+        # Inferences derived from THIS block's own text (title_alias/file_path
+        # sources) are NOT carry-prone and are left untouched.
+        STICKINESS_INFERENCE_SOURCES = {
+            'qb_company_file', 'agent_current_client', 'prior_block',
+            'stickiness', 'cached_client',
+        }
+        source_is_carry_prone = any(
+            src in STICKINESS_INFERENCE_SOURCES for src in evidence_sources
+        )
+
+        # (b) browser forward-fill: carry-prone + browser + no corroboration → drop.
+        _app_lower = (block.app_name or '').lower()
+        _BROWSER_APPS = {'msedge', 'chrome', 'firefox', 'brave',
+                         'safari', 'opera', 'iexplore'}
+        if _app_lower in _BROWSER_APPS and source_is_carry_prone:
+            _CORROBORATING = {
+                'title_match_title_alias', 'title_match_file_path',
+                'title_match_domain', 'file_path_structure', 'calendar',
+                'mail', 'learned_pattern', 'org_rule', 'tax_software',
+            }
+            _has_corr = any(
+                s.detail and s.detail.get('client_id') == cid
+                and s.type in _CORROBORATING
+                for s in decision.matched_signals
+            )
+            if not _has_corr:
+                logger.info(
+                    f"[STAGE-8-INF] Block {getattr(block, 'pk', '?')}: "
+                    f"suppressing carry-prone agent_inference on browser block "
+                    f"({_app_lower}) — no corroboration for client_id={cid} "
+                    f"(sources={evidence_sources})"
+                )
+                return False
+
+        # (a) competing authoritative Stage 3 signal naming a DIFFERENT client.
+        _AUTHORITATIVE = {
+            'title_match_title_alias', 'title_match_file_path', 'title_match_domain',
+        }
+        _competing = next(
+            (s for s in decision.matched_signals
+             if s.type in _AUTHORITATIVE and s.detail
+             and s.detail.get('client_id')
+             and s.detail.get('client_id') != cid),
+            None,
+        )
+        forward_fill_suspect = source_is_carry_prone and _competing is not None
+
         # Map agent confidence to classifier signal strength.
         # Agent's confidence already factors in evidence quality + decay, so
         # we trust it more than the flat-0.45 legacy signal.
-        # NEW (FIXED):
         if best_confidence >= 0.85:
             signal_strength = 0.85   # strong
         elif best_confidence >= 0.70:
             signal_strength = 0.75   # moderate-strong
         elif best_confidence >= 0.60:
-            signal_strength = 0.65   # moderate (now passes!)
+            signal_strength = 0.65   # moderate
         else:
             signal_strength = 0.45   # weak
 
-        evidence_sources = [
-            e.get('source', '?') for e in best_inference.get('evidence', [])
-        ]
+        if forward_fill_suspect:
+            # Cap below the Stage 3 title floor (0.82) AND the propose gate
+            # (0.65) so a stale QB-file inference can neither win against nor
+            # corroborate around the authoritative title naming client X.
+            _capped = min(signal_strength, 0.45)
+            logger.info(
+                f"[STAGE-8-INF] Block {getattr(block, 'pk', '?')}: forward-fill "
+                f"suspect — inference client={client.name} "
+                f"(sources={evidence_sources}) conflicts with authoritative "
+                f"Stage 3 client_id={_competing.detail.get('client_id')}; "
+                f"capping {signal_strength}->{_capped}, marking stickiness"
+            )
+            signal_strength = _capped
 
         decision.matched_signals.append(Signal(
             type='agent_inference',
@@ -3103,6 +3174,10 @@ class ClassificationService:
                 'inference_confidence': best_confidence,
                 'inference_evidence_sources': evidence_sources,
                 'source_event_id': best_event_id,
+                # v1.4.1: carry-prone inferences count as stickiness (not
+                # independent attestation) for FIX 7 / Mets guard.
+                'is_stickiness_inference': source_is_carry_prone,
+                'forward_fill_capped': forward_fill_suspect,
             },
         ))
 
@@ -4699,9 +4774,12 @@ class ClassificationService:
             non_stickiness_attestation = [
                 s for s in attesting_signals
                 if s.type != 'agent_current_client'
+                and not (s.type == 'agent_inference'
+                         and s.detail and s.detail.get('is_stickiness_inference'))
             ]
             stickiness_corroborated = any(
-                s.type == 'agent_current_client' and s.detail.get('corroborated')
+                (s.type == 'agent_current_client' and s.detail.get('corroborated'))
+                or (s.type == 'agent_inference' and s.detail.get('corroborated'))
                 for s in attesting_signals
             )
 
@@ -4843,9 +4921,15 @@ class ClassificationService:
                     s for s in decision.matched_signals
                     if s.detail and s.detail.get('client_id') == decision.client_id
                 ]
-                non_stickiness = [s for s in attesting if s.type != 'agent_current_client']
+                non_stickiness = [
+                    s for s in attesting
+                    if s.type != 'agent_current_client'
+                    and not (s.type == 'agent_inference'
+                             and s.detail and s.detail.get('is_stickiness_inference'))
+                ]
                 stickiness_corroborated = any(
-                    s.type == 'agent_current_client' and s.detail.get('corroborated')
+                    (s.type == 'agent_current_client' and s.detail.get('corroborated'))
+                    or (s.type == 'agent_inference' and s.detail.get('corroborated'))
                     for s in attesting
                 )
                 if not non_stickiness and not stickiness_corroborated:

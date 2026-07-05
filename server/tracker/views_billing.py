@@ -1140,19 +1140,20 @@ def mark_invoiced(request):
     # acknowledged with override_mismatches=true, refuse to bill blocks whose
     # window title names a different client than they're booked to. Same
     # detector as the nightly scan.
+    # v1.4.1: DETECTION-ONLY until the billing UI handles the 409 review prompt.
+    # Log mismatches and record them, but DO NOT block the invoice — the
+    # frontend has no handler yet, so a hard 409 would dead-end billing. Flip
+    # back to blocking (restore the 409 return) once the UI is built.
     if not override:
         from tracker.services.mismatch_scan import check_invoice_mismatches
         mismatches = check_invoice_mismatches(org, block_ids)
         if mismatches:
-            return Response({
-                'error': 'client_mismatch',
-                'mismatches': mismatches,
-                'message': (
-                    f'{len(mismatches)} block(s) have a title/booked-client '
-                    f'mismatch. Reconcile them, or resend with '
-                    f'override_mismatches=true to bill anyway.'
-                ),
-            }, status=409)
+            import logging
+            logging.getLogger(__name__).warning(
+                f"[MARK-INVOICED] {len(mismatches)} mismatch(es) on invoice for "
+                f"org {org.id}, blocks {[m['block_id'] for m in mismatches]} — "
+                f"logged, NOT blocked (UI handler pending)"
+            )
 
     updated = Block.objects.filter(
         id__in=block_ids,

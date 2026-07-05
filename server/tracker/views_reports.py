@@ -899,33 +899,61 @@ def reports_summary_export(request):
     return resp
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Uncategorized drill-through — the "what's in the pile + common theme" view
-# ──────────────────────────────────────────────────────────────────────────
-def _normalize_signature(app_name: str, window_title: str, url: str) -> tuple:
-    """
-    Collapse an activity into a stable (theme_label, group_key) so blocks that
-    are really 'the same thing' bucket together. Mirrors the spirit of
-    get_categorization_data's signature logic but tuned for theme display.
+# Corrected _normalize_signature — strips trailing app-chrome, keeps the full
+# (possibly hyphenated) client/document name.
 
-    Examples:
-      Outlook / "Inbox - wayne@..."     → "Outlook — Inbox"
-      Chrome  / "Acme 1040 - Google..." → "Chrome — Acme 1040"
-      Acrobat / "SOE26 - 247 TL WALL"   → "Acrobat — SOE26 - 247 TL WALL"
+_APP_TAIL_PATTERNS = (
+    "quickbooks accountant desktop",
+    "quickbooks accountant",
+    "quickbooks desktop",
+    "quickbooks",
+    "google chrome",
+    "microsoft edge",
+    "microsoft excel",
+    "microsoft word",
+    "microsoft outlook",
+    "excel",
+    "word",
+    "outlook",
+    "adobe acrobat",
+    "acrobat reader",
+    "acrobat",
+    "mozilla firefox",
+    "firefox",
+)
+
+def _strip_app_tail(title: str) -> str:
     """
+    Remove a trailing ' - <app chrome>' from a window title while keeping the
+    real (possibly hyphenated) name intact.
+
+      "St. Mary - St. Peter's Church - QuickBooks Accountant Desktop Plus 2024"
+        -> "St. Mary - St. Peter's Church"
+      "Acme 1040 - Google Chrome" -> "Acme 1040"
+      "SOE26 - 247 TL WALL"       -> "SOE26 - 247 TL WALL"   (no app tail; kept whole)
+      "Inbox - wayne@x.com - Outlook" -> "Inbox - wayne@x.com"
+    """
+    segs = [s.strip() for s in title.split(" - ") if s.strip()]
+    if not segs:
+        return title.strip()
+    # Drop trailing segments that are pure app chrome (match from the end).
+    while len(segs) > 1:
+        last = segs[-1].lower()
+        if any(p in last for p in _APP_TAIL_PATTERNS):
+            segs.pop()
+        else:
+            break
+    return " - ".join(segs)
+
+
+def _normalize_signature(app_name, window_title, url):
     app = (app_name or "Unknown").strip()
-    # Strip common app suffixes/extensions for a cleaner label
     app_clean = app.replace(".exe", "").replace(".EXE", "").strip().title()
 
     title = (window_title or "").strip()
-    # Drop everything after a " - <app>" tail and trailing email/account noise
-    # Keep the first meaningful segment.
     if title:
-        # Take the part before the last " - " if it looks like an app/account tail
-        segs = [s.strip() for s in title.split(" - ") if s.strip()]
-        head = segs[0] if segs else title
-        # Truncate very long heads
-        head = head[:60]
+        head = _strip_app_tail(title)
+        head = head[:80]  # was 60; give hyphenated names room
         label = f"{app_clean} — {head}"
     elif url:
         from urllib.parse import urlparse
@@ -933,7 +961,6 @@ def _normalize_signature(app_name: str, window_title: str, url: str) -> tuple:
         label = f"{app_clean} — {host}" if host else app_clean
     else:
         label = app_clean
-
     return (label, label.lower())
 
 

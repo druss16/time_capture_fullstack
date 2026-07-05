@@ -637,7 +637,10 @@ export default function ReportsSummary({
       )}
 
       {/* ══ EMPLOYEES SECTION ════════════════════════════════════════════ */}
-      {data && !loading && !error && (
+      {/* Team view — only for viewers the server scopes as "all" (owners/admins/
+          managers). Staff scoped to "self" never see the comparative team table;
+          it's performance/comp-adjacent data and a naked cross-employee ranking. */}
+      {data && data.scope === "all" && !loading && !error && (
         <section className="space-y-3 pt-2">
           <h2 className="text-base font-bold text-slate-900">Employees</h2>
           {employeeRows.length === 0 ? (
@@ -660,6 +663,7 @@ export default function ReportsSummary({
                   <EmployeeRow
                     key={`${r.id}-${r.label}`}
                     row={r}
+                    maxTotal={Math.max(1, ...employeeRows.map((e) => e.total_hours || 0))}
                     expanded={expanded.has(`${r.id}-${r.label}`)}
                     onToggle={() => toggleExpand(`${r.id}-${r.label}`)}
                     onOpenClient={({ clientId, clientName, employeeId, employeeLabel, scoped }) =>
@@ -706,12 +710,13 @@ export default function ReportsSummary({
 // Clicking the row toggles an inline per-client breakdown below it. On narrow
 // screens the columns collapse into a wrapped stat strip so nothing is lost.
 function EmployeeRow({
-  row, expanded, onToggle, onOpenReview, onOpenClient,
+  row, expanded, onToggle, onOpenReview, onOpenClient, maxTotal,
 }: {
   row: SummaryRow;
   expanded: boolean;
   onToggle: () => void;
   onOpenReview: () => void;
+  maxTotal: number;   // busiest person's total hours — scales the mix bar length
   // Called when a client inside this person's breakdown is clicked. Passes the
   // employee context so the modal can scope to "this person on this client".
   onOpenClient: (args: {
@@ -728,6 +733,10 @@ function EmployeeRow({
   const billPct = (row.billable_hours / total) * 100;
   const nonPct = (row.non_billable_hours / total) * 100;
   const revPct = ((row.uncategorized_hours || 0) / total) * 100;
+  // Bar LENGTH encodes total hours (vs the busiest person), so a light week and
+  // a heavy week look different at a glance. Segments still show the bill/
+  // non-bill/review mix within that length. Floor at 8% so tiny bars stay visible.
+  const lengthPct = Math.max(8, (total / (maxTotal || 1)) * 100);
   const review = row.uncategorized_hours || 0;
   const util = row.utilization_pct ?? 0;
   const hasBreakdown = Array.isArray(row.breakdown) && row.breakdown.length > 0;
@@ -767,10 +776,15 @@ function EmployeeRow({
               Most time on {row.top_client || "Internal / Admin"}
             </div>
           </div>
-          <div className="flex h-2.5 overflow-hidden rounded-full">
-            <span className="h-full bg-emerald-600" style={{ width: `${billPct}%` }} />
-            <span className="h-full bg-slate-400" style={{ width: `${nonPct}%` }} />
-            <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
+          <div>
+            <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-100">
+              <div className="flex h-full overflow-hidden rounded-full" style={{ width: `${lengthPct}%` }}>
+                <span className="h-full bg-emerald-600" style={{ width: `${billPct}%` }} />
+                <span className="h-full bg-slate-400" style={{ width: `${nonPct}%` }} />
+                <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
+              </div>
+            </div>
+            <div className="mt-1 text-[10px] tabular-nums text-slate-400">{fmtHours(total)} total</div>
           </div>
           <div className="text-right">
             <div className="text-sm font-bold tabular-nums text-emerald-700">{fmtHours(row.billable_hours)}</div>
@@ -833,6 +847,7 @@ function EmployeeRow({
               <span className="tabular-nums text-amber-600"><b className="font-bold">{fmtHours(review)}</b> review</span>
             )}
             <span className="tabular-nums"><b className="text-slate-700 font-bold">{util}%</b> <span className="text-slate-400">util</span></span>
+            <span className="tabular-nums"><b className="text-slate-700 font-bold">{fmtHours(total)}</b> <span className="text-slate-400">total</span></span>
           </div>
         </div>
       </button>

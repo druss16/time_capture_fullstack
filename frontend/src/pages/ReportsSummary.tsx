@@ -55,6 +55,13 @@ function fmtHours(hours: number | undefined): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+// Display label for a client name. The backend uses "Unassigned" for blocks
+// with no client (client_id is null); we show that as "No Client".
+function displayClient(name: string | null | undefined): string {
+  const n = (name || "").trim();
+  return n === "Unassigned" ? "No Client" : (n || "No Client");
+}
+
 function initials(label: string): string {
   return label
     .split(/[\s]+/)
@@ -583,7 +590,7 @@ export default function ReportsSummary({
                       onClick={() => openClientDetail(c)}
                       className="w-full grid grid-cols-[minmax(0,1fr)_84px] sm:grid-cols-[220px_minmax(0,1fr)_84px] items-center gap-3 rounded-lg px-1.5 py-1 text-left hover:bg-slate-50 cursor-pointer"
                     >
-                      <span className="truncate text-sm font-semibold text-slate-800">{c.label}</span>
+                      <span className="truncate text-sm font-semibold text-slate-800">{displayClient(c.label)}</span>
                       <span className="hidden sm:block h-[26px] rounded-full bg-slate-100 overflow-hidden">
                         <span
                           className="flex h-full items-center rounded-full bg-gradient-to-r from-emerald-600 to-emerald-500 pl-2.5 text-[11px] font-bold text-white"
@@ -724,11 +731,16 @@ function EmployeeRow({
   const review = row.uncategorized_hours || 0;
   const util = row.utilization_pct ?? 0;
   const hasBreakdown = Array.isArray(row.breakdown) && row.breakdown.length > 0;
+  // Hide the "No Client" (unassigned) bucket from the per-employee breakdown —
+  // it's not client work. The employee's header totals still include it; this
+  // only cleans the client list. (Renamed from "Unassigned" → "No Client".)
   const sortedBreakdown = hasBreakdown
-    ? [...row.breakdown!].sort((a, b) => b.total_hours - a.total_hours)
+    ? [...row.breakdown!]
+        .filter((b) => b.name !== "Unassigned" && b.name !== "No Client")
+        .sort((a, b) => b.total_hours - a.total_hours)
     : [];
-  const maxItem = hasBreakdown
-    ? Math.max(1, ...row.breakdown!.map((b) => b.total_hours))
+  const maxItem = sortedBreakdown.length
+    ? Math.max(1, ...sortedBreakdown.map((b) => b.total_hours))
     : 1;
   const bdPageCount = Math.max(1, Math.ceil(sortedBreakdown.length / BD_PAGE_SIZE));
   const bdPageSafe = Math.min(bdPage, bdPageCount - 1);
@@ -832,11 +844,11 @@ function EmployeeRow({
             <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2.5">
               Clients worked this period
             </h4>
-            {hasBreakdown ? (
+            {sortedBreakdown.length > 0 ? (
               <>
                 <div className="space-y-2.5">
                   {bdSlice.map((b, i) => {
-                    const isClient = b.name !== "Unassigned" && b.name !== "Internal / Admin";
+                    const isClient = b.name !== "Unassigned" && b.name !== "No Client" && b.name !== "Internal / Admin";
                     return (
                       <button
                         key={`${b.id}-${b.name}-${i}`}
@@ -947,14 +959,14 @@ function ClientDetailModal({
             {scope ? (
               <>
                 <div className="text-[11px] font-bold uppercase tracking-wide text-emerald-700">{scope.employeeLabel}</div>
-                <h3 className="text-xl font-bold text-slate-900">{row.label}</h3>
+                <h3 className="text-xl font-bold text-slate-900">{displayClient(row.label)}</h3>
                 <p className="mt-1 text-xs text-slate-500">
                   {scope.employeeLabel}&rsquo;s time on this client {windowPhrase}
                 </p>
               </>
             ) : (
               <>
-                <h3 className="text-xl font-bold text-slate-900">{row.label}</h3>
+                <h3 className="text-xl font-bold text-slate-900">{displayClient(row.label)}</h3>
                 <p className="mt-1 text-xs text-slate-500">
                   {people.length > 0
                     ? `${people.length} ${people.length > 1 ? "people" : "person"} worked this client ${windowPhrase} · ${fmtHours(row.total_hours)} total`

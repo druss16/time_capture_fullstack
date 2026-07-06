@@ -31,9 +31,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Loader2, Download, Clock, AlertTriangle,
-  ChevronDown, Search, X, Maximize2, Minimize2,
+  ChevronDown, Search, X, Maximize2, Minimize2, SlidersHorizontal, Check,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
+import {
+  TIMEFRAMES, resolveTimeframe, timeframePhrase, type TimeframeKey,
+} from "@/lib/timeframes";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
 import ReportsMatrix from "./ReportsMatrix";
 
@@ -72,20 +75,6 @@ function initials(label: string): string {
     .join("");
 }
 
-// Human phrase for the active window, used in headline + modal copy so the
-// page reads "this week" / "this month" / "in this range" instead of a frozen
-// "today". `custom` is true when a start–end range is active.
-function periodPhrase(period: Period, custom: boolean): string {
-  if (custom) return "in this range";
-  switch (period) {
-    case "day": return "today";
-    case "week": return "this week";
-    case "month": return "this month";
-    case "quarter": return "this quarter";
-    case "year": return "this year";
-    default: return "this period";
-  }
-}
 
 type Period = "day" | "week" | "month" | "quarter" | "year";
 type GroupBy = "employee" | "client";
@@ -166,22 +155,25 @@ interface SummaryResponse {
   timeseries: { bucket: string; total_hours: number; billable_hours: number }[];
 }
 
-const PERIODS: { key: Period; label: string }[] = [
-  { key: "day", label: "Day" },
-  { key: "week", label: "Week" },
-  { key: "month", label: "Month" },
-  { key: "quarter", label: "Quarter" },
-  { key: "year", label: "Year" },
-];
-
 const CLIENT_PAGE_SIZE = 8;
+
+// Toggleable page sections. Each user can hide the ones they don't care about;
+// the choice persists in localStorage (per browser). "employees" only renders
+// for managers anyway — hiding it when it isn't shown is harmless.
+const REPORT_WIDGETS: { key: string; label: string }[] = [
+  { key: "clients", label: "Where the billable hours went" },
+  { key: "employees", label: "Employees" },
+  { key: "matrix", label: "Client grid" },
+];
+const HIDDEN_WIDGETS_LS_KEY = "reports_hidden_widgets";
 
 export default function ReportsSummary({
   orgIdOverride,
 }: {
   orgIdOverride?: number | null;
 }) {
-  const [period, setPeriod] = useState<Period>("day");
+  const [period, setPeriod] = useState<Period>("month");
+  const [timeframe, setTimeframe] = useState<TimeframeKey>("this_month"); // QuickBooks-style preset
   const [customMode, setCustomMode] = useState(false);
   // Draft values bound to the date inputs — typing here does NOT fetch.
   const [customStart, setCustomStart] = useState<string>("");
@@ -202,6 +194,17 @@ export default function ReportsSummary({
   const [clientSearch, setClientSearch] = useState("");
   const [clientPage, setClientPage] = useState(0);
   const [clientExpandAll, setClientExpandAll] = useState(false); // show every client, no pager
+
+  // Per-user widget visibility (persisted to localStorage) + the Customize menu.
+  const [hiddenWidgets, setHiddenWidgets] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(HIDDEN_WIDGETS_LS_KEY);
+      return new Set<string>(raw ? JSON.parse(raw) : []);
+    } catch {
+      return new Set<string>();
+    }
+  });
+  const [customizeOpen, setCustomizeOpen] = useState(false);
   const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
   // When a client is opened from inside an employee's breakdown, this carries
   // the employee context so the modal can lead with "this person on this client".
@@ -217,7 +220,9 @@ export default function ReportsSummary({
 
   const buildParams = useCallback((group: GroupBy) => {
     const p = new URLSearchParams({ group_by: group });
-    if (customMode && appliedStart && appliedEnd) {
+    // A resolved range (preset "Last …"/YTD or an applied custom range) wins;
+    // otherwise fall back to the named period ("This week/month/…").
+    if (appliedStart && appliedEnd) {
       p.set("start", appliedStart);
       p.set("end", appliedEnd);
     } else {
@@ -344,7 +349,7 @@ export default function ReportsSummary({
               user_id: String(args.employeeId),
               client_id: String(args.clientId ?? 0),
             });
-            if (customMode && appliedStart && appliedEnd) {
+            if (appliedStart && appliedEnd) {
               p.set("start", appliedStart);
               p.set("end", appliedEnd);
             } else {
@@ -382,7 +387,41 @@ export default function ReportsSummary({
   // Active-window phrase for copy. A custom range only counts as "applied" when
   // both endpoints are filled (matches the fetch guard).
   const customApplied = customMode && !!appliedStart && !!appliedEnd;
-  const windowPhrase = periodPhrase(period, customApplied);
+  const windowPhrase = timeframePhrase(timeframe);
+
+  // Apply a QuickBooks-style preset. "This …" presets use the named period;
+  // "Last …"/YTD resolve to an explicit range; "Custom range…" reveals the date
+  // inputs and waits for Apply.
+  const applyTimeframe = (key: TimeframeKey) => {
+    setTimeframe(key);
+    if (key === "custom") {
+      setCustomMode(true);
+      return;
+    }
+    setCustomMode(false);
+    const sel = resolveTimeframe(key);
+    if (sel.period) {
+      setPeriod(sel.period);
+      setAppliedStart("");
+      setAppliedEnd("");
+    } else if (sel.start && sel.end) {
+      setAppliedStart(sel.start);
+      setAppliedEnd(sel.end);
+    }
+  };
+
+  const showWidget = (k: string) => !hiddenWidgets.has(k);
+  const toggleWidget = (k: string) =>
+    setHiddenWidgets((prev) => {
+      const next = new Set(prev);
+      next.has(k) ? next.delete(k) : next.add(k);
+      try {
+        localStorage.setItem(HIDDEN_WIDGETS_LS_KEY, JSON.stringify([...next]));
+      } catch {
+        /* private mode / quota — visibility just won't persist */
+      }
+      return next;
+    });
 
   const handleExport = useCallback(() => {
     const token = getAuthToken();
@@ -396,14 +435,14 @@ export default function ReportsSummary({
         const a = document.createElement("a");
         const href = URL.createObjectURL(blob);
         a.href = href;
-        a.download = customApplied
+        a.download = appliedStart && appliedEnd
           ? `time_summary_${appliedStart}_to_${appliedEnd}.csv`
-          : `time_summary_${period}.csv`;
+          : `time_summary_${timeframe}.csv`;
         a.click();
         URL.revokeObjectURL(href);
       })
       .catch(() => setError("Export failed"));
-  }, [buildParams, period, customApplied, appliedStart, appliedEnd]);
+  }, [buildParams, timeframe, appliedStart, appliedEnd]);
 
   // ── Derived: employee + client rows straight from the API rows ──────────
   const employeeRows = useMemo(
@@ -464,35 +503,31 @@ export default function ReportsSummary({
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
-            {PERIODS.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => {
-                  setCustomMode(false);
-                  setAppliedStart("");
-                  setAppliedEnd("");
-                  setPeriod(p.key);
-                }}
-                className={
-                  "px-3 py-1.5 text-xs font-medium rounded-md transition-colors " +
-                  (!customMode && period === p.key
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-600 hover:bg-slate-50")
-                }
-              >
-                {p.label}
-              </button>
-            ))}
-            <button
-              onClick={() => setCustomMode(true)}
-              className={
-                "px-3 py-1.5 text-xs font-medium rounded-md transition-colors " +
-                (customMode ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")
-              }
+          {/* QuickBooks-style timeframe presets */}
+          <div className="relative inline-flex items-center">
+            <select
+              value={timeframe}
+              onChange={(e) => applyTimeframe(e.target.value as TimeframeKey)}
+              className="appearance-none pl-3 pr-8 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 cursor-pointer"
+              aria-label="Timeframe"
             >
-              Custom
-            </button>
+              <optgroup label="Current">
+                {TIMEFRAMES.filter((t) => t.group === "current").map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Previous">
+                {TIMEFRAMES.filter((t) => t.group === "previous").map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Custom">
+                {TIMEFRAMES.filter((t) => t.group === "custom").map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </optgroup>
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
           </div>
 
           {customMode && (
@@ -537,6 +572,56 @@ export default function ReportsSummary({
             <Download className="h-3.5 w-3.5" />
             Export CSV
           </button>
+
+          {/* Customize — per-user show/hide of the page's sections */}
+          <div className="relative">
+            <button
+              onClick={() => setCustomizeOpen((v) => !v)}
+              className={
+                "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors " +
+                (customizeOpen
+                  ? "border-slate-300 bg-slate-50 text-slate-800"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")
+              }
+              title="Show or hide sections"
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Customize
+            </button>
+            {customizeOpen && (
+              <>
+                <button
+                  className="fixed inset-0 z-30 cursor-default"
+                  aria-label="Close customize menu"
+                  onClick={() => setCustomizeOpen(false)}
+                />
+                <div className="absolute right-0 mt-1.5 z-40 w-64 rounded-xl border border-slate-200 bg-white shadow-lg p-2">
+                  <p className="px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                    Show sections
+                  </p>
+                  {REPORT_WIDGETS.map((w) => (
+                    <button
+                      key={w.key}
+                      onClick={() => toggleWidget(w.key)}
+                      className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-xs text-slate-700 hover:bg-slate-50"
+                    >
+                      <span className="truncate">{w.label}</span>
+                      <span
+                        className={
+                          "flex h-4 w-4 shrink-0 items-center justify-center rounded border " +
+                          (showWidget(w.key)
+                            ? "bg-emerald-600 border-emerald-600 text-white"
+                            : "border-slate-300 text-transparent")
+                        }
+                      >
+                        <Check className="h-3 w-3" />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -562,7 +647,7 @@ export default function ReportsSummary({
       )}
 
       {/* ══ CLIENTS SECTION (bar graph) ══════════════════════════════════ */}
-      {!loading && !error && (
+      {showWidget("clients") && !loading && !error && (
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-base font-bold text-slate-900">Where the billable hours went {windowPhrase}</h2>
@@ -663,7 +748,7 @@ export default function ReportsSummary({
       {/* Team view — only for viewers the server scopes as "all" (owners/admins/
           managers). Staff scoped to "self" never see the comparative team table;
           it's performance/comp-adjacent data and a naked cross-employee ranking. */}
-      {data && data.scope === "all" && !loading && !error && (
+      {showWidget("employees") && data && data.scope === "all" && !loading && !error && (
         <section className="space-y-3 pt-2">
           <h2 className="text-base font-bold text-slate-900">Employees</h2>
           {employeeRows.length === 0 ? (
@@ -727,9 +812,11 @@ export default function ReportsSummary({
       {/* Client grid (matrix pivot) — its own section below the summary bars.
           Self-contained: loads its own preset/data and honors the same
           orgIdOverride/impersonation wiring the summary above uses. */}
-      <div className="pt-4 border-t border-slate-200">
-        <ReportsMatrix orgIdOverride={orgIdOverride ?? null} />
-      </div>
+      {showWidget("matrix") && (
+        <div className="pt-4 border-t border-slate-200">
+          <ReportsMatrix orgIdOverride={orgIdOverride ?? null} />
+        </div>
+      )}
     </div>
   );
 }

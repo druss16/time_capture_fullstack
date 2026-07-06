@@ -23,8 +23,9 @@
  * Reports page as its own <section> (or a tab) — it's fully self-contained.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Download, AlertTriangle, Table2, Maximize2, Minimize2 } from "lucide-react";
+import { Loader2, Download, AlertTriangle, Table2, Maximize2, Minimize2, ChevronDown } from "lucide-react";
 import { API_BASE } from "@/lib/api";
+import { TIMEFRAMES, resolveTimeframe, type TimeframeKey } from "@/lib/timeframes";
 
 // ── Auth token chain (identical to ReportsSummary) ────────────────────────
 function getAuthToken(): string | null {
@@ -85,11 +86,6 @@ const METRICS: { key: Metric; label: string }[] = [
   { key: "total", label: "Total" },
   { key: "non_billable", label: "Non-billable" },
 ];
-const PERIODS: { key: Period; label: string }[] = [
-  { key: "month", label: "Month" },
-  { key: "quarter", label: "Quarter" },
-  { key: "year", label: "Year" },
-];
 
 const ROW_PAGE_SIZE = 25;   // when paginated
 const ROW_HEIGHT = 34;      // px, for the virtualization window
@@ -103,6 +99,12 @@ export default function ReportsMatrix({
   const [rowsAxis, setRowsAxis] = useState<RowAxis>("employee");
   const [metric, setMetric] = useState<Metric>("billable");
   const [period, setPeriod] = useState<Period>("month");
+  const [timeframe, setTimeframe] = useState<TimeframeKey>("this_month"); // QuickBooks-style preset
+  const [customMode, setCustomMode] = useState(false);
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [appliedStart, setAppliedStart] = useState("");
+  const [appliedEnd, setAppliedEnd] = useState("");
   const [expandAll, setExpandAll] = useState(false);   // preset may flip this on
   const [presetLoaded, setPresetLoaded] = useState(false);
 
@@ -145,10 +147,38 @@ export default function ReportsMatrix({
   }, [effOrg]);
 
   const buildParams = useCallback(() => {
-    const p = new URLSearchParams({ rows: rowsAxis, metric, period });
+    const p = new URLSearchParams({ rows: rowsAxis, metric });
+    // Resolved range (preset "Last …"/YTD or applied custom range) wins;
+    // otherwise the named period ("This week/month/…").
+    if (appliedStart && appliedEnd) {
+      p.set("start", appliedStart);
+      p.set("end", appliedEnd);
+    } else {
+      p.set("period", period);
+    }
     if (effOrg) p.set("org_id", String(effOrg));
     return p.toString();
-  }, [rowsAxis, metric, period, effOrg]);
+  }, [rowsAxis, metric, period, appliedStart, appliedEnd, effOrg]);
+
+  // Apply a QuickBooks-style preset (see timeframes.ts). Mirrors ReportsSummary.
+  const applyTimeframe = (key: TimeframeKey) => {
+    setTimeframe(key);
+    setPage(0);
+    if (key === "custom") {
+      setCustomMode(true);
+      return;
+    }
+    setCustomMode(false);
+    const sel = resolveTimeframe(key);
+    if (sel.period) {
+      setPeriod(sel.period);
+      setAppliedStart("");
+      setAppliedEnd("");
+    } else if (sel.start && sel.end) {
+      setAppliedStart(sel.start);
+      setAppliedEnd(sel.end);
+    }
+  };
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -189,12 +219,12 @@ export default function ReportsMatrix({
         const a = document.createElement("a");
         const href = URL.createObjectURL(blob);
         a.href = href;
-        a.download = `matrix_${rowsAxis}_x_client_${metric}_${period}.xlsx`;
+        a.download = `matrix_${rowsAxis}_x_client_${metric}_${timeframe}.xlsx`;
         a.click();
         URL.revokeObjectURL(href);
       })
       .catch(() => setError("Export failed"));
-  }, [buildParams, rowsAxis, metric, period]);
+  }, [buildParams, rowsAxis, metric, timeframe]);
 
   const columns = data?.columns ?? [];
   const allRows = data?.rows ?? [];
@@ -253,22 +283,68 @@ export default function ReportsMatrix({
             ))}
           </div>
 
-          {/* Period (only meaningful for the employee grid; the day/month grids
-              still respect it as the window they span) */}
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
-            {PERIODS.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => setPeriod(p.key)}
-                className={
-                  "px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors " +
-                  (period === p.key ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")
-                }
-              >
-                {p.label}
-              </button>
-            ))}
+          {/* Timeframe presets (QuickBooks-style) — the window the grid spans */}
+          <div className="relative inline-flex items-center">
+            <select
+              value={timeframe}
+              onChange={(e) => applyTimeframe(e.target.value as TimeframeKey)}
+              className="appearance-none pl-3 pr-8 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 cursor-pointer"
+              aria-label="Timeframe"
+            >
+              <optgroup label="Current">
+                {TIMEFRAMES.filter((t) => t.group === "current").map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Previous">
+                {TIMEFRAMES.filter((t) => t.group === "previous").map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Custom">
+                {TIMEFRAMES.filter((t) => t.group === "custom").map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </optgroup>
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
           </div>
+
+          {customMode && (
+            <div className="inline-flex items-center gap-1.5">
+              <input
+                type="date"
+                value={customStart}
+                max={customEnd || undefined}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700"
+              />
+              <span className="text-xs text-slate-400">to</span>
+              <input
+                type="date"
+                value={customEnd}
+                min={customStart || undefined}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700"
+              />
+              <button
+                onClick={() => {
+                  if (customStart && customEnd && customStart <= customEnd) {
+                    setAppliedStart(customStart);
+                    setAppliedEnd(customEnd);
+                    setPage(0);
+                  }
+                }}
+                disabled={
+                  !customStart || !customEnd || customStart > customEnd ||
+                  (customStart === appliedStart && customEnd === appliedEnd)
+                }
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-default"
+              >
+                Apply
+              </button>
+            </div>
+          )}
 
           {/* Expand-all toggle — available to every firm */}
           <button

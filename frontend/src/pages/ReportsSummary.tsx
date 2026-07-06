@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
+import ReportsMatrix from "./ReportsMatrix";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -700,6 +701,13 @@ export default function ReportsSummary({
         onClose={() => setPanelParams(null)}
         params={panelParams || { period, group_by: "employee" }}
       />
+
+      {/* Client grid (matrix pivot) — its own section below the summary bars.
+          Self-contained: loads its own preset/data and honors the same
+          orgIdOverride/impersonation wiring the summary above uses. */}
+      <div className="pt-4 border-t border-slate-200">
+        <ReportsMatrix orgIdOverride={orgIdOverride ?? null} />
+      </div>
     </div>
   );
 }

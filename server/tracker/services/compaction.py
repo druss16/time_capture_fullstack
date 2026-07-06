@@ -815,7 +815,12 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 _qb_comp = (_extract_qb_company_for_compaction(ev.get("window_title") or "")
                             or ev.get("_qb_company_fill"))
             if _qb_comp:
-                content_id = _content_identifier(_qb_comp, "", "")
+                # The COMPANY is the content identity. NOTE: _content_identifier
+                # returns '' for a bare company (it expects a full title), which
+                # silently broke this — QB blocks fell back to the agent's
+                # unreliable client_id and different companies merged (block
+                # 48778: 4 churches in one block). Use a direct company key.
+                content_id = "qbco=" + _qb_comp.strip().lower()
             else:
                 content_id = _grouping_content_id(
                     ev.get("window_title") or "",
@@ -929,11 +934,21 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         # user spent the most time on). Using that as the content signature is
         # approximate but matches
         # how the block was originally bucketed.
-        existing_content_id = _grouping_content_id(
-            b.window_title or "",
-            b.file_path or "",
-            b.url or "",
-        )
+        # QB blocks: the COMPANY is the content identity — mirror the grouping
+        # loop. _grouping_content_id collapses EVERY QB company to 'qbo-work',
+        # so the merge glued different churches into one block (48778: Christ
+        # Our Light + St Mark's + Transfiguration + Divine Mercy). Key on the
+        # company so different companies never merge.
+        _eb_comp = (_extract_qb_company_for_compaction(b.window_title or "")
+                    if (b.app_name or "").strip().lower() in _QB_COMPACT_APPS else None)
+        if _eb_comp:
+            existing_content_id = "qbco=" + _eb_comp.strip().lower()
+        else:
+            existing_content_id = _grouping_content_id(
+                b.window_title or "",
+                b.file_path or "",
+                b.url or "",
+            )
         existing_content_part = f"|{existing_content_id}" if existing_content_id else ""
         # v2 (2026-06-29): mirror the grouping-key rule — when a coarse content
         # identity exists, it dominates and client_id is dropped from the merge
@@ -958,11 +973,16 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             new_client_id = block_data.get("current_client_id") or 0
             # v1.3.47: match the existing-block key shape — include content_id
             # so different-file blocks don't merge into each other.
-            new_content_id = _grouping_content_id(
-                block_data.get("window_title") or "",
-                block_data.get("file_path") or "",
-                block_data.get("url") or "",
-            )
+            _nb_comp = (_extract_qb_company_for_compaction(block_data.get("window_title") or "")
+                        if (block_data.get("app_name") or "").strip().lower() in _QB_COMPACT_APPS else None)
+            if _nb_comp:
+                new_content_id = "qbco=" + _nb_comp.strip().lower()
+            else:
+                new_content_id = _grouping_content_id(
+                    block_data.get("window_title") or "",
+                    block_data.get("file_path") or "",
+                    block_data.get("url") or "",
+                )
             new_content_part = f"|{new_content_id}" if new_content_id else ""
             # v2 (2026-06-29): mirror grouping + existing-block keys — content
             # identity dominates, drop client_id from the merge key when present.

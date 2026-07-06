@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Loader2, Download, Clock, AlertTriangle,
-  ChevronDown, Search, X,
+  ChevronDown, Search, X, Maximize2, Minimize2,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
@@ -201,6 +201,7 @@ export default function ReportsSummary({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [clientSearch, setClientSearch] = useState("");
   const [clientPage, setClientPage] = useState(0);
+  const [clientExpandAll, setClientExpandAll] = useState(false); // show every client, no pager
   const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
   // When a client is opened from inside an employee's breakdown, this carries
   // the employee context so the modal can lead with "this person on this client".
@@ -431,10 +432,12 @@ export default function ReportsSummary({
 
   const clientPageCount = Math.max(1, Math.ceil(filteredClients.length / CLIENT_PAGE_SIZE));
   const clientPageSafe = Math.min(clientPage, clientPageCount - 1);
-  const clientSlice = filteredClients.slice(
-    clientPageSafe * CLIENT_PAGE_SIZE,
-    clientPageSafe * CLIENT_PAGE_SIZE + CLIENT_PAGE_SIZE
-  );
+  const clientSlice = clientExpandAll
+    ? filteredClients
+    : filteredClients.slice(
+        clientPageSafe * CLIENT_PAGE_SIZE,
+        clientPageSafe * CLIENT_PAGE_SIZE + CLIENT_PAGE_SIZE
+      );
   // Scale bars against the busiest client in the full filtered set, so widths
   // stay comparable across pages instead of re-normalizing each page.
   const maxClientBill = Math.max(1, ...filteredClients.map((c) => c.billable_hours));
@@ -563,14 +566,31 @@ export default function ReportsSummary({
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-base font-bold text-slate-900">Where the billable hours went {windowPhrase}</h2>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-              <input
-                value={clientSearch}
-                onChange={(e) => { setClientSearch(e.target.value); setClientPage(0); }}
-                placeholder="Search clients…"
-                className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
-              />
+            <div className="flex items-center gap-2">
+              {filteredClients.length > CLIENT_PAGE_SIZE && (
+                <button
+                  onClick={() => setClientExpandAll((v) => !v)}
+                  className={
+                    "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors " +
+                    (clientExpandAll
+                      ? "border-emerald-700 bg-emerald-50 text-emerald-800"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")
+                  }
+                  title={clientExpandAll ? "Showing all clients" : "Show every client at once"}
+                >
+                  {clientExpandAll ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                  {clientExpandAll ? "Expanded" : "Expand all"}
+                </button>
+              )}
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                <input
+                  value={clientSearch}
+                  onChange={(e) => { setClientSearch(e.target.value); setClientPage(0); }}
+                  placeholder="Search clients…"
+                  className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                />
+              </div>
             </div>
           </div>
 
@@ -610,28 +630,30 @@ export default function ReportsSummary({
               </div>
             )}
 
-            {/* pager */}
+            {/* pager — hidden when expanded */}
             <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500">
               <span>
                 Showing {clientSlice.length} of {filteredClients.length} client{filteredClients.length === 1 ? "" : "s"}
               </span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  disabled={clientPageSafe === 0}
-                  onClick={() => setClientPage(clientPageSafe - 1)}
-                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
-                >
-                  ← Prev
-                </button>
-                <span className="px-1.5">{clientPageSafe + 1} / {clientPageCount}</span>
-                <button
-                  disabled={clientPageSafe >= clientPageCount - 1}
-                  onClick={() => setClientPage(clientPageSafe + 1)}
-                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
-                >
-                  Next →
-                </button>
-              </div>
+              {!clientExpandAll && clientPageCount > 1 && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    disabled={clientPageSafe === 0}
+                    onClick={() => setClientPage(clientPageSafe - 1)}
+                    className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                  >
+                    ← Prev
+                  </button>
+                  <span className="px-1.5">{clientPageSafe + 1} / {clientPageCount}</span>
+                  <button
+                    disabled={clientPageSafe >= clientPageCount - 1}
+                    onClick={() => setClientPage(clientPageSafe + 1)}
+                    className="px-2.5 py-1 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                  >
+                    Next →
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -736,6 +758,7 @@ function EmployeeRow({
   }) => void;
 }) {
   const [bdPage, setBdPage] = useState(0);
+  const [bdExpandAll, setBdExpandAll] = useState(false); // show every client, no pager
   const BD_PAGE_SIZE = 6;
   const total = row.total_hours || 0.0001;
   const billPct = (row.billable_hours / total) * 100;
@@ -761,10 +784,12 @@ function EmployeeRow({
     : 1;
   const bdPageCount = Math.max(1, Math.ceil(sortedBreakdown.length / BD_PAGE_SIZE));
   const bdPageSafe = Math.min(bdPage, bdPageCount - 1);
-  const bdSlice = sortedBreakdown.slice(
-    bdPageSafe * BD_PAGE_SIZE,
-    bdPageSafe * BD_PAGE_SIZE + BD_PAGE_SIZE
-  );
+  const bdSlice = bdExpandAll
+    ? sortedBreakdown
+    : sortedBreakdown.slice(
+        bdPageSafe * BD_PAGE_SIZE,
+        bdPageSafe * BD_PAGE_SIZE + BD_PAGE_SIZE
+      );
 
   return (
     <div className={expanded ? "bg-slate-50/40" : ""}>
@@ -864,9 +889,26 @@ function EmployeeRow({
       {expanded && (
         <div className="px-4 pb-4 pt-1">
           <div className="rounded-lg bg-white border border-slate-200 p-3.5">
-            <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2.5">
-              Clients worked this period
-            </h4>
+            <div className="flex items-center justify-between gap-2 mb-2.5">
+              <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                Clients worked this period
+              </h4>
+              {sortedBreakdown.length > BD_PAGE_SIZE && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setBdExpandAll((v) => !v); }}
+                  className={
+                    "inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-md border transition-colors " +
+                    (bdExpandAll
+                      ? "border-emerald-700 bg-emerald-50 text-emerald-800"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")
+                  }
+                  title={bdExpandAll ? "Showing all clients" : "Show every client at once"}
+                >
+                  {bdExpandAll ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                  {bdExpandAll ? "Expanded" : "Expand all"}
+                </button>
+              )}
+            </div>
             {sortedBreakdown.length > 0 ? (
               <>
                 <div className="space-y-2.5">
@@ -917,28 +959,30 @@ function EmployeeRow({
                     );
                   })}
                 </div>
-                {bdPageCount > 1 && (
+                {sortedBreakdown.length > BD_PAGE_SIZE && (
                   <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500">
                     <span>
                       Showing {bdSlice.length} of {sortedBreakdown.length} clients
                     </span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        disabled={bdPageSafe === 0}
-                        onClick={(e) => { e.stopPropagation(); setBdPage(bdPageSafe - 1); }}
-                        className="px-2 py-0.5 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
-                      >
-                        ← Prev
-                      </button>
-                      <span className="px-1">{bdPageSafe + 1} / {bdPageCount}</span>
-                      <button
-                        disabled={bdPageSafe >= bdPageCount - 1}
-                        onClick={(e) => { e.stopPropagation(); setBdPage(bdPageSafe + 1); }}
-                        className="px-2 py-0.5 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
-                      >
-                        Next →
-                      </button>
-                    </div>
+                    {!bdExpandAll && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          disabled={bdPageSafe === 0}
+                          onClick={(e) => { e.stopPropagation(); setBdPage(bdPageSafe - 1); }}
+                          className="px-2 py-0.5 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                        >
+                          ← Prev
+                        </button>
+                        <span className="px-1">{bdPageSafe + 1} / {bdPageCount}</span>
+                        <button
+                          disabled={bdPageSafe >= bdPageCount - 1}
+                          onClick={(e) => { e.stopPropagation(); setBdPage(bdPageSafe + 1); }}
+                          className="px-2 py-0.5 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 disabled:opacity-40"
+                        >
+                          Next →
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </>

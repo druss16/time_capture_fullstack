@@ -390,29 +390,36 @@ function MatrixTable({
   const padTop = virtualize ? startIdx * ROW_HEIGHT : 0;
   const padBottom = virtualize ? (rows.length - endIdx) * ROW_HEIGHT : 0;
 
+  // The "No Client" catch-all column gets a subtle amber tint, mirroring the
+  // Excel export so the on-screen grid and the download read the same way.
+  const isNoClient = (c: MatrixColumn) => c.key === "__none__" || c.id === null;
+
   return (
     <div
       ref={scrollRef}
       onScroll={onScroll}
-      className="rounded-xl border border-slate-200 bg-white overflow-auto"
+      className="rounded-xl border border-slate-200 bg-white overflow-auto ring-1 ring-slate-100 shadow-sm"
       style={{ maxHeight: expandAll ? "70vh" : undefined }}
     >
       <table className="border-collapse text-xs" style={{ minWidth: "max-content" }}>
         <thead className="sticky top-0 z-20">
           <tr>
-            <th className="sticky left-0 z-30 bg-slate-800 text-white text-left font-bold px-3 py-2 min-w-[160px]">
+            <th className="sticky left-0 z-30 bg-[#0F3D2E] text-white text-left font-bold px-3 py-2.5 min-w-[170px] shadow-[2px_0_5px_rgba(0,0,0,0.08)]">
               {rowAxisLabel}
             </th>
             {columns.map((c) => (
               <th
                 key={c.key}
-                className="bg-slate-800 text-white font-semibold px-2 py-2 text-right whitespace-nowrap max-w-[120px]"
+                className={
+                  "font-semibold px-2.5 py-2.5 text-right whitespace-nowrap max-w-[130px] bg-[#0F3D2E] " +
+                  (isNoClient(c) ? "text-amber-200" : "text-emerald-50")
+                }
                 title={c.label}
               >
-                <span className="block truncate max-w-[110px]">{c.label}</span>
+                <span className="block truncate max-w-[120px]">{c.label}</span>
               </th>
             ))}
-            <th className="sticky right-0 z-30 bg-slate-900 text-white font-bold px-3 py-2 text-right">
+            <th className="sticky right-0 z-30 bg-[#064E3B] text-white font-bold px-3 py-2.5 text-right shadow-[-2px_0_5px_rgba(0,0,0,0.08)]">
               Total
             </th>
           </tr>
@@ -426,10 +433,10 @@ function MatrixTable({
           {visibleRows.map((r, i) => (
             <tr
               key={`${r.key}-${r.label}`}
-              className={((startIdx + i) % 2 === 0 ? "bg-white" : "bg-slate-50/60") + " hover:bg-emerald-50/40"}
+              className={((startIdx + i) % 2 === 0 ? "bg-white" : "bg-slate-50") + " hover:bg-emerald-50/60 transition-colors"}
               style={{ height: ROW_HEIGHT }}
             >
-              <td className="sticky left-0 z-10 bg-inherit font-semibold text-slate-800 px-3 py-1.5 whitespace-nowrap border-r border-slate-100">
+              <td className="sticky left-0 z-10 bg-inherit font-semibold text-slate-800 px-3 py-1.5 whitespace-nowrap border-r border-slate-200 shadow-[2px_0_5px_rgba(0,0,0,0.04)]">
                 {r.label}
               </td>
               {columns.map((c) => {
@@ -438,15 +445,16 @@ function MatrixTable({
                   <td
                     key={c.key}
                     className={
-                      "px-2 py-1.5 text-right tabular-nums whitespace-nowrap " +
-                      (v > 0 ? "text-slate-800" : "text-slate-200")
+                      "px-2.5 py-1.5 text-right tabular-nums whitespace-nowrap " +
+                      (isNoClient(c) ? "bg-amber-50/60 " : "") +
+                      (v > 0 ? "text-slate-800" : "text-slate-300")
                     }
                   >
                     {v > 0 ? fmtHours(v) : "·"}
                   </td>
                 );
               })}
-              <td className="sticky right-0 z-10 bg-inherit font-bold text-slate-900 px-3 py-1.5 text-right tabular-nums border-l border-slate-100">
+              <td className="sticky right-0 z-10 bg-emerald-50 font-bold text-emerald-900 px-3 py-1.5 text-right tabular-nums border-l border-emerald-100">
                 {fmtHours(r.total_hours)}
               </td>
             </tr>
@@ -459,15 +467,15 @@ function MatrixTable({
         </tbody>
         <tfoot className="sticky bottom-0 z-20">
           <tr>
-            <td className="sticky left-0 z-30 bg-slate-100 font-bold text-slate-900 px-3 py-2 border-t border-slate-300">
+            <td className="sticky left-0 z-30 bg-emerald-100 font-bold text-emerald-950 px-3 py-2.5 border-t-2 border-emerald-200 shadow-[2px_0_5px_rgba(0,0,0,0.06)]">
               Total
             </td>
             {columns.map((c) => (
-              <td key={c.key} className="bg-slate-100 font-bold text-slate-700 px-2 py-2 text-right tabular-nums border-t border-slate-300 whitespace-nowrap">
+              <td key={c.key} className="bg-emerald-100 font-semibold text-emerald-900 px-2.5 py-2.5 text-right tabular-nums border-t-2 border-emerald-200 whitespace-nowrap">
                 {fmtHours(c.total_hours)}
               </td>
             ))}
-            <td className="sticky right-0 z-30 bg-slate-200 font-extrabold text-slate-900 px-3 py-2 text-right tabular-nums border-t border-slate-300">
+            <td className="sticky right-0 z-30 bg-emerald-600 font-extrabold text-white px-3 py-2.5 text-right tabular-nums border-t-2 border-emerald-200 shadow-[-2px_0_5px_rgba(0,0,0,0.08)]">
               {fmtHours(grandTotal)}
             </td>
           </tr>

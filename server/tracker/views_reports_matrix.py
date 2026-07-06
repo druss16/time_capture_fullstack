@@ -332,80 +332,138 @@ def reports_matrix_export(request):
     )
     matrix = _build_matrix(blocks, row_axis, metric)
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = f"{metric[:15]}"
+    # ── Palette — one emerald family + neutral slate, matching the web app ──
+    INK       = "0F172A"   # slate-900 text
+    MUTED     = "64748B"   # slate-500 subtitle
+    HEADER_BG = "0F3D2E"   # deep emerald header band
+    HEADER_FG = "FFFFFF"
+    TOTALCOL  = "064E3B"   # emerald-900 for the Total column header
+    BAND_BG   = "F1F5F9"   # slate-100 zebra band
+    NOCLIENT  = "FFF7ED"   # amber-50 tint marking the "No Client" catch-all column
+    TOTCOL_BG = "ECFDF5"   # faint emerald tint down the Total column
+    TOTROW_BG = "DCFCE7"   # emerald-100 totals band
+    GRAND_BG  = "16A34A"   # emerald-600 grand-total cell
+    GRID      = "E2E8F0"   # slate-200 gridlines
 
+    metric_label = {
+        "billable": "Billable hours",
+        "non_billable": "Non-billable hours",
+        "total": "Total hours",
+    }.get(metric, metric)
     axis_label = {
         "employee": "Employee", "day": "Day of Month", "week": "Week",
         "month": "Month", "quarter": "Quarter", "year": "Year",
     }[row_axis]
 
-    thin = Side(style="thin", color="D9D9D9")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    header_fill = PatternFill("solid", fgColor="1F4E3D")   # emerald-ish
-    header_font = Font(bold=True, color="FFFFFF", size=10)
-    total_fill = PatternFill("solid", fgColor="EEF2F0")
-    bold = Font(bold=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = metric_label[:31]          # Excel caps sheet titles at 31 chars
+    ws.sheet_view.showGridLines = False   # our own borders read cleaner
 
-    # Title row
-    ncols = 1 + len(matrix["columns"]) + 1  # axis + clients + Total
-    ws.cell(row=1, column=1,
-            value=f"{org.name} — {axis_label} × Client ({metric}) · "
-                  f"{start_date} to {end_date}")
-    ws.cell(row=1, column=1).font = Font(bold=True, size=12)
+    thin = Side(style="thin", color=GRID)
+    grid_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    cols = matrix["columns"]
+    ncols = 1 + len(cols) + 1              # axis + clients + Total
+    last_col_letter = get_column_letter(ncols)
+    # Which physical column (if any) is the "No Client" bucket, so we can tint it.
+    noclient_idx = next(
+        (j for j, c in enumerate(cols, start=2) if c["key"] == "__none__"), None
+    )
+
+    # ── Title band (row 1) + subtitle (row 2) ──────────────────────────
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    t = ws.cell(row=1, column=1, value=org.name)
+    t.font = Font(bold=True, size=15, color=INK)
+    t.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 24
 
-    # Header row (row 3)
-    hr = 3
-    ws.cell(row=hr, column=1, value=axis_label)
-    for j, col in enumerate(matrix["columns"], start=2):
-        ws.cell(row=hr, column=j, value=col["label"])
-    ws.cell(row=hr, column=ncols, value="Total")
-    for c in range(1, ncols + 1):
-        cell = ws.cell(row=hr, column=c)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.border = border
-        cell.alignment = Alignment(horizontal="center", vertical="center",
-                                   wrap_text=True)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+    sub = ws.cell(
+        row=2, column=1,
+        value=f"{axis_label} × Client  ·  {metric_label}  ·  {start_date} to {end_date}",
+    )
+    sub.font = Font(size=10, color=MUTED, italic=True)
+    sub.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[2].height = 16
 
-    # Data rows
+    # ── Header row (row 4) ─────────────────────────────────────────────
+    hr = 4
+    ws.row_dimensions[hr].height = 30
+
+    def _style_header(cell, bg=HEADER_BG, align="center"):
+        cell.fill = PatternFill("solid", fgColor=bg)
+        cell.font = Font(bold=True, color=HEADER_FG, size=10)
+        cell.border = grid_border
+        cell.alignment = Alignment(horizontal=align, vertical="center", wrap_text=True)
+
+    _style_header(ws.cell(row=hr, column=1, value=axis_label), align="left")
+    for j, col in enumerate(cols, start=2):
+        _style_header(ws.cell(row=hr, column=j, value=col["label"]))
+    _style_header(ws.cell(row=hr, column=ncols, value="Total"), bg=TOTALCOL)
+
+    # ── Data rows — zebra banding, blank on zero (mirrors the on-screen "·") ──
+    NUM_FMT = "#,##0.00;-#,##0.00;\"\""
     r = hr + 1
-    for row in matrix["rows"]:
-        ws.cell(row=r, column=1, value=row["label"]).border = border
-        for j, col in enumerate(matrix["columns"], start=2):
+    for i, row in enumerate(matrix["rows"]):
+        band = PatternFill("solid", fgColor=BAND_BG) if i % 2 else None
+
+        lc = ws.cell(row=r, column=1, value=row["label"])
+        lc.font = Font(bold=True, color=INK, size=10)
+        lc.border = grid_border
+        lc.alignment = Alignment(horizontal="left", vertical="center")
+        if band:
+            lc.fill = band
+
+        for j, col in enumerate(cols, start=2):
             v = row["cells"].get(str(col["key"]), 0) or 0
             cell = ws.cell(row=r, column=j, value=round(v, 2))
-            cell.border = border
-            cell.number_format = "0.00"
+            cell.border = grid_border
+            cell.number_format = NUM_FMT
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+            if j == noclient_idx:
+                cell.fill = PatternFill("solid", fgColor=NOCLIENT)
+            elif band:
+                cell.fill = band
+
         tcell = ws.cell(row=r, column=ncols, value=round(row["total_hours"], 2))
-        tcell.border = border
-        tcell.font = bold
-        tcell.number_format = "0.00"
+        tcell.font = Font(bold=True, color=INK, size=10)
+        tcell.border = grid_border
+        tcell.number_format = NUM_FMT
+        tcell.alignment = Alignment(horizontal="right", vertical="center")
+        tcell.fill = PatternFill("solid", fgColor=TOTCOL_BG)
         r += 1
 
-    # Column-total row
-    ws.cell(row=r, column=1, value="Total").font = bold
-    ws.cell(row=r, column=1).fill = total_fill
-    for j, col in enumerate(matrix["columns"], start=2):
+    # ── Totals band ────────────────────────────────────────────────────
+    ws.row_dimensions[r].height = 22
+    tot = ws.cell(row=r, column=1, value="Total")
+    tot.font = Font(bold=True, color=INK, size=10)
+    tot.fill = PatternFill("solid", fgColor=TOTROW_BG)
+    tot.border = grid_border
+    tot.alignment = Alignment(horizontal="left", vertical="center")
+    for j, col in enumerate(cols, start=2):
         cell = ws.cell(row=r, column=j, value=round(col["total_hours"], 2))
-        cell.font = bold
-        cell.fill = total_fill
-        cell.border = border
-        cell.number_format = "0.00"
-    gcell = ws.cell(row=r, column=ncols, value=round(matrix["grand_total_hours"], 2))
-    gcell.font = bold
-    gcell.fill = total_fill
-    gcell.border = border
-    gcell.number_format = "0.00"
+        cell.font = Font(bold=True, color=INK, size=10)
+        cell.fill = PatternFill("solid", fgColor=TOTROW_BG)
+        cell.border = grid_border
+        cell.number_format = NUM_FMT
+        cell.alignment = Alignment(horizontal="right", vertical="center")
+    g = ws.cell(row=r, column=ncols, value=round(matrix["grand_total_hours"], 2))
+    g.font = Font(bold=True, color="FFFFFF", size=11)
+    g.fill = PatternFill("solid", fgColor=GRAND_BG)
+    g.border = grid_border
+    g.number_format = "#,##0.00"
+    g.alignment = Alignment(horizontal="right", vertical="center")
 
-    # Column widths + freeze panes so the grid stays readable when scrolled.
-    ws.column_dimensions["A"].width = 22
-    for j in range(2, ncols):
-        ws.column_dimensions[get_column_letter(j)].width = 12
-    ws.column_dimensions[get_column_letter(ncols)].width = 10
-    ws.freeze_panes = ws.cell(row=hr + 1, column=2)  # freeze header + axis col
+    # ── Column widths (autofit-ish from label length) + freeze panes ───
+    ws.column_dimensions["A"].width = max(16, min(32, max(
+        (len(str(row["label"])) for row in matrix["rows"]), default=10) + 3))
+    for j, col in enumerate(cols, start=2):
+        ws.column_dimensions[get_column_letter(j)].width = max(
+            10, min(22, len(str(col["label"])) + 2))
+    ws.column_dimensions[last_col_letter].width = 11
+    ws.freeze_panes = ws.cell(row=hr + 1, column=2)  # freeze title/header + axis col
+    ws.print_title_rows = f"{hr}:{hr}"               # repeat header when printed
 
     buf = io.BytesIO()
     wb.save(buf)

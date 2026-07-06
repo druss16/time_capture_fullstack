@@ -2254,6 +2254,48 @@ class OrgRoutingRule(models.Model):
         }
 
 
+class OrgReportPreset(models.Model):
+    ROW_AXES = [
+        ("employee", "Employee"),
+        ("day", "Day"),
+        ("week", "Week"),
+        ("month", "Month"),
+        ("quarter", "Quarter"),
+        ("year", "Year"),
+    ]
+    METRICS = [
+        ("total", "Total hours"),
+        ("billable", "Billable hours"),
+        ("non_billable", "Non-billable hours"),
+    ]
+ 
+    org = models.ForeignKey(
+        "Organization", on_delete=models.CASCADE, related_name="report_presets"
+    )
+    name = models.CharField(max_length=120)
+ 
+    # Layout. CLIENT is always the column axis (fixed), so we only store the row
+    # axis + which number fills each cell.
+    rows_axis = models.CharField(max_length=16, choices=ROW_AXES, default="employee")
+    metric = models.CharField(max_length=16, choices=METRICS, default="billable")
+ 
+    # Presentation flags — this is where "no pagination, expand all" lives.
+    expand_all = models.BooleanField(default=False)   # render every row/col at once
+    paginate = models.BooleanField(default=True)      # false = show everything
+    show_totals = models.BooleanField(default=True)   # row/col total lines
+ 
+    is_default = models.BooleanField(default=False)   # one default per org (enforced in view)
+ 
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+ 
+    class Meta:
+        unique_together = [("org", "name")]
+        indexes = [models.Index(fields=["org", "is_default"])]
+ 
+    def __str__(self):
+        return f"{self.org_id}:{self.name} ({self.rows_axis}×client/{self.metric})"
+ 
 
 class RuleSuggestion(models.Model):
     org = models.ForeignKey(

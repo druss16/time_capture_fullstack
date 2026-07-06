@@ -407,13 +407,13 @@ class ClassificationService:
         # Stage 9 — Learned patterns
         self._stage_9_learned_patterns(block, decision)
 
-        # Stage 9.5 — Bracket attribution (same-day temporal context)
-        # Fires only when no earlier stage produced a moderate-or-better
-        # client signal. Catches "context work" like bank portals and brief
-        # Excel scratch that are bracketed by attributed work for one client.
-        # Strength 0.65 — strong enough to override stale agent signals,
-        # weak enough to defer to direct title evidence.
-        self._stage_9_5_bracket_attribution(block, decision)
+        # Stage 9.5 — Temporal bracket attribution now lives in
+        # _finalize_decision as "Stage Sandwich" (sandwich_correlation.py),
+        # gated by org.sandwich_correlation_enabled. It runs there because it
+        # must fire only after every real-evidence stage has produced nothing —
+        # a precedence the finalize step already enforces. The old in-pipeline
+        # _stage_9_5_bracket_attribution was dead code (its _daily_blocks_cache
+        # was never populated) and has been removed.
 
         # Stage 9.6 — Deterministic tool→category from industry config.
         # Backstops Stage 10 so routine tool work (QuickBooks→Bookkeeping,
@@ -3572,139 +3572,6 @@ class ClassificationService:
                                 'client_name': pattern.client.name,
                             },
                         ))
-
-
-    def _stage_9_5_bracket_attribution(self, block, decision: ClassificationDecision):
-        """
-        Stage 9.5 — Same-day temporal bracket attribution (in-memory version).
-        Uses cached block list instead of DB queries to avoid 600+ queries per request.
-        """
-        from datetime import timedelta
-
-        # Guard 1: Don't fire if a real signal already proposes a client
-        for sig in decision.matched_signals:
-            if sig.proposed_client_id and sig.strength >= 0.65:
-                return
-
-        if not block.start or not block.end or not hasattr(self, '_daily_blocks_cache'):
-            return
-
-        # Use pre-loaded blocks instead of querying
-        all_blocks = self._daily_blocks_cache
-        TWO_SIDED_WINDOW = timedelta(minutes=30)
-        ONE_SIDED_WINDOW = timedelta(minutes=15)
-        EXCLUDE_SOURCES = {'bracket_attribution', 'bracket'}
-
-        def find_prev(window):
-            """Find preceding block within window."""
-            for b in reversed(all_blocks):
-                if b.id == block.id or not b.client_id:
-                    continue
-                if b.end > block.start:
-                    continue  # hasn't ended yet
-                if b.end < block.start - window:
-                    break  # too far back
-                if b.client.name == 'Internal - Tax':
-                    continue
-                if b.state_changed_by in EXCLUDE_SOURCES:
-                    continue
-                return b
-            return None
-
-        def find_next(window):
-            """Find following block within window."""
-            for b in all_blocks:
-                if b.id == block.id or not b.client_id:
-                    continue
-                if b.start < block.end:
-                    continue  # already started
-                if b.start > block.end + window:
-                    break  # too far ahead
-                if b.client.name == 'Internal - Tax':
-                    continue
-                if b.state_changed_by in EXCLUDE_SOURCES:
-                    continue
-                return b
-            return None
-
-        # Mode 1: Two-sided bracket
-        prev_wide = find_prev(TWO_SIDED_WINDOW)
-        next_wide = find_next(TWO_SIDED_WINDOW)
-
-        if prev_wide and next_wide and prev_wide.client_id == next_wide.client_id:
-            client = next((c for c in self._clients if c.id == prev_wide.client_id), None)
-            if client:
-                gap_before_min = int((block.start - prev_wide.end).total_seconds() // 60)
-                gap_after_min = int((next_wide.start - block.end).total_seconds() // 60)
-                decision.matched_signals.append(Signal(
-                    type='bracket_attribution',
-                    strength=0.55,
-                    evidence=f"Adjacent blocks: {client.name} ({gap_before_min}min before, {gap_after_min}min after)",
-                    detail={
-                        'client_id': client.id,
-                        'client_name': client.name,
-                        'mode': 'two_sided',
-                    },
-                ))
-                return
-
-        if prev_wide and next_wide and prev_wide.client_id != next_wide.client_id:
-            return  # Disagreement, don't guess
-
-        # Mode 2: One-sided bracket
-        prev_tight = find_prev(ONE_SIDED_WINDOW)
-        next_tight = find_next(ONE_SIDED_WINDOW)
-
-        candidate = None
-        if prev_tight and next_tight and prev_tight.client_id == next_tight.client_id:
-            candidate = prev_tight
-        elif prev_tight and not next_tight:
-            candidate = prev_tight
-        elif next_tight and not prev_tight:
-            candidate = next_tight
-
-        if candidate and candidate.client_id:
-            client = next((c for c in self._clients if c.id == candidate.client_id), None)
-            if client:
-                decision.matched_signals.append(Signal(
-                    type='bracket_attribution',
-                    strength=0.55,
-                    evidence=f"Bracket context: {client.name}",
-                    detail={
-                        'client_id': client.id,
-                        'client_name': client.name,
-                        'mode': 'one_sided',
-                    },
-                ))
-                return
-
-        # Mode 3: Overlap (blocks starting during this block)
-        overlapping = [
-            b for b in all_blocks
-            if b.id != block.id
-            and b.start > block.start
-            and b.start < block.end
-            and b.client_id
-            and b.client.name != 'Internal - Tax'
-            and b.state_changed_by not in EXCLUDE_SOURCES
-        ]
-
-        if overlapping:
-            client_ids = set(b.client_id for b in overlapping)
-            if len(client_ids) == 1:
-                client_id = client_ids.pop()
-                client = next((c for c in self._clients if c.id == client_id), None)
-                if client:
-                    decision.matched_signals.append(Signal(
-                        type='bracket_attribution',
-                        strength=0.55,
-                        evidence=f"Overlap: {client.name} work during this block",
-                        detail={
-                            'client_id': client.id,
-                            'client_name': client.name,
-                            'mode': 'overlap',
-                        },
-                    ))
 
     def _stage_9_6_tool_category(self, block, decision: ClassificationDecision):
         """

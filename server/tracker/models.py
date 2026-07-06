@@ -106,6 +106,16 @@ class Organization(models.Model):
         help_text="Enable Stage 6 (calendar event overlap) in classifier",
     )
 
+    sandwich_correlation_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "Enable Stage Sandwich (temporal fallback attribution). When a block "
+            "has no client signal but is tightly bracketed in time by blocks "
+            "attributed to the SAME client, propose that client. Never "
+            "auto-commits — always surfaces as a proposal for human review."
+        ),
+    )
+
     route_individual_returns_to_internal_tax = models.BooleanField(
         default=False,
         help_text=(

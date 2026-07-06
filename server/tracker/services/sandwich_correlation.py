@@ -60,7 +60,7 @@ logger = logging.getLogger('timetracker.classification')
 # ── Tunables (see brief §"Sandwich strength tuning — the levers") ────────────
 WINDOW_MINUTES = 30          # look this far before B.start and after B.end
 GAP_TIGHT_MINUTES = 15       # gap on each side at or under this = strong tier
-MIN_BREAD_MINUTES = 5        # bread blocks shorter than this are too weak
+MIN_BREAD_MINUTES = 5        # min AGGREGATE same-client minutes required per side
 MAX_SANDWICH_MINUTES = 25    # target blocks longer than this aren't quick switches
 MAX_IDLE_FRACTION = 0.80     # target >80% idle is not active work — skip
 
@@ -186,11 +186,15 @@ def find_sandwich_attribution(block, user, org) -> Optional['Signal']:
     for b in bread_qs:
         if not b.start or not b.end:
             continue
-        b_minutes = b.minutes or 0
-        if b_minutes < MIN_BREAD_MINUTES:
-            continue  # bread too brief to be trustworthy evidence
         if _is_idle_block(b):
             continue
+        # NB: no per-block minutes floor here. A real client session is often
+        # fragmented into many 1-minute blocks (QB report dialogs, per-screen
+        # captures) plus one long span. Filtering each tiny block out would
+        # push the effective "nearest bread" minutes away and mis-read a
+        # 2-minute gap as 17. We instead require MIN_BREAD_MINUTES in AGGREGATE
+        # per side below — fragmented sessions qualify, a lone stray block does
+        # not.
         # "before" = ends at or before target start, within the window
         if b.end <= block.start and b.end >= win_start:
             before_candidates.append(b)
@@ -202,7 +206,7 @@ def find_sandwich_attribution(block, user, org) -> Optional['Signal']:
     if not before_candidates or not after_candidates:
         return None
 
-    # Closest bread on each side (proximity-ordered)
+    # Closest bread on each side sets the client and the gap (proximity wins).
     bread_before = max(before_candidates, key=lambda b: b.end)    # latest-ending before
     bread_after = min(after_candidates, key=lambda b: b.start)    # earliest-starting after
 
@@ -211,6 +215,21 @@ def find_sandwich_attribution(block, user, org) -> Optional['Signal']:
         return None  # one side Client X, other side Client Y → no sandwich
 
     client_id = bread_before.client_id
+
+    # ── Aggregate-minutes floor (per side) ───────────────────────────────────
+    # Sum the same-client billable minutes within the window on each side. This
+    # replaces the old per-block floor: a fragmented session (9 x 1-min) now
+    # clears MIN_BREAD, but a single stray 1-min block adjacent to an unrelated
+    # target does not — so the "substantial adjacent work" guarantee is kept
+    # while fragmentation stops hiding it.
+    before_minutes = sum(
+        (b.minutes or 0) for b in before_candidates if b.client_id == client_id
+    )
+    after_minutes = sum(
+        (b.minutes or 0) for b in after_candidates if b.client_id == client_id
+    )
+    if before_minutes < MIN_BREAD_MINUTES or after_minutes < MIN_BREAD_MINUTES:
+        return None
 
     # ── Gaps drive the strength tier ─────────────────────────────────────────
     gap_before_min = (block.start - bread_before.end).total_seconds() / 60.0

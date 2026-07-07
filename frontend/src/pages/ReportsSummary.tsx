@@ -748,7 +748,7 @@ export default function ReportsSummary({
       {/* Team view — only for viewers the server scopes as "all" (owners/admins/
           managers). Staff scoped to "self" never see the comparative team table;
           it's performance/comp-adjacent data and a naked cross-employee ranking. */}
-      {showWidget("employees") && data && data.scope === "all" && !loading && !error && (
+      {showWidget("employees") && data && !loading && !error && (
         <section className="space-y-3 pt-2">
           <h2 className="text-base font-bold text-slate-900">Employees</h2>
           {employeeRows.length === 0 ? (

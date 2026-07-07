@@ -2672,6 +2672,15 @@ class ClassificationService:
         Abstains (returns None) when zero or 2+ clients match, so an ambiguous
         multi-client desktop never produces a guess. No-ops gracefully when no
         office_open_files data is present (pre-Tier-1 agents / non-Office blocks).
+
+        SCOPE GUARD: only fires when the foreground document is a genuinely
+        identity-less UNSAVED scratch file (Excel "Book2", Word "Document1",
+        PowerPoint "Presentation1"). A *named* document in front — even one that
+        didn't match a client, e.g. a Protected-View report export the user is
+        viewing — means the user is working on THAT file; borrowing a client
+        from a background file would over-reach (proven: a
+        "matrix_..._billable.xlsx" report mis-proposed as a client that merely
+        had a file open alongside).
         """
         from tracker.models import RawEvent
 
@@ -2680,6 +2689,15 @@ class ClassificationService:
         # etc.) — keeps this a no-cost stage for the vast majority of blocks.
         app = (block.app_name or '').lower()
         if not any(app.startswith(k) for k in ('excel', 'winword', 'powerpnt')):
+            return None
+
+        # Scope guard: foreground must be an unsaved scratch document. Office
+        # names these Book<N> / Document<N> / Presentation<N> until first save;
+        # once saved (or opened from a real/Protected-View file) the title is
+        # the filename, and co-open must not override it.
+        title = (block.window_title or block.title or '').strip()
+        lead = re.split(r'\s+[-–]\s+', title, maxsplit=1)[0].strip()
+        if not re.match(r'^(book|document|presentation)\s*\d+$', lead, re.IGNORECASE):
             return None
 
         paths = set()

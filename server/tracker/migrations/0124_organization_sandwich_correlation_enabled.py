@@ -16,7 +16,7 @@ def disable_for_pilot_org(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0121_alter_supportdoc_embedding'),
+        ('tracker', '0123_orgreportpreset'),
     ]
 
     operations = [

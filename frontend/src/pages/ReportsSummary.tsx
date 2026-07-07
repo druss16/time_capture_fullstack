@@ -814,7 +814,13 @@ export default function ReportsSummary({
           orgIdOverride/impersonation wiring the summary above uses. */}
       {showWidget("matrix") && (
         <div className="pt-4 border-t border-slate-200">
-          <ReportsMatrix orgIdOverride={orgIdOverride ?? null} />
+          <ReportsMatrix
+            orgIdOverride={orgIdOverride ?? null}
+            period={period}
+            appliedStart={appliedStart}
+            appliedEnd={appliedEnd}
+            timeframeLabel={timeframe}
+          />
         </div>
       )}
     </div>

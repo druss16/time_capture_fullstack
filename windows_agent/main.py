@@ -1465,6 +1465,80 @@ def get_office_open_files(exe: str) -> list:
         log(f"[FILE] Office open-files enumeration failed: {e}")
     return sorted(found)
 
+
+_SCRATCH_TITLE_RE = re.compile(r'^(book|document|presentation)\s*\d+$', re.IGNORECASE)
+
+def _is_unsaved_scratch_excel(window_title: str) -> bool:
+    """True if the title is Excel's placeholder for an UNSAVED workbook
+    ("Book2 - Excel"). Once saved, the title is the filename, so this is a
+    reliable 'no file identity yet' test."""
+    title = (window_title or '').strip()
+    lead = re.split(r'\s+[-–]\s+', title, maxsplit=1)[0].strip()
+    return bool(_SCRATCH_TITLE_RE.match(lead))
+
+def _read_excel_sheets_com():
+    """Worker-thread body: read Excel sheet tabs via a READ-ONLY COM attach.
+
+    Safety (this is the whole point — no window flashing, ever):
+      - GetActiveObject ONLY. It attaches to an already-running Excel and
+        RAISES if none is running. It NEVER launches Excel (that is Dispatch()),
+        which is the thing that flashes/black-screens.
+      - Reads only properties (.Name / .ActiveSheet.Name / .Worksheets). Never
+        sets .Visible, never .Activate, never calls a method that shows UI.
+    Returns a dict or None. Never raises.
+    """
+    try:
+        import pythoncom
+        import win32com.client
+    except Exception:
+        return None
+    pythoncom.CoInitialize()
+    try:
+        xl = win32com.client.GetActiveObject("Excel.Application")  # attach; never launches
+        wb = xl.ActiveWorkbook
+        if wb is None:
+            return None
+        return {
+            "workbook":     str(wb.Name),
+            "active_sheet": str(wb.ActiveSheet.Name),
+            "sheets":       [str(ws.Name) for ws in wb.Worksheets][:64],
+        }
+    except Exception:
+        # Expected when Excel is busy/modal/closed — best effort, stay quiet.
+        return None
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+def get_excel_sheets(timeout: float = 1.5):
+    """Best-effort read of the active Excel workbook's sheet tabs + active sheet.
+
+    Runs the COM read in a daemon worker thread with a hard timeout, so even a
+    hung/unresponsive Excel can NEVER block the agent's event loop. Returns the
+    dict from _read_excel_sheets_com() or None. Read-only and launch-free —
+    cannot cause window flashing.
+    """
+    try:
+        import queue
+        q = queue.Queue()
+
+        def _worker():
+            try:
+                q.put(_read_excel_sheets_com())
+            except Exception:
+                q.put(None)
+
+        t = threading.Thread(target=_worker, name="excel-sheets-com", daemon=True)
+        t.start()
+        t.join(timeout)
+        if t.is_alive():
+            return None  # abandoned; daemon thread won't hold up the agent
+        return q.get_nowait()
+    except Exception:
+        return None
+
 def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, str, str]:
     """Check if activity is a development tool."""
     exe = (exe_name or "").lower()
@@ -2090,6 +2164,24 @@ def write_event(
                 if not isinstance(payload.get("ctx"), dict):
                     payload["ctx"] = {}
                 payload["ctx"]["office_open_files"] = _open_docs
+    except Exception:
+        pass
+
+    # ── Tier 2: Excel sheet tabs for UNSAVED scratch workbooks only ──
+    # A "Book2 - Excel" has no file identity, but its sheet tabs may be named
+    # by client (e.g. "DivineMercy_JE"). Read them via a read-only COM attach.
+    # HARD-GATED to unsaved scratch books so normal saved-file work triggers
+    # ZERO COM calls — COM only ever touches Excel in the exact case Tier 2
+    # targets. GetActiveObject never launches Excel; the read is timeout-guarded
+    # and best-effort, so it cannot flash a window or block the agent.
+    try:
+        if (app_name or "").lower() == "excel.exe" and _is_unsaved_scratch_excel(title):
+            _sheets = get_excel_sheets()
+            if _sheets and _sheets.get("sheets"):
+                if not isinstance(payload.get("ctx"), dict):
+                    payload["ctx"] = {}
+                payload["ctx"]["excel_active_sheet"] = _sheets.get("active_sheet")
+                payload["ctx"]["excel_sheets"] = _sheets.get("sheets")
     except Exception:
         pass
 

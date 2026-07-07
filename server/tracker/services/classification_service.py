@@ -2759,6 +2759,90 @@ class ClassificationService:
             },
         )
 
+    def _match_excel_sheets(self, block):
+        """Tier 2 consumer: attribute an unsaved scratch workbook from the name
+        of its ACTIVE worksheet tab (agent ctx.excel_active_sheet).
+
+        A "Book2 - Excel" has no file identity, but the tab the user is actually
+        working on may be named for a client (e.g. "DivineMercy_JE"). We use the
+        ACTIVE sheet only — deliberately NOT the other tabs. A scratch book can
+        hold several clients' tabs; guessing from a background tab the user isn't
+        on would be exactly the kind of over-reach we just removed from co-open.
+        The active tab is the one being worked on, so it's the honest signal.
+
+        Fires only when the active tab resolves to a single client; abstains
+        otherwise. Ranks BELOW co-open — a real client file open beside the book
+        is stronger than a typed tab name. Proposes only.
+        """
+        from tracker.models import RawEvent
+
+        app = (block.app_name or '').lower()
+        if not app.startswith('excel'):
+            return None
+        # Same scratch-book scope guard as co-open (belt-and-suspenders; the
+        # agent already only captures sheets for scratch books).
+        title = (block.window_title or block.title or '').strip()
+        lead = re.split(r'\s+[-–]\s+', title, maxsplit=1)[0].strip()
+        if not re.match(r'^(book|document|presentation)\s*\d+$', lead, re.IGNORECASE):
+            return None
+
+        active = None
+        try:
+            for ctx in (RawEvent.objects.filter(block=block)
+                        .values_list('ctx', flat=True)):
+                if isinstance(ctx, dict) and ctx.get('excel_active_sheet'):
+                    active = ctx.get('excel_active_sheet')
+                    break
+        except Exception:
+            return None
+        if not active:
+            return None
+
+        searchable = self._split_tab_name(active)
+        if not searchable:
+            return None
+        hits = set()
+        for client in self._clients:
+            if client.name.lower().strip() in META_CLIENT_NAMES:
+                continue
+            all_names = [client.name.lower()] + (
+                [a.lower() for a in (client.aliases or [])]
+                if client.aliases else [])
+            for alias in all_names:
+                if not self._alias_is_safe(alias):
+                    continue
+                if self._alias_matches_safely(alias, searchable):
+                    hits.add(client.id)
+                    break
+        if len(hits) != 1:
+            return None  # zero or ambiguous — do not guess
+        cid = hits.pop()
+        client = next((c for c in self._clients if c.id == cid), None)
+        if client is None:
+            return None
+
+        return Signal(
+            type='excel_sheet_tab',
+            strength=0.60,
+            evidence=f"Scratch workbook — active tab '{active}' names {client.name}",
+            detail={
+                'client_id':   client.id,
+                'client_name': client.name,
+                'via':         'active_sheet',
+                'is_billable': True,
+            },
+        )
+
+    @staticmethod
+    def _split_tab_name(name: str) -> str:
+        """Normalize a worksheet tab name for alias matching:
+        "DivineMercy_JE" -> "divine mercy je", "StJames-Payroll" -> "st james payroll".
+        Splits underscores/hyphens, camelCase, and letter/digit boundaries."""
+        s = re.sub(r'[_\-]+', ' ', name or '')
+        s = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', s)          # camelCase
+        s = re.sub(r'(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])', ' ', s)  # letter/digit
+        return re.sub(r'\s+', ' ', s).strip().lower()
+
     # -------------------------------------------------------------------------
     # STAGE 6 — CALENDAR EVENT OVERLAP (v1.3.42)
     # -------------------------------------------------------------------------
@@ -4717,6 +4801,23 @@ class ClassificationService:
                 decision.recommended_state = 'proposed'   # never auto-commit
                 decision.confidence = co_open_sig.strength
                 decision.is_billable = co_open_sig.detail.get('is_billable', True)
+                return decision
+
+        # Stage Sheet-Tab (Tier 2) — attribute an unsaved scratch workbook from
+        # its worksheet tab names when no client file was open beside it (so
+        # co-open found nothing). Ranks below co-open, above the temporal
+        # sandwich. Proposes only.
+        if decision.client_id is None:
+            sheet_sig = self._match_excel_sheets(block)
+            if sheet_sig:
+                decision.matched_signals.append(sheet_sig)
+                decision.client_id = sheet_sig.proposed_client_id
+                decision.category = sheet_sig.proposed_category or decision.category
+                decision.source = 'excel_sheet_tab'
+                decision.reasoning = sheet_sig.evidence
+                decision.recommended_state = 'proposed'   # never auto-commit
+                decision.confidence = sheet_sig.strength
+                decision.is_billable = sheet_sig.detail.get('is_billable', True)
                 return decision
 
         # Stage Sandwich — temporal fallback attribution.

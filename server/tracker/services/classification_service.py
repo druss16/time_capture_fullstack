@@ -2658,6 +2658,88 @@ class ClassificationService:
             },
         ))
 
+    def _match_co_open_office(self, block):
+        """Deterministic co-open-file attribution (Tier 1 consumer).
+
+        Gathers ctx.office_open_files from THIS block's RawEvents (the full set
+        of Office documents open while the block was active, captured by the
+        agent), excludes the block's own active file (already handled by Stages
+        3/4), and matches each remaining path against client aliases using the
+        same safe-alias matcher the deterministic stages use.
+
+        Returns a Signal ONLY when exactly one distinct client matches — a
+        scratch/unsaved workbook (Book2) open beside one client's named file.
+        Abstains (returns None) when zero or 2+ clients match, so an ambiguous
+        multi-client desktop never produces a guess. No-ops gracefully when no
+        office_open_files data is present (pre-Tier-1 agents / non-Office blocks).
+        """
+        from tracker.models import RawEvent
+
+        # office_open_files is only captured for Office foreground windows, so
+        # skip the RawEvent query entirely for every other block (QB, browser,
+        # etc.) — keeps this a no-cost stage for the vast majority of blocks.
+        app = (block.app_name or '').lower()
+        if not any(app.startswith(k) for k in ('excel', 'winword', 'powerpnt')):
+            return None
+
+        paths = set()
+        try:
+            for ctx in (RawEvent.objects.filter(block=block)
+                        .values_list('ctx', flat=True)):
+                if isinstance(ctx, dict):
+                    for p in (ctx.get('office_open_files') or []):
+                        if p:
+                            paths.add(p)
+        except Exception:
+            return None
+        if not paths:
+            return None
+
+        own = (block.file_path or '').strip().lower()
+        matched = {}  # client_id -> (client, path, spec)
+        for path in paths:
+            if own and path.strip().lower() == own:
+                continue  # the active file is already Stage 3/4's job
+            username = _infer_username_from_path(path)
+            segments = _clean_path_segments(path, username) or []
+            searchable = ' '.join(segments)
+            if not searchable:
+                continue
+            for client in self._clients:
+                if client.name.lower().strip() in META_CLIENT_NAMES:
+                    continue
+                all_names = [client.name.lower()] + (
+                    [a.lower() for a in (client.aliases or [])]
+                    if client.aliases else [])
+                for alias in all_names:
+                    if not self._alias_is_safe(alias):
+                        continue
+                    if self._alias_matches_safely(alias, searchable):
+                        spec = self._alias_match_score(alias, searchable)
+                        prev = matched.get(client.id)
+                        if not prev or spec > prev[2]:
+                            matched[client.id] = (client, path, spec)
+                        break
+
+        if len(matched) != 1:
+            return None  # zero or ambiguous — do not guess
+
+        client, path, spec = next(iter(matched.values()))
+        fname = path.replace('\\', '/').rstrip('/').split('/')[-1]
+        return Signal(
+            type='co_open_office',
+            strength=0.62,
+            evidence=(
+                f"Open alongside {client.name}'s file '{fname}' "
+                f"in the same Office session"
+            ),
+            detail={
+                'client_id':    client.id,
+                'client_name':  client.name,
+                'co_open_path': path[:200],
+                'is_billable':  True,
+            },
+        )
 
     # -------------------------------------------------------------------------
     # STAGE 6 — CALENDAR EVENT OVERLAP (v1.3.42)
@@ -4597,6 +4679,27 @@ class ClassificationService:
                     decision.recommended_state = 'committed'
                     decision.confidence = combined
                     return decision
+
+        # Stage Co-Open — deterministic fallback from other Office documents
+        # open at the same moment (agent Tier 1: ctx.office_open_files). A
+        # scratch/unsaved workbook ("Book2 - Excel") that has no client identity
+        # of its own, open alongside exactly ONE client's named file, is almost
+        # certainly that client's work. Ranks ABOVE the temporal sandwich: a
+        # real client filename is stronger than time-adjacency. Proposes only
+        # (never auto-commits) and abstains when 0 or 2+ clients match.
+        # Precedence: real evidence > co-open > sandwich > safe default.
+        if decision.client_id is None:
+            co_open_sig = self._match_co_open_office(block)
+            if co_open_sig:
+                decision.matched_signals.append(co_open_sig)
+                decision.client_id = co_open_sig.proposed_client_id
+                decision.category = co_open_sig.proposed_category or decision.category
+                decision.source = 'co_open_office'
+                decision.reasoning = co_open_sig.evidence
+                decision.recommended_state = 'proposed'   # never auto-commit
+                decision.confidence = co_open_sig.strength
+                decision.is_billable = co_open_sig.detail.get('is_billable', True)
+                return decision
 
         # Stage Sandwich — temporal fallback attribution.
         # Runs only when no real evidence produced a client. Slots between

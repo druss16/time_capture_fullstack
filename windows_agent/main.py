@@ -1417,8 +1417,53 @@ def get_office_file_path(exe: str, window_title: str = None) -> Optional[str]:
                 continue
     except Exception as e:
         log(f"[FILE] Process file detection failed: {e}")
-    
+
     return None
+
+def get_office_open_files(exe: str) -> list:
+    """Return ALL open Office document paths for the given Office exe.
+
+    Same psutil open-handle source as get_office_file_path(), but returns the
+    FULL set (deduped, lock files excluded) instead of a single title match.
+
+    This is the "what else was open" signal. An unsaved scratch workbook
+    ("Book2 - Excel") has no path of its own, but the named client files open
+    beside it are strong client evidence — e.g. Book2 focused while
+    "Divine Mercy Client Info.xlsx" is open in the same Excel instance.
+
+    Best-effort and side-effect-free: returns [] on any failure, never raises,
+    and never touches window_title/file_path. Purely additive context.
+    """
+    if not psutil:
+        return []
+    exe_lower = exe.lower()
+    extensions = {
+        "excel.exe": {".xlsx", ".xls", ".xlsm", ".xlsb", ".csv"},
+        "winword.exe": {".docx", ".doc", ".docm"},
+        "powerpnt.exe": {".pptx", ".ppt", ".pptm"},
+    }
+    target_exts = extensions.get(exe_lower, set())
+    if not target_exts:
+        return []
+    found = set()
+    try:
+        for proc in psutil.process_iter(["name"]):
+            try:
+                if proc.info["name"].lower() != exe_lower:
+                    continue
+                for f in proc.open_files():
+                    p = f.path
+                    base = os.path.basename(p)
+                    # Skip Office lock files (~$Name.xlsx) — not real documents
+                    if base.startswith("~$"):
+                        continue
+                    if any(p.lower().endswith(ext) for ext in target_exts):
+                        found.add(p)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception as e:
+        log(f"[FILE] Office open-files enumeration failed: {e}")
+    return sorted(found)
 
 def looks_toolish(exe_name: Optional[str], url: Optional[str]) -> Tuple[bool, str, str]:
     """Check if activity is a development tool."""
@@ -2031,6 +2076,23 @@ def write_event(
         "inference": inference_dict,
     }
  
+    # ── Tier 1: co-open Office documents (additive context) ──
+    # For an Office foreground window, record the FULL set of open workbooks/
+    # docs in ctx. A scratch/unsaved workbook (Book2) contributes no path of
+    # its own, but the named client files open alongside it let the server
+    # attribute it deterministically. Best-effort — never alters the core
+    # fields, never crashes the event handler.
+    try:
+        _app_lower = (app_name or "").lower()
+        if _app_lower in ("excel.exe", "winword.exe", "powerpnt.exe"):
+            _open_docs = get_office_open_files(_app_lower)
+            if _open_docs:
+                if not isinstance(payload.get("ctx"), dict):
+                    payload["ctx"] = {}
+                payload["ctx"]["office_open_files"] = _open_docs
+    except Exception:
+        pass
+
     toolish, tool_reason, tool_host = looks_toolish(bundle_id, url)
     payload["toolish"] = bool(toolish)
     if toolish:

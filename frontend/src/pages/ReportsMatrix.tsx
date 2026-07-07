@@ -37,9 +37,18 @@ function getAuthToken(): string | null {
   );
 }
 
-function fmtHours(hours: number | undefined): string {
+// Two display modes: "hm" → 7h37m (easy to read), "decimal" → 7.62 (billing math).
+// Decimal uses 2dp, the convention on CPA timesheets, and trims a trailing
+// ".00" so whole hours read as "7" not "7.00". Empty stays empty in both.
+type HourMode = "hm" | "decimal";
+
+function fmtHours(hours: number | undefined, mode: HourMode = "hm"): string {
   const totalMin = Math.round((hours || 0) * 60);
   if (totalMin === 0) return "";
+  if (mode === "decimal") {
+    const dec = (totalMin / 60).toFixed(2);
+    return dec.endsWith(".00") ? dec.slice(0, -3) : dec;
+  }
   if (totalMin < 60) return `${totalMin}m`;
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
@@ -107,6 +116,7 @@ export default function ReportsMatrix({
   const [appliedEnd, setAppliedEnd] = useState("");
   const [expandAll, setExpandAll] = useState(false);   // preset may flip this on
   const [heatOn, setHeatOn] = useState(true);          // display-only cell shading
+  const [hourMode, setHourMode] = useState<HourMode>("hm"); // 7h37m vs 7.62
   const [presetLoaded, setPresetLoaded] = useState(false);
 
   const [data, setData] = useState<MatrixResponse | null>(null);
@@ -377,6 +387,31 @@ export default function ReportsMatrix({
             Heat
           </button>
 
+          {/* Hours format — H:M for reading, Decimal for billing math. Display
+              only; the Excel export always carries decimal hours regardless. */}
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Hours format">
+            <button
+              onClick={() => setHourMode("hm")}
+              className={
+                "px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors " +
+                (hourMode === "hm" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")
+              }
+              title="Show hours and minutes (7h37m)"
+            >
+              H:M
+            </button>
+            <button
+              onClick={() => setHourMode("decimal")}
+              className={
+                "px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors " +
+                (hourMode === "decimal" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")
+              }
+              title="Show decimal hours (7.62)"
+            >
+              Decimal
+            </button>
+          </div>
+
           <button
             onClick={handleExport}
             disabled={!data}
@@ -416,6 +451,7 @@ export default function ReportsMatrix({
               expandAll={expandAll}
               grandTotal={data.grand_total_hours}
               heatOn={heatOn}
+              hourMode={hourMode}
             />
           )}
 
@@ -480,7 +516,7 @@ function heatStyle(v: number, max: number): React.CSSProperties {
 // Sticky first column (row labels) + sticky header row. When expandAll is on
 // and there are many rows, we window the row set to keep the DOM light.
 function MatrixTable({
-  rowAxisLabel, columns, rows, expandAll, grandTotal, heatOn,
+  rowAxisLabel, columns, rows, expandAll, grandTotal, heatOn, hourMode,
 }: {
   rowAxisLabel: string;
   columns: MatrixColumn[];
@@ -488,6 +524,7 @@ function MatrixTable({
   expandAll: boolean;
   grandTotal: number;
   heatOn: boolean;
+  hourMode: HourMode;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -584,12 +621,12 @@ function MatrixTable({
                           (v > 0 ? "text-slate-800" : "text-slate-300"))
                     }
                   >
-                    {v > 0 ? fmtHours(v) : <span className="text-slate-300">·</span>}
+                    {v > 0 ? fmtHours(v, hourMode) : <span className="text-slate-300">·</span>}
                   </td>
                 );
               })}
               <td className="sticky right-0 z-10 bg-emerald-50 font-bold text-emerald-900 px-3 py-1.5 text-right tabular-nums border-l border-emerald-100">
-                {fmtHours(r.total_hours)}
+                {fmtHours(r.total_hours, hourMode)}
               </td>
             </tr>
           ))}
@@ -606,11 +643,11 @@ function MatrixTable({
             </td>
             {columns.map((c) => (
               <td key={c.key} className="bg-emerald-100 font-semibold text-emerald-900 px-2.5 py-2.5 text-right tabular-nums border-t-2 border-emerald-200 whitespace-nowrap">
-                {fmtHours(c.total_hours)}
+                {fmtHours(c.total_hours, hourMode)}
               </td>
             ))}
             <td className="sticky right-0 z-30 bg-emerald-600 font-extrabold text-white px-3 py-2.5 text-right tabular-nums border-t-2 border-emerald-200 shadow-[-2px_0_5px_rgba(0,0,0,0.08)]">
-              {fmtHours(grandTotal)}
+              {fmtHours(grandTotal, hourMode)}
             </td>
           </tr>
         </tfoot>

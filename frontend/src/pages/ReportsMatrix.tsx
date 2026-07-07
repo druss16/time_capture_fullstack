@@ -23,7 +23,7 @@
  * Reports page as its own <section> (or a tab) — it's fully self-contained.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Download, AlertTriangle, Table2, Maximize2, Minimize2, ChevronDown } from "lucide-react";
+import { Loader2, Download, AlertTriangle, Table2, Maximize2, Minimize2, ChevronDown, Flame } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import { TIMEFRAMES, resolveTimeframe, type TimeframeKey } from "@/lib/timeframes";
 
@@ -106,6 +106,7 @@ export default function ReportsMatrix({
   const [appliedStart, setAppliedStart] = useState("");
   const [appliedEnd, setAppliedEnd] = useState("");
   const [expandAll, setExpandAll] = useState(false);   // preset may flip this on
+  const [heatOn, setHeatOn] = useState(true);          // display-only cell shading
   const [presetLoaded, setPresetLoaded] = useState(false);
 
   const [data, setData] = useState<MatrixResponse | null>(null);
@@ -361,6 +362,21 @@ export default function ReportsMatrix({
             {expandAll ? "Expanded" : "Expand all"}
           </button>
 
+          {/* Heat toggle — display-only, does not affect values or export */}
+          <button
+            onClick={() => setHeatOn((v) => !v)}
+            className={
+              "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors " +
+              (heatOn
+                ? "border-emerald-700 bg-emerald-50 text-emerald-800"
+                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")
+            }
+            title="Shade cells by hours — screen only, export is unchanged"
+          >
+            <Flame className="h-3.5 w-3.5" />
+            Heat
+          </button>
+
           <button
             onClick={handleExport}
             disabled={!data}
@@ -399,6 +415,7 @@ export default function ReportsMatrix({
               rows={pagedRows}
               expandAll={expandAll}
               grandTotal={data.grand_total_hours}
+              heatOn={heatOn}
             />
           )}
 
@@ -438,17 +455,39 @@ export default function ReportsMatrix({
   );
 }
 
+// ── Heat shading ────────────────────────────────────────────────────────────
+// Emerald 5-stop ramp (matches the emerald palette used across the page). Maps a
+// cell's share of the busiest cell → a background + a readable text color. This
+// is PURELY a display layer: the values, totals, and the Excel export are all
+// untouched, so heat on/off produces identical numbers and identical downloads.
+const HEAT_BG = ["#ecfdf5", "#a7f3d0", "#6ee7b7", "#34d399", "#059669"]; // emerald 50→600
+function heatBucket(v: number, max: number): number {
+  if (v <= 0 || max <= 0) return -1;
+  const r = v / max;
+  if (r > 0.75) return 4;
+  if (r > 0.5) return 3;
+  if (r > 0.28) return 2;
+  if (r > 0.12) return 1;
+  return 0;
+}
+function heatStyle(v: number, max: number): React.CSSProperties {
+  const b = heatBucket(v, max);
+  if (b < 0) return {};
+  return { backgroundColor: HEAT_BG[b], color: b >= 3 ? "#04342c" : "#0f6e56" };
+}
+
 // ── The grid itself ────────────────────────────────────────────────────────
 // Sticky first column (row labels) + sticky header row. When expandAll is on
 // and there are many rows, we window the row set to keep the DOM light.
 function MatrixTable({
-  rowAxisLabel, columns, rows, expandAll, grandTotal,
+  rowAxisLabel, columns, rows, expandAll, grandTotal, heatOn,
 }: {
   rowAxisLabel: string;
   columns: MatrixColumn[];
   rows: MatrixRow[];
   expandAll: boolean;
   grandTotal: number;
+  heatOn: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -469,6 +508,19 @@ function MatrixTable({
   // The "No Client" catch-all column gets a subtle amber tint, mirroring the
   // Excel export so the on-screen grid and the download read the same way.
   const isNoClient = (c: MatrixColumn) => c.key === "__none__" || c.id === null;
+
+  // Busiest single cell in the grid — the ramp's top of scale. Computed over ALL
+  // rows (not the windowed slice) so colors stay stable while scrolling.
+  const maxCell = useMemo(() => {
+    let mx = 0;
+    for (const r of rows) {
+      for (const c of columns) {
+        const v = r.cells[String(c.key)] || 0;
+        if (v > mx) mx = v;
+      }
+    }
+    return mx;
+  }, [rows, columns]);
 
   return (
     <div
@@ -517,16 +569,22 @@ function MatrixTable({
               </td>
               {columns.map((c) => {
                 const v = r.cells[String(c.key)] || 0;
+                const shaded = heatOn && v > 0;
                 return (
                   <td
                     key={c.key}
+                    style={shaded ? heatStyle(v, maxCell) : undefined}
                     className={
                       "px-2.5 py-1.5 text-right tabular-nums whitespace-nowrap " +
-                      (isNoClient(c) ? "bg-amber-50/60 " : "") +
-                      (v > 0 ? "text-slate-800" : "text-slate-300")
+                      // No-Client amber tint + slate text apply only when NOT
+                      // heat-shading (heat sets its own bg + text via style).
+                      (shaded
+                        ? ""
+                        : (isNoClient(c) ? "bg-amber-50/60 " : "") +
+                          (v > 0 ? "text-slate-800" : "text-slate-300"))
                     }
                   >
-                    {v > 0 ? fmtHours(v) : "·"}
+                    {v > 0 ? fmtHours(v) : <span className="text-slate-300">·</span>}
                   </td>
                 );
               })}

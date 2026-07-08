@@ -233,9 +233,10 @@ def _register_robust_watchdog_task(exe_path: str, log_fn=print) -> bool:
     import tempfile
     tmp = os.path.join(tempfile.gettempdir(), "tt_watchdog_task.xml")
     try:
-        # schtasks /XML wants a BOM'd Unicode file; utf-8-sig matches what the
-        # proven PowerShell (Set-Content -Encoding UTF8) produces.
-        with open(tmp, "w", encoding="utf-8-sig") as f:
+        # schtasks /Create /XML requires UTF-16LE with a BOM. A UTF-8 BOM
+        # (utf-8-sig) is rejected with "The task XML is malformed. (1,2):
+        # incorrect document syntax". Python's "utf-16" writes UTF-16LE+BOM.
+        with open(tmp, "w", encoding="utf-16") as f:
             f.write(_WATCHDOG_TASK_XML.format(exe_path=exe_path))
         r = subprocess.run(
             ["schtasks", "/Create", "/TN", WATCHDOG_TASK_NAME, "/XML", tmp, "/F"],
@@ -278,31 +279,15 @@ def register_watchdog_task(log_fn=print):
     )
 
     # Watchdog task — robust, always (re)applied to upgrade older weak tasks.
+    # No separate agent task: the watchdog itself keeps the agent alive, and the
+    # installer already creates a "MavOps TimeTracker" logon task for the agent.
+    # (The old agent-task registration only produced a redundant "Access is
+    # denied" and added nothing.)
     wd_exe = os.path.join(install_dir, WATCHDOG_EXE_NAME)
     if os.path.exists(wd_exe):
         _register_robust_watchdog_task(wd_exe, log_fn=log_fn)
     else:
         log_fn(f"[WATCHDOG-TASK] ⚠️ {WATCHDOG_EXE_NAME} not found — skipping")
-
-    # Agent task — simple onlogon fallback (only if missing).
-    agent_exe = os.path.join(install_dir, AGENT_EXE_NAME)
-    if not os.path.exists(agent_exe):
-        log_fn(f"[WATCHDOG-TASK] ⚠️ {AGENT_EXE_NAME} not found — skipping agent task")
-    elif _task_exists(AGENT_TASK_NAME):
-        log_fn(f"[WATCHDOG-TASK] ✅ {AGENT_TASK_NAME} already registered")
-    else:
-        try:
-            r = subprocess.run(
-                ["schtasks", "/Create", "/TN", AGENT_TASK_NAME,
-                 "/TR", f'"{agent_exe}"', "/SC", "ONLOGON", "/RL", "LIMITED", "/F"],
-                capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
-            )
-            if r.returncode == 0:
-                log_fn(f"[WATCHDOG-TASK] ✅ Registered: {AGENT_TASK_NAME}")
-            else:
-                log_fn(f"[WATCHDOG-TASK] ⚠️ Failed: {r.stderr.strip()}")
-        except Exception as e:
-            log_fn(f"[WATCHDOG-TASK] ❌ Exception: {e}")
 
 
 def unregister_watchdog_task(log_fn=print):

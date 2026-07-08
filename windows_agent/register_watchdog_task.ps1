@@ -74,6 +74,8 @@ $xml = @"
 "@
 
 $tmpXml = "$env:TEMP\tt_watchdog_task.xml"
-$xml | Set-Content -Path $tmpXml -Encoding UTF8
+# schtasks /XML needs UTF-16LE+BOM. -Encoding UTF8 writes a UTF-8 BOM, which
+# schtasks rejects with "The task XML is malformed. (1,2)". Unicode = UTF-16LE.
+$xml | Set-Content -Path $tmpXml -Encoding Unicode
 schtasks /Create /TN "TimeTrackerWatchdog" /XML $tmpXml /F
 Remove-Item $tmpXml -ErrorAction SilentlyContinue

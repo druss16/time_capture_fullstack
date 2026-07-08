@@ -390,6 +390,46 @@ def watchdog_command(request):
 
 
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def watchdog_crash_report(request):
+    """Posted by tt_watchdog.exe when it detects an agent crash loop it cannot
+    fix by restarting (a bad build). Stored as an AgentError so it surfaces in
+    the existing MavOps errors dashboard — no new model needed. No auth: the
+    watchdog has no API key, so the device is identified by device_id, exactly
+    like watchdog_command above."""
+    from tracker.models import AgentError, AgentDevice
+
+    data = request.data or {}
+    device_id = (data.get('device_id') or 'unknown')[:100]
+    version = str(data.get('version', ''))[:20]
+    component = str(data.get('component', 'TimeTrackerAgent.exe'))[:100]
+    try:
+        fast_crashes = int(data.get('fast_crashes') or 0)
+    except (TypeError, ValueError):
+        fast_crashes = 0
+
+    user = org = None
+    hostname = ''
+    device = AgentDevice.objects.select_related('user', 'org').filter(device_id=device_id).first()
+    if device:
+        user = device.user
+        org = device.org
+        hostname = (getattr(device, 'hostname', '') or '')[:100]
+
+    AgentError.objects.create(
+        user=user,
+        org=org,
+        error_type='watchdog_crash_loop',
+        error_message=f'{component} crash-looping: {fast_crashes} fast crashes on v{version or "?"}',
+        device_id=device_id,
+        hostname=hostname,
+        app_version=version,
+        context={'fast_crashes': fast_crashes, 'component': component, 'source': 'tt_watchdog'},
+    )
+    return Response({'ok': True})
+
+
 # ── Org Impersonation ─────────────────────────────────────────────────────────
 
 import os

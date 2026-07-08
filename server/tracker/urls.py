@@ -390,6 +390,7 @@ urlpatterns = [
 
     path('mavops/kill-agent/', views_mavops.mavops_kill_agent),
     path('watchdog/command/', views_mavops.watchdog_command),
+    path('watchdog/crash-report/', views_mavops.watchdog_crash_report),
 
 
     path("analytics/tax-returns/", views_analytics_tax_returns.tax_returns_dashboard),

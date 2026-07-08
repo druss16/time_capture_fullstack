@@ -307,8 +307,12 @@ jobs:
             --add-data "content_identity.py;." `
             main.py
 
-          # Build Watchdog — onefile, runs standalone
+          # Build Watchdog — onefile, runs standalone.
+          # Bundle version + update_checker so the watchdog can self-heal a
+          # crash-looping agent by downloading + replacing a bad build.
           python -m PyInstaller --onefile --noconsole --name "tt_watchdog" `
+            --hidden-import=version `
+            --hidden-import=update_checker `
             tt_watchdog.py
 
       # ── SIGN FIRST, ZIP SECOND ──────────────────────────────────

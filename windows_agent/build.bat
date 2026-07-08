@@ -63,7 +63,7 @@ if errorlevel 1 (
 REM Build Watchdog (no console, background service)
 echo.
 echo [5/5] Building tt_watchdog.exe (External Watchdog)...
-python -m PyInstaller --onefile --noconsole --name "tt_watchdog" tt_watchdog.py
+python -m PyInstaller --onefile --noconsole --name "tt_watchdog" --hidden-import=version --hidden-import=update_checker tt_watchdog.py
 if errorlevel 1 (
     echo ERROR: Failed to build tt_watchdog.exe
     pause

@@ -16,6 +16,16 @@ MAX_START_ATTEMPTS = 5
 BACKOFF_SLEEP      = 300
 API_BASE           = "https://timetracker-api-k375.onrender.com/api"
 
+# ── Crash-loop self-heal ──────────────────────────────────────────────
+# A plain restart cannot fix a bad *build* (e.g. an import-time crash) — it
+# just relaunches the same broken exe forever. When the agent dies almost
+# immediately after we start it, repeatedly, the watchdog stops restarting and
+# instead tries to REPLACE the build. The watchdog is the right place for this:
+# it is the process that does NOT crash, so it can cure one that does.
+CRASH_WINDOW         = 45     # agent must survive at least this long, or it's a "fast crash"
+CRASH_LOOP_THRESHOLD = 3      # this many fast crashes ⇒ bad build ⇒ attempt self-heal
+SELF_HEAL_THROTTLE   = 1800   # at most one self-heal update attempt per 30 min
+
 APPDATA   = os.environ.get("APPDATA", os.path.expanduser("~"))
 LOG_DIR   = os.path.join(APPDATA, "TimeTracker", "Logs")
 LOG_FILE  = os.path.join(LOG_DIR, "watchdog.log")
@@ -152,11 +162,85 @@ def _task_exists(task_name: str) -> bool:
         return False
 
 
+# Self-reviving watchdog task: starts at logon, re-checks every 5 min (so it
+# comes back if it ever exits mid-session), and Task Scheduler restarts it every
+# minute if it crashes. This is the SAME robust definition the GPO script uses —
+# now applied on every machine, so staying alive no longer depends on GPO.
+_WATCHDOG_TASK_XML = '''<?xml version="1.0"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>MavOps TimeTracker Watchdog - keeps the agent alive and self-heals bad builds</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled><Delay>PT10S</Delay></LogonTrigger>
+    <TimeTrigger>
+      <Repetition><Interval>PT5M</Interval><Duration>P9999D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <Enabled>true</Enabled><StartBoundary>2024-01-01T00:00:00</StartBoundary>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
+  </Settings>
+  <Actions>
+    <Exec><Command>{exe_path}</Command></Exec>
+  </Actions>
+</Task>'''
+
+
+def _register_robust_watchdog_task(exe_path: str, log_fn=print) -> bool:
+    """Register the watchdog as a self-reviving Scheduled Task via XML.
+    Uses /F so an existing WEAK (onlogon-only) task from an older build is
+    UPGRADED in place. Best-effort: on a domain box where the user lacks rights
+    to overwrite a GPO-owned task, this fails harmlessly (GPO's task — already
+    robust — stays)."""
+    import tempfile
+    tmp = os.path.join(tempfile.gettempdir(), "tt_watchdog_task.xml")
+    try:
+        # schtasks /XML wants a BOM'd Unicode file; utf-8-sig matches what the
+        # proven PowerShell (Set-Content -Encoding UTF8) produces.
+        with open(tmp, "w", encoding="utf-8-sig") as f:
+            f.write(_WATCHDOG_TASK_XML.format(exe_path=exe_path))
+        r = subprocess.run(
+            ["schtasks", "/Create", "/TN", WATCHDOG_TASK_NAME, "/XML", tmp, "/F"],
+            capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
+        )
+        if r.returncode == 0:
+            log_fn("[WATCHDOG-TASK] ✅ Watchdog task registered (repetition + restart-on-failure)")
+            return True
+        log_fn(f"[WATCHDOG-TASK] ⚠️ Robust register failed: {r.stderr.strip()}")
+        return False
+    except Exception as e:
+        log_fn(f"[WATCHDOG-TASK] ❌ Robust register exception: {e}")
+        return False
+    finally:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+
+
 def register_watchdog_task(log_fn=print):
     """
-    Called by agent on startup — tries to register tasks.
-    Fails silently on domain machines (GPO handles it).
+    Called by agent/watchdog on startup — registers the Scheduled Tasks.
     Only tries once per session.
+
+    Watchdog task: robust XML (self-reviving) — always (re)applied so older
+    machines with the weak onlogon-only task get upgraded. Agent task: a simple
+    onlogon fallback; the watchdog is the primary supervisor.
     """
     if sys.platform != "win32":
         return
@@ -170,32 +254,28 @@ def register_watchdog_task(log_fn=print):
         else os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker")
     )
 
-    for task_name, exe_name in [
-        (WATCHDOG_TASK_NAME, WATCHDOG_EXE_NAME),
-        (AGENT_TASK_NAME,    AGENT_EXE_NAME),
-    ]:
-        exe_path = os.path.join(install_dir, exe_name)
-        if not os.path.exists(exe_path):
-            log_fn(f"[WATCHDOG-TASK] ⚠️ {exe_name} not found — skipping")
-            continue
-        if _task_exists(task_name):
-            log_fn(f"[WATCHDOG-TASK] ✅ {task_name} already registered")
-            continue
+    # Watchdog task — robust, always (re)applied to upgrade older weak tasks.
+    wd_exe = os.path.join(install_dir, WATCHDOG_EXE_NAME)
+    if os.path.exists(wd_exe):
+        _register_robust_watchdog_task(wd_exe, log_fn=log_fn)
+    else:
+        log_fn(f"[WATCHDOG-TASK] ⚠️ {WATCHDOG_EXE_NAME} not found — skipping")
+
+    # Agent task — simple onlogon fallback (only if missing).
+    agent_exe = os.path.join(install_dir, AGENT_EXE_NAME)
+    if not os.path.exists(agent_exe):
+        log_fn(f"[WATCHDOG-TASK] ⚠️ {AGENT_EXE_NAME} not found — skipping agent task")
+    elif _task_exists(AGENT_TASK_NAME):
+        log_fn(f"[WATCHDOG-TASK] ✅ {AGENT_TASK_NAME} already registered")
+    else:
         try:
             r = subprocess.run(
-                [
-                    "schtasks", "/Create",
-                    "/TN", task_name,
-                    "/TR", f'"{exe_path}"',
-                    "/SC", "ONLOGON",
-                    "/RL", "LIMITED",
-                    "/F",
-                ],
-                capture_output=True, text=True, timeout=30,
-                creationflags=_NO_WINDOW,
+                ["schtasks", "/Create", "/TN", AGENT_TASK_NAME,
+                 "/TR", f'"{agent_exe}"', "/SC", "ONLOGON", "/RL", "LIMITED", "/F"],
+                capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
             if r.returncode == 0:
-                log_fn(f"[WATCHDOG-TASK] ✅ Registered: {task_name}")
+                log_fn(f"[WATCHDOG-TASK] ✅ Registered: {AGENT_TASK_NAME}")
             else:
                 log_fn(f"[WATCHDOG-TASK] ⚠️ Failed: {r.stderr.strip()}")
         except Exception as e:
@@ -215,6 +295,73 @@ def unregister_watchdog_task(log_fn=print):
             log_fn(f"[WATCHDOG-TASK] Failed to remove {task}: {e}")
 
 
+def _installed_version() -> str:
+    """The shipped version. Agent + watchdog ship together in one zip, so the
+    watchdog's own version equals the (crashing) agent's version."""
+    try:
+        from version import APP_VERSION
+        return APP_VERSION
+    except Exception:
+        return "dev"
+
+
+def report_crash_loop(version: str, crashes: int):
+    """Best-effort telemetry so a crash-looping fleet surfaces from monitoring
+    instead of user complaints. Harmless no-op if the endpoint doesn't exist."""
+    device_id = _get_device_id()
+    if not device_id:
+        return
+    try:
+        payload = json.dumps({
+            "device_id":    device_id,
+            "version":      version,
+            "fast_crashes": crashes,
+            "component":    AGENT_EXE_NAME,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{API_BASE}/watchdog/crash-report/",
+            data=payload, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=5)
+        log(f"[WATCHDOG] 📡 Reported crash-loop (v{version}, {crashes} fast crashes)")
+    except Exception:
+        # Endpoint may not exist yet — telemetry never blocks recovery.
+        pass
+
+
+def try_self_heal_update() -> bool:
+    """Crash-loop cure: ask the backend for the latest build and, if newer,
+    download + replace the crashing agent. Reuses the tested updater. Runs in
+    the watchdog (the process that does NOT crash), so a broken agent build can
+    be replaced with zero user action. Returns True if an update was launched."""
+    version = _installed_version()
+    if version in ("dev", "0.0.0", ""):
+        log("[WATCHDOG] Self-heal skipped — dev/unknown build")
+        return False
+    try:
+        from update_checker import check_version, _auto_update_windows
+    except Exception as e:
+        log(f"[WATCHDOG] Self-heal unavailable (update_checker import failed): {e}")
+        return False
+    try:
+        data = check_version(API_BASE, version)
+        if not data or not data.get("update_available"):
+            log(f"[WATCHDOG] Self-heal: server reports no newer build than v{version}")
+            return False
+        latest  = data.get("latest_version", "unknown")
+        url     = data.get("download_url", "")
+        zip_url = data.get("zip_url", "")
+        if not zip_url:
+            log("[WATCHDOG] Self-heal: server gave no zip_url — cannot replace")
+            return False
+        log(f"[WATCHDOG] 🩹 Self-heal: replacing crashing v{version} with v{latest}")
+        return _auto_update_windows(url, latest, zip_url=zip_url)
+    except Exception as e:
+        log(f"[WATCHDOG] Self-heal update failed: {e}")
+        return False
+
+
 def run_watchdog():
     log("=" * 60)
     log(f"[WATCHDOG] TimeTracker External Watchdog starting")
@@ -228,7 +375,10 @@ def run_watchdog():
     if not agent_exe:
         log(f"[WATCHDOG] ⚠️ Could not find {AGENT_EXE_NAME} — will keep retrying")
 
-    consecutive_failures = 0
+    consecutive_failures = 0    # can't-start-at-all counter
+    fast_crashes         = 0    # agent starts then dies quickly ⇒ bad build
+    last_start_time      = 0.0  # when the watchdog last launched the agent
+    last_heal_attempt    = 0.0  # throttles self-heal update attempts
 
     while True:
         try:
@@ -247,25 +397,59 @@ def run_watchdog():
                     time.sleep(CHECK_INTERVAL)
                     continue
 
-            # ── Check if agent is running ─────────────────────────────
+            # ── Agent is healthy ──────────────────────────────────────
             if is_agent_running():
-                if consecutive_failures > 0:
-                    log(f"[WATCHDOG] ✅ Agent is running again")
-                consecutive_failures = 0
-            else:
-                consecutive_failures += 1
-                log(f"[WATCHDOG] ⚠️ Agent NOT running (attempt {consecutive_failures})")
-
-                if consecutive_failures >= MAX_START_ATTEMPTS:
-                    log(f"[WATCHDOG] 🛑 {consecutive_failures} failed starts — backing off {BACKOFF_SLEEP}s")
+                # Only "healthy" once it has survived past the crash window;
+                # then clear crash counters so a later stop starts fresh.
+                if last_start_time and (time.time() - last_start_time) >= CRASH_WINDOW:
+                    if fast_crashes or consecutive_failures:
+                        log("[WATCHDOG] ✅ Agent stable — clearing crash counters")
+                    fast_crashes = 0
                     consecutive_failures = 0
-                    time.sleep(BACKOFF_SLEEP)
-                    continue
+                time.sleep(CHECK_INTERVAL)
+                continue
 
-                if start_agent(agent_exe):
-                    log(f"[WATCHDOG] ✅ Agent started — waiting {STARTUP_GRACE}s")
-                    time.sleep(STARTUP_GRACE)
-                    continue
+            # ── Agent is NOT running ──────────────────────────────────
+            # Did it die shortly after we launched it? That's a crash (bad
+            # build), not a normal stop.
+            if last_start_time and (time.time() - last_start_time) < CRASH_WINDOW:
+                fast_crashes += 1
+                log(f"[WATCHDOG] 💥 Agent died {int(time.time() - last_start_time)}s "
+                    f"after start — fast crash #{fast_crashes}")
+
+            # ── Crash loop ⇒ restarting won't help. REPLACE the build. ─
+            if fast_crashes >= CRASH_LOOP_THRESHOLD:
+                ver = _installed_version()
+                log(f"[WATCHDOG] 🔁 Crash loop detected (v{ver}) — a restart can't fix a bad build")
+                report_crash_loop(ver, fast_crashes)
+                now = time.time()
+                if now - last_heal_attempt >= SELF_HEAL_THROTTLE:
+                    last_heal_attempt = now
+                    if try_self_heal_update():
+                        log("[WATCHDOG] 🩹 Update launched — exiting so the updater can swap files")
+                        return  # updater's bat kills + relaunches the new watchdog
+                else:
+                    log("[WATCHDOG] Self-heal throttled — waiting before next attempt")
+                log(f"[WATCHDOG] Backing off {BACKOFF_SLEEP}s")
+                fast_crashes = 0
+                time.sleep(BACKOFF_SLEEP)
+                continue
+
+            # ── Otherwise: normal "not running" → (re)start it ────────
+            consecutive_failures += 1
+            log(f"[WATCHDOG] ⚠️ Agent NOT running (attempt {consecutive_failures})")
+
+            if consecutive_failures >= MAX_START_ATTEMPTS:
+                log(f"[WATCHDOG] 🛑 {consecutive_failures} failed starts — backing off {BACKOFF_SLEEP}s")
+                consecutive_failures = 0
+                time.sleep(BACKOFF_SLEEP)
+                continue
+
+            if start_agent(agent_exe):
+                last_start_time = time.time()
+                log(f"[WATCHDOG] ✅ Agent started — waiting {STARTUP_GRACE}s")
+                time.sleep(STARTUP_GRACE)
+                continue
 
         except Exception as e:
             log(f"[WATCHDOG] ❌ Loop error: {e}")

@@ -78,6 +78,30 @@ def heartbeat_age() -> float:
         return time.time() - _last_heartbeat
 
 
+# ── Disk heartbeat (read by the EXTERNAL tt_watchdog.exe) ──────────────────
+# The in-process heartbeat above is memory-only — another process can't see it.
+# We ALSO stamp a file from the watchdog loop so tt_watchdog.exe can detect a
+# WHOLE-PROCESS freeze (every thread wedged after a sleep/wake), which is the one
+# case the in-process watchdog cannot recover from because it is wedged too.
+# Stamped from the watchdog thread (not the tracking loop) so it keeps pulsing
+# even when tracking is paused — it signals process liveness, not activity.
+_HEARTBEAT_FILE = os.path.join(
+    os.environ.get("APPDATA", os.path.expanduser("~")), "TimeTracker", "agent.heartbeat"
+)
+
+
+def _write_disk_heartbeat():
+    """Best-effort atomic stamp of the current time. Never raises."""
+    try:
+        os.makedirs(os.path.dirname(_HEARTBEAT_FILE), exist_ok=True)
+        tmp = _HEARTBEAT_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(str(time.time()))
+        os.replace(tmp, _HEARTBEAT_FILE)   # atomic — reader never sees a half-write
+    except Exception:
+        pass
+
+
 # ── Self-relaunch (v1.5.x) ──────────────────────────────────────────────────
 # Track relaunch timestamps so a freeze-on-startup loop can't fork-bomb.
 _relaunch_times = []
@@ -194,6 +218,7 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
     """
     global _heartbeat_started
     _heartbeat_started = time.time()
+    _write_disk_heartbeat()   # stamp immediately so the file exists at startup
 
     log_fn("[WATCHDOG] Started watchdog thread")
 
@@ -202,6 +227,7 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
 
     while True:
         time.sleep(WATCHDOG_CHECK_INTERVAL)
+        _write_disk_heartbeat()   # external tt_watchdog reads this to spot a frozen process
 
         thread = tracking_thread_ref[0]
         uptime = time.time() - _heartbeat_started

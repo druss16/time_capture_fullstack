@@ -26,6 +26,16 @@ CRASH_WINDOW         = 45     # agent must survive at least this long, or it's a
 CRASH_LOOP_THRESHOLD = 3      # this many fast crashes ⇒ bad build ⇒ attempt self-heal
 SELF_HEAL_THROTTLE   = 1800   # at most one self-heal update attempt per 30 min
 
+# ── Frozen-agent detection ────────────────────────────────────────────
+# The agent stamps APPDATA/TimeTracker/agent.heartbeat from its in-process
+# watchdog loop (~every 30s). If the process EXISTS but that stamp is stale, the
+# whole process is wedged (classic sleep/wake hard freeze) — the case a plain
+# "is the process there?" check misses. We kill the zombie so it gets restarted.
+HEARTBEAT_FILE  = os.path.join(
+    os.environ.get("APPDATA", os.path.expanduser("~")), "TimeTracker", "agent.heartbeat"
+)
+HEARTBEAT_STALE = 300         # no stamp for this long (with process alive) ⇒ frozen
+
 APPDATA   = os.environ.get("APPDATA", os.path.expanduser("~"))
 LOG_DIR   = os.path.join(APPDATA, "TimeTracker", "Logs")
 LOG_FILE  = os.path.join(LOG_DIR, "watchdog.log")
@@ -134,6 +144,19 @@ def is_agent_running() -> bool:
     except Exception as e:
         log(f"[WATCHDOG] Error checking processes: {e}")
     return False
+
+
+def agent_heartbeat_age():
+    """Seconds since the agent last stamped its disk heartbeat. Returns None if
+    there's no readable stamp (older build that doesn't write one, or not written
+    yet) — treated as 'unknown', i.e. NOT frozen, so we never kill an agent that
+    simply doesn't pulse."""
+    try:
+        with open(HEARTBEAT_FILE) as f:
+            ts = float(f.read().strip())
+        return max(0.0, time.time() - ts)
+    except Exception:
+        return None
 
 
 def start_agent(agent_exe: str) -> bool:
@@ -397,8 +420,19 @@ def run_watchdog():
                     time.sleep(CHECK_INTERVAL)
                     continue
 
-            # ── Agent is healthy ──────────────────────────────────────
+            # ── Agent process exists ──────────────────────────────────
             if is_agent_running():
+                # Present but not pulsing? Whole-process freeze (sleep/wake) —
+                # the in-process watchdog is wedged too, so kill it here and let
+                # the not-running path below relaunch a fresh one. No human needed.
+                hb = agent_heartbeat_age()
+                if hb is not None and hb > HEARTBEAT_STALE:
+                    log(f"[WATCHDOG] 🥶 Agent present but heartbeat stale ({int(hb)}s > {HEARTBEAT_STALE}s) — killing frozen agent")
+                    kill_all_agent_processes()
+                    fast_crashes = 0            # a freeze is not a build crash
+                    time.sleep(3)
+                    continue
+
                 # Only "healthy" once it has survived past the crash window;
                 # then clear crash counters so a later stop starts fresh.
                 if last_start_time and (time.time() - last_start_time) >= CRASH_WINDOW:

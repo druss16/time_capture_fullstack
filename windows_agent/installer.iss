@@ -189,7 +189,7 @@ begin
   XmlPath := ExpandConstant('{tmp}\timetracker_task.xml');
 
   XmlContent :=
-    '<?xml version="1.0">' + #13#10 +
+    '<?xml version="1.0"?>' + #13#10 +
     '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
     '  <RegistrationInfo>' + #13#10 +
     '    <Description>MavOps TimeTracker Agent - runs in background, auto-restarts on crash</Description>' + #13#10 +

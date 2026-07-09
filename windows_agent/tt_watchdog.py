@@ -303,6 +303,39 @@ def unregister_watchdog_task(log_fn=print):
             log_fn(f"[WATCHDOG-TASK] Failed to remove {task}: {e}")
 
 
+def _install_runkey():
+    """Add an HKCU Run entry so the watchdog starts at logon WITHOUT admin.
+
+    This is the no-admin fallback for locked-down machines where schtasks needs
+    elevation the standard user doesn't have. HKCU is the user's own registry
+    hive — writable without elevation — so this always succeeds where the
+    Scheduled Task can't be created. Best-effort; never raises."""
+    if sys.platform != "win32":
+        return
+    try:
+        import winreg
+        install_dir = (
+            os.path.dirname(sys.executable)
+            if getattr(sys, "frozen", False)
+            else os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker")
+        )
+        exe = os.path.join(install_dir, WATCHDOG_EXE_NAME)
+        if not os.path.exists(exe):
+            return
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE,
+        )
+        try:
+            winreg.SetValueEx(key, WATCHDOG_TASK_NAME, 0, winreg.REG_SZ, f'"{exe}"')
+            log("[WATCHDOG] ✅ HKCU Run entry ensured (no-admin logon start)")
+        finally:
+            winreg.CloseKey(key)
+    except Exception as e:
+        log(f"[WATCHDOG] HKCU Run install failed (non-fatal): {e}")
+
+
 def _installed_version() -> str:
     """The shipped version. Agent + watchdog ship together in one zip, so the
     watchdog's own version equals the (crashing) agent's version."""
@@ -376,8 +409,14 @@ def run_watchdog():
     log(f"[WATCHDOG] PID: {os.getpid()}, checking every {CHECK_INTERVAL}s")
     log("=" * 60)
 
-    # Try task registration once — fails silently on domain machines
+    # Two logon-start paths, tried in order of strength:
+    #   1. Scheduled Task — self-reviving (restart-on-failure), but needs
+    #      elevation/GPO, so it silently fails on locked-down standard-user boxes.
+    #   2. HKCU Run key — no admin ever, always works, but logon-start only.
+    # Managed machines get #1; locked-down self-installs fall back to #2 (plus
+    # the agent's mutual supervision for mid-session revival).
     register_watchdog_task(log_fn=log)
+    _install_runkey()
 
     agent_exe = find_agent_exe()
     if not agent_exe:

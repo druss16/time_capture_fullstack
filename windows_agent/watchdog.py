@@ -102,6 +102,53 @@ def _write_disk_heartbeat():
         pass
 
 
+# ── Mutual supervision (no admin required) ─────────────────────────────────
+# On locked-down machines a standard user can't create the Scheduled Task, so a
+# killed watchdog would stay dead. Close that gap the other direction: the agent
+# relaunches the watchdog if it has died. Supervision becomes two-way — as long
+# as EITHER process survives, it resurrects the other. Just launches a process;
+# no elevation involved.
+_WATCHDOG_EXE_NAME = "tt_watchdog.exe"
+_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+
+def _watchdog_exe_path() -> str:
+    base = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
+            else os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker"))
+    return os.path.join(base, _WATCHDOG_EXE_NAME)
+
+
+def _is_watchdog_running() -> bool:
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq " + _WATCHDOG_EXE_NAME, "/NH"],
+            capture_output=True, text=True, timeout=10, creationflags=_NO_WINDOW,
+        )
+        return _WATCHDOG_EXE_NAME.lower() in (out.stdout or "").lower()
+    except Exception:
+        return True   # on error, assume up — never risk spawning duplicates
+
+
+def _ensure_watchdog_running(log_fn):
+    """If the external watchdog has died, bring it back. No admin needed."""
+    if sys.platform != "win32":
+        return
+    try:
+        if _is_watchdog_running():
+            return
+        exe = _watchdog_exe_path()
+        if not os.path.exists(exe):
+            return
+        subprocess.Popen(
+            [exe],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
+        log_fn("[WATCHDOG] 🔄 External watchdog was down — relaunched it (mutual supervision)")
+    except Exception as e:
+        log_fn(f"[WATCHDOG] Could not relaunch external watchdog: {e}")
+
+
 # ── Self-relaunch (v1.5.x) ──────────────────────────────────────────────────
 # Track relaunch timestamps so a freeze-on-startup loop can't fork-bomb.
 _relaunch_times = []
@@ -227,7 +274,8 @@ def watchdog(tracking_thread_ref: list, tracking_loop_fn, log_fn, report_error_f
 
     while True:
         time.sleep(WATCHDOG_CHECK_INTERVAL)
-        _write_disk_heartbeat()   # external tt_watchdog reads this to spot a frozen process
+        _write_disk_heartbeat()       # external tt_watchdog reads this to spot a frozen process
+        _ensure_watchdog_running(log_fn)  # two-way supervision: revive the watchdog if it died
 
         thread = tracking_thread_ref[0]
         uptime = time.time() - _heartbeat_started

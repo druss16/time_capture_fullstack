@@ -303,6 +303,29 @@ def unregister_watchdog_task(log_fn=print):
             log_fn(f"[WATCHDOG-TASK] Failed to remove {task}: {e}")
 
 
+def _acquire_singleton():
+    """Ensure only ONE watchdog worker runs, no matter how many launch sources
+    fire (Scheduled Task + HKCU Run key + agent mutual-supervision). A named
+    mutex enforces it: the first worker holds it; later ones see it already
+    exists and bow out. The --onefile bootloader never runs this code, so this
+    counts real workers, not bootloader parents. Returns the mutex handle to
+    keep alive for the process lifetime, or None if another worker already owns
+    it (caller should exit)."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        ERROR_ALREADY_EXISTS = 183
+        handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\TimeTrackerWatchdogSingleton")
+        if not handle:
+            return True  # couldn't create the mutex — don't block startup
+        if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            return None  # another worker already holds it
+        return handle
+    except Exception:
+        return True      # on any error, never block the watchdog from starting
+
+
 def _install_runkey():
     """Add an HKCU Run entry so the watchdog starts at logon WITHOUT admin.
 
@@ -404,6 +427,13 @@ def try_self_heal_update() -> bool:
 
 
 def run_watchdog():
+    # Singleton guard FIRST — a duplicate instance exits before doing anything,
+    # so the task + run key + mutual supervision can't stack up watchdogs.
+    _singleton = _acquire_singleton()
+    if _singleton is None:
+        log("[WATCHDOG] 🚦 Another watchdog is already running — exiting (singleton guard)")
+        return
+
     log("=" * 60)
     log(f"[WATCHDOG] TimeTracker External Watchdog starting")
     log(f"[WATCHDOG] PID: {os.getpid()}, checking every {CHECK_INTERVAL}s")

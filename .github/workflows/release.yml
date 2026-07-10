@@ -7,6 +7,14 @@ on:
 
 env:
   ENABLE_WINDOWS_SIGNING: 'true'
+  # ── Smart App Control toggle (single source of truth) ──
+  # 'false' → sign + verify the .exe binaries only (the launched files).
+  # 'true'  → ALSO sign + verify every DLL and Python extension (.pyd)
+  #           inside the PyInstaller onedir bundles, i.e. everything the
+  #           process actually loads. Slower + more Trusted Signing calls.
+  # This one flag drives BOTH the signing filter and the hard-fail guard
+  # below, so they can never disagree.
+  SIGN_INNER_LIBS: 'false'
 
 jobs:
   build-mac:
@@ -243,6 +251,13 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    # ── OIDC federated auth for Azure Trusted Signing ──
+    # id-token:write lets GitHub mint the short-lived OIDC token that
+    # azure/login exchanges for an Azure access token (no client secret).
+    # contents:read is the minimal default for GITHUB_TOKEN in this job.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       
@@ -315,6 +330,35 @@ jobs:
             --hidden-import=update_checker `
             tt_watchdog.py
 
+      # ── Azure login via OIDC federated credential ──────────────
+      # Replaces AZURE_CLIENT_SECRET auth. azure/login performs `az login`
+      # with the federated OIDC token; the resulting CLI session is what
+      # azure/trusted-signing-action picks up (DefaultAzureCredential ->
+      # AzureCliCredential), so the signing steps below need NO secret.
+      #
+      # AZURE SIDE — one-time setup (do this BEFORE tagging a release):
+      #   1. App registration (behind AZURE_CLIENT_ID) > Certificates &
+      #      secrets > Federated credentials > Add credential.
+      #      Tags produce an EXACT subject per tag, e.g.
+      #        repo:druss16/time_capture_fullstack:ref:refs/tags/v1.7.6
+      #      so a literal "v*" will NOT match. Use a FLEXIBLE (wildcard)
+      #      credential with matching expression:
+      #        claims['sub'] matches
+      #          'repo:druss16/time_capture_fullstack:ref:refs/tags/*'
+      #   2. RBAC: app needs "Trusted Signing Certificate Profile Signer"
+      #      on the timetracker-signing account (already true if signing
+      #      works today — OIDC only changes HOW it authenticates).
+      #   3. GitHub secret AZURE_SUBSCRIPTION_ID must exist. AZURE_CLIENT_ID
+      #      and AZURE_TENANT_ID already exist; AZURE_CLIENT_SECRET is unused
+      #      once this works and can be deleted.
+      - name: Azure login (OIDC)
+        if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       # ── SIGN FIRST, ZIP SECOND ──────────────────────────────────
       # Critical: sign all exes before packaging into zip
       # Agents receive the zip via auto-update — must contain signed binaries
@@ -323,15 +367,17 @@ jobs:
         if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
         uses: azure/trusted-signing-action@v0.5.0
         with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # Auth comes from the OIDC `az login` session above — no
+          # azure-tenant-id / azure-client-id / azure-client-secret inputs.
           endpoint: https://eus.codesigning.azure.net/
           trusted-signing-account-name: timetracker-signing
           certificate-profile-name: timetracker-cert
           files-folder: ${{ github.workspace }}/windows_agent/dist
-          files-folder-filter: exe
           files-folder-recurse: true
+          # Filter driven by the SIGN_INNER_LIBS switch at the top of the
+          # workflow: 'exe' by default, 'exe,dll,pyd' when inner-lib signing
+          # is enabled. The verify guard below reads the same switch.
+          files-folder-filter: ${{ env.SIGN_INNER_LIBS == 'true' && 'exe,dll,pyd' || 'exe' }}
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
@@ -415,9 +461,7 @@ jobs:
         if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
         uses: azure/trusted-signing-action@v0.5.0
         with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # Auth comes from the OIDC `az login` session above — no secret inputs.
           endpoint: https://eus.codesigning.azure.net/
           trusted-signing-account-name: timetracker-signing
           certificate-profile-name: timetracker-cert
@@ -426,6 +470,75 @@ jobs:
           files-folder-recurse: true
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+
+      # ── HARD-FAIL SIGNATURE + TIMESTAMP GUARD ───────────────────
+      # Runs AFTER both signing steps and BEFORE any release artifact is
+      # uploaded. Verifies a valid Authenticode signature AND a present
+      # RFC-3161 timestamp on the installer + all three inner exes. Any
+      # unsigned / broken / un-timestamped file fails the whole job, so the
+      # downstream `release` job (needs: build-windows) never publishes.
+      #
+      # NOTE: gated on ENABLE_WINDOWS_SIGNING so a deliberate unsigned test
+      # build (flag=false) doesn't trip the guard. On the real release path
+      # the flag is 'true', so an unsigned release becomes impossible.
+      #
+      # There is NO separate updater exe — update_checker runs in-process
+      # inside the agent + watchdog. The three inner exes are the agent,
+      # the watchdog, and the GUI.
+      - name: Verify signatures + timestamps (hard fail)
+        if: ${{ env.ENABLE_WINDOWS_SIGNING == 'true' }}
+        working-directory: windows_agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # signtool ships with the Windows SDK but isn't on PATH on the
+          # runner — resolve the newest x64 copy.
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" `
+            -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { Write-Error "signtool.exe not found on runner"; exit 1 }
+          Write-Host "Using signtool: $signtool"
+
+          $files = @(
+            "Output\TimeTracker-Windows-Setup.exe",        # outer installer
+            "dist\TimeTrackerAgent\TimeTrackerAgent.exe",  # main agent
+            "dist\tt_watchdog.exe",                        # watchdog
+            "dist\TimeTracker\TimeTracker.exe"             # GUI
+          )
+
+          # Mirror the SIGN_INNER_LIBS switch: when inner-lib signing is on,
+          # every DLL/.pyd under dist was signed, so the guard must verify
+          # them too (otherwise a silently-unsigned lib would slip through).
+          if ($env:SIGN_INNER_LIBS -eq 'true') {
+            $libs = Get-ChildItem -Path "dist" -Recurse -Include *.dll,*.pyd -File |
+              Select-Object -ExpandProperty FullName
+            Write-Host "SIGN_INNER_LIBS=true -> also verifying $($libs.Count) DLL/.pyd file(s)"
+            $files += $libs
+          }
+
+          $failed = @()
+          foreach ($f in $files) {
+            if (-not (Test-Path $f)) { Write-Host "::error::MISSING FILE: $f"; $failed += $f; continue }
+            Write-Host "=== Verifying $f ==="
+            # /pa = default Authenticode policy, /v = verbose.
+            # Non-zero exit => unsigned or broken chain.
+            $out = & $signtool verify /pa /v $f 2>&1
+            $code = $LASTEXITCODE
+            $joined = ($out | Out-String)
+            Write-Host $joined
+            if ($code -ne 0) { Write-Host "::error::UNSIGNED or INVALID signature: $f"; $failed += $f; continue }
+            # Require an RFC-3161 timestamp: verbose verify names the
+            # timestamp authority ("timestamped" / "Timestamp Verified by").
+            if ($joined -notmatch 'imestamp') { Write-Host "::error::NO TIMESTAMP: $f"; $failed += $f; continue }
+            Write-Host "OK  signed + timestamped -> $f"
+          }
+
+          if ($failed.Count -gt 0) {
+            Write-Error "Signature/timestamp verification FAILED for: $($failed -join ', ')"
+            exit 1
+          }
+          Write-Host "All artifacts signed + RFC-3161 timestamped."
 
       - name: Generate SHA512 hashes
         working-directory: windows_agent
@@ -479,6 +592,11 @@ jobs:
   release:
     needs: [build-mac, build-windows]
     runs-on: ubuntu-latest
+    # Only PUBLISH for real release tags. Pre-release tags (anything with a
+    # hyphen, e.g. v0.0.0-rc1) still build + sign + run the verification
+    # guard above, but are NOT published to timetracker-releases and never
+    # become "latest" for the auto-updater. This makes rc tags safe to test.
+    if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Download Mac artifact
         uses: actions/download-artifact@v4

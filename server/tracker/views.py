@@ -4793,15 +4793,21 @@ def today_time(request):
         if 'type' not in fb:
             fb['type'] = 'mobile_review'
 
-    # ── Proposed blocks for inline display (red-clock rows, NOT in totals) ──
+    # ── Pending review rows (red-clock rows, NOT in totals) ─────────────────
+    # The "Pending — confirm to count as billable" list. Gated on the SHARED
+    # is_pending_review_block predicate so this list and the report's REVIEW
+    # column are identical by construction (same blocks, same minutes) for any
+    # date range. Covers both proposed blocks (client guess / second-pass) and
+    # captured-but-unattributed material blocks (rendered as no-guess "Assign
+    # client" / "No Client" rows).
+    from tracker.views_reports import is_pending_review_block
     proposed_inline = []
-    _pi = Block.objects.filter(
-        user=user, day=target_date, classification_state='proposed',
-        deleted_at__isnull=True,
-    ).exclude(categorized_by__in=['manual', 'correction']).select_related('proposed_client')
-    for _b in _pi:
-        _r = getattr(_b, 'proposed_reasoning', '') or ''
-        if 'second-pass' not in _r and not _b.proposed_client_id:
+    _pending = Block.objects.filter(
+        user=user, day=target_date,
+        is_categorized=False, deleted_at__isnull=True,
+    ).exclude(classification_state='suppressed').select_related('proposed_client')
+    for _b in _pending:
+        if not is_pending_review_block(_b):
             continue
         proposed_inline.append({
             'block_id':             _b.id,
@@ -4810,38 +4816,6 @@ def today_time(request):
             'proposed_client_id':   _b.proposed_client_id,
             'proposed_client_name': _b.proposed_client.name if _b.proposed_client_id else None,
             'proposed_confidence':  float(getattr(_b, 'proposed_confidence', 0.0) or 0.0),
-            'proposed_category':    getattr(_b, 'proposed_category', '') or '',
-        })
-
-    # ── Captured (unattributed) blocks → inline review rows ─────────────────
-    # Blocks the classifier left in 'captured' with no client (generic browsing/
-    # doc time it couldn't attribute) count on the report's "Needs Review" tile
-    # but had NO inline affordance here, so users couldn't see or act on them —
-    # they'd click "Confirm All", the tile wouldn't drop, and the leftover time
-    # was invisible. Surface them as no-guess rows (frontend renders an "Assign
-    # client" + "No Client" pair). We mirror the tile's materiality (>=2min,
-    # non-idle) so what's shown == what's counted.
-    from tracker.views_reports import (
-        _block_minutes as _rv_minutes,
-        _dominant_category as _rv_domcat,
-        _is_material as _rv_material,
-    )
-    _cap = Block.objects.filter(
-        user=user, day=target_date, classification_state='captured',
-        is_categorized=False, deleted_at__isnull=True,
-    ).exclude(bundle_id__iexact='__idle__')
-    for _b in _cap:
-        if _rv_minutes(_b) <= 0 or not _rv_material(_b):
-            continue
-        if _rv_domcat(_b).lower() == 'idle':
-            continue
-        proposed_inline.append({
-            'block_id':             _b.id,
-            'window_title':         getattr(_b, 'window_title', '') or '',
-            'minutes':              _b.minutes or 0,
-            'proposed_client_id':   None,
-            'proposed_client_name': None,
-            'proposed_confidence':  0.0,
             'proposed_category':    getattr(_b, 'proposed_category', '') or '',
         })
 

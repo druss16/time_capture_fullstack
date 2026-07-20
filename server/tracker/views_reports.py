@@ -358,6 +358,74 @@ def _uncategorized_by_group(blocks, group_by: str):
     return total, per_group
 
 
+def is_pending_review_block(b) -> bool:
+    """
+    SINGLE SOURCE OF TRUTH for "this block shows in Daily Review's
+    'Pending — confirm to count as billable' list" == "this block counts toward
+    the report's REVIEW column".
+
+    today_time (which builds the Daily Review pending rows) and the report's
+    REVIEW tally both gate on THIS, so the number you see in Daily Review and
+    the number on the report are identical by construction, for any date range.
+
+    Mirrors today_time.proposed_inline:
+      • proposed blocks the classifier surfaced (have a client guess, or are a
+        second-pass proposal), not already hand-corrected; OR
+      • captured blocks with no attribution yet, material (>=2min) and non-idle.
+    Suppressed / committed / already-corrected blocks never appear.
+    """
+    if getattr(b, "is_categorized", False):
+        return False
+    state = (getattr(b, "classification_state", "") or "")
+    if state == "suppressed":
+        return False
+    if (getattr(b, "categorized_by", "") or "") in ("manual", "correction"):
+        return False
+
+    if state == "proposed":
+        reasoning = (getattr(b, "proposed_reasoning", "") or "")
+        return bool(getattr(b, "proposed_client_id", None)) or ("second-pass" in reasoning)
+
+    if state == "captured":
+        if (getattr(b, "bundle_id", "") or "").lower() == "__idle__":
+            return False
+        if _dominant_category(b).lower() == "idle":
+            return False
+        return _is_material(b)
+
+    return False
+
+
+def _pending_review_by_group(org, start_utc, end_utc, can_see_all,
+                             forced_user_id, group_by):
+    """
+    REVIEW/uncategorized minutes per group = the sum of exactly the blocks that
+    Daily Review shows under "Pending — confirm to count as billable", summed
+    with block.minutes just like the rows the user sees. Gated on
+    is_pending_review_block so it can't drift from the Daily Review list.
+
+    Returns (total_min: int, {group_key: minutes:int}).
+    """
+    qs = Block.objects.filter(
+        org=org, deleted_at__isnull=True,
+        start__gte=start_utc, start__lt=end_utc,
+        is_categorized=False,
+    ).exclude(classification_state="suppressed")
+    if not can_see_all and forced_user_id:
+        qs = qs.filter(user_id=forced_user_id)
+
+    per_group: dict = defaultdict(int)
+    total = 0
+    for b in qs:
+        if not is_pending_review_block(b):
+            continue
+        minutes = b.minutes or 0
+        key = (b.user_id if group_by == "employee" else (b.client_id or "unassigned"))
+        per_group[key] += minutes
+        total += minutes
+    return total, dict(per_group)
+
+
 def _is_billable_block(block) -> bool:
     """A block bills if it's marked billable AND tied to a client."""
     return bool(block.is_billable and block.client_id)
@@ -698,7 +766,13 @@ def reports_summary(request):
             committed_only=False,
         )
     )
-    total_uncat_min, uncat_by_group = _uncategorized_by_group(uncat_blocks, group_by)
+    # REVIEW == the exact set Daily Review shows under "Pending — confirm to
+    # count as billable", summed the same way (block.minutes). Gated on the
+    # shared is_pending_review_block predicate so the report and Daily Review
+    # can't disagree, for any selected date range.
+    total_uncat_min, uncat_by_group = _pending_review_by_group(
+        org, start_utc, end_utc, can_see_all, forced_user_id, group_by
+    )
 
     # Merge uncategorized minutes onto each row, and surface rows that have
     # ONLY uncategorized time (no committed time yet) so they don't vanish.
@@ -843,7 +917,11 @@ def reports_summary_export(request):
             committed_only=False,
         )
     )
-    total_uncat_min, uncat_by_group = _uncategorized_by_group(uncat_blocks, group_by)
+    # REVIEW == Daily Review's pending list (shared predicate) — keep the CSV in
+    # lockstep with the JSON endpoint above.
+    total_uncat_min, uncat_by_group = _pending_review_by_group(
+        org, start_utc, end_utc, can_see_all, forced_user_id, group_by
+    )
     for r in summary["rows"]:
         key = (r["id"] if group_by == "employee" else (r["id"] or "unassigned"))
         uncat_h = round(uncat_by_group.get(key, 0) / 60, 2)
@@ -1051,8 +1129,12 @@ def reports_uncategorized_detail(request):
         if (b.bundle_id or "").lower() == "__idle__":
             continue
 
-        # Roll up immaterial blocks rather than listing each tiny sliver.
-        if not _is_material(b):
+        # Only blocks in the pending-review list become themed review items —
+        # same shared predicate as the REVIEW column and Daily Review, so this
+        # drawer's total matches the number the user clicked. Everything else
+        # (sub-2min captured slivers, proposals without a client) rolls up as
+        # immaterial context rather than a review item.
+        if not is_pending_review_block(b):
             immaterial_min += minutes
             immaterial_count += 1
             continue

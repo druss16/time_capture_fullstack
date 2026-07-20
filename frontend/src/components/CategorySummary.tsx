@@ -127,6 +127,15 @@ const isNonBillable = (name: string) => {
   );
 };
 
+// Firm-internal clients ("Internal" / "Internal - <x>", e.g. Internal - Tax,
+// Internal - Accounting) are never billable — mirrors the backend predicate
+// tracker.industry_categories.is_internal_client_name. Daily Review dims these
+// so the UI matches how reports/timesheet now treat the time.
+const isInternalClient = (name: string) => {
+  const n = (name || "").trim().toLowerCase();
+  return n === "internal" || n.startsWith("internal -");
+};
+
 const CLIENT_ACCENTS = [
   { border: "border-l-teal-500",    header: "bg-teal-50",    hours: "text-teal-600"    },
   { border: "border-l-amber-400",   header: "bg-amber-50",   hours: "text-amber-500"   },
@@ -855,7 +864,8 @@ function CategorySection({
 }) {
   const [expanded, setExpanded] = useState(true);
   const [showMoveAll, setShowMoveAll] = useState(false);
-  const nonBillable = isNonBillable(cat.name);
+  // Internal-client work is non-billable regardless of the category name.
+  const nonBillable = isNonBillable(cat.name) || isInternalClient(client.client);
 
   const allBlockIds = cat.sample_activities
     .map((a) => parse(a).blockId)
@@ -1845,7 +1855,12 @@ export default function CategorySummary({
           const displayName = unassigned ? "No Client" : client.client;
           const isClientDrop = clientDropTarget === clientKey;
 
-          const accent = unassigned
+          // Internal firm work is non-billable — dim it like No-Client, but keep
+          // its real name and hours visible so managers still see the time spent.
+          const isInternal = isInternalClient(client.client);
+          const dimmed = unassigned || isInternal;
+
+          const accent = dimmed
             ? { border: "border-l-slate-300", header: "bg-slate-50", hours: "text-slate-400" }
             : CLIENT_ACCENTS[clientIndex % CLIENT_ACCENTS.length];
 
@@ -1875,7 +1890,7 @@ export default function CategorySummary({
               className={cn(
                 "rounded-xl border border-slate-200 border-l-[5px] bg-white shadow-sm overflow-hidden transition-all",
                 accent.border,
-                unassigned && "opacity-70",
+                dimmed && "opacity-70",
                 isClientDrop && "ring-2 ring-primary/30 ring-offset-1"
               )}
               onDragOver={(e) => { e.preventDefault(); setClientDropTarget(clientKey); }}
@@ -1896,7 +1911,7 @@ export default function CategorySummary({
                     : <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />}
                   <span className={cn(
                     "font-bold text-base truncate",
-                    unassigned ? "text-slate-500" : "text-slate-900"
+                    dimmed ? "text-slate-500" : "text-slate-900"
                   )}>
                     {displayName}
                   </span>
@@ -1921,7 +1936,7 @@ export default function CategorySummary({
                   )}
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-                  {!unassigned && (() => {
+                  {!dimmed && (() => {
                     const billable = getBillable(client);
                     const nonBillable = getNonBillable(client);
                     return (
@@ -1950,13 +1965,13 @@ export default function CategorySummary({
                       </>
                     );
                   })()}
-                  {unassigned && (
+                  {dimmed && (
                     <div className="flex flex-col items-end">
                       <span className="text-lg font-extrabold tabular-nums leading-none text-slate-400">
                         {fmt(client.total_hours)}
                       </span>
                       <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
-                        total
+                        {isInternal ? "non-bill" : "total"}
                       </span>
                     </div>
                   )}

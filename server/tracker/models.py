@@ -1686,7 +1686,31 @@ class Block(models.Model):
         if self.start and self.end and not self.minutes:
             mins = int((self.end - self.start).total_seconds() // 60)
             self.minutes = max(0, mins)
-        
+
+        # ===============================
+        # 1b. Internal firm work is never billable
+        # ===============================
+        # Blocks tied to an internal client ("Internal" or "Internal - <x>",
+        # e.g. Internal - Tax / Internal - Accounting) never bill, regardless of
+        # category or how is_billable was set upstream. Enforcing it here — the
+        # single write chokepoint — keeps reports, the weekly timesheet, and
+        # invoicing in agreement (they all read this stored flag / filter on it
+        # in SQL, so a report-only rule can't reach them).
+        if self.is_billable and self.client_id:
+            from tracker.industry_categories import is_internal_client_name
+            cache = getattr(getattr(self, "_state", None), "fields_cache", {})
+            cached_client = cache.get("client")
+            if cached_client is not None:
+                client_name = cached_client.name
+            else:
+                client_name = (
+                    Client.objects.filter(pk=self.client_id)
+                    .values_list("name", flat=True)
+                    .first()
+                )
+            if client_name and is_internal_client_name(client_name):
+                self.is_billable = False
+
         # ===============================
         # 2. Auto-set immutability flags when categories assigned
         # ===============================

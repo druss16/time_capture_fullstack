@@ -1369,6 +1369,22 @@ def validate_and_fix_ai_response(ai_results: list, industry_type: str) -> list:
 # INTERNAL CLIENT HELPER
 # =============================================================================
 
+def is_internal_client_name(name: str) -> bool:
+    """
+    True for the firm's own internal-work clients: exactly "Internal", or any
+    "Internal - <x>" (e.g. "Internal - Tax", "Internal - Accounting").
+
+    Internal work is never billable. This is the single source of truth used by
+    Block.save (to force is_billable=False), the reports billable predicate, and
+    the backfill command, so every surface agrees.
+
+    Matches on the dash form so a real client that merely starts with the word
+    (e.g. "Internal Revenue Service") is NOT swept in.
+    """
+    n = (name or "").strip().lower()
+    return n == "internal" or n.startswith("internal -")
+
+
 def ensure_internal_client(org):
     """
     Ensure an 'Internal' client exists for the given org.

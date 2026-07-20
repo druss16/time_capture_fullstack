@@ -1890,7 +1890,11 @@ export default function CategorySummary({
               className={cn(
                 "rounded-xl border border-slate-200 border-l-[5px] bg-white shadow-sm overflow-hidden transition-all",
                 accent.border,
-                dimmed && "opacity-70",
+                // No-Client is an unresolved to-do → dim the whole card to nudge
+                // action. Internal is a resolved, intentional non-billable state →
+                // keep the card (and its name) crisp; the slate accent + greyed
+                // rows/hours already signal non-billable.
+                unassigned && "opacity-70",
                 isClientDrop && "ring-2 ring-primary/30 ring-offset-1"
               )}
               onDragOver={(e) => { e.preventDefault(); setClientDropTarget(clientKey); }}
@@ -1911,7 +1915,9 @@ export default function CategorySummary({
                     : <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />}
                   <span className={cn(
                     "font-bold text-base truncate",
-                    dimmed ? "text-slate-500" : "text-slate-900"
+                    // Keep the Internal client name crisp/legible (identifier, not
+                    // a billable signal); only No-Client gets the muted name.
+                    unassigned ? "text-slate-500" : "text-slate-900"
                   )}>
                     {displayName}
                   </span>

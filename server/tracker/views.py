@@ -2731,19 +2731,31 @@ def save_block_classification(request, block_id: int):
 @transaction.atomic
 def confirm_all_blocks(request):
     """
-    Bulk-confirm the requesting user's proposed blocks for a date.
+    Bulk-confirm every needs-review block the requesting user has for a date.
 
-    Each block commits to its CURRENT proposed state via
+    Commits the SAME set the report's "Needs Review" tile counts — i.e. every
+    uncommitted, material, non-idle block (both `proposed` AND `captured`), via
     ClassificationService.commit() (canonical path, writes a ClassificationAudit
     row identical to the per-block Confirm button):
       - proposed client -> committed, billable to that client
-      - no client       -> committed as No Client (already non-billable)
+      - no client       -> committed as No Client (non-billable)
+
+    Historically this only touched `proposed` blocks, so `captured` no-client
+    slivers (generic browsing/doc time the classifier couldn't attribute)
+    survived and the tile never dropped to zero even after the user confirmed
+    everything. We now reuse the report's own predicate helpers so the count
+    and the action can't drift apart.
 
     User-scoped (only the caller's own blocks), date-scoped (default today),
-    proposed-only (never touches committed/suppressed). Per-block try/except so
-    a single race doesn't abort the batch. Returns counts.
+    never touches committed/suppressed. Per-block try/except so a single race
+    doesn't abort the batch. Returns counts.
     """
     from tracker.services.classification_service import ClassificationService
+    # Reuse the report's exact "needs review" predicate so Confirm All clears
+    # precisely what the Reports tile counts (see _uncategorized_by_group).
+    from tracker.views_reports import (
+        _block_minutes, _dominant_category, _is_material,
+    )
 
     user = request.user
     org = get_org_or_default(request)
@@ -2753,12 +2765,26 @@ def confirm_all_blocks(request):
     day_start = timezone.make_aware(dt.combine(target_date, dt_time.min))
     day_end = day_start + timedelta(days=1)
 
-    pending = list(Block.objects.filter(
+    # Uncommitted, non-suppressed blocks for the day — mirrors the report's
+    # committed_only=False queryset (is_categorized=False, excludes suppressed).
+    candidates = Block.objects.filter(
         org=org, user=user,
         start__gte=day_start, start__lt=day_end,
-        classification_state="proposed",
+        is_categorized=False,
         deleted_at__isnull=True,
-    ))
+    ).exclude(classification_state="suppressed")
+
+    # Commit every proposed block (accepting the AI suggestion, as before),
+    # plus captured blocks that are material — i.e. exactly the captured slivers
+    # the tile counts. Sub-2min captured noise and idle sentinels (which the
+    # tile does NOT count) are left untouched so we don't bulk-commit micro-noise.
+    pending = [
+        b for b in candidates
+        if _block_minutes(b) > 0
+        and _dominant_category(b).lower() != "idle"
+        and (b.bundle_id or "").lower() != "__idle__"
+        and (b.classification_state == "proposed" or _is_material(b))
+    ]
 
     svc = ClassificationService(org=org, user=user)
     with_client = no_client = skipped = 0
@@ -4787,6 +4813,37 @@ def today_time(request):
             'proposed_category':    getattr(_b, 'proposed_category', '') or '',
         })
 
+    # ── Captured (unattributed) blocks → inline review rows ─────────────────
+    # Blocks the classifier left in 'captured' with no client (generic browsing/
+    # doc time it couldn't attribute) count on the report's "Needs Review" tile
+    # but had NO inline affordance here, so users couldn't see or act on them —
+    # they'd click "Confirm All", the tile wouldn't drop, and the leftover time
+    # was invisible. Surface them as no-guess rows (frontend renders an "Assign
+    # client" + "No Client" pair). We mirror the tile's materiality (>=2min,
+    # non-idle) so what's shown == what's counted.
+    from tracker.views_reports import (
+        _block_minutes as _rv_minutes,
+        _dominant_category as _rv_domcat,
+        _is_material as _rv_material,
+    )
+    _cap = Block.objects.filter(
+        user=user, day=target_date, classification_state='captured',
+        is_categorized=False, deleted_at__isnull=True,
+    ).exclude(bundle_id__iexact='__idle__')
+    for _b in _cap:
+        if _rv_minutes(_b) <= 0 or not _rv_material(_b):
+            continue
+        if _rv_domcat(_b).lower() == 'idle':
+            continue
+        proposed_inline.append({
+            'block_id':             _b.id,
+            'window_title':         getattr(_b, 'window_title', '') or '',
+            'minutes':              _b.minutes or 0,
+            'proposed_client_id':   None,
+            'proposed_client_name': None,
+            'proposed_confidence':  0.0,
+            'proposed_category':    getattr(_b, 'proposed_category', '') or '',
+        })
 
     return Response({
         'clients':            result,

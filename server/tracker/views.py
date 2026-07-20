@@ -2731,19 +2731,31 @@ def save_block_classification(request, block_id: int):
 @transaction.atomic
 def confirm_all_blocks(request):
     """
-    Bulk-confirm the requesting user's proposed blocks for a date.
+    Bulk-confirm every needs-review block the requesting user has for a date.
 
-    Each block commits to its CURRENT proposed state via
+    Commits the SAME set the report's "Needs Review" tile counts — i.e. every
+    uncommitted, material, non-idle block (both `proposed` AND `captured`), via
     ClassificationService.commit() (canonical path, writes a ClassificationAudit
     row identical to the per-block Confirm button):
       - proposed client -> committed, billable to that client
-      - no client       -> committed as No Client (already non-billable)
+      - no client       -> committed as No Client (non-billable)
+
+    Historically this only touched `proposed` blocks, so `captured` no-client
+    slivers (generic browsing/doc time the classifier couldn't attribute)
+    survived and the tile never dropped to zero even after the user confirmed
+    everything. We now reuse the report's own predicate helpers so the count
+    and the action can't drift apart.
 
     User-scoped (only the caller's own blocks), date-scoped (default today),
-    proposed-only (never touches committed/suppressed). Per-block try/except so
-    a single race doesn't abort the batch. Returns counts.
+    never touches committed/suppressed. Per-block try/except so a single race
+    doesn't abort the batch. Returns counts.
     """
     from tracker.services.classification_service import ClassificationService
+    # Reuse the report's exact "needs review" predicate so Confirm All clears
+    # precisely what the Reports tile counts (see _uncategorized_by_group).
+    from tracker.views_reports import (
+        _block_minutes, _dominant_category, _is_material,
+    )
 
     user = request.user
     org = get_org_or_default(request)
@@ -2753,12 +2765,26 @@ def confirm_all_blocks(request):
     day_start = timezone.make_aware(dt.combine(target_date, dt_time.min))
     day_end = day_start + timedelta(days=1)
 
-    pending = list(Block.objects.filter(
+    # Uncommitted, non-suppressed blocks for the day — mirrors the report's
+    # committed_only=False queryset (is_categorized=False, excludes suppressed).
+    candidates = Block.objects.filter(
         org=org, user=user,
         start__gte=day_start, start__lt=day_end,
-        classification_state="proposed",
+        is_categorized=False,
         deleted_at__isnull=True,
-    ))
+    ).exclude(classification_state="suppressed")
+
+    # Commit every proposed block (accepting the AI suggestion, as before),
+    # plus captured blocks that are material — i.e. exactly the captured slivers
+    # the tile counts. Sub-2min captured noise and idle sentinels (which the
+    # tile does NOT count) are left untouched so we don't bulk-commit micro-noise.
+    pending = [
+        b for b in candidates
+        if _block_minutes(b) > 0
+        and _dominant_category(b).lower() != "idle"
+        and (b.bundle_id or "").lower() != "__idle__"
+        and (b.classification_state == "proposed" or _is_material(b))
+    ]
 
     svc = ClassificationService(org=org, user=user)
     with_client = no_client = skipped = 0

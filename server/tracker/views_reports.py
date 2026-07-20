@@ -426,9 +426,28 @@ def _pending_review_by_group(org, start_utc, end_utc, can_see_all,
     return total, dict(per_group)
 
 
+def _is_internal_client_name(name: str) -> bool:
+    """
+    True for the firm's own internal-work clients: exactly "Internal", or any
+    "Internal - <x>" (e.g. "Internal - Tax", "Internal - Accounting"). Internal
+    work is never billable, no matter the block's is_billable flag.
+
+    Matches on the dash form so a real client that merely starts with the word
+    (e.g. "Internal Revenue Service") is NOT swept in.
+    """
+    n = (name or "").strip().lower()
+    return n == "internal" or n.startswith("internal -")
+
+
 def _is_billable_block(block) -> bool:
-    """A block bills if it's marked billable AND tied to a client."""
-    return bool(block.is_billable and block.client_id)
+    """A block bills if it's marked billable AND tied to a client — EXCEPT
+    internal firm work (any 'Internal…' client), which never counts as billable."""
+    if not (block.is_billable and block.client_id):
+        return False
+    client = getattr(block, "client", None)
+    if client is not None and _is_internal_client_name(client.name):
+        return False
+    return True
 
 
 def _dominant_category(block) -> str:

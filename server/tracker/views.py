@@ -6831,14 +6831,26 @@ def recategorize_block(request, block_id):
 
     block.save(force_update=True)
 
-    # NOTE: intentionally NOT teaching the pattern learner here. This endpoint
-    # handles single corrections AND multi-select bulk-moves identically (one
-    # recategorize call per block), so the backend can't tell a deliberate
-    # single fix from a bulk rubber-stamp without a frontend 'source' flag.
-    # Teaching here would reintroduce the bulk-poisoning we gate against. Reliable
-    # per-client memory comes from the human-approved alias tool
-    # (management/commands/suggest_aliases.py) instead. Wire gated teaching here
-    # only alongside a frontend source flag (single_confirm vs bulk_move).
+    # Gated pattern learning. This endpoint handles single per-row confirms AND
+    # multi-select bulk-moves/drags identically (one recategorize call per
+    # block), so we teach ONLY when the frontend explicitly tags the action as a
+    # deliberate single confirm. PatternLearningService.learn_from_block further
+    # gates on LEARNING_SOURCES = {'correction','single_confirm','manual'}, so any
+    # other source (bulk_move, drag, or absent → default) is a safe no-op. This
+    # is what prevents the bulk rubber-stamp poisoning we guarded against before.
+    # Auto-confirmed blocks never reach this path (committed by the classifier),
+    # so a machine guess can never reinforce itself.
+    _learn_source = (request.data.get('source') or 'bulk_move')
+    if _learn_source in {'single_confirm', 'correction', 'manual'} and block.client_id:
+        try:
+            PatternLearningService.learn_from_block(
+                block, request.user, source=_learn_source
+            )
+            log(f"[PATTERN] Learned from {_learn_source} on block {block.id} "
+                f"→ client {block.client_id}")
+        except Exception as e:
+            log(f"[PATTERN] Failed to learn from block {block.id}: {e}")
+
     return Response({
         "success": True,
         "block_id": block.id,

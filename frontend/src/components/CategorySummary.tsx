@@ -1649,12 +1649,14 @@ export default function CategorySummary({
       const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s;
     });
 
-  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string): Promise<boolean> => {
+  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string, source?: string): Promise<boolean> => {
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, client_id: clientId }),
+        // `source` tags a deliberate single confirm so the backend teaches the
+        // pattern learner. Drags / bulk-moves omit it and stay non-teaching.
+        body: JSON.stringify({ category, client_id: clientId, ...(source ? { source } : {}) }),
       });
       return true;
     } catch (e: any) {
@@ -1702,7 +1704,9 @@ export default function CategorySummary({
   const confirmProposalInline = useCallback(async (blockIds: number[], clientId: number | null, category: string) => {
     try {
       for (const id of blockIds) {
-        await moveActivity(id, clientId, category || "General Client Work");
+        // Per-row "Confirm" chip → tag as single_confirm so the backend learns
+        // this name → client mapping for future auto-classification.
+        await moveActivity(id, clientId, category || "General Client Work", "single_confirm");
       }
       // Sum the minutes we just confirmed (from the proposed groups) and name
       // the destination, so the user can SEE what landed where.

@@ -322,6 +322,13 @@ class ClassificationService:
 
         self._sandwich_enabled = getattr(org, 'sandwich_correlation_enabled', False)
 
+        # Auto-confirm name-match proposals (org-gated). When True, a proposed
+        # block whose chosen client is attested by NAME-BEARING evidence commits
+        # without a human click. See _finalize_decision for the safety scoping.
+        self._auto_confirm_name_matches = getattr(
+            org, 'auto_confirm_name_matches', False
+        )
+
 
     # -------------------------------------------------------------------------
     # PUBLIC API
@@ -5031,6 +5038,62 @@ class ClassificationService:
                     decision.client_id = None
                     decision.is_billable = False
 
+            # AUTO-CONFIRM (org.auto_confirm_name_matches): commit this proposal
+            # without a human click when the chosen client is attested by
+            # NAME-BEARING evidence — the block text literally contains the
+            # client's name/alias/file/domain. This is the "almost a literal
+            # match" pile (e.g. "Sacred Heart Basilica - QuickBooks…" @ 0.82).
+            #
+            # Safety, all inherited from the tuned funnel (nothing loosened):
+            #   • Same-family collisions never reach here — Stage 3 abstains
+            #     (emits no signal) on ties, so a name-bearing signal existing at
+            #     all means one clear winner.
+            #   • _has_contradicting_signal blocks the commit if ANY other client
+            #     competes at moderate-or-better.
+            #   • We require the name-bearing signal to attest the CHOSEN client
+            #     (proposed_client_id == decision.client_id), so mail/calendar/
+            #     temporal/AI-only proposals — which carry no textual name — never
+            #     qualify and stay proposed for review.
+            if (
+                self._auto_confirm_name_matches
+                and decision.recommended_state != 'committed'
+                and decision.client_id is not None
+                and not decision.needs_review
+            ):
+                name_bearing = [
+                    s for s in signals
+                    if s.type in AUTO_CONFIRM_NAME_SIGNAL_TYPES
+                    and s.proposed_client_id == decision.client_id
+                    and s.strength >= AUTO_CONFIRM_MIN_STRENGTH
+                ]
+                if name_bearing and not self._has_contradicting_signal(
+                    signals, decision.client_id
+                ):
+                    _conf = max(s.strength for s in name_bearing)
+                    _types = ', '.join(sorted({s.type for s in name_bearing}))
+                    decision.recommended_state = 'committed'
+                    decision.confidence = _conf
+                    decision.matched_signals.append(Signal(
+                        type='auto_confirm_name_match',
+                        strength=_conf,
+                        evidence=(
+                            f'Auto-confirmed: block text names client '
+                            f'{decision.client_id} via {_types} @ {_conf:.2f}, '
+                            f'no competing client'
+                        ),
+                        detail={
+                            'auto_confirmed': True,
+                            'client_id': decision.client_id,
+                        },
+                    ))
+                    logger.info(
+                        f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                        f"auto-confirming name-match proposal → client "
+                        f"{decision.client_id} @ {_conf:.2f} via {_types} "
+                        f"(org.auto_confirm_name_matches)"
+                    )
+                    return decision
+
             # Don't downgrade an overhead auto-commit back to 'proposed'.
             if not any(s.type == 'overhead_auto_nonbillable' for s in decision.matched_signals):
                 decision.recommended_state = 'proposed'
@@ -5297,6 +5360,28 @@ STOP_WORDS = {
     'inbox', 'outlook', 'email', 'mail', 'word', 'excel', 'powerpoint',
     'document', 'file', 'folder', 'window', 'tab',
 }
+
+# Auto-confirm gate (org.auto_confirm_name_matches): signal types that carry
+# TEXTUAL client-name evidence — the block's own title/file/url literally
+# contains the client's name, alias, file, or domain. Only these qualify a
+# moderate proposal for a hands-free commit. Mail, calendar, sandwich, co-open,
+# sheet-tab and AI-only proposals are deliberately excluded: their evidence is
+# indirect (a shared inbox routed by subject, a time-adjacency guess), so they
+# stay proposed for one-click human review.
+AUTO_CONFIRM_NAME_SIGNAL_TYPES = frozenset({
+    'title_match_title_alias',
+    'title_match_file_path',
+    'title_match_domain',
+    'file_path_structure',
+})
+
+# Minimum strength for a name-bearing signal to auto-confirm. The dominant case
+# is a contiguous title-alias match (~0.82); stronger file/domain matches (≥0.85)
+# already auto-commit upstream, and weak scattered-token matches (capped ≤0.5 by
+# the specificity score) never reach the moderate band — so 0.80 targets exactly
+# the "almost a literal match" pile without loosening any tuned threshold.
+AUTO_CONFIRM_MIN_STRENGTH = 0.80
+
 
 # Signatures that are ALWAYS firm overhead → non-billable, safe to AUTO-COMMIT
 # (not just propose). These are unambiguous: an email inbox, a login screen, a

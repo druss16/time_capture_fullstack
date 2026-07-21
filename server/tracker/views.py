@@ -4352,6 +4352,10 @@ def today_time(request):
     # =========================================================================
     NON_BILLABLE_CATEGORIES = {'personal/non-billable', 'idle', 'uncategorized'}
     EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}
+    # Internal firm work ("Internal" / "Internal - <x>") is never billable,
+    # regardless of category — keep the Daily Review header BILLABLE total in
+    # step with reports/timesheet.
+    from tracker.industry_categories import is_internal_client_name
 
     event_durations = []
     for event in events:
@@ -4408,7 +4412,7 @@ def today_time(request):
             'client_name':      client_name,
             'category':         category,
             'is_idle':          is_idle,
-            'is_billable':      bool(client_id) and category.lower() not in NON_BILLABLE_CATEGORIES,
+            'is_billable':      bool(client_id) and category.lower() not in NON_BILLABLE_CATEGORIES and not is_internal_client_name(client_name),
             'app_name':         event.app_name or 'Unknown',
             'window_title':     event.window_title or '',
             'url':              event.url or '',
@@ -4437,7 +4441,7 @@ def today_time(request):
             'client_name':      client_name,
             'category':         'Client Meeting',
             'is_idle':          False,
-            'is_billable':      True,
+            'is_billable':      not is_internal_client_name(client_name),
             'app_name':         mb.app_name or 'Meeting',
             'window_title':     mb.window_title or '',
             'url':              '',
@@ -4637,7 +4641,10 @@ def today_time(request):
                 }],
             })
 
-        billable_minutes += b_minutes
+        if is_internal_client_name(b_client_name):
+            non_billable_minutes += b_minutes
+        else:
+            billable_minutes += b_minutes
         total_minutes    += b_minutes
 
     # =========================================================================

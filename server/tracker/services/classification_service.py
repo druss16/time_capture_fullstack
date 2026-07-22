@@ -1182,7 +1182,26 @@ class ClassificationService:
         title = (block.window_title or block.title or '').strip()
         title_lower = title.lower()
         app_name = (block.app_name or '').lower()
+        bundle = (getattr(block, 'bundle_id', '') or '').lower()
         duration_min = block.minutes or 0
+
+        # AFK sentinels: lock screen, sign-in/logon UI, screensaver. The machine
+        # was locked or nobody was at the keyboard — this is idle time, never work
+        # and never billable, so it must never surface in the review pile. (e.g.
+        # app "Lockapp" / bundle "LockApp.exe" / title "Windows Default Lock Screen".)
+        AFK_APPS = {'lockapp', 'lockapp.exe', 'logonui', 'logonui.exe'}
+        AFK_TITLE_HINTS = ('lock screen', 'screensaver', 'screen saver')
+        if (app_name in AFK_APPS or bundle in AFK_APPS
+                or any(h in title_lower for h in AFK_TITLE_HINTS)):
+            decision.matched_signals.append(Signal(
+                type='suppress',
+                strength=1.0,
+                evidence=f"AFK/lock screen ({block.app_name or title[:40]})",
+                detail={'reason': 'afk_lock_screen'},
+            ))
+            decision.reasoning = 'Suppressed: lock screen / AFK (machine locked, not work time)'
+            decision.source = 'suppress'
+            return True
 
         # Empty title + short duration = transient nothing
         if not title and duration_min < 1:

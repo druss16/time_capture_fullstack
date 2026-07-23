@@ -67,15 +67,20 @@ export default function ExecutiveGate({ children }: ExecutiveGateProps) {
   // upgrade overlay on top.
   return (
     <div className="relative">
+      {/*
+        Differential cloak: the left column (Sidebar) gets only a light blur so
+        the choices stay legible, while the main data area gets an extra blur so
+        the numbers read as a teaser rather than usable data.
+      */}
       <div
-        className="pointer-events-none select-none blur-[2px] opacity-70"
+        className="pointer-events-none select-none blur-[1px] opacity-90 [&_main]:blur-[3px] [&_main]:opacity-60"
         aria-hidden="true"
         {...({ inert: '' } as Record<string, unknown>)}
       >
         {children}
       </div>
 
-      <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/30 backdrop-blur-[1px] pt-24">
+      <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/20 pt-24">
         <div className="text-center p-10 bg-white rounded-2xl border border-border/60 shadow-lg max-w-md mx-4">
           <div className="w-14 h-14 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-5">
             <Lock className="w-7 h-7 text-slate-300" />

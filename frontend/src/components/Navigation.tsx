@@ -109,7 +109,6 @@ export default function Navigation() {
     { path: '/billing',   label: 'Billing',      icon: Receipt,   show: canAccessBilling    },
     { path: '/reports',   label: 'Reports',      icon: PieChart,  show: true                },
     { path: '/analytics', label: 'Analytics',    icon: BarChart2, show: canAccessAnalytics  },
-    { path: '/settings',  label: 'Settings',     icon: Settings,  show: canAccessSettings   },
   ].filter(item => item.show);
 
   const navLinkCls = (active: boolean) => cn(
@@ -200,6 +199,15 @@ export default function Navigation() {
                         <User className="w-4 h-4 text-slate-400" />
                         <span className="text-sm font-medium text-slate-700">Account</span>
                       </button>
+                      {canAccessSettings && (
+                        <button
+                          onClick={() => handleNavigation('/settings')}
+                          className="w-full px-4 py-2 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
+                        >
+                          <Settings className="w-4 h-4 text-slate-400" />
+                          <span className="text-sm font-medium text-slate-700">Settings</span>
+                        </button>
+                      )}
                       {!mdmManaged && (
                         <button
                           onClick={() => handleNavigation('/account/download')}

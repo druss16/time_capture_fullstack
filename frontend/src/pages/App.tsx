@@ -213,7 +213,8 @@ export default function App() {
                 <Route path="/daily" element={<MaybeProtected><AppLayout><DailyReview /></AppLayout></MaybeProtected>} />
                 <Route path="/reports" element={<MaybeProtected><AppLayout><ReportsSummary /></AppLayout></MaybeProtected>} />
                 <Route path="/reports/blind-spots" element={<MaybeProtected><AdminRoute><AppLayout><AIBlindSpots /></AppLayout></AdminRoute></MaybeProtected>} />
-                <Route path="/billing" element={<MaybeProtected><AppLayout><BillingPage /></AppLayout></MaybeProtected>} />
+                <Route path="/timesheet" element={<MaybeProtected><AppLayout><BillingPage section="timesheet" /></AppLayout></MaybeProtected>} />
+                <Route path="/billing" element={<MaybeProtected><AppLayout><BillingPage section="billing" /></AppLayout></MaybeProtected>} />
                 <Route path="/devices" element={<MaybeProtected><AppLayout><Devices /></AppLayout></MaybeProtected>} />
 
                 {/* Protected — admin/manager */}

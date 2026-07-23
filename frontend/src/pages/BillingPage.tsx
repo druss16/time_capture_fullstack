@@ -1,10 +1,12 @@
 /**
- * BillingPage.tsx - With Plan-Based Feature Gating
- * Professional plan: My Timesheet, Approvals
- * Executive plan: All features (Billing, Invoices, Profitability, History)
- * No plan: Show subscribe prompt
+ * BillingPage.tsx - Two sections behind plan/role gating.
+ *  · section="timesheet"  →  My Timesheet · Approvals · History   (route /timesheet)
+ *  · section="billing"    →  Client Billing · Invoices · Profitability (route /billing)
+ * Professional plan: Timesheet section. Executive plan: Billing section + History.
+ * No plan: Show subscribe prompt.
  */
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 import ApprovalQueue from '@/components/ApprovalQueue';
@@ -30,6 +32,7 @@ import { useSearchParams } from 'react-router-dom';
 
 type UserRole = 'owner' | 'admin' | 'manager' | 'member';
 type PlanType = 'professional' | 'executive' | 'none';
+type Section = 'timesheet' | 'billing';
 
 interface Tab {
   id: string;
@@ -38,6 +41,12 @@ interface Tab {
   description: string;
   requiredRoles: UserRole[];
   requiredPlan?: PlanType[];
+}
+
+interface SectionConfig {
+  eyebrow: string;
+  title: string;
+  tabs: Tab[];
 }
 
 interface WhoamiResponse {
@@ -59,56 +68,68 @@ interface OrgResponse {
 const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive'];
 const EXECUTIVE_PLANS: PlanType[] = ['executive'];
 
-const ALL_TABS: Tab[] = [
-  {
-    id: 'timesheet',
-    label: 'My Timesheet',
-    description: 'View and submit your weekly hours',
-    requiredRoles: ['owner', 'admin', 'manager', 'member'],
-    icon: Clock,
-    requiredPlan: PROFESSIONAL_PLANS,
+const SECTIONS: Record<Section, SectionConfig> = {
+  timesheet: {
+    eyebrow: 'Time',
+    title: 'My Work',
+    tabs: [
+      {
+        id: 'timesheet',
+        label: 'My Timesheet',
+        description: 'Review & submit your week',
+        requiredRoles: ['owner', 'admin', 'manager', 'member'],
+        icon: Clock,
+        requiredPlan: PROFESSIONAL_PLANS,
+      },
+      {
+        id: 'approvals',
+        label: 'Approvals',
+        description: 'Approve team timesheets',
+        requiredRoles: ['owner', 'admin', 'manager'],
+        icon: CheckSquare,
+        requiredPlan: PROFESSIONAL_PLANS,
+      },
+      {
+        id: 'history',
+        label: 'History',
+        description: 'Past & locked weeks',
+        requiredRoles: ['owner', 'admin', 'manager'],
+        icon: FileText,
+        requiredPlan: EXECUTIVE_PLANS,
+      },
+    ],
   },
-  {
-    id: 'approvals',
-    label: 'Approvals',
-    description: 'Review and approve team timesheets',
-    requiredRoles: ['owner', 'admin', 'manager'],
-    icon: CheckSquare,
-    requiredPlan: PROFESSIONAL_PLANS,
+  billing: {
+    eyebrow: 'Billing',
+    title: 'Clients & Invoices',
+    tabs: [
+      {
+        id: 'billing',
+        label: 'Client Billing',
+        description: 'Prepare invoices by client',
+        requiredRoles: ['owner', 'admin'],
+        icon: DollarSign,
+        requiredPlan: EXECUTIVE_PLANS,
+      },
+      {
+        id: 'invoices',
+        label: 'Invoices',
+        description: 'Manage imported & billed invoices',
+        requiredRoles: ['owner', 'admin'],
+        icon: Receipt,
+        requiredPlan: EXECUTIVE_PLANS,
+      },
+      {
+        id: 'profitability',
+        label: 'Profitability',
+        description: 'Analyze margins & efficiency',
+        requiredRoles: ['owner', 'admin'],
+        icon: TrendingUp,
+        requiredPlan: EXECUTIVE_PLANS,
+      },
+    ],
   },
-  {
-    id: 'billing',
-    label: 'Client Billing',
-    description: 'Prepare invoices by client',
-    requiredRoles: ['owner', 'admin'],
-    icon: DollarSign,
-    requiredPlan: EXECUTIVE_PLANS,
-  },
-  {
-    id: 'invoices',
-    label: 'Invoices',
-    description: 'Manage imported and billed invoices',
-    requiredRoles: ['owner', 'admin'],
-    icon: Receipt,
-    requiredPlan: EXECUTIVE_PLANS,
-  },
-  {
-    id: 'profitability',
-    label: 'Profitability',
-    description: 'Analyze margins and efficiency',
-    requiredRoles: ['owner', 'admin'],
-    icon: TrendingUp,
-    requiredPlan: EXECUTIVE_PLANS,
-  },
-  {
-    id: 'history',
-    label: 'History',
-    description: 'View approved and locked timesheets',
-    requiredRoles: ['owner', 'admin', 'manager'],
-    icon: FileText,
-    requiredPlan: EXECUTIVE_PLANS,
-  },
-];
+};
 
 const SidebarSkeleton = () => (
   <div className="space-y-1">
@@ -173,9 +194,17 @@ const UpgradePrompt: React.FC<{ featureName: string }> = ({ featureName }) => (
   </div>
 );
 
-const BillingPage: React.FC = () => {
+const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' }) => {
+  const navigate = useNavigate();
+  const sectionConfig = SECTIONS[section];
+  const sectionTabs = sectionConfig.tabs;
+  const defaultTab = sectionTabs[0].id;
+  const tabInSection = (id: string | null): boolean => !!id && sectionTabs.some((t) => t.id === id);
+
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<string>(searchParams.get('tab') || 'timesheet');
+  const [activeTab, setActiveTab] = useState<string>(
+    tabInSection(searchParams.get('tab')) ? (searchParams.get('tab') as string) : defaultTab
+  );
   const [invoiceFilter, setInvoiceFilter] = useState<string>(searchParams.get('filter') || '');
   const [userInfo, setUserInfo] = useState<WhoamiResponse | null>(null);
   const [orgPlan, setOrgPlan] = useState<PlanType>('none');
@@ -234,8 +263,8 @@ const BillingPage: React.FC = () => {
   const hasNoPlan = orgPlan === 'none';
 
   const visibleTabs = useMemo(
-    () => ALL_TABS.filter((tab) => tab.requiredRoles.includes(userRole)),
-    [userRole]
+    () => sectionTabs.filter((tab) => tab.requiredRoles.includes(userRole)),
+    [sectionTabs, userRole]
   );
 
   const isTabLocked = (tab: Tab): boolean => {
@@ -244,16 +273,28 @@ const BillingPage: React.FC = () => {
     return !tab.requiredPlan.includes(orgPlan);
   };
 
+  // A user with no role access to this whole section (e.g. a member on /billing)
+  // is bounced to their timesheet rather than shown an empty sidebar.
+  useEffect(() => {
+    if (loading || hasNoPlan) return;
+    if (visibleTabs.length === 0 && section !== 'timesheet') navigate('/timesheet', { replace: true });
+  }, [loading, hasNoPlan, visibleTabs.length, section, navigate]);
+
+  // Keep the active tab valid: fall back to this section's first available tab
+  // if the current one is locked or belongs to another section.
   useEffect(() => {
     if (loading) return;
-    const tab = ALL_TABS.find((t) => t.id === activeTab);
-    if (tab && isTabLocked(tab)) setActiveTab('timesheet');
-  }, [orgPlan, loading]);
+    const tab = sectionTabs.find((t) => t.id === activeTab);
+    if (!tab || isTabLocked(tab)) {
+      const firstUnlocked = visibleTabs.find((t) => !isTabLocked(t));
+      setActiveTab((firstUnlocked ?? sectionTabs[0]).id);
+    }
+  }, [orgPlan, loading, section]);
 
   useEffect(() => {
     const tabParam = searchParams.get('tab');
     const filterParam = searchParams.get('filter') || '';
-    if (tabParam && tabParam !== activeTab) setActiveTab(tabParam);
+    if (tabInSection(tabParam) && tabParam !== activeTab) setActiveTab(tabParam as string);
     setInvoiceFilter(filterParam);
   }, [searchParams]);
 
@@ -287,8 +328,8 @@ const BillingPage: React.FC = () => {
       {/* ── Sidebar ── */}
       <aside className="w-56 bg-white border-r border-border/50 flex-shrink-0 flex flex-col">
         <div className="px-5 py-4 border-b border-border/40">
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400 mb-0.5">Billing</p>
-          <p className="text-base font-extrabold text-slate-900 tracking-tight">Time & Invoicing</p>
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400 mb-0.5">{sectionConfig.eyebrow}</p>
+          <p className="text-base font-extrabold text-slate-900 tracking-tight">{sectionConfig.title}</p>
         </div>
 
         <nav className="flex-1 py-3 px-2 space-y-0.5">
@@ -374,7 +415,7 @@ const BillingPage: React.FC = () => {
         ) : (
           <>
             {(() => {
-              const tab = ALL_TABS.find((t) => t.id === activeTab);
+              const tab = sectionTabs.find((t) => t.id === activeTab);
               const locked = tab ? isTabLocked(tab) : false;
               if (locked) return <UpgradePrompt featureName={getLockedFeatureName(activeTab)} />;
               return (

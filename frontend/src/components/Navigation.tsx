@@ -5,12 +5,13 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { 
-  Users, 
-  Receipt, 
-  Calendar, 
-  Monitor, 
-  Settings, 
+import {
+  Users,
+  Receipt,
+  Calendar,
+  Clock,
+  Monitor,
+  Settings,
   LogOut,
   ChevronDown,
   User,
@@ -68,6 +69,7 @@ export default function Navigation() {
   const userRole = userInfo?.role;
   const canAccessSettings  = ['owner', 'admin'].includes(userRole || '');
   const canAccessAnalytics = ['owner', 'admin', 'manager'].includes(userRole || '');
+  const canAccessBilling   = ['owner', 'admin'].includes(userRole || '');
   const mdmManaged = userInfo?.mdm_managed || false;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
 
@@ -103,10 +105,11 @@ export default function Navigation() {
 
   const navItems = [
     { path: '/daily',     label: 'Daily Review', icon: Calendar,  show: true                },
-    { path: '/billing',   label: 'Billing',       icon: Receipt,   show: true                },
-    { path: '/reports',   label: 'Reports',       icon: PieChart,  show: true                },
-    { path: '/analytics', label: 'Analytics',     icon: BarChart2, show: canAccessAnalytics  },
-    { path: '/settings',  label: 'Settings',      icon: Settings,  show: canAccessSettings   },
+    { path: '/timesheet', label: 'Timesheet',    icon: Clock,     show: true                },
+    { path: '/billing',   label: 'Billing',      icon: Receipt,   show: canAccessBilling    },
+    { path: '/reports',   label: 'Reports',      icon: PieChart,  show: true                },
+    { path: '/analytics', label: 'Analytics',    icon: BarChart2, show: canAccessAnalytics  },
+    { path: '/settings',  label: 'Settings',     icon: Settings,  show: canAccessSettings   },
   ].filter(item => item.show);
 
   const navLinkCls = (active: boolean) => cn(

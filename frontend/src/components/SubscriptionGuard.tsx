@@ -123,7 +123,7 @@ export function SubscriptionGuard({ children }: SubscriptionGuardProps) {
   }
 
   // Trial expired, no subscription - redirect to billing
-  return <Navigate to="/billing" state={{ from: location }} replace />;
+  return <Navigate to="/timesheet" state={{ from: location }} replace />;
 }
 
 // Trial Banner Component - show days remaining
@@ -139,11 +139,11 @@ export function TrialBanner() {
   return (
     <div className={`${urgency} text-white py-2 px-4 text-center text-sm font-medium`}>
       {status.trialDaysLeft === 0 ? (
-        <>Your trial expires today! <a href="/billing" className="underline font-bold">Subscribe now</a> to keep access.</>
+        <>Your trial expires today! <a href="/timesheet" className="underline font-bold">Subscribe now</a> to keep access.</>
       ) : status.trialDaysLeft === 1 ? (
-        <>Your trial expires tomorrow! <a href="/billing" className="underline font-bold">Subscribe now</a> to keep access.</>
+        <>Your trial expires tomorrow! <a href="/timesheet" className="underline font-bold">Subscribe now</a> to keep access.</>
       ) : (
-        <>{status.trialDaysLeft} days left in your trial. <a href="/billing" className="underline font-bold">Subscribe now</a> to keep access.</>
+        <>{status.trialDaysLeft} days left in your trial. <a href="/timesheet" className="underline font-bold">Subscribe now</a> to keep access.</>
       )}
     </div>
   );

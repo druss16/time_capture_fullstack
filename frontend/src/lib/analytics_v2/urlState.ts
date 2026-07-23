@@ -5,8 +5,8 @@
  * Bookmarks and shared links Just Work.
  *
  * Shape:
- *   /analytics/v2?lens=profitability&scope=client:42&time=this_quarter&compare=last_quarter
- *   /analytics/v2?lens=pulse                       (defaults: firm scope, this_quarter)
+ *   /analytics?lens=profitability&scope=client:42&time=this_quarter&compare=last_quarter
+ *   /analytics?lens=pulse                       (defaults: firm scope, this_quarter)
  */
 import type { AnalyticsQueryBody, LensKey, Scope, ScopeType } from "./types";
 

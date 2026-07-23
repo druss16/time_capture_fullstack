@@ -13,7 +13,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import { Lock, Sparkles } from 'lucide-react';
-import { EXECUTIVE_PLANS, type PlanType } from '@/pages/settings/types';
+import { hasAnalyticsAccess, type PlanType } from '@/pages/settings/types';
 
 interface ExecutiveGateProps {
   children: React.ReactNode;
@@ -45,7 +45,7 @@ export default function ExecutiveGate({ children }: ExecutiveGateProps) {
         }
       }
 
-      setStatus(plan && EXECUTIVE_PLANS.includes(plan) ? 'unlocked' : 'locked');
+      setStatus(hasAnalyticsAccess(plan) ? 'unlocked' : 'locked');
     };
 
     checkPlan();

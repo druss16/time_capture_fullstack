@@ -3550,6 +3550,16 @@ def run_agent():
                                     last_emit_ts = None
                                     _idle_entered_at = 0.0
                                     record_idle_exit()
+                                    # Poll-sleep before re-checking. Without this the
+                                    # `continue` skipped the sleep and, because current_sig
+                                    # was reset, the loop re-entered the idle-entry block
+                                    # every tick — a busy-loop that spammed the log ~30x/sec
+                                    # and pinned a CPU core during long AFK (e.g. after a
+                                    # laptop sleep / Modern-Standby wake → "retroactive
+                                    # idle"). All idle/resume/re-classification behavior is
+                                    # UNCHANGED — it just re-checks once per poll instead of
+                                    # spinning.
+                                    time.sleep(POLL_SECONDS)
                                     continue
                                 else:
                                     log(f"[IDLE] Intentional — {verdict.reason}")

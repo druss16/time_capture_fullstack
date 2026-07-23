@@ -536,9 +536,13 @@ def create_weekly_timesheets():
     # For each active organization
     for org in Organization.objects.filter(is_active=True):
         # Get all active members
+        # NOTE: OrganizationMembership has no is_active field — a member either
+        # has a membership row or they don't. Filtering on is_active raised a
+        # FieldError and silently killed this whole task, so draft timesheets
+        # were never pre-created (see notify_managers_pending_approvals below,
+        # which had the same bug).
         members = OrganizationMembership.objects.filter(
             organization=org,
-            is_active=True
         ).select_related('user')
 
         for membership in members:
@@ -622,10 +626,10 @@ def notify_managers_pending_approvals():
 
     for org_id, timesheets in by_org.items():
         # Find managers/admins/owners in this org
+        # OrganizationMembership has no is_active field (see create_weekly_timesheets).
         managers = OrganizationMembership.objects.filter(
             organization_id=org_id,
             role__in=['owner', 'admin', 'manager'],
-            is_active=True
         ).select_related('user')
 
         for membership in managers:

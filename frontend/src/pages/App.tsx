@@ -30,7 +30,7 @@ import DownloadPage from '@/pages/account/DownloadPage';
 import TimesheetReminderBanner from '@/components/TimesheetReminderBanner';
 import NotificationsPage from '@/pages/account/NotificationsPage';
 import ConnectionsPage from '@/pages/account/ConnectionsPage';
-import ExecutiveRoute from '@/routes/ExecutiveRoute';
+import ExecutiveGate from '@/routes/ExecutiveGate';
 
 // --------- Lazy pages (code-splitting) ---------
 const DailyReview = lazy(() => import("./DailyReview"));
@@ -220,7 +220,7 @@ export default function App() {
                 <Route path="/settings" element={<MaybeProtected><AdminRoute><AppLayout><OrgAdminSettings /></AppLayout></AdminRoute></MaybeProtected>} />
                 <Route path="/settings/onboarding" element={<MaybeProtected><AdminRoute><AppLayout><WhiteGloveOnboarding /></AppLayout></AdminRoute></MaybeProtected>} />
                 <Route path="/settings/ai" element={<MaybeProtected><AdminRoute><AppLayout><OrganizationSettings /></AppLayout></AdminRoute></MaybeProtected>} />
-                <Route path="/analytics" element={<MaybeProtected><AdminRoute><ExecutiveRoute><AppLayout><DashboardV2 /></AppLayout></ExecutiveRoute></AdminRoute></MaybeProtected>} />
+                <Route path="/analytics" element={<MaybeProtected><AdminRoute><AppLayout><ExecutiveGate><DashboardV2 /></ExecutiveGate></AppLayout></AdminRoute></MaybeProtected>} />
 
                 {/* Account settings */}
                 <Route path="/account" element={<MaybeProtected><AppLayout><AccountLayoutWrapper /></AppLayout></MaybeProtected>}>

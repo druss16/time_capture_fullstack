@@ -106,3 +106,25 @@ export const getUserDisplayName = (user: TeamMember): string => {
 
 export const PROFESSIONAL_PLANS: PlanType[] = ['professional', 'executive'];
 export const EXECUTIVE_PLANS: PlanType[] = ['executive'];
+
+/**
+ * Plan tiers in ascending order of capability. To add a new tier, add it to
+ * PlanType above and drop it into this list at the right position — gates
+ * expressed as "tier X and above" (see planRank / hasAnalyticsAccess) will
+ * pick it up automatically, no gate logic to change.
+ */
+export const PLAN_TIER_ORDER: PlanType[] = ['none', 'professional', 'executive'];
+
+/** Ordinal rank of a plan; unknown / missing plans rank at the bottom. */
+export function planRank(plan: PlanType | null | undefined): number {
+  const idx = PLAN_TIER_ORDER.indexOf((plan ?? 'none') as PlanType);
+  return idx === -1 ? 0 : idx;
+}
+
+/**
+ * Analytics is unlocked for the Executive tier and anything above it.
+ * Professional and no-plan orgs are locked.
+ */
+export function hasAnalyticsAccess(plan: PlanType | null | undefined): boolean {
+  return planRank(plan) >= planRank('executive');
+}

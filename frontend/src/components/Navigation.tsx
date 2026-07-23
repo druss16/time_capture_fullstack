@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
-import type { PlanType } from "@/pages/settings/types";
 
 import { cn, getRoleColor } from "@/lib/design-system";
 
@@ -41,23 +40,11 @@ export default function Navigation() {
   const navigate = useNavigate();
   const { logout } = useAuth();
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
-  const [orgPlan, setOrgPlan] = useState<PlanType>('none');
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     safeFetchJson(`${API_BASE}/whoami/`)
       .then(data => setUserInfo(data))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    // Admin impersonation: always treat as executive.
-    if (localStorage.getItem("impersonating_org_id")) {
-      setOrgPlan('executive');
-      return;
-    }
-    safeFetchJson<{ plan?: PlanType }>(`${API_BASE}/settings/org/`)
-      .then(org => { if (org?.plan) setOrgPlan(org.plan); })
       .catch(() => {});
   }, []);
 
@@ -80,7 +67,7 @@ export default function Navigation() {
 
   const userRole = userInfo?.role;
   const canAccessSettings  = ['owner', 'admin'].includes(userRole || '');
-  const canAccessAnalytics = ['owner', 'admin', 'manager'].includes(userRole || '') && orgPlan === 'executive';
+  const canAccessAnalytics = ['owner', 'admin', 'manager'].includes(userRole || '');
   const mdmManaged = userInfo?.mdm_managed || false;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
 

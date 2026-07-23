@@ -1,5 +1,5 @@
 /**
- * DashboardV2 — top-level page for /analytics/v2.
+ * DashboardV2 — top-level page for /analytics.
  *
  * Lifecycle:
  *   1. Read URL params → AnalyticsQueryBody
@@ -51,7 +51,7 @@ export default function DashboardV2() {
       compare: next.compare !== undefined ? next.compare : body.compare,
     };
     const search = serializeUrlState(merged);
-    navigate({ pathname: "/analytics/v2", search: search ? `?${search}` : "" });
+    navigate({ pathname: "/analytics", search: search ? `?${search}` : "" });
   }, [body, navigate]);
 
   // Drilldown handler (KPI tile or insight card click)

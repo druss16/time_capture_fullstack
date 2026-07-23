@@ -30,7 +30,6 @@ import DownloadPage from '@/pages/account/DownloadPage';
 import TimesheetReminderBanner from '@/components/TimesheetReminderBanner';
 import NotificationsPage from '@/pages/account/NotificationsPage';
 import ConnectionsPage from '@/pages/account/ConnectionsPage';
-import TaxReturnsTab from "./TaxReturnsTab";
 
 // --------- Lazy pages (code-splitting) ---------
 const DailyReview = lazy(() => import("./DailyReview"));
@@ -42,7 +41,6 @@ const Login = lazy(() => import("./Login"));
 const NotFound = lazy(() => import("./NotFound"));
 const BillingPage = lazy(() => import("./BillingPage"));
 const WhiteGloveOnboarding = lazy(() => import("./settings/WhiteGloveOnboarding"));
-const ExecutiveDashboard = lazy(() => import("./ExecutiveDashboard"));
 const Home = lazy(() => import("./Home"));
 const RequestAccess = lazy(() => import("./RequestAccess"));
 const MavOpsAdmin = lazy(() => import("./MavOpsAdmin"));
@@ -221,8 +219,7 @@ export default function App() {
                 <Route path="/settings" element={<MaybeProtected><AdminRoute><AppLayout><OrgAdminSettings /></AppLayout></AdminRoute></MaybeProtected>} />
                 <Route path="/settings/onboarding" element={<MaybeProtected><AdminRoute><AppLayout><WhiteGloveOnboarding /></AppLayout></AdminRoute></MaybeProtected>} />
                 <Route path="/settings/ai" element={<MaybeProtected><AdminRoute><AppLayout><OrganizationSettings /></AppLayout></AdminRoute></MaybeProtected>} />
-                <Route path="/analytics" element={<MaybeProtected><AdminRoute><AppLayout><ExecutiveDashboard apiBase={API_BASE} /></AppLayout></AdminRoute></MaybeProtected>} />
-                <Route path="/analytics/v2" element={<MaybeProtected><AdminRoute><AppLayout><DashboardV2 /></AppLayout></AdminRoute></MaybeProtected>} />
+                <Route path="/analytics" element={<MaybeProtected><AdminRoute><AppLayout><DashboardV2 /></AppLayout></AdminRoute></MaybeProtected>} />
 
                 {/* Account settings */}
                 <Route path="/account" element={<MaybeProtected><AppLayout><AccountLayoutWrapper /></AppLayout></MaybeProtected>}>

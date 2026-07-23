@@ -68,14 +68,14 @@ export default function ExecutiveGate({ children }: ExecutiveGateProps) {
   return (
     <div className="relative">
       <div
-        className="pointer-events-none select-none blur-sm opacity-40"
+        className="pointer-events-none select-none blur-[2px] opacity-70"
         aria-hidden="true"
         {...({ inert: '' } as Record<string, unknown>)}
       >
         {children}
       </div>
 
-      <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/60 backdrop-blur-[2px] pt-24">
+      <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/30 backdrop-blur-[1px] pt-24">
         <div className="text-center p-10 bg-white rounded-2xl border border-border/60 shadow-lg max-w-md mx-4">
           <div className="w-14 h-14 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-5">
             <Lock className="w-7 h-7 text-slate-300" />

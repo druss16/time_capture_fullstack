@@ -202,6 +202,16 @@ app.conf.beat_schedule = {
         'options': {'expires': 2700},
     },
 
+    # ✅ CLIENT ALIAS SWEEP: daily at 4am
+    # Append-only alias derivation across all orgs — safety net for clients
+    # added after onboarding via any path (CSV, request approval, CCH sync).
+    # Never removes aliases; the per-create hook handles instant coverage.
+    'derive-client-aliases-sweep': {
+        'task': 'tracker.derive_client_aliases_all_orgs',
+        'schedule': crontab(hour=4, minute=0),  # 4am daily
+        'options': {'expires': 3600},
+    },
+
     # =========================================================================
     # INTEGRATIONS - QB RECONCILE (Fallback for missed webhooks)
     # =========================================================================

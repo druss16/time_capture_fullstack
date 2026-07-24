@@ -1875,3 +1875,70 @@ def scan_org_mismatches(days=7, org_id=None):
     )
     return {'orgs': len(org_ids), 'current': len(current),
             'opened': opened, 'resolved': resolved}
+
+
+# ============================================================================
+# CLIENT ALIAS DERIVATION
+# ============================================================================
+#
+# Auto-generate name aliases for clients added AFTER onboarding (Settings UI,
+# CSV import, client-request approval, CCH sync, etc.). During onboarding the
+# QB/Xero imports already call run_post_import_alias_derivation; these two
+# tasks extend the same coverage to every other client-creation path.
+#
+# IMPORTANT — non-destructive by design: both tasks run ONLY `derive_aliases`,
+# which is strictly append-only (it skips aliases already present and never
+# re-adds the client's own name). They deliberately do NOT run
+# `prune_junk_aliases`, so a manually-entered alias can never be removed.
+
+@shared_task(name='tracker.derive_client_aliases_for_org')
+def derive_client_aliases_for_org(org_id, min_confidence: float = 0.8):
+    """
+    Append-only alias derivation for a single org. Dispatched (best-effort)
+    right after a client is created through a manual/UI path so the new
+    client picks up derived aliases immediately.
+
+    Runs derive_aliases ONLY (no prune) — existing/manual aliases are never
+    touched. Whole-org re-derive is intentional: a new client's alias might
+    collide with an existing client, and derive_for_org's collision guard
+    needs the full client list to reject those safely.
+    """
+    try:
+        from django.core.management import call_command
+        from io import StringIO
+        out = StringIO()
+        call_command("derive_aliases", org_id=org_id,
+                     min_confidence=min_confidence, stdout=out)
+        logger.info("[ALIAS] Derived aliases for org %s:\n%s", org_id, out.getvalue())
+        return {'ok': True, 'org_id': org_id}
+    except Exception as e:
+        logger.warning("[ALIAS] Alias derivation failed for org %s: %s",
+                       org_id, e, exc_info=True)
+        return {'error': str(e), 'org_id': org_id}
+
+
+@shared_task(name='tracker.derive_client_aliases_all_orgs')
+def derive_client_aliases_all_orgs(min_confidence: float = 0.8):
+    """
+    Nightly safety-net sweep: append-only alias derivation across every org.
+
+    Catches clients added through paths that don't dispatch the per-create
+    hook (CSV bulk import, client-request approval, CCH Axcess sync, direct
+    create_client). Idempotent and non-destructive — orgs with no new aliases
+    are no-ops, and nothing is ever removed.
+
+    Schedule: crontab(hour=4, minute=0)  # 4am daily
+    """
+    from tracker.models import Organization
+
+    ok = 0
+    failed = 0
+    for org_id in Organization.objects.values_list('id', flat=True):
+        result = derive_client_aliases_for_org.run(org_id, min_confidence=min_confidence)
+        if result.get('ok'):
+            ok += 1
+        else:
+            failed += 1
+
+    logger.info("[ALIAS] Nightly sweep complete: %d orgs ok, %d failed", ok, failed)
+    return {'ok': ok, 'failed': failed}

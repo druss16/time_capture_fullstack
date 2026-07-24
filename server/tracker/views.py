@@ -7367,12 +7367,18 @@ def settings_clients(request):
         if Client.objects.filter(org=org, name__iexact=name).exists():
             return Response({"error": "Client with this name already exists"}, status=400)
         
+        manual_aliases = request.data.get("aliases", []) or []
         client = Client.objects.create(
             org=org,
             name=name,
             code=code or None,
             visibility=request.data.get("visibility", "all"),
-            aliases=request.data.get("aliases", []),  # ADD THIS
+            aliases=manual_aliases,  # ADD THIS
+            # Mark hand-entered aliases 'manual' so the self-heal never removes
+            # them (only auto-derived aliases are ever auto-pruned).
+            alias_sources={
+                a.lower(): "manual" for a in manual_aliases if isinstance(a, str)
+            },
         )
 
         # Best-effort: auto-derive name aliases for the new client (append-only,
@@ -7419,7 +7425,16 @@ def settings_client_detail(request, client_id):
             client.visibility = request.data["visibility"]
         if "aliases" in request.data:                          # ADD THIS
             aliases = request.data["aliases"]
-            client.aliases = aliases if isinstance(aliases, list) else []
+            aliases = aliases if isinstance(aliases, list) else []
+            client.aliases = aliases
+            # Re-sync provenance: preserve a known source (a kept 'derived'
+            # alias stays self-heal-eligible), default any newly-typed alias to
+            # 'manual', and drop entries for aliases the user removed.
+            prior = client.alias_sources or {}
+            client.alias_sources = {
+                a.lower(): prior.get(a.lower(), "manual")
+                for a in aliases if isinstance(a, str)
+            }
         client.save()
         
         return Response({

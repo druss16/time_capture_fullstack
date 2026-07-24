@@ -422,3 +422,70 @@ def derive_for_org(
 
     results.sort(key=lambda d: (str(d.client_id), -d.confidence, d.alias))
     return results
+
+
+# --- Ambiguity self-heal ---------------------------------------------------
+
+def find_ambiguous_derived(clients) -> dict:
+    """
+    Find already-STORED aliases that have become ambiguous against a sibling.
+
+    clients: list of (client_id, name, stored_aliases) tuples, where
+    stored_aliases is the flat list of alias strings currently on the client.
+
+    Returns {client_id: [alias, ...]} listing stored aliases whose distinctive
+    tokens no longer distinguish them from another client (the multi-parish
+    problem, e.g. bare "St Mary's" once a second St Mary's exists), or that
+    equal another client's original name.
+
+    This is the mirror image of derive_for_org's guards, applied to aliases
+    that were written BEFORE the colliding sibling existed — which append-only
+    derivation can prevent adding but cannot retroactively remove.
+
+    Provenance-AGNOSTIC: it reports ambiguity only. Callers MUST restrict
+    actual removal to aliases known to be auto-derived, so manually-entered
+    (and unmarked legacy) aliases are never touched.
+    """
+    norm = []
+    for cid, name, stored in clients:
+        norm.append((cid, name, list(stored or [])))
+
+    originals: dict[str, object] = {}
+    client_sig: dict[object, frozenset] = {}
+    for cid, name, _ in norm:
+        originals[_collapse_ws(name).lower()] = cid
+        client_sig.setdefault(cid, _distinctive_token_sig(name))
+
+    flagged: dict[object, list] = {}
+    for cid, name, stored in norm:
+        own_name_lower = _collapse_ws(name).lower()
+        for alias in stored:
+            if not isinstance(alias, str):
+                continue
+            key = _collapse_ws(alias).lower()
+            if not key or key == own_name_lower:
+                continue
+
+            ambiguous = False
+
+            # Equals a DIFFERENT client's original name → it would match them.
+            owner = originals.get(key)
+            if owner is not None and owner != cid:
+                ambiguous = True
+
+            # Multi-parish: distinctive tokens are a subset of a sibling's
+            # name signature, so the alias can't tell the two apart.
+            if not ambiguous:
+                sig = _distinctive_token_sig(alias)
+                if sig:
+                    for other_cid, other_sig in client_sig.items():
+                        if other_cid == cid:
+                            continue
+                        if sig <= other_sig:
+                            ambiguous = True
+                            break
+
+            if ambiguous:
+                flagged.setdefault(cid, []).append(alias)
+
+    return flagged

@@ -734,6 +734,18 @@ class Client(models.Model):
         help_text="Alternative names/abbreviations for AI client matching"
         )
 
+    alias_sources = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Provenance map {alias_lower: 'derived'|'manual'} paralleling "
+            "`aliases`. Lets the ambiguity self-heal remove only auto-derived "
+            "aliases that later collide with a sibling client — manual and "
+            "unmarked (legacy) aliases are never auto-removed. Not read by the "
+            "classifier; `aliases` remains the flat string list Stage 3 uses."
+        ),
+    )
+
     quickbooks_realm_id = models.CharField(max_length=50, blank=True, null=True)
     xero_tenant_id = models.CharField(max_length=50, blank=True, null=True)
 

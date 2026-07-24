@@ -301,12 +301,22 @@ def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id,
     )
 
     if committed_only:
-        # Match Daily Review (today_time), which is the source of truth: it
-        # counts proposed AND committed time, not committed-only. Without this
-        # the dashboard under-reports billable hours vs the day view.
+        # Confirmed time only — mirror Daily Review (today_time), the source of
+        # truth, which EXCLUDES proposed blocks from its totals ("if state ==
+        # 'proposed': continue"). A proposed block is an in-flight re-attribution
+        # the classifier surfaced but nobody has confirmed — e.g. an ambiguous
+        # "St. Mary's (Primary)" QuickBooks file the second pass wants to move to
+        # a different St. Mary's client. Counting it here credited billable hours
+        # for work no one confirmed (and often mis-attributed to the wrong same-
+        # family client), overstating billable vs the day view.
+        #
+        # Exclude by STATE, not is_categorized: many proposed blocks carry a stale
+        # is_categorized=True from a first-pass attribution the second pass is
+        # trying to correct, so an is_categorized fallback alone would leak that
+        # mis-attributed time back in as billable.
         qs = qs.filter(
-            Q(classification_state__in=["committed", "proposed"]) | Q(is_categorized=True)
-        )
+            Q(classification_state="committed") | Q(is_categorized=True)
+        ).exclude(classification_state="proposed")
     else:
         # The review pile — match get_categorization_data() EXACTLY so the
         # report's Uncategorized number agrees with the Categorize tab badge.

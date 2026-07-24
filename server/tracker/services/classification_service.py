@@ -602,15 +602,23 @@ class ClassificationService:
                 )
 
             block.is_billable = decision.is_billable
-            # Backwards compat with existing is_categorized field
-            block.is_categorized = True
-            if not block.categorized_at:
+            # is_categorized marks a block as CONFIRMED — the terminal
+            # 'committed' state. A 'proposed' block is still an unconfirmed guess
+            # awaiting review, so it MUST stay is_categorized=False.
+            #
+            # The old code set is_categorized=True for BOTH states ("backwards
+            # compat"), which minted a contradictory limbo: proposed +
+            # is_categorized=True. Both consumers then hid it — today_time and
+            # the reports exclude classification_state='proposed' from billable,
+            # while the review-pile filter requires is_categorized=False — so the
+            # block appeared in NEITHER and its time silently vanished from
+            # billing (see memory reports-exclude-proposed). Gating on the state
+            # restores the invariant is_categorized == (state == 'committed'),
+            # so proposed blocks flow back into the Daily Review "confirm" pile.
+            block.is_categorized = (new_state == 'committed')
+            if new_state == 'committed' and not block.categorized_at:
                 block.categorized_at = timezone.now()
             block.categorized_by = self._map_state_to_categorized_by(source)
-
-        # The 'proposed' state is preserved in classification_state, even though
-        # is_categorized=True. Frontend uses classification_state OR the
-        # needs_review flag from suggestions endpoint to render differently.
 
         # Save with force_classifier=True to bypass the legacy protection check
         block.save(force_classifier=True)

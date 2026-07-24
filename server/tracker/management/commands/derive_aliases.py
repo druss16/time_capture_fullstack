@@ -139,7 +139,14 @@ class Command(BaseCommand):
                 current = list(client.aliases or [])
                 current.extend(alias for alias, _ in new_aliases)
                 client.aliases = current
-                client.save(update_fields=["aliases"])
+                # Record provenance so the ambiguity self-heal can later remove
+                # ONLY auto-derived aliases. setdefault: never clobber an entry
+                # already marked 'manual'.
+                sources = dict(client.alias_sources or {})
+                for alias, _ in new_aliases:
+                    sources.setdefault(alias.lower(), "derived")
+                client.alias_sources = sources
+                client.save(update_fields=["aliases", "alias_sources"])
                 updated += 1
 
         self.stdout.write(self.style.SUCCESS(

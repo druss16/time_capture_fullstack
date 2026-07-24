@@ -1886,10 +1886,15 @@ def scan_org_mismatches(days=7, org_id=None):
 # QB/Xero imports already call run_post_import_alias_derivation; these two
 # tasks extend the same coverage to every other client-creation path.
 #
-# IMPORTANT — non-destructive by design: both tasks run ONLY `derive_aliases`,
-# which is strictly append-only (it skips aliases already present and never
-# re-adds the client's own name). They deliberately do NOT run
-# `prune_junk_aliases`, so a manually-entered alias can never be removed.
+# NON-DESTRUCTIVE by design. Two steps run per org:
+#   * derive_aliases        — strictly append-only (skips existing, never
+#                             re-adds the client's own name).
+#   * heal_ambiguous_aliases — removes ONLY aliases whose provenance is
+#                             'derived' AND that now collide with a sibling
+#                             client. Manual and unmarked/legacy aliases are
+#                             never removed.
+# They deliberately do NOT run `prune_junk_aliases` (which could delete a
+# legit standalone manual alias like "Home"/"Group").
 
 @shared_task(name='tracker.derive_client_aliases_for_org')
 def derive_client_aliases_for_org(org_id, min_confidence: float = 0.8):
@@ -1898,10 +1903,15 @@ def derive_client_aliases_for_org(org_id, min_confidence: float = 0.8):
     right after a client is created through a manual/UI path so the new
     client picks up derived aliases immediately.
 
-    Runs derive_aliases ONLY (no prune) — existing/manual aliases are never
-    touched. Whole-org re-derive is intentional: a new client's alias might
-    collide with an existing client, and derive_for_org's collision guard
-    needs the full client list to reject those safely.
+    Two append-only-safe steps run in order:
+      1. derive_aliases — appends new derived aliases (never removes anything).
+      2. heal_ambiguous_aliases — removes ONLY auto-derived aliases that now
+         collide with a sibling client (e.g. a stale bare "St Mary's" once a
+         second St Mary's exists). Manual/legacy aliases are never touched.
+
+    Whole-org scope is intentional: a new client's alias might collide with an
+    existing client, and both the derive collision guard and the heal step
+    need the full client list to judge ambiguity safely.
     """
     try:
         from django.core.management import call_command
@@ -1909,7 +1919,9 @@ def derive_client_aliases_for_org(org_id, min_confidence: float = 0.8):
         out = StringIO()
         call_command("derive_aliases", org_id=org_id,
                      min_confidence=min_confidence, stdout=out)
-        logger.info("[ALIAS] Derived aliases for org %s:\n%s", org_id, out.getvalue())
+        call_command("heal_ambiguous_aliases", org_id=org_id, stdout=out)
+        logger.info("[ALIAS] Derived + healed aliases for org %s:\n%s",
+                    org_id, out.getvalue())
         return {'ok': True, 'org_id': org_id}
     except Exception as e:
         logger.warning("[ALIAS] Alias derivation failed for org %s: %s",

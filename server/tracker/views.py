@@ -3893,7 +3893,15 @@ def create_client(request):
         code=code,
         is_active=True
     )
-    
+
+    # Best-effort append-only alias derivation for the new client (never
+    # removes existing aliases). Async so it can't fail the create.
+    try:
+        from tracker.tasks import derive_client_aliases_for_org
+        derive_client_aliases_for_org.delay(org.id)
+    except Exception:
+        logger.warning("Alias derivation dispatch failed for org %s", org.id, exc_info=True)
+
     return Response({
         "ok": True,
         "client": {
@@ -4037,7 +4045,16 @@ def import_clients_csv(request):
         except Exception as e:
             errors.append(f"Row {row_num}: {str(e)}")
             clients_skipped += 1
-    
+
+    # Best-effort append-only alias derivation for the whole batch. One
+    # re-derive covers every client just imported; never removes aliases.
+    if clients_created:
+        try:
+            from tracker.tasks import derive_client_aliases_for_org
+            derive_client_aliases_for_org.delay(org.id)
+        except Exception:
+            logger.warning("Alias derivation dispatch failed for org %s", org.id, exc_info=True)
+
     return Response({
         "ok": True,
         "clients": clients_created,
@@ -7357,7 +7374,16 @@ def settings_clients(request):
             visibility=request.data.get("visibility", "all"),
             aliases=request.data.get("aliases", []),  # ADD THIS
         )
-        
+
+        # Best-effort: auto-derive name aliases for the new client (append-only,
+        # never removes the manual aliases just entered above). Dispatched async
+        # so a broker/derivation hiccup can never fail the create request.
+        try:
+            from tracker.tasks import derive_client_aliases_for_org
+            derive_client_aliases_for_org.delay(org.id)
+        except Exception:
+            logger.warning("Alias derivation dispatch failed for org %s", org.id, exc_info=True)
+
         return Response({
             "success": True,
             "id": client.id,

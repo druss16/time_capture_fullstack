@@ -329,6 +329,13 @@ class ClassificationService:
             org, 'auto_confirm_name_matches', False
         )
 
+        # Broader auto-confirm (org-gated): commit ANY single-client attribution
+        # with no competing client, even without literal name evidence — "if it's
+        # already under a client, just confirm it." See _finalize_decision.
+        self._auto_confirm_client_attributions = getattr(
+            org, 'auto_confirm_client_attributions', False
+        )
+
 
     # -------------------------------------------------------------------------
     # PUBLIC API
@@ -5120,6 +5127,44 @@ class ClassificationService:
                         f"(org.auto_confirm_name_matches)"
                     )
                     return decision
+
+            # BROAD AUTO-CONFIRM (org.auto_confirm_client_attributions): commit
+            # ANY confident single-client attribution without a human click —
+            # "if it's already under a client, just confirm it" — even when the
+            # evidence is contextual (temporal / co-open / agent) rather than a
+            # literal name in the title. Same safety rails as the name-match gate:
+            #   • needs_review still forces review.
+            #   • _has_contradicting_signal holds back same-family collisions —
+            #     a second competing client means we never auto-bill a disputed
+            #     attribution (the "which St. Mary's?" guard).
+            #   • Weak-only agent stickiness was already cleared above, so a
+            #     surviving client_id is moderate-or-better attested.
+            # Billability is untouched: non-billable context stays non-billable.
+            if (
+                self._auto_confirm_client_attributions
+                and decision.recommended_state != 'committed'
+                and decision.client_id is not None
+                and not decision.needs_review
+                and not self._has_contradicting_signal(signals, decision.client_id)
+            ):
+                decision.confidence = max(s.strength for s in moderate_or_better)
+                decision.recommended_state = 'committed'
+                decision.matched_signals.append(Signal(
+                    type='auto_confirm_client_attribution',
+                    strength=decision.confidence,
+                    evidence=(
+                        f'Auto-confirmed: block attributed to client '
+                        f'{decision.client_id} with no competing client '
+                        f'(org.auto_confirm_client_attributions)'
+                    ),
+                    detail={'auto_confirmed': True, 'client_id': decision.client_id},
+                ))
+                logger.info(
+                    f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                    f"auto-confirming client attribution → client "
+                    f"{decision.client_id} (org.auto_confirm_client_attributions)"
+                )
+                return decision
 
             # Don't downgrade an overhead auto-commit back to 'proposed'.
             if not any(s.type == 'overhead_auto_nonbillable' for s in decision.matched_signals):

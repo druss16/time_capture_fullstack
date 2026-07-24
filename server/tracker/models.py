@@ -141,6 +141,22 @@ class Organization(models.Model):
         ),
     )
 
+    auto_confirm_client_attributions = models.BooleanField(
+        default=False,
+        help_text=(
+            "Broader than auto_confirm_name_matches: auto-confirm (commit) ANY "
+            "proposed block that is already attributed to a single client with no "
+            "competing client — even when the evidence is contextual (temporal / "
+            "co-open / agent) rather than a literal name in the title. This is the "
+            "'if it's already under a client, just confirm it' rule (e.g. 'Bank "
+            "Statements - File Explorer' grouped under a church whose QuickBooks "
+            "was open). Same safety rails: blocks flagged needs_review still "
+            "surface, and same-family collisions are held back because a competing "
+            "client trips the contradiction guard. Preserves each block's billable "
+            "judgment. Enable per-org only once attribution accuracy is trusted."
+        ),
+    )
+
     disable_mail_integration = models.BooleanField(
         default=False,
         help_text='Master switch — disables mail OAuth/sync/classifier for the whole org.',

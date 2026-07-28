@@ -73,6 +73,18 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=2, minute=30),
     },
 
+    # ✅ NIGHTLY 2:45 AM: QB-chrome attribution (second pass).
+    # Attributes unattributed QuickBooks dialog blocks to the concurrently-open
+    # company file's client. Gated on org.auto_confirm_client_attributions.
+    # Runs after second-pass so anchor blocks are settled.
+    'attribute-qb-chrome-nightly': {
+        'task': 'tracker.tasks.attribute_qb_chrome_all',
+        'schedule': crontab(hour=2, minute=45),
+        'options': {
+            'expires': 3600,
+        }
+    },
+
     # ✅ NIGHTLY 3:00 AM: Client-name mismatch backstop scan.
     # Detection-only — opens/resolves MismatchFlag rows over a 7-day rolling
     # window. Watched in MavOps Admin org-health; feeds the pre-invoice gate.

@@ -4984,6 +4984,14 @@ class ClassificationService:
                     any(sub in _title_l for sub in AUTO_NONBILLABLE_TITLE_SUBSTRINGS)
                     or _app_l in AUTO_NONBILLABLE_APPS
                 )
+                # Unambiguous PERSONAL browsing (weather, apartments, restaurants,
+                # sports, streaming, job search, prank sites) → auto non-billable.
+                # Surgical + work-vetoed; see services.personal_browsing. Purely
+                # title-based, so it's safe inline (no neighbor dependency).
+                from tracker.services.personal_browsing import is_personal_browsing
+                _is_personal = is_personal_browsing(
+                    getattr(block, 'window_title', '') or '', _app_l
+                )
 
                 # v1.3.60: also propose a category so the UI can pre-fill
                 industry = getattr(self.org, 'industry_type', None) or 'general'
@@ -4992,15 +5000,19 @@ class ClassificationService:
                 )
                 if not decision.category:
                     decision.category = non_billable_fb
-                if _is_overhead:
+                if _is_overhead or _is_personal:
                     # Strong strength → auto-commits as non-billable. User can
                     # still override in Daily Review if a given inbox session
                     # was actually billable correspondence.
                     decision.recommended_state = 'committed'
                     decision.matched_signals.append(Signal(
-                        type='overhead_auto_nonbillable',
+                        type='personal_browsing' if _is_personal else 'overhead_auto_nonbillable',
                         strength=0.90,
-                        evidence=f'Unambiguous overhead → auto non-billable ({non_billable_fb})',
+                        evidence=(
+                            f'Unambiguous personal browsing → auto non-billable ({non_billable_fb})'
+                            if _is_personal else
+                            f'Unambiguous overhead → auto non-billable ({non_billable_fb})'
+                        ),
                         detail={'category': non_billable_fb, 'is_billable': False},
                     ))
                 else:

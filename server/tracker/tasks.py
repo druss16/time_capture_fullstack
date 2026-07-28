@@ -1784,6 +1784,58 @@ def second_pass_categorize_all(self):
             log.exception(f"[SECOND-PASS] org {oid} failed: {e}")
 
 
+@shared_task(name='tracker.tasks.attribute_qb_chrome_all', bind=True, max_retries=2)
+def attribute_qb_chrome_all(self, days=2, min_age_minutes=60):
+    """Intraday QB-chrome attribution (second pass).
+
+    Attributes unattributed QuickBooks dialog/chrome blocks to the client whose
+    company file was concurrently open (see services.qb_chrome_attribution).
+
+    Runs frequently (every 15 min) over a trailing `days` window so a reviewer
+    checking their timesheet at 5pm already sees today's QB dialogs attributed
+    and out of review — not just the next-morning reader. `min_age_minutes` is
+    a settle delay: blocks newer than that are skipped so a late-uploading QB
+    anchor can't turn a single-overlap into an ambiguous one after we commit.
+
+    Gated on org.auto_confirm_client_attributions — the same opt-in that lets
+    contextual single-client attributions auto-commit. Orgs without it opted in
+    get NOTHING (not even proposals), keeping this off by default.
+
+    Commits OVERLAP (billable), proposes NEAR, abstains on AMBIGUOUS/NONE.
+    Idempotent: already-committed blocks are excluded from the next run.
+    """
+    from tracker.models import Organization
+    from tracker.services.qb_chrome_attribution import run_qb_chrome_attribution
+    import logging
+    log = logging.getLogger('timetracker')
+
+    today = timezone.localdate()
+    start = today - timedelta(days=days)
+    org_ids = list(
+        Organization.objects
+        .filter(auto_confirm_client_attributions=True)
+        .values_list('id', flat=True)
+    )
+    totals = {'orgs': 0, 'committed': 0, 'proposed': 0}
+    for oid in org_ids:
+        try:
+            org = Organization.objects.get(pk=oid)
+            s = run_qb_chrome_attribution(org, start, today, gap=10, apply=True,
+                                          min_age_minutes=min_age_minutes)
+            totals['orgs'] += 1
+            totals['committed'] += s['committed']
+            totals['proposed'] += s['proposed']
+            if s['committed'] or s['proposed']:
+                log.info(f"[QB-CHROME] org {oid}: {s}")
+            if s['skipped_protected']:
+                log.warning(f"[QB-CHROME] org {oid}: skipped "
+                            f"{s['skipped_protected']} protected blocks")
+        except Exception as e:
+            log.exception(f"[QB-CHROME] org {oid} failed: {e}")
+    log.info(f"[QB-CHROME] sweep complete: {totals}")
+    return totals
+
+
 @shared_task(name='tracker.tasks.scan_org_mismatches')
 def scan_org_mismatches(days=7, org_id=None):
     """

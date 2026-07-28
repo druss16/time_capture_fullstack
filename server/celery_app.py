@@ -73,15 +73,16 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=2, minute=30),
     },
 
-    # ✅ NIGHTLY 2:45 AM: QB-chrome attribution (second pass).
+    # ✅ EVERY 15 MIN: QB-chrome attribution (intraday second pass).
     # Attributes unattributed QuickBooks dialog blocks to the concurrently-open
-    # company file's client. Gated on org.auto_confirm_client_attributions.
-    # Runs after second-pass so anchor blocks are settled.
-    'attribute-qb-chrome-nightly': {
+    # company file's client, over a trailing 2-day window with a 60-min settle
+    # delay. Frequent so a 5pm reviewer sees today's QB dialogs already out of
+    # review. Gated on org.auto_confirm_client_attributions. Idempotent.
+    'attribute-qb-chrome-sweep': {
         'task': 'tracker.tasks.attribute_qb_chrome_all',
-        'schedule': crontab(hour=2, minute=45),
+        'schedule': crontab(minute='*/15'),
         'options': {
-            'expires': 3600,
+            'expires': 600,
         }
     },
 

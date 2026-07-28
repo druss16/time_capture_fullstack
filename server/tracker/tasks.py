@@ -1785,12 +1785,17 @@ def second_pass_categorize_all(self):
 
 
 @shared_task(name='tracker.tasks.attribute_qb_chrome_all', bind=True, max_retries=2)
-def attribute_qb_chrome_all(self, days=7):
-    """Nightly QB-chrome attribution (second pass).
+def attribute_qb_chrome_all(self, days=2, min_age_minutes=60):
+    """Intraday QB-chrome attribution (second pass).
 
     Attributes unattributed QuickBooks dialog/chrome blocks to the client whose
     company file was concurrently open (see services.qb_chrome_attribution).
-    Runs over a trailing `days` window so the day's anchor blocks have settled.
+
+    Runs frequently (every 15 min) over a trailing `days` window so a reviewer
+    checking their timesheet at 5pm already sees today's QB dialogs attributed
+    and out of review — not just the next-morning reader. `min_age_minutes` is
+    a settle delay: blocks newer than that are skipped so a late-uploading QB
+    anchor can't turn a single-overlap into an ambiguous one after we commit.
 
     Gated on org.auto_confirm_client_attributions — the same opt-in that lets
     contextual single-client attributions auto-commit. Orgs without it opted in
@@ -1815,7 +1820,8 @@ def attribute_qb_chrome_all(self, days=7):
     for oid in org_ids:
         try:
             org = Organization.objects.get(pk=oid)
-            s = run_qb_chrome_attribution(org, start, today, gap=10, apply=True)
+            s = run_qb_chrome_attribution(org, start, today, gap=10, apply=True,
+                                          min_age_minutes=min_age_minutes)
             totals['orgs'] += 1
             totals['committed'] += s['committed']
             totals['proposed'] += s['proposed']
@@ -1826,7 +1832,7 @@ def attribute_qb_chrome_all(self, days=7):
                             f"{s['skipped_protected']} protected blocks")
         except Exception as e:
             log.exception(f"[QB-CHROME] org {oid} failed: {e}")
-    log.info(f"[QB-CHROME] nightly complete: {totals}")
+    log.info(f"[QB-CHROME] sweep complete: {totals}")
     return totals
 
 

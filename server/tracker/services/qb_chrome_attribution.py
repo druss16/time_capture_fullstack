@@ -28,6 +28,7 @@ import datetime as dt
 from collections import defaultdict
 
 from django.db import transaction
+from django.utils import timezone
 
 from tracker.models import Block, Client
 from tracker.services.classification_service import (
@@ -58,15 +59,23 @@ def _has_client_token(title: str) -> bool:
     )
 
 
-def classify_targets(org, start: dt.date, end: dt.date, gap: int = 10):
+def classify_targets(org, start: dt.date, end: dt.date, gap: int = 10,
+                     min_age_minutes: int = 0):
     """Return {tier: [(block, client_id_or_None, reason), ...]} for the window.
 
-    Read-only. `apply_attribution` consumes this.
+    Read-only. `run_qb_chrome_attribution` consumes this.
+
+    min_age_minutes > 0 skips blocks whose end is more recent than that — the
+    "settle delay" for intraday runs, so a late-uploading QB anchor can't turn
+    a single-overlap into an ambiguous one after we've already committed.
     """
     q = (Block.objects
          .filter(org=org, app_name__iexact=QB_APP, client__isnull=True,
                  approved=False, day__gte=start, day__lte=end)
          .exclude(classification_state__in=["committed", "suppressed"]))
+    if min_age_minutes > 0:
+        cutoff = timezone.now() - dt.timedelta(minutes=min_age_minutes)
+        q = q.filter(end__lte=cutoff)
     targets = [b for b in q if b.start and b.end]
 
     anchors_by_ud: dict[tuple, list] = defaultdict(list)
@@ -113,13 +122,15 @@ def _mins(rows):
 
 
 def run_qb_chrome_attribution(org, start: dt.date, end: dt.date,
-                              gap: int = 10, apply: bool = False) -> dict:
+                              gap: int = 10, apply: bool = False,
+                              min_age_minutes: int = 0) -> dict:
     """Classify and (optionally) write. Returns a stats dict.
 
     apply=False -> read-only (dry run).
     apply=True  -> commit OVERLAP (billable), propose NEAR; abstain otherwise.
+    min_age_minutes -> settle delay for intraday runs (see classify_targets).
     """
-    results = classify_targets(org, start, end, gap)
+    results = classify_targets(org, start, end, gap, min_age_minutes)
     stats = {
         "org_id": org.id,
         "targets": sum(len(v) for v in results.values()),

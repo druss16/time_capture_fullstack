@@ -2314,6 +2314,41 @@ class ClassificationService:
         if not haystack_distinctive:
             return False
 
+        # v1.3.76: Entity-class exclusion, HEAD-NOUN aware — applied BEFORE the
+        # direct-substring shortcut below (the old set-based check further down
+        # never runs for a substring hit).
+        #
+        # A file named "<Parish> Church Cemetery" IS a cemetery: the trailing
+        # entity noun is the head, "Church" is only a modifier. Without this
+        # early gate, a church client's stem ("saint mary church") matches as a
+        # direct substring of "saint mary church cemetery" and returns True at
+        # the shortcut below, so the church client silently wins a cemetery file.
+        #
+        # Rule: for each mutually-exclusive class group, if the ALIAS names one
+        # class and the title's HEAD class (the LAST class token in the
+        # pre-bracket region) is a DIFFERENT one, reject. When the title carries
+        # several class tokens (church + cemetery), only the head noun decides —
+        # so "St Mary's Church Cemetery" excludes the church client and keeps the
+        # cemetery client. Pre-bracket only, so QB vendor-center names inside
+        # " - [ ... ]" can't flip the head noun.
+        alias_class_tokens = set(alias_n.split())
+        _raw_bracket_pos = haystack.find(' - [')
+        _pre_bracket_n = (
+            _normalize(haystack[:_raw_bracket_pos])
+            if _raw_bracket_pos > 0 else haystack_n
+        )
+        _pre_bracket_tokens = _pre_bracket_n.split()
+        for class_group in EXCLUSIVE_ENTITY_CLASSES:
+            alias_classes = class_group & alias_class_tokens
+            if not alias_classes:
+                continue
+            title_class_seq = [t for t in _pre_bracket_tokens if t in class_group]
+            if not title_class_seq:
+                continue
+            head_class = title_class_seq[-1]  # trailing token = head noun
+            if head_class not in alias_classes:
+                return False
+
         # Direct substring hit — easiest case, preserves prior behavior
         # for aliases that already matched exactly.
         if alias_n and alias_n in haystack_n:
@@ -2476,11 +2511,14 @@ class ClassificationService:
         if not close_pair_found:
             return False
 
-        # v1.3.23: Entity-class exclusion check. If the title and the
-        # client name contain words from opposed classes (e.g. title
-        # says "Church", client name says "Cemetery"), reject the match.
-        # Same parish often has church + cemetery + fund as DIFFERENT
-        # accounting clients — matching one to the other is always wrong.
+        # v1.3.23: Entity-class exclusion check (whole-haystack, set-based
+        # backstop). The primary, head-noun-aware gate now runs near the top of
+        # this method (v1.3.76) and covers the substring path; this block stays
+        # as a secondary check for the multi-token token-path. If the title and
+        # the client name contain words from opposed classes (e.g. title says
+        # "Church", client name says "Cemetery"), reject the match. Same parish
+        # often has church + cemetery + fund as DIFFERENT accounting clients —
+        # matching one to the other is always wrong.
         for class_group in EXCLUSIVE_ENTITY_CLASSES:
             alias_classes = class_group & set(alias_tokens)
             haystack_classes = class_group & haystack_token_set

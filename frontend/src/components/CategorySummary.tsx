@@ -1666,12 +1666,29 @@ export default function CategorySummary({
   }, []);
 
   const moveMany = useCallback(async (blockIds: number[] | string[], clientId: number | null, category: string) => {
-    const resolvedIds = (blockIds as any[])
-      .map((id: any) => {
-        const n = typeof id === "string" ? parseInt(id.split("-")[0]) : id as number;
-        return n;
-      })
-      .filter((n: number) => !isNaN(n) && n > 0);
+    // A selection key (`${blockId}-${idx}`) carries only the FIRST id of a
+    // title-group row, but each displayed row is really N sibling blocks that
+    // share one title (a "(25m)" row is ~25 one-minute blocks). Expand every
+    // selected first-id back to its full sibling set the way selectionCurrent
+    // does, so moving a row moves all its minutes — not just the first block.
+    const firstIds = new Set(
+      (blockIds as any[])
+        .map((id: any) => (typeof id === "string" ? parseInt(id.split("-")[0]) : (id as number)))
+        .filter((n: number) => !isNaN(n) && n > 0)
+    );
+    const resolvedIds: number[] = [];
+    for (const client of timeSummary) {
+      for (const cat of client.categories) {
+        for (const a of cat.sample_activities) {
+          const p = parse(a);
+          const ids = p.blockIds.length > 0 ? p.blockIds : (p.blockId ? [p.blockId] : []);
+          if (ids.some((id) => firstIds.has(id))) resolvedIds.push(...ids);
+        }
+      }
+    }
+    // Fall back to the raw first-ids if nothing matched (defensive; keeps the
+    // old behavior rather than silently moving nothing).
+    if (resolvedIds.length === 0) resolvedIds.push(...firstIds);
     const uniqueIds = [...new Set(resolvedIds)];
     if (!uniqueIds.length) {
       showToast("No moveable entries selected", "error");
@@ -1689,7 +1706,7 @@ export default function CategorySummary({
     } catch (e: any) {
       showToast(e?.message || "Move failed", "error");
     }
-  }, [moveActivity, clearSelection, onRefresh, showToast]);
+  }, [moveActivity, clearSelection, onRefresh, showToast, timeSummary]);
 
   const moveSingle = useCallback(async (blockId: number, clientId: number | null, category: string) => {
     try {

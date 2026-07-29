@@ -1737,10 +1737,21 @@ class ClassificationService:
         if not self._clients:
             return
  
-        haystack = self._build_haystack(block)
-        if not haystack:
+        # v1.3.77: Structured haystack — the ACTIVE window title (+ this block's
+        # own url/file_path) is the PRIMARY matching surface; the block's other
+        # co-open windows are weaker CONTEXT. A dense same-family roster (a CPA
+        # with a dozen parish QuickBooks windows open) floods the flat haystack
+        # with competing identities, which (a) tripped _alias_matches_safely's
+        # multi-identity / proximity guards so the client actually named in the
+        # active title FAILED to match, and (b) let a co-open sibling (a
+        # cemetery whose name appears in another window) win uncontested. Match
+        # the primary surface on its own so the active title always yields its
+        # own clean signal, and demote co-open context to a fallback that can
+        # never outrank it.
+        primary_surface, context_surface = self._build_haystack_segments(block)
+        if not primary_surface and not context_surface:
             return
- 
+
         url = (block.url or '').strip().lower()
         file_path_raw = (block.file_path or '').strip()
  
@@ -1765,8 +1776,9 @@ class ClassificationService:
         # matches Cicero/Basilica/NY-Mills/Rome all on shared "sacred heart").
         # In that case we DEFER to AI (Stage 10), which reads the distinguishing
         # token. URL/file_path matches are specific and excluded from this.
-        _title_alias_hits = []  # list of (client_id, strength, spec) — title matches
-        _file_path_hits = []    # same shape — file-path matches (collision-checked too)
+        _title_alias_hits = []    # (client_id, strength, spec) — ACTIVE-title matches
+        _context_alias_hits = []  # same shape — co-open CONTEXT matches (secondary)
+        _file_path_hits = []      # same shape — file-path matches (collision-checked too)
  
         for client in self._clients:
             # Skip meta-clients
@@ -1821,23 +1833,66 @@ class ClassificationService:
                             best_match_type = 'file_path'
                         break
 
-            # Match 3: Title alias (moderate-high)
+            # Match 3: Title alias (moderate-high). v1.3.77: the ACTIVE title
+            # (primary_surface) is matched FIRST and on its own — so a client
+            # whose full name is in the title always produces a clean signal,
+            # unpolluted by the crowd of other identities in co-open windows
+            # that would otherwise trip the multi-identity / proximity guards
+            # in _alias_matches_safely. Only if the active surface does NOT
+            # name this client do we fall back to co-open CONTEXT as weaker,
+            # secondary evidence. best_* is NOT updated here; the title-alias
+            # winner is folded in after the loop so primary always dominates
+            # context (see the fold below).
+            _matched_primary = False
             for alias in all_names:
                 if not self._alias_is_safe(alias):
                     continue
-                if self._alias_matches_safely(alias, haystack):
-                    spec = self._alias_match_score(alias, haystack)
+                if self._alias_matches_safely(alias, primary_surface):
+                    spec = self._alias_match_score(alias, primary_surface)
                     this_strength = 0.82 + (spec - 0.5) * 0.02
                     # Store (id, strength, spec): strength drives the existing
                     # collision margin (Basilica-safe); raw spec drives the
                     # high-confidence shortcut below (St Matthew rescue).
                     _title_alias_hits.append((client.id, this_strength, spec))
-                    if this_strength > best_strength:
-                        best_client = client
-                        best_strength = this_strength
-                        best_match_type = 'title_alias'
+                    _matched_primary = True
                     break
- 
+            if not _matched_primary and context_surface:
+                for alias in all_names:
+                    if not self._alias_is_safe(alias):
+                        continue
+                    if self._alias_matches_safely(alias, context_surface):
+                        spec = self._alias_match_score(alias, context_surface)
+                        # Same scoring formula as primary so a co-open-ONLY
+                        # block (generic active title, real client named only
+                        # in a sibling window) commits exactly as it did on the
+                        # old flat haystack — no downstream confidence change.
+                        # Priority over primary is enforced STRUCTURALLY in the
+                        # fold, not by strength, so context can never beat an
+                        # active-title match even when its spec is higher.
+                        this_strength = 0.82 + (spec - 0.5) * 0.02
+                        _context_alias_hits.append((client.id, this_strength, spec))
+                        break
+
+        # v1.3.77: Fold the title-alias signal into best_*. PRIMARY (active
+        # title) hits dominate: when the active title names ANY client, co-open
+        # CONTEXT hits are ignored for winner selection (they remain available
+        # only if the active title named nobody). This is what stops a co-open
+        # cemetery from outranking the church actually in the title.
+        _eff_title_hits = _title_alias_hits if _title_alias_hits else _context_alias_hits
+        _title_from_context = (not _title_alias_hits) and bool(_context_alias_hits)
+        title_surface = context_surface if _title_from_context else primary_surface
+        if _eff_title_hits:
+            _clients_by_id = {c.id: c for c in self._clients}
+            _t_best_id, _t_best_strength = None, 0.0
+            for _cid, _strg, _ in _eff_title_hits:
+                if _strg > _t_best_strength:
+                    _t_best_strength = _strg
+                    _t_best_id = _cid
+            if _t_best_id is not None and _t_best_strength > best_strength:
+                best_client = _clients_by_id.get(_t_best_id)
+                best_strength = _t_best_strength
+                best_match_type = 'title_alias'
+
         if not best_client or best_strength < 0.65:
             return
  
@@ -1861,8 +1916,12 @@ class ClassificationService:
         # path that names ONE client (".../Clients/Acme Corp/...") still yields a
         # single hit, no tie, and commits exactly as before — no regression.
         # URL matches remain specific and are still excluded.
+        # v1.3.77: for the title path use the EFFECTIVE hit set (primary if the
+        # active title named anyone, else the co-open context fallback) and the
+        # matching surface, so the same-family collision/tiebreak logic runs on
+        # exactly the text the winner came from — not the polluted flat haystack.
         _active_hits = (
-            _title_alias_hits if best_match_type == 'title_alias'
+            _eff_title_hits if best_match_type == 'title_alias'
             else _file_path_hits if best_match_type == 'file_path'
             else []
         )
@@ -1911,7 +1970,7 @@ class ClassificationService:
                     )
                 elif best_match_type == 'title_alias':
                     _winner_id = self._disambiguate_collision(
-                        _tied, haystack, haystack, self._clients
+                        _tied, title_surface, title_surface, self._clients
                     )
                 if _winner_id is not None:
                     _wc = next((c for c in self._clients if c.id == _winner_id), None)
@@ -1952,7 +2011,7 @@ class ClassificationService:
                     block.client_id = None
                 logger.info(
                     f"[STAGE-3-COLLISION] {len(_tied)} clients tie for title "
-                    f"{haystack[:45]!r} (score {_top:.2f}) -- deferring to AI"
+                    f"{title_surface[:45]!r} (score {_top:.2f}) -- deferring to AI"
                 )
                 return
 
@@ -2561,8 +2620,24 @@ class ClassificationService:
         return title
 
     @staticmethod
-    def _build_haystack(block) -> str:
-        """Combine searchable text fields into one lowercase string.
+    def _build_haystack_segments(block):
+        """Split a block's searchable text into two evidence surfaces.
+
+        Returns ``(primary, context)`` — both lowercased strings:
+
+          * ``primary``  — the ACTIVE window: this block's own representative
+            title (QB bracket stripped), its own url, and its own cleaned
+            file_path. This is what the user was actually looking at.
+          * ``context`` — text from the block's OTHER co-open windows (the
+            distinct RawEvent titles that differ from the active title). This
+            is weaker, session-level evidence: for a CPA with a dozen parish
+            QuickBooks windows open, it names a dozen different clients none of
+            which is necessarily the one being worked on.
+
+        Keeping the two apart lets Stage 3 match the active title on its own
+        (so a client whose full name is in the title is never suppressed by a
+        crowd of competing identities in co-open context) and treat co-open
+        text strictly as secondary evidence that can't outrank it.
 
         File path is cleaned via _clean_path_segments to strip OS user home,
         AppData, Temp, Protected View randomized dirs, etc. Otherwise the
@@ -2578,7 +2653,7 @@ class ClassificationService:
         primary_title = ClassificationService._strip_qb_screen_bracket(
             block.window_title or block.title or ''
         )
-        parts = [
+        primary_parts = [
             primary_title,
             (block.url or ''),
         ]
@@ -2587,8 +2662,9 @@ class ClassificationService:
             username = _infer_username_from_path(block.file_path)
             cleaned_segments = _clean_path_segments(block.file_path, username)
             if cleaned_segments:
-                parts.append(' '.join(cleaned_segments))
+                primary_parts.append(' '.join(cleaned_segments))
 
+        context_parts = []
         try:
             from tracker.models import RawEvent
             event_titles = list(
@@ -2606,11 +2682,27 @@ class ClassificationService:
                 # v1.3.55: strip QB bracket from each event title too
                 stripped = ClassificationService._strip_qb_screen_bracket(t)
                 if stripped and stripped.lower() != block_title_lower:
-                    parts.append(stripped)
+                    context_parts.append(stripped)
         except Exception:
             pass
 
-        return ' '.join(p for p in parts if p).lower()
+        primary = ' '.join(p for p in primary_parts if p).lower()
+        context = ' '.join(p for p in context_parts if p).lower()
+        return primary, context
+
+    @staticmethod
+    def _build_haystack(block) -> str:
+        """Combine searchable text fields into one flat lowercase string.
+
+        Retained for callers that only need presence-of-a-keyword semantics
+        (e.g. Stage 9 tool detection), where co-open pollution is harmless.
+        The concatenation is byte-for-byte the old primary+context order, so
+        those callers are unaffected. Stage 3 uses the structured
+        _build_haystack_segments instead so it can weight the active title
+        above co-open context.
+        """
+        primary, context = ClassificationService._build_haystack_segments(block)
+        return ' '.join(p for p in (primary, context) if p)
 
     @staticmethod
     def _extract_domain(url: str) -> str:

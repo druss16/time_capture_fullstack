@@ -50,6 +50,18 @@ NAME_BEARING = {
     'title_match_domain',
 }
 
+# Agent-side evidence sources that mean the agent read the client out of the
+# WINDOW ITSELF (as opposed to carried-forward context). If the agent's
+# attribution came from one of these, its pick is window-truth and must not be
+# overridden by a server title match — this is what protects a correct
+# same-family agent match from a server alias-coverage gap. Kept in sync with
+# _AGENT_WINDOW_TEXT_SOURCES in ClassificationService.apply().
+AGENT_WINDOW_TEXT_SOURCES = {
+    'title_alias_match', 'file_path_client_folder',
+    'url_domain_match', 'email_thread_match',
+    'tax_software_taxpayer', 'qb_company_file',
+}
+
 
 class Command(BaseCommand):
     help = (
@@ -131,7 +143,20 @@ class Command(BaseCommand):
                 and s.detail.get('client_id') == committed_id
                 for s in decision.matched_signals
             )
-            if names_new and not names_committed:
+            # Guard b: the committed (agent) pick must be stale context, not a
+            # client the agent read from the window itself.
+            agent_sigs = [
+                s for s in decision.matched_signals
+                if s.type == 'agent_inference' and s.detail
+                and s.detail.get('client_id') == committed_id
+            ]
+            agent_read_window_text = any(
+                src in AGENT_WINDOW_TEXT_SOURCES
+                for s in agent_sigs
+                for src in (s.detail.get('inference_evidence_sources') or [])
+            )
+            agent_pick_is_stale = bool(agent_sigs) and not agent_read_window_text
+            if names_new and not names_committed and agent_pick_is_stale:
                 flips.append((block, committed_id, new_id))
 
         # Report.

@@ -536,10 +536,30 @@ class ClassificationService:
                     # agent's, so a real conflict (both named) or a non-textual
                     # classifier pick (calendar/mail/AI/temporal) still defers to
                     # the agent below, unchanged.
+                    #
+                    # SAME-FAMILY SAFETY (guard b): only override when the
+                    # AGENT'S pick is genuinely stale context — a decaying tray
+                    # override or window-continuity stickiness — NOT when the
+                    # agent read the client out of the window itself. Without
+                    # this, a server-side alias-coverage gap could flip a CORRECT
+                    # agent title match to a wrong same-family sibling: e.g. a
+                    # "St. Anne Mother of Mary Catholic Church" window the agent
+                    # correctly matched to St. Anne, where the server failed to
+                    # match St. Anne but did match St. Mary's on the shared
+                    # "Mary" token. The agent's evidence sources tell us which:
+                    # window-text sources (title/file/domain/qb-file) mean the
+                    # agent saw the client in the window; context sources
+                    # (manual override, recent-window continuity, learned) mean
+                    # it's carried-forward belief.
                     _NAME_BEARING = {
                         'title_match_title_alias',
                         'title_match_file_path',
                         'title_match_domain',
+                    }
+                    _AGENT_WINDOW_TEXT_SOURCES = {
+                        'title_alias_match', 'file_path_client_folder',
+                        'url_domain_match', 'email_thread_match',
+                        'tax_software_taxpayer', 'qb_company_file',
                     }
                     title_names_classifier = any(
                         s.type in _NAME_BEARING and s.detail
@@ -551,13 +571,31 @@ class ClassificationService:
                         and s.detail.get('client_id') == old_client_id
                         for s in decision.matched_signals
                     )
-                    if title_names_classifier and not title_names_agent:
+                    # The agent's inference signals attesting the agent's client.
+                    _agent_sigs_for_old = [
+                        s for s in decision.matched_signals
+                        if s.type == 'agent_inference' and s.detail
+                        and s.detail.get('client_id') == old_client_id
+                    ]
+                    _agent_read_window_text = any(
+                        src in _AGENT_WINDOW_TEXT_SOURCES
+                        for s in _agent_sigs_for_old
+                        for src in (s.detail.get('inference_evidence_sources') or [])
+                    )
+                    # Stale only when the agent DID attest this client (so we
+                    # know its provenance) AND that provenance is pure context,
+                    # never the window's own text.
+                    agent_pick_is_stale = (
+                        bool(_agent_sigs_for_old) and not _agent_read_window_text
+                    )
+                    if (title_names_classifier and not title_names_agent
+                            and agent_pick_is_stale):
                         logger.info(
                             f"[CLASSIFY-TITLE-WINS] Block {block.pk}: window text "
                             f"names classifier client={decision.client_id} via an "
-                            f"authoritative title match; agent's stale pick "
-                            f"{old_client_id} is not named by the window — "
-                            f"overriding agent attribution"
+                            f"authoritative title match; agent's pick "
+                            f"{old_client_id} is stale context (not read from "
+                            f"the window) — overriding agent attribution"
                         )
                         block.client_id = decision.client_id
                         block.ai_disagrees_with_agent = False

@@ -519,17 +519,60 @@ class ClassificationService:
                 # handles this for AI signals; mirror that for deterministic
                 # stages by recording disagreement and leaving block.client_id.
                 if old_client_id and old_client_id != decision.client_id:
-                    # Agent already attributed. Don't overwrite — surface as disagreement.
-                    block.ai_disagrees_with_agent = True
-                    block.ai_proposed_client_id = decision.client_id
-                    block.ai_proposed_confidence = decision.confidence or 0.0
-                    block.ai_disagreement_reasoning = (decision.reasoning or '')[:500]
-                    logger.info(
-                        f"[CLASSIFY-DISAGREE] Block {block.pk}: agent={old_client_id} "
-                        f"vs classifier={decision.client_id} at {decision.confidence:.2f} — "
-                        f"keeping agent's pick"
+                    # v1.4.2 TITLE-WINS EXCEPTION.
+                    # "Respect agent attribution" exists to preserve a genuine
+                    # manual tray pick — but that pick DECAYS (15-min linear) and
+                    # forward-fills onto later windows the user has since moved
+                    # on from. When the block's OWN TEXT deterministically names
+                    # the classifier's client (Stage-3 title-alias / file-path /
+                    # domain) and does NOT name the agent's client, the agent's
+                    # attribution is stale context, not window truth — so the
+                    # title wins. This is the St. John / Spirit-of-Hope leak: a
+                    # ~6-min-old Spirit-of-Hope tray override bled onto a
+                    # "St. John the Evangelist - QuickBooks" window whose title
+                    # unambiguously named St. John. Narrow by construction — it
+                    # only fires when an authoritative name-bearing signal names
+                    # the classifier's client and no such signal names the
+                    # agent's, so a real conflict (both named) or a non-textual
+                    # classifier pick (calendar/mail/AI/temporal) still defers to
+                    # the agent below, unchanged.
+                    _NAME_BEARING = {
+                        'title_match_title_alias',
+                        'title_match_file_path',
+                        'title_match_domain',
+                    }
+                    title_names_classifier = any(
+                        s.type in _NAME_BEARING and s.detail
+                        and s.detail.get('client_id') == decision.client_id
+                        for s in decision.matched_signals
                     )
-                    # Don't write block.client_id — keep agent's choice
+                    title_names_agent = any(
+                        s.type in _NAME_BEARING and s.detail
+                        and s.detail.get('client_id') == old_client_id
+                        for s in decision.matched_signals
+                    )
+                    if title_names_classifier and not title_names_agent:
+                        logger.info(
+                            f"[CLASSIFY-TITLE-WINS] Block {block.pk}: window text "
+                            f"names classifier client={decision.client_id} via an "
+                            f"authoritative title match; agent's stale pick "
+                            f"{old_client_id} is not named by the window — "
+                            f"overriding agent attribution"
+                        )
+                        block.client_id = decision.client_id
+                        block.ai_disagrees_with_agent = False
+                    else:
+                        # Agent already attributed. Don't overwrite — surface as disagreement.
+                        block.ai_disagrees_with_agent = True
+                        block.ai_proposed_client_id = decision.client_id
+                        block.ai_proposed_confidence = decision.confidence or 0.0
+                        block.ai_disagreement_reasoning = (decision.reasoning or '')[:500]
+                        logger.info(
+                            f"[CLASSIFY-DISAGREE] Block {block.pk}: agent={old_client_id} "
+                            f"vs classifier={decision.client_id} at {decision.confidence:.2f} — "
+                            f"keeping agent's pick"
+                        )
+                        # Don't write block.client_id — keep agent's choice
                 else:
                     block.client_id = decision.client_id
             else:

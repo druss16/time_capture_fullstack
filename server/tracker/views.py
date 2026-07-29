@@ -4169,13 +4169,12 @@ def _humanize_mixed_content(review_reason):
 # ============================================================================x
 
 
-# tracker/views.py — today_time() function, v1.3.38
+# tracker/views.py — today_time()
 #
-# REPLACE the entire today_time() function (starting at line 3806) with the
-# version below. Stop replacing at the closing `})` of the final `return Response({...})`.
-#
-# All decorators stay. All other functions in views.py stay.
-# The _today_time_from_blocks() helper this function calls is unchanged.
+# Header totals + per-client cards are computed from ONE source of truth,
+# tracker.services.billing_totals (committed blocks, flag-based billable), so
+# Daily Review and Reports agree. Captured/proposed time surfaces only as
+# proposed_inline (Needs Review), never as billable.
 
 
 # --- block activity context (tab/document names within a block) -----------
@@ -4320,277 +4319,31 @@ def today_time(request):
     end_utc = end_local.astimezone(dt_timezone.utc)
 
     # =========================================================================
-    # STEP 1: Get ALL events for the day, ordered by interval start
-    # v1.3.38: filter and order by start_ts (was ts_utc in v1.3.37)
+    # Totals + per-client cards — ONE source of truth.
+    # Header totals AND per-client cards both come from the SAME committed-block
+    # set and the SAME billable rule Reports uses (tracker.services.billing_totals),
+    # so Daily Review and Reports agree for any user/day. CONFIRMED (committed)
+    # time only — captured/proposed time is never billable here; it surfaces below
+    # as proposed_inline (Needs Review).
     # =========================================================================
-    events = list(RawEvent.objects.filter(
-        user=user,
-        start_ts__gte=start_utc,
-        start_ts__lt=end_utc,
-    ).exclude(
-        block__classification_state='suppressed',
-    ).select_related('block', 'block__client').order_by('start_ts'))
+    from tracker.services.billing_totals import compute_totals, compute_client_cards
 
-    from django.db.models import Q
-    deleted_block_ids = set(
-        Block.objects.filter(
-            user=user,
-            deleted_at__isnull=False,
-        ).values_list('id', flat=True)
-    )
+    org = get_request_org_override(request)
+    _totals = compute_totals(org, start_utc, end_utc, user_id=user.id, can_see_all=False)
+    result = compute_client_cards(org, start_utc, end_utc, user_id=user.id, can_see_all=False)
 
-    if not events:
-        return _today_time_from_blocks(request, user, target_date, start_utc, end_utc)
-
-    # =========================================================================
-    # Pre-load meeting blocks. Meetings use BLOCK-LEVEL canonical duration
-    # because Meeting/Meeting-End raw events are 1-second sentinels — the
-    # meaningful duration lives on the Block, not the raw events.
-    # =========================================================================
-    meeting_blocks = list(Block.objects.filter(
-        user=user,
-        day=target_date,
-        bundle_id__startswith='meeting:',
-    ).exclude(
-        deleted_at__isnull=False,
-    ).select_related('client'))
-
-    # Only ATTRIBUTED meetings shadow events — unattributed meetings leave
-    # foreground app time alone so users can manually attribute later.
-    meeting_windows = [
-        (mb.start, mb.end, mb)
-        for mb in meeting_blocks
-        if mb.start and mb.end and mb.client_id
-    ]
+    billable_hours     = _totals['billable_hours']
+    non_billable_hours = _totals['non_billable_hours']
+    needs_review_hours = _totals['needs_review_hours']
+    # Total = ALL time captured that day, including not-yet-confirmed review time,
+    # so it matches Reports' total exactly. Needs-review is also surfaced as its
+    # own number (below) so the header total stays self-explanatory.
+    global_hours       = round(_totals['total_hours'] + needs_review_hours, 2)
 
     # =========================================================================
-    # STEP 2: Calculate duration for each event using REAL intervals
-    # v1.3.38: no more IDLE_CAP / 180s-trailing-fallback. Just end_ts - start_ts.
-    # =========================================================================
-    NON_BILLABLE_CATEGORIES = {'personal/non-billable', 'idle', 'uncategorized'}
-    EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}
-    # Internal firm work ("Internal" / "Internal - <x>") is never billable,
-    # regardless of category — keep the Daily Review header BILLABLE total in
-    # step with reports/timesheet.
-    from tracker.industry_categories import is_internal_client_name
-
-    event_durations = []
-    for event in events:
-        duration_sec = (event.end_ts - event.start_ts).total_seconds()
-        if duration_sec <= 0:
-            continue
-
-        block = event.block
-        if block and block.id in deleted_block_ids:
-            block = None
-
-        # Skip events that fall inside an attributed meeting window.
-        # The meeting block itself provides canonical attribution
-        # (injected in Step 2.5 below).
-        if meeting_windows and any(
-            mw_start <= event.start_ts <= mw_end
-            for mw_start, mw_end, _ in meeting_windows
-        ):
-            continue
-
-        # Proposed blocks belong in the PENDING list (red clock) ONLY — exclude
-        # their events from card totals so they don't double-render (showing in
-        # a card AND in pending). Once confirmed→committed, events flow into the
-        # card normally. Captured/committed blocks are unaffected.
-        if block and block.classification_state == 'proposed':
-            continue
-
-        if block:
-            client_id = block.client_id
-            client_name = block.client.name if block.client else 'Unassigned'
-            if block.category_hours and isinstance(block.category_hours, dict):
-                categories = list(block.category_hours.keys())
-                category = categories[0] if categories else 'Uncategorized'
-            else:
-                category = 'Uncategorized'
-            is_idle = (
-                category.lower() == 'idle' or
-                (event.bundle_id or '').lower() == '__idle__' or
-                (event.window_title or '').lower() == 'idle/uncategorized'
-            )
-        else:
-            client_id = None
-            client_name = 'Unassigned'
-            category = 'Uncategorized'
-            is_idle = (
-                (event.bundle_id or '').lower() == '__idle__' or
-                (event.window_title or '').lower() == 'idle/uncategorized'
-            )
-
-        event_durations.append({
-            'ts':               event.start_ts,
-            'duration_minutes': duration_sec / 60.0,
-            'client_id':        client_id,
-            'client_name':      client_name,
-            'category':         category,
-            'is_idle':          is_idle,
-            'is_billable':      bool(client_id) and category.lower() not in NON_BILLABLE_CATEGORIES and not is_internal_client_name(client_name),
-            'app_name':         event.app_name or 'Unknown',
-            'window_title':     event.window_title or '',
-            'url':              event.url or '',
-            'block_id':         block.id if block else None,
-        })
-
-    # =========================================================================
-    # STEP 2.5: Inject meeting blocks as canonical entries
-    # Each meeting block contributes its full block.minutes (not event-walked).
-    # Unattributed meetings (no client) are skipped — they won't bill anyone.
-    # =========================================================================
-    for mb in meeting_blocks:
-        if not mb.client_id:
-            continue
-
-        mb_minutes = float(mb.minutes or 0)
-        if mb_minutes <= 0:
-            continue
-
-        client_name = mb.client.name if mb.client else 'Unattributed'
-
-        event_durations.append({
-            'ts':               mb.start,
-            'duration_minutes': mb_minutes,
-            'client_id':        mb.client_id,
-            'client_name':      client_name,
-            'category':         'Client Meeting',
-            'is_idle':          False,
-            'is_billable':      not is_internal_client_name(client_name),
-            'app_name':         mb.app_name or 'Meeting',
-            'window_title':     mb.window_title or '',
-            'url':              '',
-            'block_id':         mb.id,
-        })
-
-    # =========================================================================
-    # STEP 3: Aggregate by client → category
-    # =========================================================================
-    data = defaultdict(lambda: {
-        'client_id': None,
-        'categories': defaultdict(lambda: {
-            'minutes': 0.0,
-            'block_count': 0,
-            'blocks_seen': set(),
-            'by_activity': {},
-        })
-    })
-
-    total_minutes = 0.0
-    billable_minutes = 0.0
-    non_billable_minutes = 0.0
-
-    for ev in event_durations:
-        client_name = ev['client_name']
-        category = ev['category']
-        minutes = ev['duration_minutes']
-
-        data[client_name]['client_id'] = ev['client_id']
-        cat_data = data[client_name]['categories'][category]
-        cat_data['minutes'] += minutes
-
-        if ev['block_id'] and ev['block_id'] not in cat_data['blocks_seen']:
-            cat_data['blocks_seen'].add(ev['block_id'])
-            cat_data['block_count'] += 1
-
-        formatted = format_block_for_display({
-            'app_name':     ev['app_name'],
-            'window_title': ev['window_title'],
-            'url':          ev['url'],
-            'minutes':      minutes,
-        }, client_name=client_name)
-
-        clean_title = formatted['title']
-
-        if clean_title in cat_data['by_activity']:
-            cat_data['by_activity'][clean_title]['minutes'] += minutes
-            # Collect EVERY block id that merges into this activity row, so the
-            # frontend can move ALL of them together (not just the first).
-            if ev['block_id'] is not None:
-                cat_data['by_activity'][clean_title]['ids'].append(ev['block_id'])
-        else:
-            cat_data['by_activity'][clean_title] = {
-                'id':    ev['block_id'],
-                'ids':   [ev['block_id']] if ev['block_id'] is not None else [],
-                'title': clean_title,
-                'minutes': minutes,
-            }
-
-        if category.lower() not in EXCLUDE_FROM_TOTALS:
-            total_minutes += minutes
-            if ev['is_billable']:
-                billable_minutes += minutes
-            else:
-                non_billable_minutes += minutes
-
-    # =========================================================================
-    # STEP 4: Build response with clean formatting
-    # =========================================================================
-    result = []
-    for client_name, client_data in sorted(data.items()):
-        categories = []
-        client_total_minutes = 0.0
-
-        for cat_name, cat_data in sorted(client_data['categories'].items()):
-            if cat_name.lower() in EXCLUDE_FROM_TOTALS:
-                continue
-            minutes = cat_data['minutes']
-            client_total_minutes += minutes
-
-            aggregated_samples = []
-            sorted_activities = sorted(
-                cat_data['by_activity'].items(),
-                key=lambda x: -x[1]['minutes']
-            )[:10]
-
-            for clean_title, info in sorted_activities:
-                mins = info['minutes']
-                time_str = format_duration(mins)
-                # Emit ALL merged block ids (dedup, preserve order) so the
-                # frontend moves the whole row's worth of blocks at once.
-                ids = info.get('ids') or ([info['id']] if info.get('id') else [])
-                seen = set(); ids = [i for i in ids if not (i in seen or seen.add(i))]
-                if ids:
-                    id_str = ",".join(str(i) for i in ids)
-                    aggregated_samples.append(f"[id:{id_str}] {clean_title} ({time_str})")
-                else:
-                    aggregated_samples.append(f"{clean_title} ({time_str})")
-
-            # Plan B: surface the firm's TaskType for this canonical category
-            # so the UI can show the code in a tooltip.
-            task_type_code = None
-            task_type_name = None
-            if user_org is not None:
-                try:
-                    from tracker.services.task_type_resolver import resolve_task_type_for_category
-                    tt = resolve_task_type_for_category(user_org, cat_name)
-                    if tt:
-                        task_type_code = tt.code
-                        task_type_name = tt.name
-                except Exception:
-                    pass
-
-            categories.append({
-                'name':              cat_name,
-                'hours':             round(minutes / 60, 2),
-                'block_count':       cat_data['block_count'],
-                'unique_activities': len(cat_data['by_activity']),
-                'sample_activities': aggregated_samples,
-                'task_type_code':    task_type_code,
-                'task_type_name':    task_type_name,
-            })
-
-        result.append({
-            'client_id':   client_data['client_id'],
-            'client':      client_name,
-            'total_hours': round(client_total_minutes / 60, 2),
-            'categories':  categories,
-        })
-
-    # =========================================================================
-    # STEP 5: Merge in mobile blocks (no RawEvents — add separately)
+    # Mobile blocks that need review -> flagged banners. Their TIME is already
+    # counted above by compute_client_cards (committed mobile blocks are in the
+    # same block set), so we do NOT re-add their minutes here.
     # =========================================================================
     flagged_blocks = []
 
@@ -4625,44 +4378,6 @@ def today_time(request):
                 'start':         block.start.isoformat(),
             })
 
-        existing = next((r for r in result if r['client'] == b_client_name), None)
-
-        if existing:
-            existing_cat = next((c for c in existing['categories'] if c['name'] == b_cat), None)
-            if existing_cat:
-                existing_cat['hours']        = round(existing_cat['hours'] + b_hours, 2)
-                existing_cat['block_count'] += 1
-                existing_cat['sample_activities'].insert(0, f"[id:{block.id}] {b_title}")
-            else:
-                existing['categories'].append({
-                    'name':              b_cat,
-                    'hours':             b_hours,
-                    'block_count':       1,
-                    'unique_activities': 1,
-                    'needs_review':      getattr(block, 'needs_review', False),
-                    'sample_activities': [f"[id:{block.id}] {b_title}"],
-                })
-            existing['total_hours'] = round(existing['total_hours'] + b_hours, 2)
-        else:
-            result.append({
-                'client_id':   block.client_id,
-                'client':      b_client_name,
-                'total_hours': b_hours,
-                'categories':  [{
-                    'name':              b_cat,
-                    'hours':             b_hours,
-                    'block_count':       1,
-                    'unique_activities': 1,
-                    'needs_review':      getattr(block, 'needs_review', False),
-                    'sample_activities': [f"[id:{block.id}] {b_title}"],
-                }],
-            })
-
-        if is_internal_client_name(b_client_name):
-            non_billable_minutes += b_minutes
-        else:
-            billable_minutes += b_minutes
-        total_minutes    += b_minutes
 
     # =========================================================================
     # STEP 6: AI disagreement blocks → flagged_blocks
@@ -4845,9 +4560,10 @@ def today_time(request):
 
     return Response({
         'clients':            result,
-        'global_hours':       round(total_minutes / 60, 2),
-        'billable_hours':     round(billable_minutes / 60, 2),
-        'non_billable_hours': round(non_billable_minutes / 60, 2),
+        'global_hours':       global_hours,
+        'billable_hours':     billable_hours,
+        'non_billable_hours': non_billable_hours,
+        'needs_review_hours': needs_review_hours,
         'date':               target_date.isoformat(),
         'flagged_blocks':     flagged_blocks,
         'proposed_inline':    proposed_inline,
@@ -5073,269 +4789,6 @@ def resolve_ai_disagreement(request, block_id):
     })
 
 
-def _today_time_from_blocks(request, user, target_date, start_utc, end_utc):
-    """
-    Fallback for manual entries or when no events exist.
-    Uses block-level data (less accurate but necessary for manual time).
-    
-    NOW WITH CLEAN DISPLAY FORMATTING.
-    """
-    from collections import defaultdict
-    from tracker.utils.display_names import format_block_for_display, format_duration
-
-    EXCLUDE_FROM_TOTALS = {'idle', 'uncategorized'}
-    
-    blocks = Block.objects.filter(
-        user=user,
-        start__gte=start_utc,
-        start__lt=end_utc,
-        deleted_at__isnull=True
-    ).select_related('client').order_by('start')
-    
-    data = defaultdict(lambda: {
-        'client_id': None,
-        'categories': defaultdict(lambda: {
-            'minutes': 0.0,
-            'block_count': 0,
-            'by_activity': {},
-        })
-    })
-    
-    total_minutes = 0.0
-    billable_minutes = 0.0
-    
-    # Plan B: derive the org once for the TaskType code lookup at the end
-    user_org = None
-    
-    for block in blocks:
-        # Proposed blocks belong in the PENDING list (red clock) ONLY — skip
-        # them here so they don't double-render in card totals. (Mirrors the
-        # event-path guard in today_time.)
-        if block.classification_state == 'proposed':
-            continue
-        client_name = block.client.name if block.client else 'Unassigned'
-        client_id = block.client_id
-        minutes = block.minutes or 0
-        if user_org is None:
-            user_org = block.org
-        
-        if block.category_hours and isinstance(block.category_hours, dict):
-            categories = list(block.category_hours.keys())
-            category = categories[0] if categories else 'Uncategorized'
-        else:
-            category = 'Uncategorized'
-        
-        is_idle = category.lower() == 'idle'
-        
-        data[client_name]['client_id'] = client_id
-        cat_data = data[client_name]['categories'][category]
-        cat_data['minutes'] += minutes
-        cat_data['block_count'] += 1
-        
-        # ✅ Use display formatter for clean title
-        formatted = format_block_for_display({
-            'app_name': block.app_name or '',
-            'window_title': block.window_title or '',
-            'url': block.url or '',
-            'minutes': minutes,
-        }, client_name=client_name)
-        
-        clean_title = formatted['title']
-        
-        if clean_title in cat_data['by_activity']:
-            cat_data['by_activity'][clean_title]['minutes'] += minutes
-            # Collect EVERY block id merged into this activity row (fallback path)
-            if block.id is not None:
-                cat_data['by_activity'][clean_title]['ids'].append(block.id)
-        else:
-            cat_data['by_activity'][clean_title] = {
-                'id': block.id,
-                'ids': [block.id] if block.id is not None else [],
-                'title': clean_title,
-                'minutes': minutes,
-            }
-        
-        if category.lower() not in EXCLUDE_FROM_TOTALS:
-            total_minutes += minutes
-            if client_id:
-                billable_minutes += minutes
-    
-    result = []
-    for client_name, client_data in sorted(data.items()):
-        categories = []
-        client_total = 0.0
-        
-        for cat_name, cat_data in sorted(client_data['categories'].items()):
-            if cat_name.lower() in EXCLUDE_FROM_TOTALS:
-                continue
-            minutes = cat_data['minutes']
-            client_total += minutes
-            
-            samples = []
-            for clean_title, info in sorted(cat_data['by_activity'].items(), key=lambda x: -x[1]['minutes'])[:10]:
-                time_str = format_duration(info['minutes'])
-                # Emit ALL merged block ids (dedup, preserve order) so the
-                # frontend moves the whole row's worth of blocks at once.
-                ids = info.get('ids') or ([info['id']] if info.get('id') else [])
-                seen = set(); ids = [i for i in ids if not (i in seen or seen.add(i))]
-                if ids:
-                    id_str = ",".join(str(i) for i in ids)
-                    samples.append(f"[id:{id_str}] {clean_title} ({time_str})")
-                else:
-                    samples.append(f"{clean_title} ({time_str})")
-            
-            # Plan B: surface the firm's TaskType code for this canonical category
-            # so the UI can show it in tooltips.
-            task_type_code = None
-            task_type_name = None
-            if user_org is not None:
-                try:
-                    from tracker.services.task_type_resolver import resolve_task_type_for_category
-                    tt = resolve_task_type_for_category(user_org, cat_name)
-                    if tt:
-                        task_type_code = tt.code
-                        task_type_name = tt.name
-                except Exception:
-                    pass
-
-            categories.append({
-                'name': cat_name,
-                'hours': round(minutes / 60, 2),
-                'block_count': cat_data['block_count'],
-                'unique_activities': len(cat_data['by_activity']),
-                'sample_activities': samples,
-                'task_type_code': task_type_code,
-                'task_type_name': task_type_name,
-            })
-        
-        result.append({
-            'client_id': client_data['client_id'],
-            'client': client_name,
-            'total_hours': round(client_total / 60, 2),
-            'categories': categories,
-        })
-    
-    # =========================================================================
-    # Surface disagreement banners even when there are no RawEvents.
-    # Mirrors STEP 6 / 6.5 / 6.6 from the main today_time path.
-    # =========================================================================
-    flagged_blocks = []
-
-    # AI disagreement
-    ai_disagreement_blocks = Block.objects.filter(
-        user=user,
-        day=target_date,
-        ai_disagrees_with_agent=True,
-        ai_disagreement_resolved_at__isnull=True,
-        deleted_at__isnull=True,
-    ).select_related('client', 'ai_proposed_client')
-
-    for block in ai_disagreement_blocks:
-        flagged_blocks.append({
-            'block_id':                block.id,
-            'client_name':             block.client.name if block.client else 'Uncategorized',
-            'review_reason':           f"AI suggests {block.ai_proposed_client.name if block.ai_proposed_client else 'a different client'}",
-            'minutes':                 block.minutes or 0,
-            'start':                   block.start.isoformat() if block.start else '',
-            'type':                    'ai_disagreement',
-            'ai_proposed_client_id':   block.ai_proposed_client_id,
-            'ai_proposed_client_name': block.ai_proposed_client.name if block.ai_proposed_client else None,
-            'ai_confidence':           block.ai_proposed_confidence or 0.0,
-            'ai_reasoning':            humanize_for_api(block),
-        })
-
-    # Mail disagreement
-    mail_disagreement_blocks = Block.objects.filter(
-        user=user,
-        day=target_date,
-        mail_disagrees_with_agent=True,
-        mail_disagreement_resolved_at__isnull=True,
-        deleted_at__isnull=True,
-    ).select_related('client', 'mail_proposed_client')
-
-    for block in mail_disagreement_blocks:
-        proposed_name = (
-            block.mail_proposed_client.name
-            if block.mail_proposed_client else 'a different client'
-        )
-        flagged_blocks.append({
-            'block_id':                  block.id,
-            'client_name':               block.client.name if block.client else 'Uncategorized',
-            'review_reason':             f"Email metadata suggests {proposed_name}",
-            'minutes':                   block.minutes or 0,
-            'start':                     block.start.isoformat() if block.start else '',
-            'type':                      'mail_disagreement',
-            'mail_proposed_client_id':   block.mail_proposed_client_id,
-            'mail_proposed_client_name': block.mail_proposed_client.name if block.mail_proposed_client else None,
-            'mail_confidence':           block.mail_proposed_confidence or 0.0,
-            'mail_reasoning':            block.mail_disagreement_reasoning or '',
-        })
-
-    # Calendar disagreement (v1.3.42)
-    calendar_disagreement_blocks = Block.objects.filter(
-        user=user,
-        day=target_date,
-        calendar_disagrees_with_agent=True,
-        calendar_disagreement_resolved_at__isnull=True,
-        deleted_at__isnull=True,
-    ).select_related('client', 'calendar_proposed_client')
-
-    for block in calendar_disagreement_blocks:
-        proposed_name = (
-            block.calendar_proposed_client.name
-            if block.calendar_proposed_client else 'a different client'
-        )
-        if block.calendar_disagreement_source == 'manual':
-            review_reason = (
-                f"You picked a different client, but this block overlaps "
-                f"a calendar event associated with {proposed_name}"
-            )
-        else:
-            review_reason = f"Calendar event suggests {proposed_name}"
-
-        flagged_blocks.append({
-            'block_id':                      block.id,
-            'client_name':                   block.client.name if block.client else 'Uncategorized',
-            'review_reason':                 review_reason,
-            'minutes':                       block.minutes or 0,
-            'start':                         block.start.isoformat() if block.start else '',
-            'type':                          'calendar_disagreement',
-            'calendar_proposed_client_id':   block.calendar_proposed_client_id,
-            'calendar_proposed_client_name': block.calendar_proposed_client.name if block.calendar_proposed_client else None,
-            'calendar_confidence':           block.calendar_proposed_confidence or 0.0,
-            'calendar_reasoning':            block.calendar_disagreement_reasoning or '',
-            'calendar_disagreement_source':  block.calendar_disagreement_source or 'classifier',
-        })
-
-    # ── Proposed blocks for inline display (red-clock rows, NOT in totals) ──
-    proposed_inline = []
-    _pi = Block.objects.filter(
-        user=user, day=target_date, classification_state='proposed',
-        deleted_at__isnull=True,
-    ).exclude(categorized_by__in=['manual', 'correction']).select_related('proposed_client')
-    for _b in _pi:
-        _r = getattr(_b, 'proposed_reasoning', '') or ''
-        if 'second-pass' not in _r and not _b.proposed_client_id:
-            continue
-        proposed_inline.append({
-            'block_id':             _b.id,
-            'window_title':         getattr(_b, 'window_title', '') or '',
-            'minutes':              _b.minutes or 0,
-            'proposed_client_id':   _b.proposed_client_id,
-            'proposed_client_name': _b.proposed_client.name if _b.proposed_client_id else None,
-            'proposed_confidence':  float(getattr(_b, 'proposed_confidence', 0.0) or 0.0),
-            'proposed_category':    getattr(_b, 'proposed_category', '') or '',
-        })
-
-    return Response({
-        'clients':            result,
-        'global_hours':       round(total_minutes / 60, 2),
-        'billable_hours':     round(billable_minutes / 60, 2),
-        'non_billable_hours': round((total_minutes - billable_minutes) / 60, 2),
-        'date':               target_date.isoformat(),
-        'flagged_blocks':     flagged_blocks,
-        'proposed_inline':    proposed_inline,
-    })
 
 # ============================================================================
 # VIEW 1: Get Uncategorized Blocks + Dropdown Options

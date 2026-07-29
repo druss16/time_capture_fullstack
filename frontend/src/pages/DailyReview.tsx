@@ -94,6 +94,7 @@ type TodayTimeResponse = {
   clients: ClientTime[];
   billable_hours: number;
   non_billable_hours: number;
+  needs_review_hours: number;
   global_hours: number;
   date: string;
   flagged_blocks: FlaggedBlock[];
@@ -165,6 +166,7 @@ export default function DailyReview() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [billableHours, setBillableHours] = useState(0);
   const [nonBillableHours, setNonBillableHours] = useState(0);
+  const [needsReviewHours, setNeedsReviewHours] = useState(0);
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [manualEntry, setManualEntry] = useState<{
     client_id: number | null;
@@ -231,6 +233,7 @@ export default function DailyReview() {
       setTimeSummary(json.clients || []);
       setBillableHours(json.billable_hours || 0);
       setNonBillableHours(json.non_billable_hours || 0);
+      setNeedsReviewHours(json.needs_review_hours || 0);
       setProposedInline(json.proposed_inline || []);
       const allFlagged = json.flagged_blocks || [];
       const needsReview = allFlagged.filter(b => b.review_reason?.includes("Mixed content"));
@@ -405,7 +408,9 @@ export default function DailyReview() {
     loadUncategorizedCount();
   }, [loadTimeSummary, loadUncategorizedCount]);
 
-  const totalHours = billableHours + nonBillableHours;
+  // Total = all time captured that day, including not-yet-confirmed review time,
+  // so it matches the backend global_hours and the Reports total.
+  const totalHours = billableHours + nonBillableHours + needsReviewHours;
 
   const stepDate = (days: number) => {
     const d = new Date(date + "T00:00:00");
@@ -520,6 +525,11 @@ export default function DailyReview() {
                 value={formatHours(nonBillableHours)}
                 label="Non-bill"
                 valueClass="text-slate-400"
+              />
+              <StatCell
+                value={formatHours(needsReviewHours)}
+                label="Needs review"
+                valueClass="text-amber-500"
               />
               <StatCell
                 value={formatHours(totalHours)}

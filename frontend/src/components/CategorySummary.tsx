@@ -20,13 +20,13 @@ import {
   MousePointerClick,
   Mail,
   CalendarClock,
-  Clock
+  Clock,
+  Plus
 } from "lucide-react";
 import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 
 import { BlockEvidencePanel } from "@/components/BlockEvidencePanel";
-import { AliasSuggestionCard, AliasSuggestion } from "@/components/AliasSuggestionCard";
 
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -163,6 +163,13 @@ function MovePopover({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const catRef = useRef<HTMLSelectElement>(null);
+  // Optional "remember a name for this client" alias — collapsed by default so
+  // it's available on demand without cluttering every move.
+  const [aliasOpen, setAliasOpen] = useState(false);
+  const [aliasVal, setAliasVal] = useState("");
+  const [aliasErr, setAliasErr] = useState<string | null>(null);
+  const [aliasBusy, setAliasBusy] = useState(false);
+  const applyRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const el = anchorEl ?? document.body;
@@ -183,13 +190,40 @@ function MovePopover({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); onClose(); }
-      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onApply(selClient, selCat); }
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); applyRef.current(); }
     };
     document.addEventListener("keydown", handler, true);
     return () => document.removeEventListener("keydown", handler, true);
-  }, [onClose, onApply, selClient, selCat]);
+  }, [onClose]);
 
   const hasChanged = selClient !== currentClientId || selCat !== currentCategory;
+  const alias = aliasVal.trim();
+  const canApply = (hasChanged || !!alias) && !aliasBusy;
+
+  // Apply = optionally teach the alias, then move. The alias add is done here
+  // (self-contained) so a "too close to another client" rejection can be shown
+  // inline without leaving the popover; the move still happens on success.
+  const apply = async () => {
+    if (!canApply) return;
+    if (alias && selClient != null) {
+      setAliasBusy(true); setAliasErr(null);
+      try {
+        await safeFetchJson(`${API_BASE}/settings/clients/${selClient}/aliases/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ alias }),
+        });
+      } catch (e: any) {
+        setAliasBusy(false);
+        setAliasErr(e?.message || "Couldn't add that alias");
+        return; // keep the popover open so they can edit or clear it
+      }
+      setAliasBusy(false);
+    }
+    if (hasChanged) onApply(selClient, selCat); // moves (and closes) as before
+    else onClose(); // alias-only: nothing to move
+  };
+  applyRef.current = apply;
 
   if (!pos) return null;
 
@@ -225,6 +259,35 @@ function MovePopover({
           </select>
         </div>
       </div>
+      {selClient != null && (
+        <div className="mb-3">
+          {aliasOpen ? (
+            <>
+              <label className="text-[10px] font-semibold text-teal-600 uppercase tracking-wide mb-1 block">
+                Remember as alias
+              </label>
+              <input
+                autoFocus
+                value={aliasVal}
+                onChange={(e) => { setAliasVal(e.target.value); setAliasErr(null); }}
+                placeholder="e.g. SacredHeart.qbw, SJEC"
+                className="w-full border border-teal-200 rounded-lg px-3 py-2 text-sm font-medium bg-teal-50/40 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none placeholder:text-slate-400 placeholder:font-normal"
+              />
+              <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                Any file or window name that should map to this client from now on.
+              </p>
+              {aliasErr && <p className="text-[11px] text-rose-600 mt-1">{aliasErr}</p>}
+            </>
+          ) : (
+            <button
+              onClick={() => setAliasOpen(true)}
+              className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:opacity-80"
+            >
+              <Plus className="w-3 h-3" /> Remember a name for this client
+            </button>
+          )}
+        </div>
+      )}
       <p className="text-[10px] text-slate-300 mb-3">Press Enter to apply · Escape to cancel</p>
       <div className="flex gap-2">
         <button
@@ -234,14 +297,14 @@ function MovePopover({
           Cancel
         </button>
         <button
-          onClick={() => onApply(selClient, selCat)}
-          disabled={!hasChanged}
+          onClick={() => apply()}
+          disabled={!canApply}
           className={cn(
             "flex-1 py-2 rounded-lg text-sm font-semibold shadow-sm transition-all",
-            hasChanged ? "bg-primary text-white hover:opacity-90" : "bg-slate-100 text-slate-400 cursor-not-allowed"
+            canApply ? "bg-primary text-white hover:opacity-90" : "bg-slate-100 text-slate-400 cursor-not-allowed"
           )}
         >
-          Apply
+          {aliasBusy ? "Saving…" : "Apply"}
         </button>
       </div>
     </div>,
@@ -1585,8 +1648,6 @@ export default function CategorySummary({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // EDIT 1 of 4: per-client reveal state for parked non-billable / no-client time.
   const [revealedNonBill, setRevealedNonBill] = useState<Set<string>>(new Set());
-  // Post-correction "remember this name?" prompt (from recategorize response).
-  const [aliasPrompt, setAliasPrompt] = useState<AliasSuggestion | null>(null);
 
   const pendingToggleRef = useRef<Set<string>>(new Set());
   const handleToggleSelect = useCallback((rowKey: string, _idx: number, _shift: boolean) => {
@@ -1652,21 +1713,18 @@ export default function CategorySummary({
       const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s;
     });
 
-  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string, source?: string, suggestAlias?: boolean): Promise<any> => {
+  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string, source?: string): Promise<boolean> => {
     try {
-      // Returns the response body (truthy) so callers can read `alias_suggestion`;
-      // bulk callers still test truthiness too. 404 → null.
-      return await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
+      await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         // `source` tags a deliberate single confirm so the backend teaches the
         // pattern learner. Drags / bulk-moves omit it and stay non-teaching.
-        // `suggest_alias` is separate: it asks for a name→client alias candidate
-        // and is safe on bulk moves too (the human approves it on the card).
-        body: JSON.stringify({ category, client_id: clientId, ...(source ? { source } : {}), ...(suggestAlias ? { suggest_alias: true } : {}) }),
+        body: JSON.stringify({ category, client_id: clientId, ...(source ? { source } : {}) }),
       });
+      return true;
     } catch (e: any) {
-      if (e?.status === 404 || e?.message?.includes("404") || e?.message?.includes("Not found")) return null;
+      if (e?.status === 404 || e?.message?.includes("404") || e?.message?.includes("Not found")) return false;
       throw e;
     }
   }, []);
@@ -1701,29 +1759,12 @@ export default function CategorySummary({
       return;
     }
     try {
-      // Bulk move is a deliberate correction too → ask for alias candidates
-      // (suggest_alias), but NOT pattern learning (no source): the human still
-      // approves the alias, so bulk can't rubber-stamp-poison.
-      const results = await Promise.all(uniqueIds.map((id) => moveActivity(id, clientId, category, undefined, true)));
+      const results = await Promise.all(uniqueIds.map((id) => moveActivity(id, clientId, category)));
       const moved = results.filter(Boolean).length;
       showToast(
         moved > 0 ? `Moved ${moved} activit${moved !== 1 ? "ies" : "y"}` : "Nothing to move",
         moved > 0 ? "success" : "error"
       );
-      // Selected rows may span several titles → several alias candidates. Show
-      // the most common distinct one (all share the same destination client).
-      const cands = results.filter(Boolean).map((r) => r.alias_suggestion).filter(Boolean);
-      if (cands.length) {
-        const byAlias = new Map<string, { c: AliasSuggestion; n: number }>();
-        for (const c of cands) {
-          const k = c.alias.toLowerCase();
-          const e = byAlias.get(k) || { c, n: 0 };
-          e.n += 1;
-          byAlias.set(k, e);
-        }
-        const best = [...byAlias.values()].sort((a, b) => b.n - a.n)[0].c;
-        setAliasPrompt(best);
-      }
       clearSelection();
       onRefresh();
     } catch (e: any) {
@@ -1733,31 +1774,13 @@ export default function CategorySummary({
 
   const moveSingle = useCallback(async (blockId: number, clientId: number | null, category: string) => {
     try {
-      // Deliberate single move → tag it so the backend teaches the pattern, and
-      // ask for a name → client alias worth remembering.
-      const res = await moveActivity(blockId, clientId, category, "single_confirm", true);
+      await moveActivity(blockId, clientId, category);
       showToast("Moved", "success");
-      if (res?.alias_suggestion) setAliasPrompt(res.alias_suggestion);
       onRefresh();
     } catch (e: any) {
       showToast(e?.message || "Move failed", "error");
     }
   }, [moveActivity, onRefresh, showToast]);
-
-  const addAliasFromPrompt = useCallback(async (alias: string) => {
-    if (!aliasPrompt) return;
-    try {
-      await safeFetchJson(`${API_BASE}/settings/clients/${aliasPrompt.client_id}/aliases/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ alias }),
-      });
-      showToast(`Alias added to ${aliasPrompt.client_name}`, "success");
-      setAliasPrompt(null);
-    } catch (e: any) {
-      showToast(e?.message || "Couldn't add alias", "error");
-    }
-  }, [aliasPrompt, showToast]);
 
   const confirmProposalInline = useCallback(async (blockIds: number[], clientId: number | null, category: string) => {
     try {
@@ -1865,16 +1888,6 @@ export default function CategorySummary({
 
   return (
     <div>
-      {aliasPrompt && createPortal(
-        <div className="fixed top-[120px] right-4 z-50 w-[340px] max-w-[calc(100vw-2rem)] shadow-lg rounded-xl animate-in slide-in-from-top-1 duration-200">
-          <AliasSuggestionCard
-            suggestion={aliasPrompt}
-            onAdd={addAliasFromPrompt}
-            onDismiss={() => setAliasPrompt(null)}
-          />
-        </div>,
-        document.body
-      )}
       <FlaggedBanner
         flagged={flaggedBlocks}
         onDismiss={onDismissReview}

@@ -327,6 +327,11 @@ function InlineMovePicker({
   const [selClient, setSelClient] = useState<number | null>(currentClientId);
   const [selCat, setSelCat] = useState(currentCategory || categories[0] || "");
   const ref = useRef<HTMLDivElement>(null);
+  // Optional "remember a name for this client" alias — collapsed by default.
+  const [aliasOpen, setAliasOpen] = useState(false);
+  const [aliasVal, setAliasVal] = useState("");
+  const [aliasErr, setAliasErr] = useState<string | null>(null);
+  const [aliasBusy, setAliasBusy] = useState(false);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -335,6 +340,29 @@ function InlineMovePicker({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [onClose]);
+
+  const alias = aliasVal.trim();
+  // Add the alias (if any) to the destination client, then move the selection.
+  // Self-contained so a "too close to another client" rejection shows inline.
+  const apply = async () => {
+    if (aliasBusy) return;
+    if (alias && selClient != null) {
+      setAliasBusy(true); setAliasErr(null);
+      try {
+        await safeFetchJson(`${API_BASE}/settings/clients/${selClient}/aliases/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ alias }),
+        });
+      } catch (e: any) {
+        setAliasBusy(false);
+        setAliasErr(e?.message || "Couldn't add that alias");
+        return; // keep open so they can edit or clear it
+      }
+      setAliasBusy(false);
+    }
+    onApply(selClient, selCat);
+  };
 
   return (
     <div
@@ -363,12 +391,42 @@ function InlineMovePicker({
           {categories.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
+      {selClient != null && (
+        <div className="mb-4">
+          {aliasOpen ? (
+            <>
+              <label className="text-[10px] font-semibold text-teal-600 uppercase tracking-wide mb-1 block">
+                Remember as alias
+              </label>
+              <input
+                autoFocus
+                value={aliasVal}
+                onChange={(e) => { setAliasVal(e.target.value); setAliasErr(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); apply(); } }}
+                placeholder="e.g. SacredHeart.qbw, SJEC"
+                className="w-full border border-teal-200 rounded-lg px-3 py-2 text-sm font-medium bg-teal-50/40 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none placeholder:text-slate-400 placeholder:font-normal"
+              />
+              <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                Any file or window name that should map to this client from now on.
+              </p>
+              {aliasErr && <p className="text-[11px] text-rose-600 mt-1">{aliasErr}</p>}
+            </>
+          ) : (
+            <button
+              onClick={() => setAliasOpen(true)}
+              className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:opacity-80"
+            >
+              <Plus className="w-3 h-3" /> Remember a name for this client
+            </button>
+          )}
+        </div>
+      )}
       <div className="flex gap-2">
         <button onClick={onClose} className="flex-1 py-2 border border-slate-200 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
           Cancel
         </button>
-        <button onClick={() => onApply(selClient, selCat)} className="flex-1 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:opacity-90 transition-all">
-          Apply
+        <button onClick={() => apply()} disabled={aliasBusy} className="flex-1 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:opacity-90 transition-all disabled:opacity-50">
+          {aliasBusy ? "Saving…" : "Apply"}
         </button>
       </div>
     </div>

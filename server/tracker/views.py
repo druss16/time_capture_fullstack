@@ -6328,41 +6328,12 @@ def recategorize_block(request, block_id):
         except Exception as e:
             log(f"[PATTERN] Failed to learn from block {block.id}: {e}")
 
-    # Alias suggestion is DECOUPLED from pattern learning. The correction (single
-    # OR bulk "move selected") just told us "this title → this client"; if the
-    # title carries a distinctive name that did NOT already match and is
-    # collision-safe, offer it so the reviewer can teach it once. It gates on an
-    # explicit request flag rather than the learning source because bulk moves
-    # are deliberately excluded from pattern learning (rubber-stamp poisoning),
-    # but the alias is safe to offer there — the human still approves it on the
-    # card, so it can't auto-poison.
-    alias_suggestion = None
-    if request.data.get('suggest_alias') and block.client_id:
-        try:
-            from tracker.services.alias_suggestion import (
-                suggest_alias_for_block, alias_is_safe_to_add,
-            )
-            cand = suggest_alias_for_block(block, block.client)
-            if cand:
-                siblings = list(
-                    Client.objects.filter(org=block.client.org).only("id", "name")
-                )
-                if alias_is_safe_to_add(cand, block.client, siblings):
-                    alias_suggestion = {
-                        "client_id": block.client_id,
-                        "client_name": block.client.name,
-                        "alias": cand,
-                    }
-        except Exception as e:
-            log(f"[ALIAS] suggestion failed for block {block.id}: {e}")
-
     return Response({
         "success": True,
         "block_id": block.id,
         "old_category": old_category,
         "new_category": new_category,
         "client_id": block.client_id,
-        "alias_suggestion": alias_suggestion,
     })
 
 @api_view(["POST"])

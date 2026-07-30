@@ -289,7 +289,7 @@ function MovePopover({
                 value={aliasVal}
                 onChange={(e) => { setAliasVal(e.target.value); setAliasErr(null); }}
                 placeholder="e.g. SacredHeart.qbw, SJEC"
-                className="w-full border border-teal-200 rounded-lg px-3 py-2 text-sm font-medium bg-teal-50/40 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none placeholder:text-slate-400 placeholder:font-normal"
+                className="w-full border border-teal-200 rounded-lg px-3 py-2 text-sm font-medium text-slate-900 bg-teal-50/40 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none placeholder:text-slate-400 placeholder:font-normal"
               />
               <p className="text-[10px] text-slate-400 mt-1 leading-snug">
                 Any file or window name that should map to this client from now on.
@@ -425,7 +425,7 @@ function InlineMovePicker({
                 onChange={(e) => { setAliasVal(e.target.value); setAliasErr(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); apply(); } }}
                 placeholder="e.g. SacredHeart.qbw, SJEC"
-                className="w-full border border-teal-200 rounded-lg px-3 py-2 text-sm font-medium bg-teal-50/40 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none placeholder:text-slate-400 placeholder:font-normal"
+                className="w-full border border-teal-200 rounded-lg px-3 py-2 text-sm font-medium text-slate-900 bg-teal-50/40 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none placeholder:text-slate-400 placeholder:font-normal"
               />
               <p className="text-[10px] text-slate-400 mt-1 leading-snug">
                 Any file or window name that should map to this client from now on.

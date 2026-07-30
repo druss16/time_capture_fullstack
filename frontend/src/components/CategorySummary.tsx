@@ -26,6 +26,7 @@ import { cn, getClientColor, SKELETON } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 
 import { BlockEvidencePanel } from "@/components/BlockEvidencePanel";
+import { AliasSuggestionCard, AliasSuggestion } from "@/components/AliasSuggestionCard";
 
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -1584,6 +1585,8 @@ export default function CategorySummary({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // EDIT 1 of 4: per-client reveal state for parked non-billable / no-client time.
   const [revealedNonBill, setRevealedNonBill] = useState<Set<string>>(new Set());
+  // Post-correction "remember this name?" prompt (from recategorize response).
+  const [aliasPrompt, setAliasPrompt] = useState<AliasSuggestion | null>(null);
 
   const pendingToggleRef = useRef<Set<string>>(new Set());
   const handleToggleSelect = useCallback((rowKey: string, _idx: number, _shift: boolean) => {
@@ -1649,18 +1652,19 @@ export default function CategorySummary({
       const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s;
     });
 
-  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string, source?: string): Promise<boolean> => {
+  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string, source?: string): Promise<any> => {
     try {
-      await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
+      // Returns the response body (truthy) so single-move callers can read
+      // `alias_suggestion`; bulk callers still just test truthiness. 404 → null.
+      return await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         // `source` tags a deliberate single confirm so the backend teaches the
         // pattern learner. Drags / bulk-moves omit it and stay non-teaching.
         body: JSON.stringify({ category, client_id: clientId, ...(source ? { source } : {}) }),
       });
-      return true;
     } catch (e: any) {
-      if (e?.status === 404 || e?.message?.includes("404") || e?.message?.includes("Not found")) return false;
+      if (e?.status === 404 || e?.message?.includes("404") || e?.message?.includes("Not found")) return null;
       throw e;
     }
   }, []);
@@ -1710,13 +1714,31 @@ export default function CategorySummary({
 
   const moveSingle = useCallback(async (blockId: number, clientId: number | null, category: string) => {
     try {
-      await moveActivity(blockId, clientId, category);
+      // Deliberate single move → tag it so the backend teaches the pattern and
+      // can hand back a name → client alias worth remembering.
+      const res = await moveActivity(blockId, clientId, category, "single_confirm");
       showToast("Moved", "success");
+      if (res?.alias_suggestion) setAliasPrompt(res.alias_suggestion);
       onRefresh();
     } catch (e: any) {
       showToast(e?.message || "Move failed", "error");
     }
   }, [moveActivity, onRefresh, showToast]);
+
+  const addAliasFromPrompt = useCallback(async (alias: string) => {
+    if (!aliasPrompt) return;
+    try {
+      await safeFetchJson(`${API_BASE}/settings/clients/${aliasPrompt.client_id}/aliases/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias }),
+      });
+      showToast(`Alias added to ${aliasPrompt.client_name}`, "success");
+      setAliasPrompt(null);
+    } catch (e: any) {
+      showToast(e?.message || "Couldn't add alias", "error");
+    }
+  }, [aliasPrompt, showToast]);
 
   const confirmProposalInline = useCallback(async (blockIds: number[], clientId: number | null, category: string) => {
     try {
@@ -1824,8 +1846,18 @@ export default function CategorySummary({
 
   return (
     <div>
-      <FlaggedBanner 
-        flagged={flaggedBlocks} 
+      {aliasPrompt && createPortal(
+        <div className="fixed top-[120px] right-4 z-50 w-[340px] max-w-[calc(100vw-2rem)] shadow-lg rounded-xl animate-in slide-in-from-top-1 duration-200">
+          <AliasSuggestionCard
+            suggestion={aliasPrompt}
+            onAdd={addAliasFromPrompt}
+            onDismiss={() => setAliasPrompt(null)}
+          />
+        </div>,
+        document.body
+      )}
+      <FlaggedBanner
+        flagged={flaggedBlocks}
         onDismiss={onDismissReview}
         onResolveDisagreement={onResolveDisagreement}
         onConfirmProposal={confirmProposalInline}

@@ -15,42 +15,15 @@ Usage:
   python manage.py suggest_aliases --org 21 --days 60
   python manage.py suggest_aliases --org 21 --add 388 "St Marys_Clinton"   # apply one
 """
-import re
 from collections import defaultdict
 from datetime import timedelta
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 from tracker.models import Client, ClassificationAudit, Organization
 from tracker.services.classification_service import ClassificationService as C
-
-# strip app/window chrome from a title to get the work "subject" (client name)
-_APP_TAIL = re.compile(
-    r'\s*[-|]\s*(quickbooks|excel|adobe acrobat|acrobat|word|outlook|microsoft'
-    r'|message \(html\)|google|work|search|yahoo|yelp|msn|file explorer|adobe'
-    r'|reader|\d+ more).*$', re.I)
-_DOC_EXT = re.compile(r'\.(pdf|xlsx?|xlsm|xlsb|docx?|csv|pptx?)\b.*$', re.I)
-_PAREN = re.compile(r'\s*\((primary|secondary)\)\s*', re.I)
-_GENERIC_SUBJ = {
-    'home', 'documents', 'document', 'book1', 'untitled', 'downloads', 'desktop',
-    'new tab', 'settings', 'all', 'office', 'inbox', 'save as', 'move or copy',
-    'open', 'print', 'preview',
-}
-
-
-def _subject(title: str) -> str:
-    t = C._strip_qb_screen_bracket(title or '')
-    t = _APP_TAIL.sub('', t)
-    t = _DOC_EXT.sub('', t)
-    t = _PAREN.sub(' ', t)
-    return re.sub(r'\s+', ' ', t).strip()
-
-
-def _is_distinctive(subj: str) -> bool:
-    n = C._normalize_name(subj)
-    if not n or n in _GENERIC_SUBJ or len(n) < 5:
-        return False
-    toks = n.split()
-    return len(toks) >= 2 and any(len(t) >= 4 for t in toks)
+# _subject / _is_distinctive live in the shared service so this command and the
+# inline recategorize_block suggestion mine alias candidates identically.
+from tracker.services.alias_suggestion import _subject, _is_distinctive
 
 
 def build_suggestions(org, since):

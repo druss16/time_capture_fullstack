@@ -1652,16 +1652,18 @@ export default function CategorySummary({
       const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s;
     });
 
-  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string, source?: string): Promise<any> => {
+  const moveActivity = useCallback(async (blockId: number, clientId: number | null, category: string, source?: string, suggestAlias?: boolean): Promise<any> => {
     try {
-      // Returns the response body (truthy) so single-move callers can read
-      // `alias_suggestion`; bulk callers still just test truthiness. 404 → null.
+      // Returns the response body (truthy) so callers can read `alias_suggestion`;
+      // bulk callers still test truthiness too. 404 → null.
       return await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         // `source` tags a deliberate single confirm so the backend teaches the
         // pattern learner. Drags / bulk-moves omit it and stay non-teaching.
-        body: JSON.stringify({ category, client_id: clientId, ...(source ? { source } : {}) }),
+        // `suggest_alias` is separate: it asks for a name→client alias candidate
+        // and is safe on bulk moves too (the human approves it on the card).
+        body: JSON.stringify({ category, client_id: clientId, ...(source ? { source } : {}), ...(suggestAlias ? { suggest_alias: true } : {}) }),
       });
     } catch (e: any) {
       if (e?.status === 404 || e?.message?.includes("404") || e?.message?.includes("Not found")) return null;
@@ -1699,12 +1701,29 @@ export default function CategorySummary({
       return;
     }
     try {
-      const results = await Promise.all(uniqueIds.map((id) => moveActivity(id, clientId, category)));
+      // Bulk move is a deliberate correction too → ask for alias candidates
+      // (suggest_alias), but NOT pattern learning (no source): the human still
+      // approves the alias, so bulk can't rubber-stamp-poison.
+      const results = await Promise.all(uniqueIds.map((id) => moveActivity(id, clientId, category, undefined, true)));
       const moved = results.filter(Boolean).length;
       showToast(
         moved > 0 ? `Moved ${moved} activit${moved !== 1 ? "ies" : "y"}` : "Nothing to move",
         moved > 0 ? "success" : "error"
       );
+      // Selected rows may span several titles → several alias candidates. Show
+      // the most common distinct one (all share the same destination client).
+      const cands = results.filter(Boolean).map((r) => r.alias_suggestion).filter(Boolean);
+      if (cands.length) {
+        const byAlias = new Map<string, { c: AliasSuggestion; n: number }>();
+        for (const c of cands) {
+          const k = c.alias.toLowerCase();
+          const e = byAlias.get(k) || { c, n: 0 };
+          e.n += 1;
+          byAlias.set(k, e);
+        }
+        const best = [...byAlias.values()].sort((a, b) => b.n - a.n)[0].c;
+        setAliasPrompt(best);
+      }
       clearSelection();
       onRefresh();
     } catch (e: any) {
@@ -1714,9 +1733,9 @@ export default function CategorySummary({
 
   const moveSingle = useCallback(async (blockId: number, clientId: number | null, category: string) => {
     try {
-      // Deliberate single move → tag it so the backend teaches the pattern and
-      // can hand back a name → client alias worth remembering.
-      const res = await moveActivity(blockId, clientId, category, "single_confirm");
+      // Deliberate single move → tag it so the backend teaches the pattern, and
+      // ask for a name → client alias worth remembering.
+      const res = await moveActivity(blockId, clientId, category, "single_confirm", true);
       showToast("Moved", "success");
       if (res?.alias_suggestion) setAliasPrompt(res.alias_suggestion);
       onRefresh();

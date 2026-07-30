@@ -117,6 +117,21 @@ const parse = (activity: string): ParsedActivity => {
   return { blockId: null, blockIds: [], title: activity };
 };
 
+// Best-effort clean of a row title into an alias candidate to PRE-FILL the
+// "remember as alias" field (the user can edit it). Mirrors the backend's
+// _subject: drop the [id:] marker, "(1m)"/"(Primary)" tags, the "Qbw.Exe - "
+// process prefix, the app suffix ("- Excel"), the file extension, and a
+// trailing year. Approximate on purpose — it's a starting point, not the gate.
+const suggestAliasFromTitle = (raw: string): string => {
+  let t = (raw || "").replace(/\[id:[\d,]+\]\s*/g, "");
+  t = t.replace(/\s*\((?:\d+m|primary|secondary)\)\s*/gi, " ");
+  t = t.replace(/\s*[-|]\s*(excel|word|quickbooks[^-|]*|outlook|adobe[^-|]*|acrobat|reader|microsoft[^-|]*|google[^-|]*|work|file explorer|edge|chrome|\d+ more.*)$/i, "");
+  t = t.replace(/^[a-z0-9_]+\.exe\s*[-–]\s*/i, "");
+  t = t.replace(/\.(pdf|xlsx?|xlsm|xlsb|docx?|csv|pptx?)\b.*$/i, "");
+  t = t.replace(/[\s_-]+(?:q[1-4][\s_-]*)?(?:fy[\s_-]*)?(?:19|20)\d{2}\s*$/i, "");
+  return t.replace(/\s+/g, " ").trim();
+};
+
 const isNonBillable = (name: string) => {
   const n = name.toLowerCase();
   return (
@@ -149,12 +164,13 @@ const CLIENT_ACCENTS = [
 // ─── Move Popover ─────────────────────────────────────────────────────────────
 
 function MovePopover({
-  anchorEl, clients, categories, currentClientId, currentCategory, label, onApply, onClose,
+  anchorEl, clients, categories, currentClientId, currentCategory, label, defaultAlias, onApply, onClose,
 }: {
   anchorEl?: HTMLElement | null;
   clients: ClientOption[]; categories: string[];
   currentClientId: number | null; currentCategory: string;
   label: string;
+  defaultAlias?: string;
   onApply: (clientId: number | null, category: string) => void;
   onClose: () => void;
 }) {
@@ -197,7 +213,9 @@ function MovePopover({
   }, [onClose]);
 
   const hasChanged = selClient !== currentClientId || selCat !== currentCategory;
-  const alias = aliasVal.trim();
+  // Only honor the alias when the field is open, so a pre-filled default is
+  // never added without the user opening/seeing it.
+  const alias = aliasOpen ? aliasVal.trim() : "";
   const canApply = (hasChanged || !!alias) && !aliasBusy;
 
   // Apply = optionally teach the alias, then move. The alias add is done here
@@ -280,7 +298,7 @@ function MovePopover({
             </>
           ) : (
             <button
-              onClick={() => setAliasOpen(true)}
+              onClick={() => { setAliasOpen(true); if (!aliasVal && defaultAlias) setAliasVal(defaultAlias); }}
               className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:opacity-80"
             >
               <Plus className="w-3 h-3" /> Remember a name for this client
@@ -315,12 +333,13 @@ function MovePopover({
 // ─── Inline Move Picker ───────────────────────────────────────────────────────
 
 function InlineMovePicker({
-  clients, categories, count, currentClientId, currentCategory, onApply, onClose,
+  clients, categories, count, currentClientId, currentCategory, defaultAlias, onApply, onClose,
 }: {
   clients: ClientOption[]; categories: string[];
   count: number;
   currentClientId: number | null;
   currentCategory: string;
+  defaultAlias?: string;
   onApply: (clientId: number | null, category: string) => void;
   onClose: () => void;
 }) {
@@ -341,7 +360,9 @@ function InlineMovePicker({
     return () => document.removeEventListener("mousedown", handler);
   }, [onClose]);
 
-  const alias = aliasVal.trim();
+  // Only honor the alias when the field is actually open, so a pre-filled
+  // default can never be added without the user seeing/opting into it.
+  const alias = aliasOpen ? aliasVal.trim() : "";
   // Add the alias (if any) to the destination client, then move the selection.
   // Self-contained so a "too close to another client" rejection shows inline.
   const apply = async () => {
@@ -413,7 +434,7 @@ function InlineMovePicker({
             </>
           ) : (
             <button
-              onClick={() => setAliasOpen(true)}
+              onClick={() => { setAliasOpen(true); if (!aliasVal && defaultAlias) setAliasVal(defaultAlias); }}
               className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:opacity-80"
             >
               <Plus className="w-3 h-3" /> Remember a name for this client
@@ -436,13 +457,14 @@ function InlineMovePicker({
 // ─── Floating Selection Bar ───────────────────────────────────────────────────
 
 function SelectionBar({
-  count, clients, categories, currentClientId, currentCategory, onMove, onClear,
+  count, clients, categories, currentClientId, currentCategory, defaultAlias, onMove, onClear,
 }: {
   count: number;
   clients: ClientOption[];
   categories: string[];
   currentClientId: number | null;
   currentCategory: string;
+  defaultAlias?: string;
   onMove: (clientId: number | null, category: string) => void;
   onClear: () => void;
 }) {
@@ -473,6 +495,7 @@ function SelectionBar({
             count={count}
             currentClientId={currentClientId}
             currentCategory={currentCategory}
+            defaultAlias={defaultAlias ?? ""}
             onApply={(clientId, category) => { setShowPopover(false); onMove(clientId, category); }}
             onClose={() => setShowPopover(false)}
           />
@@ -919,6 +942,7 @@ function ActivityRow({
               currentClientId={client.client_id}
               currentCategory={categoryName}
               label="Move this activity"
+              defaultAlias={suggestAliasFromTitle(parsed.title)}
               onApply={handleApply}
               onClose={() => setShowPopover(false)}
             />
@@ -1742,10 +1766,11 @@ export default function CategorySummary({
         .map((k) => parseInt(k.split("-")[0]))
         .filter((n) => !isNaN(n) && n > 0)
     );
-    if (selectedBlockIds.size === 0) return { clientId: null, category: "" };
+    if (selectedBlockIds.size === 0) return { clientId: null, category: "", title: "" };
 
     const clientIds = new Set<number | null>();
     const categories = new Set<string>();
+    let firstTitle = "";
 
     for (const client of timeSummary) {
       for (const cat of client.categories) {
@@ -1755,6 +1780,7 @@ export default function CategorySummary({
           if (ids.some((id) => selectedBlockIds.has(id))) {
             clientIds.add(client.client_id);
             categories.add(cat.name);
+            if (!firstTitle) firstTitle = p.title;
           }
         }
       }
@@ -1763,6 +1789,7 @@ export default function CategorySummary({
     return {
       clientId: clientIds.size === 1 ? [...clientIds][0] : null,
       category: categories.size === 1 ? [...categories][0] : "",
+      title: firstTitle,
     };
   }, [selectedIds, timeSummary]);
 
@@ -2278,6 +2305,7 @@ export default function CategorySummary({
         categories={availableCategories}
         currentClientId={selectionCurrent.clientId}
         currentCategory={selectionCurrent.category}
+        defaultAlias={suggestAliasFromTitle(selectionCurrent.title)}
         onMove={(clientId, category) => moveMany(Array.from(selectedIds) as any, clientId, category)}
         onClear={clearSelection}
       />

@@ -66,6 +66,52 @@ def _client_from_filename(fname: str) -> str:
     return ""
 
 
+# Folder names that hold one sub-folder per client. The segment immediately
+# BELOW one of these is the client-level folder — a stable, per-client boundary
+# that (unlike a filename keyword) is identical for every one of that client's
+# documents and differs between clients. Lowercased exact-segment match.
+# Extend per-org if a firm uses a different clients-root name.
+_CLIENT_ROOT_FOLDERS = (
+    "client file notes",
+    "clients",
+    "client files",
+    "client docs",
+)
+
+
+def client_folder_bucket(file_path: str, roots=_CLIENT_ROOT_FOLDERS) -> str:
+    """Return the client-level folder segment from a path, or '' if none.
+
+    The path structure that matters here is ``...\\<clients-root>\\<Client>\\...``
+    (org 21: ``...\\Company Data\\Client File Notes\\Divine Mercy\\...``). The
+    ``<Client>`` folder is the client boundary: every one of that client's docs
+    shares it, and two different clients never do. Keying a doc block on this
+    folder is what stops one Excel session that touched two clients' files from
+    collapsing into a single mixed block (block 54393: Divine Mercy + Our Lady
+    of Hope files merged under one ``docs`` bucket).
+
+    Returns '' when the path has no recognized clients-root (e.g. a file under
+    ``C:\\Users\\<name>\\OneDrive\\...``) — the caller then keeps the existing
+    coarse ``docs`` bucket, so those paths are unaffected.
+    """
+    if not file_path:
+        return ""
+    segs = [s for s in re.split(r"[\\/]+", file_path) if s]
+    low = [s.strip().lower() for s in segs]
+    anchor_idx = None
+    for i, s in enumerate(low):
+        if s in roots:
+            anchor_idx = i
+            break
+    if anchor_idx is None or anchor_idx + 1 >= len(low):
+        return ""
+    folder = re.sub(r"\s+", " ", low[anchor_idx + 1]).strip()
+    # A one/two-char segment is not a real client folder — keep coarse.
+    if len(folder) < 3:
+        return ""
+    return folder
+
+
 def grouping_key(identity: str) -> str:
     """Map a fine content_identity to a coarse grouping key.
 

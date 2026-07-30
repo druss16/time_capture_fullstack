@@ -52,7 +52,7 @@ from tracker.utils.content_classifier import (
 )
 
 from tracker.utils.content_identity import content_identity
-from tracker.utils.grouping_key import grouping_key
+from tracker.utils.grouping_key import grouping_key, client_folder_bucket
 
 import logging
 logger = logging.getLogger(__name__)
@@ -278,6 +278,22 @@ def _grouping_content_id(window_title: str, file_path: str, url: str) -> str:
     nothing, preserving all prior behavior (Office files, QB company).
     """
     gk = grouping_key(content_identity(window_title or "", url or "", file_path or ""))
+    # Refine the coarse DOCUMENT buckets ("docs", "docs:<filename-hint>") with the
+    # actual CLIENT FOLDER from the path when one is present. The folder segment
+    # under a clients-root (org 21: ...\Client File Notes\<Client>\...) is a
+    # reliable per-client boundary: every one of a client's documents shares it,
+    # and two different clients never do. Keying on it splits an Excel/Word
+    # session that touched two clients' files into one block PER CLIENT (block
+    # 54393: Divine Mercy + Our Lady of Hope files were collapsed into a single
+    # "docs" bucket), while a single client's docs still group together. This
+    # ONLY refines the docs family — QBO-customer, scan-batch, web and paychex
+    # identities are untouched — and is a no-op when the path has no recognized
+    # clients-root (client_folder_bucket returns ''), so user-folder / OneDrive
+    # docs keep the existing coarse bucket.
+    if file_path and (gk == "docs" or gk.startswith("docs:")):
+        cf = client_folder_bucket(file_path)
+        if cf:
+            return f"docs:cf={cf}"
     if gk:
         return gk
     return _content_identifier(window_title, file_path, url)
@@ -879,13 +895,31 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 and e["window_title"].lower().strip() not in GENERIC_TITLES
             ]
             if titled_events:
-                window_title = max(titled_events, key=_ev_seconds)["window_title"]
+                rep_event = max(titled_events, key=_ev_seconds)
             else:
-                window_title = app_events[0]["window_title"]
+                rep_event = app_events[0]
+            window_title = rep_event["window_title"]
 
             urls = [e["url"] for e in app_events if e["url"]]
             paths = [e["file_path"] for e in app_events if e["file_path"]]
             client_id = app_events[0].get("current_client_id")
+
+            # Representative file_path / url must come from the SAME event as the
+            # representative window_title. Previously file_path was paths[0] (the
+            # FIRST event's path) while the title came from the max-dwell event.
+            # When a block wrongly commingles two clients' files (see the
+            # docs-bucket merge fix), that made the block's title name one client
+            # and its file_path another — and the classifier keys on file_path
+            # (its strongest signal), so it attributed to the client the human
+            # never saw in the title. Block 54393: title "Divine Mercy Transfers
+            # JUN26.xlsx" but file_path an "Our Lady of Hope" file → booked to
+            # Our Lady of Hope. Sourcing both from the representative event keeps
+            # them consistent. Fall back to any in-block value so browser blocks
+            # (representative event has no file_path) are unchanged.
+            rep_path = rep_event.get("file_path") or ""
+            rep_url = rep_event.get("url") or ""
+            file_path = rep_path or (paths[0] if paths else "")
+            url = rep_url or (urls[0] if urls else "")
 
             # v1.3.39: drop client attribution on pure-personal blocks.
             # If every event in this group is high-confidence personal content,
@@ -908,8 +942,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 "app_name": app_events[0]["app_name"],
                 "bundle_id": app_events[0]["bundle_id"],
                 "window_title": window_title,
-                "url": urls[0] if urls else "",
-                "file_path": paths[0] if paths else "",
+                "url": url,
+                "file_path": file_path,
                 "hostname": app_events[0]["hostname"],
                 "device_id": app_events[0]["device_id"],
                 "current_client_id": client_id,

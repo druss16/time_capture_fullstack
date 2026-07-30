@@ -1399,12 +1399,231 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Daily Review Tab (firm-wide accuracy audit) ────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface DRCategory {
+  name: string; hours: number; block_count: number; unique_activities: number;
+  sample_activities: string[]; task_type_code: string | null; task_type_name: string | null;
+}
+interface DRUserCard { user_id: number; name: string; total_hours: number; categories: DRCategory[]; }
+interface DRClient { client_id: number | null; client: string; total_hours: number; users: DRUserCard[]; }
+interface DRUserSummary {
+  user_id: number; name: string; email: string; role: string;
+  billable_hours: number; non_billable_hours: number; total_hours: number; needs_review_hours: number;
+}
+interface DRResponse {
+  org_id: number; org_name: string; timezone: string;
+  window: { mode: "day" | "range"; start: string; end: string };
+  totals: { billable_hours: number; non_billable_hours: number; total_hours: number; needs_review_hours: number };
+  user_summary: DRUserSummary[];
+  clients: DRClient[];
+}
+
+interface DailyReviewTabProps {
+  apiFetch: (path: string, opts?: RequestInit) => Promise<any>;
+  flash: (msg: string, type?: "ok" | "err") => void;
+  filterOrg: number | null;
+  setFilterOrg: (id: number | null) => void;
+  orgs: Org[];
+}
+
+const fmtH = (n: number) => `${(n || 0).toFixed(2)}h`;
+const cleanActivity = (s: string) => s.replace(/^\[id:[^\]]*\]\s*/, "");
+const clientKey = (c: DRClient) => (c.client_id != null ? `id:${c.client_id}` : `name:${c.client}`);
+
+function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: DailyReviewTabProps) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [rangeMode, setRangeMode] = useState(false);
+  const [date, setDate] = useState(today);
+  const [startDate, setStartDate] = useState(today);
+  const [endDate, setEndDate] = useState(today);
+  const [data, setData] = useState<DRResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const load = useCallback(async () => {
+    if (!filterOrg) { flash("Select a firm above first.", "err"); return; }
+    setLoading(true);
+    try {
+      const p = new URLSearchParams({ org_id: String(filterOrg) });
+      if (rangeMode) { p.set("start", startDate); p.set("end", endDate); }
+      else { p.set("date", date); }
+      const d: DRResponse = await apiFetch(`/mavops/daily-review/?${p.toString()}`);
+      setData(d);
+      setExpanded(new Set());
+    } catch { flash("Failed to load daily review.", "err"); }
+    finally { setLoading(false); }
+  }, [apiFetch, flash, filterOrg, rangeMode, date, startDate, endDate]);
+
+  // Auto-load when the firm changes (date changes require the Load button).
+  useEffect(() => { if (filterOrg) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterOrg]);
+
+  const toggle = (key: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+
+  const inputStyle: React.CSSProperties = {
+    background: T.bg, border: `1px solid ${T.border}`, color: T.text,
+    padding: "7px 10px", fontSize: 12, outline: "none", borderRadius: 4, ...mono,
+  };
+
+  return (
+    <div>
+      {/* ── Controls ── */}
+      <div style={{ ...card, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" as const }}>
+        <span style={{ color: T.textMuted, fontSize: 11, letterSpacing: 1, textTransform: "uppercase" as const, fontWeight: 600 }}>Firm</span>
+        <select value={filterOrg || ""} onChange={e => setFilterOrg(e.target.value ? Number(e.target.value) : null)} style={{ ...inputStyle, cursor: "pointer", color: filterOrg ? T.teal : T.textSub }}>
+          <option value="">— select firm —</option>
+          {orgs.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+
+        <div style={{ width: 1, height: 24, background: T.border }} />
+
+        {rangeMode ? (
+          <>
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={inputStyle} />
+            <span style={{ color: T.textMuted, fontSize: 12 }}>→</span>
+            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={inputStyle} />
+          </>
+        ) : (
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} />
+        )}
+
+        <label style={{ display: "flex", alignItems: "center", gap: 6, color: T.textSub, fontSize: 12, cursor: "pointer", ...mono }}>
+          <input type="checkbox" checked={rangeMode} onChange={e => setRangeMode(e.target.checked)} style={{ cursor: "pointer" }} />
+          date range
+        </label>
+
+        <Btn label={loading ? "loading…" : "load"} onClick={load} disabled={loading || !filterOrg} />
+      </div>
+
+      {!filterOrg && (
+        <div style={{ color: T.textMuted, fontSize: 14, ...mono, paddingTop: 48, textAlign: "center" }}>
+          select a firm to audit its clients across every user
+        </div>
+      )}
+
+      {data && (
+        <>
+          {/* ── Header + firm totals ── */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, margin: "20px 0 12px" }}>
+            <span style={{ fontSize: 18, fontWeight: 700, color: T.text }}>{data.org_name}</span>
+            <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>
+              {data.window.mode === "range" ? `${data.window.start} → ${data.window.end}` : data.window.start} · {data.timezone}
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
+            <StatCard label="Billable" value={fmtH(data.totals.billable_hours)} color={T.green} />
+            <StatCard label="Non-billable" value={fmtH(data.totals.non_billable_hours)} color={T.textSub} />
+            <StatCard label="Total" value={fmtH(data.totals.total_hours)} color={T.text} />
+            <StatCard label="Needs Review" value={fmtH(data.totals.needs_review_hours)} color={data.totals.needs_review_hours > 0 ? T.yellow : T.textMuted} />
+          </div>
+
+          {/* ── Per-user summary ── */}
+          {data.user_summary.length > 0 && (
+            <div style={{ ...card, marginBottom: 20 }}>
+              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>By User</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 12, ...mono }}>
+                <thead>
+                  <tr style={{ color: T.textMuted, textAlign: "left" as const }}>
+                    <th style={{ padding: "4px 8px", fontWeight: 500 }}>User</th>
+                    <th style={{ padding: "4px 8px", fontWeight: 500 }}>Role</th>
+                    <th style={{ padding: "4px 8px", fontWeight: 500, textAlign: "right" as const }}>Billable</th>
+                    <th style={{ padding: "4px 8px", fontWeight: 500, textAlign: "right" as const }}>Non-bill</th>
+                    <th style={{ padding: "4px 8px", fontWeight: 500, textAlign: "right" as const }}>Total</th>
+                    <th style={{ padding: "4px 8px", fontWeight: 500, textAlign: "right" as const }}>Needs Review</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.user_summary.map(u => (
+                    <tr key={u.user_id} style={{ borderTop: `1px solid ${T.border}` }}>
+                      <td style={{ padding: "5px 8px", color: T.text }}>{u.name}</td>
+                      <td style={{ padding: "5px 8px", color: T.textMuted }}>{u.role}</td>
+                      <td style={{ padding: "5px 8px", textAlign: "right" as const, color: T.green }}>{fmtH(u.billable_hours)}</td>
+                      <td style={{ padding: "5px 8px", textAlign: "right" as const, color: T.textSub }}>{fmtH(u.non_billable_hours)}</td>
+                      <td style={{ padding: "5px 8px", textAlign: "right" as const, color: T.text }}>{fmtH(u.total_hours)}</td>
+                      <td style={{ padding: "5px 8px", textAlign: "right" as const, color: u.needs_review_hours > 0 ? T.yellow : T.textMuted }}>{fmtH(u.needs_review_hours)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ── Clients (client-major) ── */}
+          <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 10, fontWeight: 600 }}>
+            Clients · {data.clients.length}
+          </div>
+
+          {data.clients.length === 0 && (
+            <div style={{ color: T.textMuted, fontSize: 13, ...mono, padding: "20px 0" }}>no client time in this window</div>
+          )}
+
+          {data.clients.map(c => {
+            const key = clientKey(c);
+            const isOpen = expanded.has(key);
+            const unassigned = c.client_id == null;
+            return (
+              <div key={key} style={{ ...card, marginBottom: 8, padding: 0, overflow: "hidden", borderColor: unassigned ? T.yellow + "55" : T.border }}>
+                <div onClick={() => toggle(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", cursor: "pointer", background: unassigned ? T.yellow + "0e" : "transparent" }}>
+                  <span style={{ color: T.textMuted, fontSize: 12, width: 12 }}>{isOpen ? "▾" : "▸"}</span>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: unassigned ? T.yellow : T.text, fontStyle: unassigned ? "italic" as const : "normal" as const }}>
+                    {c.client}{unassigned ? "  (unattributed)" : ""}
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{c.users.length} user{c.users.length > 1 ? "s" : ""}</span>
+                  <span style={{ ...mono, fontSize: 13, color: T.teal, fontWeight: 600 }}>{fmtH(c.total_hours)}</span>
+                </div>
+
+                {isOpen && (
+                  <div style={{ borderTop: `1px solid ${T.border}`, padding: "6px 18px 14px 42px" }}>
+                    {c.users.map(u => (
+                      <div key={u.user_id} style={{ padding: "10px 0", borderBottom: `1px solid ${T.border}55` }}>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{u.name}</span>
+                          <span style={{ ...mono, fontSize: 12, color: T.teal }}>{fmtH(u.total_hours)}</span>
+                        </div>
+                        {u.categories.map((cat, i) => (
+                          <div key={i} style={{ marginBottom: 6, paddingLeft: 12 }}>
+                            <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12, ...mono }}>
+                              <span style={{ color: T.purple }}>{cat.name}</span>
+                              <span style={{ color: T.textSub }}>{fmtH(cat.hours)}</span>
+                              <span style={{ color: T.textMuted }}>· {cat.block_count} block{cat.block_count > 1 ? "s" : ""}</span>
+                              {cat.task_type_name && <span style={{ color: T.textMuted }}>· {cat.task_type_name}</span>}
+                            </div>
+                            {cat.sample_activities.length > 0 && (
+                              <ul style={{ listStyle: "none", margin: "3px 0 0", padding: 0 }}>
+                                {cat.sample_activities.map((s, j) => (
+                                  <li key={j} style={{ color: T.textMuted, fontSize: 11.5, ...mono, padding: "1px 0 1px 14px" }}>· {cleanActivity(s)}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function MavOpsAdmin() {
   const [latestVersion, setLatestVersion] = useState<string>("0.0.0");
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
-  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "suggestions" | "mismatches">("orgs");
+  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "suggestions" | "mismatches" | "daily-review">("orgs");
 
   const [filterOrg, setFilterOrg] = useState<number | null>(null);
   const [filterHostname, setFilterHostname] = useState("");
@@ -1575,7 +1794,8 @@ export default function MavOpsAdmin() {
     return [d.machine_name, d.user, d.org_name].some(s => s.toLowerCase().includes(search.toLowerCase()));
   });
 
-  const TABS = ["orgs", "devices", "logs", "errors", "rules", "suggestions", "mismatches"] as const;
+  const TABS = ["orgs", "devices", "logs", "errors", "rules", "suggestions", "mismatches", "daily-review"] as const;
+  const TAB_LABELS: Record<string, string> = { "daily-review": "Daily Review" };
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'DM Sans', sans-serif" }}>
@@ -1655,7 +1875,7 @@ export default function MavOpsAdmin() {
       <div style={{ borderBottom: `1px solid ${T.border}`, padding: "0 32px", display: "flex", alignItems: "center", background: T.surface }}>
         {TABS.map(t => (
           <button key={t} onClick={() => setTab(t)} style={{ background: "none", border: "none", color: tab === t ? T.teal : T.textMuted, padding: "14px 22px", fontSize: 13, cursor: "pointer", borderBottom: tab === t ? `2px solid ${T.teal}` : "2px solid transparent", textTransform: "capitalize" as const, ...mono, letterSpacing: 1, fontWeight: tab === t ? 600 : 400 }}>
-            {t}
+            {TAB_LABELS[t] || t}
             {t === "errors" && errorSummary && errorSummary.unresolved > 0 && (
               <span style={{ marginLeft: 6, background: T.red + "33", color: T.red, fontSize: 10, padding: "2px 6px", borderRadius: 3 }}>{errorSummary.unresolved}</span>
             )}
@@ -2044,6 +2264,11 @@ export default function MavOpsAdmin() {
 
         {tab === "mismatches" && (
           <MismatchesTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} />
+        )}
+
+        {/* ══ DAILY REVIEW (firm-wide accuracy audit) ══ */}
+        {tab === "daily-review" && (
+          <DailyReviewTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} setFilterOrg={setFilterOrg} orgs={orgs} />
         )}
         
         {/* ══ SUGGESTIONS ══ */}

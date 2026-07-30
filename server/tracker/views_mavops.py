@@ -510,6 +510,158 @@ def mavops_org_members(request, org_id):
     })
 
 
+# ── Firm-wide Daily Review (accuracy audit) ──────────────────────────────────
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_daily_review(request):
+    """
+    Firm-wide Daily Review — accuracy audit view for one org.
+
+    GET /api/mavops/daily-review/?org_id=<id>&date=YYYY-MM-DD           (single day)
+    GET /api/mavops/daily-review/?org_id=<id>&start=YYYY-MM-DD&end=YYYY-MM-DD  (range)
+
+    Lists every client with the blocks each user attributed to it, grouped
+    CLIENT-major (client -> users -> categories -> sample activities). Reuses the
+    reconciled billing service (compute_client_cards / compute_totals), so the
+    numbers match Daily Review and Reports byte-for-byte. Read-only.
+    """
+    from datetime import datetime, timedelta
+    from datetime import timezone as dt_timezone
+    from django.utils.dateparse import parse_date
+
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:  # pragma: no cover - py<3.9 fallback
+        from backports.zoneinfo import ZoneInfo
+
+    from tracker.services.billing_totals import compute_totals, compute_client_cards
+
+    org_id = request.GET.get('org_id')
+    if not org_id:
+        return Response({'error': 'org_id is required'}, status=400)
+    try:
+        org = Organization.objects.get(id=org_id)
+    except (Organization.DoesNotExist, ValueError):
+        return Response({'error': 'Organization not found'}, status=404)
+
+    # ── Window, keyed off the ORG's timezone (not the staff user's active tz) ──
+    try:
+        tz = ZoneInfo(org.timezone or 'UTC')
+    except Exception:
+        tz = ZoneInfo('UTC')
+
+    start_str = request.GET.get('start')
+    end_str = request.GET.get('end')
+    if start_str and end_str:
+        mode = 'range'
+        start_date = parse_date(start_str)
+        end_date = parse_date(end_str)
+        if not start_date or not end_date:
+            return Response({'error': 'Invalid start/end date'}, status=400)
+        if end_date < start_date:
+            start_date, end_date = end_date, start_date
+    else:
+        mode = 'day'
+        date_str = request.GET.get('date')
+        start_date = parse_date(date_str) if date_str else timezone.localdate()
+        if not start_date:
+            return Response({'error': 'Invalid date'}, status=400)
+        end_date = start_date
+
+    start_local = datetime.combine(start_date, datetime.min.time(), tzinfo=tz)
+    end_local = datetime.combine(end_date, datetime.min.time(), tzinfo=tz) + timedelta(days=1)
+    start_utc = start_local.astimezone(dt_timezone.utc)
+    end_utc = end_local.astimezone(dt_timezone.utc)
+
+    # ── Firm-level header totals (all users, one query set) ──
+    firm_totals = compute_totals(org, start_utc, end_utc, user_id=None, can_see_all=True)
+
+    # ── Per-user cards, pivoted CLIENT-major ──
+    members = (
+        OrganizationMembership.objects
+        .filter(organization=org)
+        .select_related('user')
+        .order_by('user__username')
+    )
+
+    clients = {}        # key -> {client_id, client, total_hours, users: [...]}
+    user_summary = []
+
+    for m in members:
+        u = m.user
+        uid = u.id
+        display_name = (
+            (u.get_full_name() or '').strip()
+            or u.username or u.email or f'User {uid}'
+        )
+
+        u_totals = compute_totals(
+            org, start_utc, end_utc, user_id=uid, can_see_all=False
+        )
+        cards = compute_client_cards(
+            org, start_utc, end_utc, user_id=uid, can_see_all=False
+        )
+
+        user_summary.append({
+            'user_id': uid,
+            'name': display_name,
+            'email': u.email or '',
+            'role': m.role,
+            'billable_hours': u_totals['billable_hours'],
+            'non_billable_hours': u_totals['non_billable_hours'],
+            'total_hours': u_totals['total_hours'],
+            'needs_review_hours': u_totals['needs_review_hours'],
+        })
+
+        for card in cards:
+            key = (
+                card['client_id'] if card['client_id'] is not None
+                else f"name:{card['client']}"
+            )
+            bucket = clients.get(key)
+            if bucket is None:
+                bucket = {
+                    'client_id': card['client_id'],
+                    'client': card['client'],
+                    'total_hours': 0.0,
+                    'users': [],
+                }
+                clients[key] = bucket
+            bucket['total_hours'] = round(bucket['total_hours'] + card['total_hours'], 2)
+            bucket['users'].append({
+                'user_id': uid,
+                'name': display_name,
+                'total_hours': card['total_hours'],
+                'categories': card['categories'],
+            })
+
+    client_list = sorted(clients.values(), key=lambda c: -c['total_hours'])
+    for c in client_list:
+        c['users'].sort(key=lambda x: -x['total_hours'])
+    user_summary.sort(key=lambda x: -x['total_hours'])
+
+    return Response({
+        'org_id': org.id,
+        'org_name': org.name,
+        'timezone': str(tz),
+        'window': {
+            'mode': mode,
+            'start': start_date.isoformat(),
+            'end': end_date.isoformat(),
+        },
+        'totals': {
+            'billable_hours': firm_totals['billable_hours'],
+            'non_billable_hours': firm_totals['non_billable_hours'],
+            'total_hours': firm_totals['total_hours'],
+            'needs_review_hours': firm_totals['needs_review_hours'],
+        },
+        'user_summary': user_summary,
+        'clients': client_list,
+    })
+
+
 @api_view(['GET'])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])

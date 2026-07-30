@@ -397,6 +397,8 @@ urlpatterns = [
 
     path('mavops/orgs/<int:org_id>/members/', views_mavops.mavops_org_members),
 
+    path('mavops/daily-review/', views_mavops.mavops_daily_review, name='mavops-daily-review'),
+
     path('orgs/<int:org_id>/routing-rules/', views_routing_rules.list_create_rules, name='routing_rules_list_create'),
 
     path('orgs/<int:org_id>/routing-rules/<int:rule_id>/', views_routing_rules.detail_update_delete_rule, name='routing_rules_detail'),

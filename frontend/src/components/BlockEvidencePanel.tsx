@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { Sparkles, Mail, CalendarClock, Target, Compass, ArrowRight, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
+import { AliasSuggestionCard, AliasSuggestion } from "@/components/AliasSuggestionCard";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api")
@@ -323,6 +324,7 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [assigning, setAssigning] = useState(false);
   const [assignedTo, setAssignedTo] = useState<string | null>(null);
+  const [aliasSuggestion, setAliasSuggestion] = useState<AliasSuggestion | null>(null);
   const [showEvents, setShowEvents] = useState(false);
 
   useEffect(() => {
@@ -352,21 +354,41 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
 const handleAssign = async (clientId: number, clientName: string, category?: string) => {
     setAssigning(true);
     try {
-      await safeFetchJson(`${API_BASE}/blocks/${blockId}/recategorize/`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_id: clientId,
-          category: category || "Accounting/Bookkeeping",
-        }),
-      });
+      const res = await safeFetchJson<{ alias_suggestion?: AliasSuggestion | null }>(
+        `${API_BASE}/blocks/${blockId}/recategorize/`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          // Deliberate single correction: tag it so the backend learns the
+          // pattern AND can offer a name → client alias to remember.
+          body: JSON.stringify({
+            client_id: clientId,
+            category: category || "Accounting/Bookkeeping",
+            source: "single_confirm",
+          }),
+        }
+      );
       setAssignedTo(clientName);
+      setAliasSuggestion(res?.alias_suggestion || null);
       if (onAssigned) onAssigned();
     } catch (err: any) {
       setError(err?.message || "Failed to assign");
     } finally {
       setAssigning(false);
     }
+  };
+
+  const addAlias = async (alias: string) => {
+    if (!aliasSuggestion) return;
+    await safeFetchJson(
+      `${API_BASE}/settings/clients/${aliasSuggestion.client_id}/aliases/`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias }),
+      }
+    );
+    setAliasSuggestion(null);
   };
 
   if (loading) {
@@ -387,12 +409,22 @@ const handleAssign = async (clientId: number, clientName: string, category?: str
 
   if (!data) return null;
 
-  // Post-assign confirmation — keep the panel calm, just acknowledge.
+  // Post-assign confirmation — keep the panel calm, just acknowledge. If the
+  // correction taught us a new name, offer to remember it as an alias.
   if (assignedTo) {
     return (
-      <div className="px-3 py-3 flex items-center gap-2 text-[13px] text-emerald-700">
-        <Check className="w-4 h-4" />
-        Assigned to <span className="font-semibold">{assignedTo}</span>.
+      <div className="px-3 py-3 space-y-2.5">
+        <div className="flex items-center gap-2 text-[13px] text-emerald-700">
+          <Check className="w-4 h-4" />
+          Assigned to <span className="font-semibold">{assignedTo}</span>.
+        </div>
+        {aliasSuggestion && (
+          <AliasSuggestionCard
+            suggestion={aliasSuggestion}
+            onAdd={addAlias}
+            onDismiss={() => setAliasSuggestion(null)}
+          />
+        )}
       </div>
     );
   }

@@ -6318,6 +6318,7 @@ def recategorize_block(request, block_id):
     # Auto-confirmed blocks never reach this path (committed by the classifier),
     # so a machine guess can never reinforce itself.
     _learn_source = (request.data.get('source') or 'bulk_move')
+    alias_suggestion = None
     if _learn_source in {'single_confirm', 'correction', 'manual'} and block.client_id:
         try:
             PatternLearningService.learn_from_block(
@@ -6328,12 +6329,37 @@ def recategorize_block(request, block_id):
         except Exception as e:
             log(f"[PATTERN] Failed to learn from block {block.id}: {e}")
 
+        # The correction just told us "this title → this client". If the title
+        # carries a distinctive name that did NOT already match the client, and
+        # it's collision-safe against siblings, offer it as an alias so the
+        # reviewer can teach it once instead of re-correcting it every time.
+        # Same teaching-source gate as pattern learning, so bulk/drag moves
+        # never trigger the prompt.
+        try:
+            from tracker.services.alias_suggestion import (
+                suggest_alias_for_block, alias_is_safe_to_add,
+            )
+            cand = suggest_alias_for_block(block, block.client)
+            if cand:
+                siblings = list(
+                    Client.objects.filter(org=block.client.org).only("id", "name")
+                )
+                if alias_is_safe_to_add(cand, block.client, siblings):
+                    alias_suggestion = {
+                        "client_id": block.client_id,
+                        "client_name": block.client.name,
+                        "alias": cand,
+                    }
+        except Exception as e:
+            log(f"[ALIAS] suggestion failed for block {block.id}: {e}")
+
     return Response({
         "success": True,
         "block_id": block.id,
         "old_category": old_category,
         "new_category": new_category,
         "client_id": block.client_id,
+        "alias_suggestion": alias_suggestion,
     })
 
 @api_view(["POST"])
@@ -6904,6 +6930,51 @@ def settings_client_detail(request, client_id):
             "success": True,
             "message": f"Deleted client: {client_name}",
         })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def add_client_alias(request, client_id):
+    """Append ONE alias to a client — the inline "teach me this name" flow.
+
+    Kept separate from the settings PATCH (which admins use to edit the whole
+    alias list) so a reviewer doing corrections can teach a single name without
+    org-admin rights. Marks the alias 'manual' so the nightly self-heal never
+    removes it, and re-runs the sibling-collision gate server-side — the client
+    is never trusted to have checked.
+    """
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+    try:
+        client = Client.objects.get(id=client_id, org=org)
+    except Client.DoesNotExist:
+        return Response({"error": "Client not found"}, status=404)
+
+    alias = (request.data.get("alias") or "").strip()
+    if not alias:
+        return Response({"error": "alias required"}, status=400)
+
+    existing = list(client.aliases or [])
+    if any(isinstance(a, str) and a.lower() == alias.lower() for a in existing):
+        return Response({"success": True, "aliases": existing, "already": True})
+
+    from tracker.services.alias_suggestion import alias_is_safe_to_add
+    siblings = list(Client.objects.filter(org=org).only("id", "name"))
+    if not alias_is_safe_to_add(alias, client, siblings):
+        return Response(
+            {"error": "That alias is too close to another client and could "
+                      "cause mix-ups. Edit it to something more specific."},
+            status=409,
+        )
+
+    existing.append(alias)
+    client.aliases = existing
+    sources = dict(client.alias_sources or {})
+    sources.setdefault(alias.lower(), "manual")
+    client.alias_sources = sources
+    client.save(update_fields=["aliases", "alias_sources"])
+    return Response({"success": True, "aliases": existing})
 
 
 # ============================================================================

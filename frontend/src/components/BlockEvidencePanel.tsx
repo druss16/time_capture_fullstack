@@ -359,12 +359,13 @@ const handleAssign = async (clientId: number, clientName: string, category?: str
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          // Deliberate single correction: tag it so the backend learns the
-          // pattern AND can offer a name → client alias to remember.
+          // Deliberate single correction: `source` teaches the pattern learner;
+          // `suggest_alias` asks for a name → client alias to remember.
           body: JSON.stringify({
             client_id: clientId,
             category: category || "Accounting/Bookkeeping",
             source: "single_confirm",
+            suggest_alias: true,
           }),
         }
       );

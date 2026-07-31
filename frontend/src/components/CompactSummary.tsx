@@ -283,7 +283,7 @@ export default function CompactSummary({
                   <span className="shrink-0">
                     <span className="text-foreground/80">{a.bookedClient}</span>
                     <span className="mx-1.5 text-rose-500">→</span>
-                    <span className="text-amber-600 dark:text-amber-300">{a.looksLike}</span>
+                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">{a.looksLike}</span>
                   </span>
                   <span className="min-w-0 flex-1 truncate text-muted-foreground">{a.title}</span>
                   {a.looksLikeId != null && (

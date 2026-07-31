@@ -102,6 +102,21 @@ export default function CompactSummary({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [anomaliesOpen, setAnomaliesOpen] = useState(true);
   const [move, setMove] = useState<MoveState | null>(null);
+  // Mismatch flags the user dismissed as false positives (persisted per browser).
+  const [ignored, setIgnored] = useState<Set<string>>(() => {
+    try { return new Set<string>(JSON.parse(localStorage.getItem("dr_ignored_mismatches") || "[]")); }
+    catch { return new Set<string>(); }
+  });
+  const ignoreMismatch = (ids: number[]) =>
+    setIgnored((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(String(id)));
+      try { localStorage.setItem("dr_ignored_mismatches", JSON.stringify([...next])); } catch { /* noop */ }
+      return next;
+    });
+  // A block's "looks like" client name — unless the user has ignored that flag.
+  const looksLikeFor = (ids: number[]) =>
+    ids.map((id) => (ignored.has(String(id)) ? undefined : mismatchFlags[String(id)])).find(Boolean);
 
   const toggle = (key: string) =>
     setCollapsed((prev) => {
@@ -216,7 +231,7 @@ export default function CompactSummary({
       for (const cat of client.categories) {
         for (const a of cat.sample_activities) {
           const p = parse(a);
-          const looks = p.blockIds.map((id) => mismatchFlags[String(id)]).find(Boolean);
+          const looks = looksLikeFor(p.blockIds);
           if (looks) {
             out.push({
               ids: p.blockIds, title: p.title, bookedClient: client.client,
@@ -228,7 +243,7 @@ export default function CompactSummary({
       }
     }
     return out;
-  }, [timeSummary, mismatchFlags, availableClients]);
+  }, [timeSummary, mismatchFlags, availableClients, ignored]);
 
   const fixAllAnomalies = useCallback(async () => {
     const fixable = anomalies.filter((a) => a.looksLikeId != null);
@@ -292,6 +307,10 @@ export default function CompactSummary({
                       Fix
                     </button>
                   )}
+                  <button onClick={() => ignoreMismatch(a.ids)} title="Not a mistake — hide this flag"
+                    className="shrink-0 font-sans text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground">
+                    Ignore
+                  </button>
                 </div>
               ))}
             </div>
@@ -348,7 +367,7 @@ export default function CompactSummary({
             const pending = pendingByKey.get(clientKeyOf(client.client_id)) || [];
 
             const clientFlagged = client.categories.some((cat) =>
-              cat.sample_activities.some((a) => parse(a).blockIds.some((id) => mismatchFlags[String(id)]))
+              cat.sample_activities.some((a) => !!looksLikeFor(parse(a).blockIds))
             );
 
             return (
@@ -416,7 +435,7 @@ export default function CompactSummary({
                               {cat.sample_activities.map((a, ax) => {
                                 const p = parse(a);
                                 const ids = p.blockIds;
-                                const looksLike = ids.map((id) => mismatchFlags[String(id)]).find(Boolean);
+                                const looksLike = looksLikeFor(ids);
                                 const isSel = ids.length > 0 && ids.every((id) => selected.has(id));
                                 return (
                                   <div key={ax}
@@ -445,9 +464,16 @@ export default function CompactSummary({
                                     <GripVertical className="w-3 h-3 shrink-0 text-muted-foreground/40 opacity-0 group-hover/row:opacity-100" />
                                     <span className="min-w-0 flex-1 truncate">{p.title}</span>
                                     {looksLike && (
-                                      <span title={`Title clearly names "${looksLike}"`}
-                                        className="shrink-0 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10.5px] text-rose-600 dark:text-rose-300">
-                                        ⚠ looks like {looksLike}
+                                      <span className="flex shrink-0 items-center gap-1">
+                                        <span title={`Title clearly names "${looksLike}"`}
+                                          className="rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10.5px] text-rose-600 dark:text-rose-300">
+                                          ⚠ looks like {looksLike}
+                                        </span>
+                                        <button onClick={(e) => { e.stopPropagation(); ignoreMismatch(ids); }}
+                                          title="Not a mistake — hide this flag"
+                                          className="text-[10.5px] font-medium text-muted-foreground hover:text-foreground">
+                                          ignore
+                                        </button>
                                       </span>
                                     )}
                                     <MousePointerClick className="w-3 h-3 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100" />

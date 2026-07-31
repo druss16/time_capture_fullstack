@@ -52,7 +52,7 @@ export type ClientTime = {
   categories: Category[];
 };
 export type ClientOption = { id: number; name: string };
-type FlaggedBlock = {
+export type FlaggedBlock = {
   block_id: number;
   client_name: string;
   review_reason: string;
@@ -80,7 +80,7 @@ type FlaggedBlock = {
   proposed_category?: string | null;
   proposed_reasoning?: string;
 };
-type ProposedInline = {
+export type ProposedInline = {
   block_id: number;
   window_title: string;
   minutes: number;
@@ -88,6 +88,7 @@ type ProposedInline = {
   proposed_client_name: string | null;
   proposed_confidence: number;
   proposed_category: string;
+  proposed_reasoning?: string;
 };
 
 type ParsedActivity = { blockId: number | null; blockIds: number[]; title: string };
@@ -103,7 +104,7 @@ const fmt = (hours: number): string => {
   return `${h}h ${m}m`;
 };
 
-const parse = (activity: string): ParsedActivity => {
+export const parse = (activity: string): ParsedActivity => {
   // Supports multi-id rows: [id:44763,44767]
   const match = activity.match(/\[id:([\d,]+)\]\s*/);
   if (match) {
@@ -163,18 +164,23 @@ const CLIENT_ACCENTS = [
 
 // ─── Move Popover ─────────────────────────────────────────────────────────────
 
-function MovePopover({
-  anchorEl, clients, categories, currentClientId, currentCategory, label, defaultAlias, onApply, onClose,
+export function MovePopover({
+  anchorEl, clients, categories, currentClientId, currentCategory, label, defaultAlias, suggestClientId, onApply, onClose,
 }: {
   anchorEl?: HTMLElement | null;
   clients: ClientOption[]; categories: string[];
   currentClientId: number | null; currentCategory: string;
   label: string;
   defaultAlias?: string;
+  // Pre-select a DIFFERENT client than the current one (e.g. an anomaly's
+  // "looks like X" suggestion) so Apply is armed to accept it in one click.
+  suggestClientId?: number | null;
   onApply: (clientId: number | null, category: string) => void;
   onClose: () => void;
 }) {
-  const [selClient, setSelClient] = useState<number | null>(currentClientId);
+  const [selClient, setSelClient] = useState<number | null>(
+    suggestClientId != null ? suggestClientId : currentClientId
+  );
   const [selCat, setSelCat] = useState(currentCategory);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
@@ -261,7 +267,7 @@ function MovePopover({
             onChange={(e) => setSelClient(e.target.value ? parseInt(e.target.value) : null)}
             className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none"
           >
-            <option value="">Unassigned</option>
+            <option value="">No client</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>

@@ -567,3 +567,169 @@ def _serialize_suggestion(block: Block) -> Optional[Dict[str, Any]]:
         "method": hints.get("proposal_method"),
         "ai_category": hints.get("ai_category"),  # {label, confidence, rationale}
     }
+
+# =============================================================================
+# "Why this client?" — a smart, plain-English attribution explanation
+# =============================================================================
+#
+# GET /api/blocks/<id>/why/  (user-facing, org-scoped like block_evidence)
+#
+# Assembles the strongest available context into ONE friendly sentence, in
+# priority order, and ALWAYS falls back to the local time-of-day so the answer
+# is never empty:
+#   1. co_open   — an Office file for another client was open at the same time
+#   2. sandwich  — the temporal neighbors agree on a client (before & after)
+#   3. neighbor  — a single adjacent block names a client
+#   4. day       — one client dominates the user's day (>50%)
+#   5. none      — no correlating signal; just report when they worked on it
+#
+# Read-only. Reuses the evidence helpers (_build_surrounding, _file_basename)
+# and the distinctive-token client matcher (detect_title_client) so it stays in
+# lockstep with how attribution actually works.
+
+
+def _co_open_client(block: Block, org) -> "tuple[list, Optional[dict]]":
+    """Office docs open at the same time as `block`, plus the single client (if
+    any) their file names distinctively point to. Co-open paths live on
+    RawEvent.ctx['office_open_files']."""
+    from tracker.utils.client_name_match import build_token_index, detect_title_client
+
+    own = (_file_basename(getattr(block, "file_path", "") or "") or "").lower()
+    files, seen = [], set()
+    for ctx in RawEvent.objects.filter(block=block).values_list("ctx", flat=True):
+        if not isinstance(ctx, dict):
+            continue
+        for p in (ctx.get("office_open_files") or []):
+            base = _file_basename(p)
+            if base and base.lower() != own and base.lower() not in seen:
+                seen.add(base.lower())
+                files.append(base)
+    if not files:
+        return [], None
+
+    names = {c.id: c.name for c in Client.objects.filter(org=org).only("id", "name")}
+    index = build_token_index(names) if names else None
+    match = None
+    if index:
+        for base in files:
+            stem = os.path.splitext(base)[0]
+            m = detect_title_client(stem, index, names, firm_name=getattr(org, "name", None))
+            if m:
+                match = {"client_id": m["client_id"], "client_name": m["client_name"], "file": base}
+                break
+    return files, match
+
+
+def _compose_why(local_time: str, co_open_client, surrounding: dict) -> "tuple[str, str, Optional[int], Optional[str]]":
+    """Return (sentence, tier, suggested_client_id, suggested_client_name).
+
+    The suggestion is deliberately offered even at LOWER confidence than the
+    classifier needs to auto-attribute — a one-click cue for the human to accept,
+    never an automatic placement. Highest-signal explanation wins; always falls
+    back to the local time-of-day so the sentence is never empty."""
+    when = f" around {local_time}" if local_time else ""
+
+    if co_open_client:
+        return (
+            f"You had {co_open_client['client_name']}’s file "
+            f"“{co_open_client['file']}” open at the same time{when}.",
+            "co_open", co_open_client.get("client_id"), co_open_client.get("client_name"),
+        )
+
+    sug = (surrounding or {}).get("suggestion") or {}
+    if sug.get("reason"):
+        return (sug["reason"], "sandwich", sug.get("client_id"), sug.get("client_name"))
+
+    before = (surrounding or {}).get("before")
+    after = (surrounding or {}).get("after")
+    nb, side = (before, "before") if (before and before.get("client_name")) else (
+        (after, "after") if (after and after.get("client_name")) else (None, "")
+    )
+    if nb:
+        return (
+            f"Right {side} this, you were working on {nb['client_name']}.",
+            "neighbor", nb.get("client_id"), nb.get("client_name"),
+        )
+
+    dd = (surrounding or {}).get("day_dominant") or {}
+    if dd.get("client_name"):
+        return (
+            f"You spent most of your day ({dd['pct']}%) on {dd['client_name']}, "
+            f"so this may be theirs too.",
+            "day", dd.get("client_id"), dd.get("client_name"),
+        )
+
+    if when:
+        return (f"No added context to go on — you worked on this{when}.", "none", None, None)
+    return ("No added context to go on for this entry.", "none", None, None)
+
+
+def suggested_client_for(block, org):
+    """The client id the /why/ explanation would point to (co-open > sandwich >
+    adjacent neighbor > day-dominant), or None. Shared by the block_why endpoint
+    AND bulk Confirm-all, so the green per-row button and "Confirm all" can never
+    disagree about what the best guess is. Read-only."""
+    try:
+        _, co = _co_open_client(block, org)
+    except Exception:
+        co = None
+    try:
+        surrounding = _build_surrounding(block) or {}
+    except Exception:
+        surrounding = {}
+    _, _, suggested_id, _ = _compose_why("", co, surrounding)
+    return suggested_id
+
+
+@api_view(["GET"])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def block_why(request, block_id: int):
+    """GET /api/blocks/<id>/why/ — plain-English 'why this client' explanation."""
+    user = request.user
+    try:
+        block = Block.objects.select_related("org", "client", "user").get(id=block_id)
+    except Block.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    is_member = user.memberships.filter(organization_id=block.org_id).exists()
+    is_admin = getattr(user, "is_mavops_admin", False) or user.is_superuser
+    if not is_member and not is_admin:
+        return Response({"error": "forbidden"}, status=403)
+
+    org = block.org
+
+    # Local time-of-day, in the org's timezone.
+    local_time = ""
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(getattr(org, "timezone", None) or "America/New_York")
+        if block.start:
+            local_time = block.start.astimezone(tz).strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        local_time = ""
+
+    try:
+        co_open_files, co_open_client = _co_open_client(block, org)
+    except Exception:
+        co_open_files, co_open_client = [], None
+
+    try:
+        surrounding = _build_surrounding(block) or {}
+    except Exception:
+        surrounding = {}
+
+    explanation, tier, suggested_id, suggested_name = _compose_why(
+        local_time, co_open_client, surrounding
+    )
+
+    return Response({
+        "block_id": block.id,
+        "local_time": local_time,
+        "explanation": explanation,
+        "tier": tier,
+        "suggested_client_id": suggested_id,
+        "suggested_client_name": suggested_name,
+        "co_open_files": co_open_files[:5],
+        "surrounding": surrounding or None,
+    })

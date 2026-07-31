@@ -1,0 +1,546 @@
+/**
+ * CompactSummary.tsx
+ *
+ * A dense, collapsible client → category → activity view for the user-facing
+ * Daily Review. Drop-in sibling of CategorySummary (same props) rendered behind
+ * the Compact/Detailed toggle in DailyReview.tsx.
+ *
+ * Design decisions (locked with the owner):
+ *  - Follows the SYSTEM light/dark theme, scoped to this subtree only: the whole
+ *    view is wrapped in a `.dark`-classed div when the OS prefers dark, so the
+ *    design-system CSS vars (`.dark { --token }`) cascade here WITHOUT touching
+ *    the rest of the (currently light-only) app.
+ *  - Reuses the load-bearing `parse()` (the `[id:...]` block-id contract) and the
+ *    proven `MovePopover` from CategorySummary — no fork of that logic.
+ *  - Keeps every action: move (single / all / selection), confirm pending.
+ *    Move/confirm hit the same `recategorize` endpoint CategorySummary uses.
+ *  - Pending (needs-review) items live UNDER their guessed client (or "No Client"
+ *    when clientless), not in a top strip.
+ *  - Carries the ⚠ mismatch flags (detect_mismatch) into the user view.
+ *  - The AI/mail/calendar "suggests X instead of Y" disagreement banners are
+ *    intentionally NOT shown here (owner doesn't use them). Mobile-entry review
+ *    prompts are kept — a separate feature.
+ */
+
+import { useState, useEffect, useMemo, useCallback } from "react";
+import {
+  ChevronRight, ChevronDown, AlertTriangle, Check, Smartphone, MousePointerClick, GripVertical,
+} from "lucide-react";
+import { cn } from "@/lib/design-system";
+import { safeFetchJson } from "@/lib/api";
+import {
+  parse, MovePopover,
+  type ClientTime, type ClientOption, type FlaggedBlock, type ProposedInline,
+} from "@/components/CategorySummary";
+
+const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
+const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
+
+type Props = {
+  timeSummary: ClientTime[];
+  availableClients: ClientOption[];
+  availableCategories: string[];
+  flaggedBlocks: FlaggedBlock[];
+  proposedInline?: ProposedInline[];
+  busy: boolean;
+  onDismissReview: (id: number) => void;
+  onResolveDisagreement: (id: number, action: "accept" | "dismiss") => void;
+  onRefresh: () => void;
+  showToast: (msg: string, type: "success" | "error") => void;
+  /** block_id -> looks-like client name, from today-time's detect_mismatch scan */
+  mismatchFlags?: Record<string, string>;
+};
+
+// Left-accent colors — 500-weight reads on both light and dark grounds.
+// Amber (pending/unassigned) and rose (mismatch) are deliberately EXCLUDED so
+// those colors only ever signal something that needs attention.
+const ACCENTS = [
+  "border-l-teal-500", "border-l-violet-500", "border-l-sky-500",
+  "border-l-emerald-500", "border-l-cyan-500", "border-l-indigo-500",
+];
+
+const isInternalClient = (name: string) => {
+  const n = (name || "").trim().toLowerCase();
+  return n === "internal" || n.startsWith("internal -");
+};
+
+const clientKeyOf = (clientId: number | null) => (clientId != null ? `id:${clientId}` : "none");
+
+// Follows the OS theme; drives the scoped `.dark` wrapper.
+function useSystemDark(): boolean {
+  const [dark, setDark] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia
+      && window.matchMedia("(prefers-color-scheme: dark)").matches
+  );
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const h = (e: MediaQueryListEvent) => setDark(e.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, []);
+  return dark;
+}
+
+type MoveState = {
+  anchor: HTMLElement;
+  ids: number[];
+  currentClientId: number | null;
+  currentCategory: string;
+  label: string;
+  suggestClientId?: number | null;
+};
+
+export default function CompactSummary({
+  timeSummary, availableClients, availableCategories, flaggedBlocks,
+  proposedInline = [], busy, onDismissReview,
+  onRefresh, showToast, mismatchFlags = {},
+}: Props) {
+  const sysDark = useSystemDark();
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [move, setMove] = useState<MoveState | null>(null);
+
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+
+  const clearSel = () => setSelected(new Set());
+  const toggleRow = (ids: number[]) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const all = ids.length > 0 && ids.every((id) => next.has(id));
+      ids.forEach((id) => (all ? next.delete(id) : next.add(id)));
+      return next;
+    });
+
+  // ── Mutations ──────────────────────────────────────────────────────────────
+  const moveBlocks = useCallback(async (ids: number[], clientId: number | null, category: string) => {
+    if (!ids.length) return;
+    try {
+      await Promise.all(ids.map((id) =>
+        safeFetchJson(`${API_BASE}/blocks/${id}/recategorize/`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ category, client_id: clientId }),
+        })
+      ));
+      showToast(`Moved ${ids.length} ${ids.length > 1 ? "entries" : "entry"}`, "success");
+      clearSel();
+      onRefresh();
+    } catch {
+      showToast("Failed to move", "error");
+    }
+  }, [onRefresh, showToast]);
+
+  // Accept a pending entry to a client — or to NO client (clientId=null), which
+  // marks it not billable (mindless browsing / personal). One path for both.
+  const acceptTo = useCallback(async (b: ProposedInline, clientId: number | null) => {
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${b.block_id}/recategorize/`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category: b.proposed_category || "General Client Work",
+          client_id: clientId,
+          source: "single_confirm",
+        }),
+      });
+      showToast(clientId == null ? "Set to No client" : "Confirmed", "success");
+      onRefresh();
+    } catch {
+      showToast("Couldn’t update this entry", "error");
+    }
+  }, [onRefresh, showToast]);
+
+  const openMove = (
+    anchor: HTMLElement, ids: number[], clientId: number | null, category: string,
+    label: string, suggestClientId: number | null = null,
+  ) =>
+    setMove({ anchor, ids, currentClientId: clientId, currentCategory: category, label, suggestClientId });
+
+  const selCount = selected.size;
+  const catList = availableCategories.length ? availableCategories : ["General Client Work"];
+
+  // ── Pending grouped by guessed client (so it renders UNDER that client) ──
+  const pendingByKey = useMemo(() => {
+    const m = new Map<string, ProposedInline[]>();
+    for (const p of proposedInline) {
+      const key = clientKeyOf(p.proposed_client_id);
+      const arr = m.get(key);
+      if (arr) arr.push(p); else m.set(key, [p]);
+    }
+    return m;
+  }, [proposedInline]);
+
+  // Which pending groups get absorbed into an existing client card…
+  const realKeys = new Set(timeSummary.map((c) => clientKeyOf(c.client_id)));
+  // …and which need a synthetic card (guessed client / No Client with no committed time today).
+  const syntheticPending = useMemo(() => {
+    const out: { key: string; name: string; clientId: number | null; items: ProposedInline[] }[] = [];
+    pendingByKey.forEach((items, key) => {
+      if (realKeys.has(key)) return;
+      if (key === "none") out.push({ key, name: "No client", clientId: null, items });
+      else out.push({ key, name: items[0].proposed_client_name || "Client", clientId: items[0].proposed_client_id, items });
+    });
+    return out;
+    // realKeys derives from timeSummary; recompute when either input changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingByKey, timeSummary]);
+
+  // Mobile-entry review prompts only (NOT the AI/mail/calendar "suggests" banners).
+  const mobileReviews = useMemo(
+    () => flaggedBlocks.filter((f) => f.type === "mobile_review"),
+    [flaggedBlocks]
+  );
+
+  const clientCount = timeSummary.length + syntheticPending.length;
+
+  const onChangePending = (
+    anchor: HTMLElement, b: ProposedInline, cardClientId: number | null, suggestId: number | null,
+  ) =>
+    openMove(anchor, [b.block_id], cardClientId, b.proposed_category || catList[0], "Change client", suggestId);
+
+  return (
+    <div className={cn(sysDark && "dark")}>
+      <div className="bg-background text-foreground rounded-xl">
+
+        {/* ── Mobile-entry review prompts ── */}
+        {mobileReviews.length > 0 && (
+          <div className="mb-3 flex flex-col gap-2">
+            {mobileReviews.map((f) => (
+              <div key={f.block_id}
+                className="flex items-center gap-3 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2.5 text-sm">
+                <Smartphone className="w-4 h-4 shrink-0 text-sky-500" />
+                <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                  Mobile entry needs review — <span className="font-medium text-foreground">{f.window_title || f.client_name}</span>
+                </span>
+                <button onClick={() => onDismissReview(f.block_id)} disabled={busy}
+                  className="shrink-0 rounded-md bg-sky-500 px-3 py-1 text-xs font-semibold text-white hover:opacity-90">
+                  Looks correct
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Section label ── */}
+        <div className="mb-2 px-1 font-mono text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">
+          Clients · {clientCount}
+        </div>
+
+        {clientCount === 0 && !busy && (
+          <div className="py-10 text-center font-mono text-sm text-muted-foreground">no tracked time for this day</div>
+        )}
+
+        {/* ── Client cards ── */}
+        <div className="flex flex-col gap-2">
+          {timeSummary.map((client, ci) => {
+            const cKey = `c:${clientKeyOf(client.client_id)}`;
+            const open = !collapsed.has(cKey);
+            const unassigned = client.client_id == null;
+            const internal = isInternalClient(client.client);
+            const accent = unassigned ? "border-l-amber-400" : ACCENTS[ci % ACCENTS.length];
+            const pending = pendingByKey.get(clientKeyOf(client.client_id)) || [];
+
+            const clientFlagged = client.categories.some((cat) =>
+              cat.sample_activities.some((a) => parse(a).blockIds.some((id) => mismatchFlags[String(id)]))
+            );
+
+            return (
+              <div key={cKey}
+                className={cn(
+                  "overflow-hidden rounded-xl border border-l-4 bg-card", accent,
+                  unassigned && "border-dashed border-amber-500/50",
+                  clientFlagged && "border-rose-500/50"
+                )}>
+                <button onClick={() => toggle(cKey)}
+                  className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/60">
+                  <ChevronRight className={cn("w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+                  <span className={cn("text-[15px] font-semibold",
+                    unassigned ? "italic text-amber-600 dark:text-amber-300" : internal ? "text-muted-foreground" : "text-foreground")}>
+                    {unassigned ? "No client" : client.client}
+                  </span>
+                  {clientFlagged && (
+                    <span title="A title here clearly names a different client"
+                      className="shrink-0 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 font-mono text-[11px] text-rose-600 dark:text-rose-300">
+                      ⚠ mismatch
+                    </span>
+                  )}
+                  {pending.length > 0 && (
+                    <span className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[11px] text-amber-600 dark:text-amber-300">
+                      {pending.length} pending
+                    </span>
+                  )}
+                  <span className="flex-1" />
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                    {client.categories.reduce((s, c) => s + c.block_count, 0)} blocks
+                  </span>
+                  <span className="shrink-0 font-mono text-sm font-bold tabular-nums text-primary">
+                    {fmtH(client.total_hours)}
+                  </span>
+                </button>
+
+                {open && (
+                  <div className="border-t border-border px-3 pb-3 pt-2">
+                    {pending.length > 0 && (
+                      <PendingStrip items={pending} busy={busy} allowNoClient={client.client_id == null}
+                        onAccept={(b, cid) => acceptTo(b, cid)}
+                        onNoClient={(b) => acceptTo(b, null)}
+                        onChange={(anchor, b, suggestId) => onChangePending(anchor, b, client.client_id, suggestId)} />
+                    )}
+                    {client.categories.map((cat, kx) => {
+                      const catKey = `${cKey}/cat:${cat.name}`;
+                      const catOpen = !collapsed.has(catKey);
+                      const catBlockIds = cat.sample_activities.flatMap((a) => parse(a).blockIds);
+                      return (
+                        <div key={catKey} className={cn("py-1.5", kx > 0 && "border-t border-border/60")}>
+                          <div className="group flex items-center gap-2 px-1 py-1">
+                            <button onClick={() => toggle(catKey)} className="flex flex-1 items-center gap-2 text-left">
+                              <ChevronRight className={cn("w-3 h-3 shrink-0 text-muted-foreground transition-transform", catOpen && "rotate-90")} />
+                              <span className="font-mono text-[13px] font-semibold text-violet-600 dark:text-violet-300">{cat.name}</span>
+                              <span className="font-mono text-xs text-muted-foreground">{fmtH(cat.hours)}</span>
+                              <span className="font-mono text-xs text-muted-foreground">· {cat.block_count} blocks</span>
+                            </button>
+                            {catBlockIds.length > 0 && (
+                              <button
+                                onClick={(e) => openMove(e.currentTarget, catBlockIds, client.client_id, cat.name, `Move all · ${cat.name}`)}
+                                className="shrink-0 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary opacity-0 transition-opacity group-hover:opacity-100">
+                                Move all
+                              </button>
+                            )}
+                          </div>
+
+                          {catOpen && (
+                            <div className="flex flex-col">
+                              {cat.sample_activities.map((a, ax) => {
+                                const p = parse(a);
+                                const ids = p.blockIds;
+                                const looksLike = ids.map((id) => mismatchFlags[String(id)]).find(Boolean);
+                                const isSel = ids.length > 0 && ids.every((id) => selected.has(id));
+                                return (
+                                  <div key={ax}
+                                    onClick={(e) => {
+                                      if ((e.target as HTMLElement).closest("[data-cbox]")) return;
+                                      if (!ids.length) return;
+                                      // On a flagged row, pre-select the suggested client so Apply fixes it in one click.
+                                      const suggestId = looksLike
+                                        ? (availableClients.find((c) => c.name === looksLike)?.id ?? null)
+                                        : null;
+                                      openMove(
+                                        e.currentTarget as HTMLElement, ids, client.client_id, cat.name,
+                                        looksLike ? `Fix — looks like ${looksLike}` : "Move entry", suggestId,
+                                      );
+                                    }}
+                                    className={cn(
+                                      "group/row flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 font-mono text-[12.5px]",
+                                      isSel ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    )}>
+                                    <span data-cbox onClick={(e) => { e.stopPropagation(); if (ids.length) toggleRow(ids); }}
+                                      className={cn("grid h-3.5 w-3.5 shrink-0 place-items-center rounded border text-[10px]",
+                                        isSel ? "border-primary bg-primary text-primary-foreground opacity-100"
+                                          : "border-muted-foreground/50 text-transparent opacity-0 group-hover/row:opacity-100")}>
+                                      <Check className="w-2.5 h-2.5" />
+                                    </span>
+                                    <GripVertical className="w-3 h-3 shrink-0 text-muted-foreground/40 opacity-0 group-hover/row:opacity-100" />
+                                    <span className="min-w-0 flex-1 truncate">{p.title}</span>
+                                    {looksLike && (
+                                      <span title={`Title clearly names "${looksLike}"`}
+                                        className="shrink-0 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10.5px] text-rose-600 dark:text-rose-300">
+                                        ⚠ looks like {looksLike}
+                                      </span>
+                                    )}
+                                    <MousePointerClick className="w-3 h-3 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100" />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* ── Synthetic cards: pending whose client has no committed time today ── */}
+          {syntheticPending.map((s) => {
+            const cKey = `c:${s.key}:pending`;
+            const open = !collapsed.has(cKey);
+            const noClient = s.clientId == null;
+            return (
+              <div key={cKey}
+                className={cn("overflow-hidden rounded-xl border border-l-4 border-l-amber-400 bg-card",
+                  noClient && "border-dashed border-amber-500/50")}>
+                <button onClick={() => toggle(cKey)}
+                  className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/60">
+                  <ChevronRight className={cn("w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+                  <span className={cn("text-[15px] font-semibold", noClient ? "italic text-amber-600 dark:text-amber-300" : "text-foreground")}>
+                    {s.name}
+                  </span>
+                  <span className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[11px] text-amber-600 dark:text-amber-300">
+                    {s.items.length} pending
+                  </span>
+                  <span className="flex-1" />
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">needs review</span>
+                </button>
+                {open && (
+                  <div className="border-t border-border px-3 pb-3 pt-2">
+                    <PendingStrip items={s.items} busy={busy} allowNoClient={s.clientId == null}
+                      onAccept={(b, cid) => acceptTo(b, cid)}
+                      onNoClient={(b) => acceptTo(b, null)}
+                      onChange={(anchor, b, suggestId) => onChangePending(anchor, b, s.clientId, suggestId)} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Floating selection bar ── */}
+      {selCount > 0 && (
+        <div className={cn("fixed left-1/2 bottom-6 z-40 -translate-x-1/2", sysDark && "dark")}>
+          <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-2.5 shadow-2xl">
+            <span className="font-mono text-sm font-bold text-foreground"><span className="text-primary">{selCount}</span> selected</span>
+            <button
+              onClick={(e) => openMove(e.currentTarget, Array.from(selected), null, catList[0], `Move ${selCount} entries`)}
+              className="rounded-md bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground hover:opacity-90">
+              Move to…
+            </button>
+            <button onClick={clearSel} className="rounded-md border border-border px-3 py-1 text-xs font-semibold text-muted-foreground hover:bg-muted">
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Move popover (reused from CategorySummary) ── */}
+      {move && (
+        <MovePopover
+          anchorEl={move.anchor}
+          clients={availableClients}
+          categories={catList}
+          currentClientId={move.currentClientId}
+          currentCategory={move.currentCategory}
+          label={move.label}
+          suggestClientId={move.suggestClientId ?? null}
+          onApply={(clientId, category) => { moveBlocks(move.ids, clientId, category); setMove(null); }}
+          onClose={() => setMove(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Pending rows ──────────────────────────────────────────────────────────────
+// Module-level so each row's "why?" expand state survives parent re-renders.
+type WhyData = {
+  explanation: string;
+  local_time: string;
+  co_open_files: string[];
+  tier: string;
+  suggested_client_id: number | null;
+  suggested_client_name: string | null;
+};
+
+function PendingRow({ b, busy, allowNoClient, onAccept, onNoClient, onChange }: {
+  b: ProposedInline;
+  busy: boolean;
+  allowNoClient: boolean;   // only offer the quick "No client" out in the No-client bucket
+  onAccept: (b: ProposedInline, clientId: number) => void;
+  onNoClient: (b: ProposedInline) => void;
+  onChange: (anchor: HTMLElement, b: ProposedInline, suggestId: number | null) => void;
+}) {
+  const [why, setWhy] = useState<WhyData | null>(null);
+
+  // Load the explanation + context suggestion up front, so the reason line and
+  // the best-guess button are visible without any expanding.
+  useEffect(() => {
+    let alive = true;
+    safeFetchJson<WhyData>(`${API_BASE}/blocks/${b.block_id}/why/`)
+      .then((w) => { if (alive) setWhy(w); })
+      .catch(() => { if (alive) setWhy(null); });
+    return () => { alive = false; };
+  }, [b.block_id]);
+
+  // Best guess = the classifier's proposed client, else the contextual suggestion.
+  const guessId = b.proposed_client_id ?? why?.suggested_client_id ?? null;
+  const guessName = b.proposed_client_name ?? why?.suggested_client_name ?? null;
+  const reason = why?.explanation || "";
+  // Primary = soft teal tint (colored, so it leads — but calm). Secondary = quiet neutral outline.
+  const primary = "inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/20 px-3 py-1 font-sans text-[11px] font-semibold text-primary transition-colors hover:bg-primary/30 disabled:opacity-50";
+  const ghost = "inline-flex items-center gap-1 rounded-full border border-border bg-muted/60 px-3 py-1 font-sans text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary disabled:opacity-50";
+
+  return (
+    <div className="py-2.5">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-xs text-foreground/90">{b.window_title || "(untitled)"}</div>
+          {reason && (
+            <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">{reason}</div>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Primary: accept the best-guess client, or "No client". */}
+          {guessId ? (
+            <button onClick={() => onAccept(b, guessId)} disabled={busy} title={`Book to ${guessName}`}
+              className={cn(primary, "max-w-[230px]")}>
+              <Check className="h-3 w-3 shrink-0" /> <span className="truncate">{guessName}</span>
+            </button>
+          ) : (
+            <button onClick={() => onNoClient(b)} disabled={busy} title="No client"
+              className="inline-flex items-center gap-1.5 rounded-full border border-slate-400/50 bg-slate-400/25 px-3 py-1 font-sans text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-400/35 disabled:opacity-50 dark:text-slate-300">
+              <Check className="h-3 w-3" /> No client
+            </button>
+          )}
+          {/* Quick "No client" out — only in the No-client bucket, never under a client. */}
+          {guessId && allowNoClient && (
+            <button onClick={() => onNoClient(b)} disabled={busy} className={ghost}>No client</button>
+          )}
+          <button onClick={(e) => onChange(e.currentTarget, b, guessId)} disabled={busy} className={ghost}>
+            Change <ChevronDown className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PendingStrip({ items, busy, allowNoClient, onAccept, onNoClient, onChange }: {
+  items: ProposedInline[];
+  busy: boolean;
+  allowNoClient: boolean;
+  onAccept: (b: ProposedInline, clientId: number) => void;
+  onNoClient: (b: ProposedInline) => void;
+  onChange: (anchor: HTMLElement, b: ProposedInline, suggestId: number | null) => void;
+}) {
+  return (
+    <div className="mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5">
+      <div className="mb-1 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-300">
+        <AlertTriangle className="w-3.5 h-3.5" /> Pending — confirm to count as billable
+      </div>
+      <div className="flex flex-col divide-y divide-amber-500/20">
+        {items.map((b) => (
+          <PendingRow key={b.block_id} b={b} busy={busy} allowNoClient={allowNoClient}
+            onAccept={onAccept} onNoClient={onNoClient} onChange={onChange} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Hours formatter: 1.7 -> "1h 42m", 0.25 -> "15m", 2 -> "2h".
+function fmtH(hours: number): string {
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}

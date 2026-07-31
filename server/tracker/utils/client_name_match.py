@@ -93,6 +93,30 @@ def _tokenize(name: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall((name or "").lower()) if len(t) > 1]
 
 
+# Words that don't contribute a letter to a client's initialism (SFA, SMA…).
+# Connectors PLUS the generic org-type suffixes people drop when abbreviating
+# ("St. Francis of Assisi Church" -> SFA, not SFAC). NOTE: "st"/"saint" are kept
+# IN (they supply the leading S of SFA/SMA), so they're deliberately absent here.
+_INITIALISM_STOP = {
+    "of", "the", "and", "a", "an", "&", "at",
+    "church", "parish", "catholic", "roman", "school", "cathedral", "basilica",
+    "center", "centre", "services", "service", "company", "co", "corp", "inc",
+    "llc", "ltd", "group", "comm", "community", "chapel", "ministries", "ministry",
+}
+
+
+def _initialism(name: str) -> str:
+    """First letter of each significant word — 'St. Francis of Assisi' -> 'sfa',
+    "St. Mary's of the Assumption" -> 'sma'. Lowercased; connectors dropped."""
+    letters = []
+    for part in re.split(r"[\s\-/&,.]+", (name or "").strip()):
+        core = re.sub(r"[^a-z0-9]", "", part.lower())
+        if not core or core in _INITIALISM_STOP:
+            continue
+        letters.append(core[0])
+    return "".join(letters)
+
+
 def build_token_index(client_names: dict[int, str]) -> dict:
     """
     client_names: {client_id: name}
@@ -127,6 +151,16 @@ def build_token_index(client_names: dict[int, str]) -> dict:
         client_weights[cid] = weights
         client_mass[cid] = sum(weights.values()) or 1.0
 
+    # Per-client initialism (SFA, SMA…) + reverse map. Only 3+ letter initialisms
+    # are indexed — 2-letter ones (SH, SM) collide too easily to be trustworthy.
+    client_initialism: dict[int, str] = {}
+    initialisms: dict[str, set] = defaultdict(set)
+    for cid, name in client_names.items():
+        ini = _initialism(name)
+        client_initialism[cid] = ini
+        if len(ini) >= 3:
+            initialisms[ini].add(cid)
+
     return {
         "df": dict(df),
         "n": n,
@@ -134,6 +168,8 @@ def build_token_index(client_names: dict[int, str]) -> dict:
         "client_weights": client_weights,
         "client_mass": client_mass,
         "distinctiveness": distinctiveness,
+        "client_initialism": client_initialism,
+        "initialisms": {k: v for k, v in initialisms.items()},
     }
 
 
@@ -197,6 +233,48 @@ def detect_mismatch(
 
     booked_cov, _, _ = score_title_against_client(title_tokens, booked_cid, index)
 
+    def _acronym_match():
+        """Fallback for when no distinctive WORD matched: a unique 3+ letter
+        client initialism appearing as an UPPERCASE whole word in the raw title
+        (e.g. 'SFA P&L 2025' booked elsewhere -> St. Francis of Assisi). The
+        uppercase + uniqueness + length gates keep this conservative."""
+        if booked_cov >= STRONG_COVERAGE:
+            return None
+        inis = index.get("initialisms") or {}
+        booked_ini = (index.get("client_initialism") or {}).get(booked_cid, "")
+        for tok in title_tokens:
+            if len(tok) < 3 or tok == booked_ini:
+                continue
+            cids = inis.get(tok)
+            if not cids or len(cids) != 1:
+                continue                       # unknown or ambiguous initialism
+            cand = next(iter(cids))
+            if cand == booked_cid:
+                continue                       # title initials the booked client
+            if not re.search(r"\b" + re.escape(tok.upper()) + r"\b", title):
+                continue                       # require the UPPERCASE acronym
+            booked_name = client_names[booked_cid]
+            looks_name = client_names[cand]
+            bucket = (
+                "internal"
+                if is_internal_client(booked_name, firm_name)
+                or is_internal_client(looks_name, firm_name)
+                else "client"
+            )
+            return {
+                "looks_like_client_id": cand,
+                "looks_like_client_name": looks_name,
+                "looks_like_coverage": 1.0,
+                "looks_like_abs_hit": 0.0,
+                "booked_coverage": round(booked_cov, 3),
+                "runner_up_abs_hit": 0.0,
+                "top_token_weight": 0.0,
+                "bucket": bucket,
+                "match_kind": "acronym",
+                "matched_token": tok.upper(),
+            }
+        return None
+
     # Rank OTHER clients by absolute hit mass; keep top two.
     best_cid = None
     best_cov = best_topw = best_abs = 0.0
@@ -212,12 +290,12 @@ def detect_mismatch(
             second_abs = abs_hit
 
     if best_cid is None or best_abs <= 0:
-        return None
+        return _acronym_match()
 
     # Ambiguity gate (mass-based): if another client's absolute fingerprint is
     # nearly as strong, the title doesn't point at ONE client → suppress.
     if second_abs >= AMBIGUITY_RATIO * best_abs:
-        return None
+        return _acronym_match()
 
     # Strict strength gates.
     if (
@@ -244,7 +322,8 @@ def detect_mismatch(
             "top_token_weight": round(best_topw, 3),
             "bucket": bucket,
         }
-    return None
+
+    return _acronym_match()
 
 def detect_title_client(
     title: str,

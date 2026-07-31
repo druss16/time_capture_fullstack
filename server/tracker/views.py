@@ -2786,11 +2786,23 @@ def confirm_all_blocks(request):
         and (b.classification_state == "proposed" or _is_material(b))
     ]
 
+    # Match the per-row green "✓ [client]" button: when the classifier proposed
+    # NO client, fall back to the same context suggestion the /why/ panel shows
+    # (co-open file / temporal "sandwich" / day-dominant). This keeps "Confirm
+    # all" == "accept every green button", so bulk-confirming never silently
+    # files a context-attributable block as No Client (non-billable).
+    from tracker.views_block_evidence import suggested_client_for
+
     svc = ClassificationService(org=org, user=user)
     with_client = no_client = skipped = 0
     for b in pending:
         try:
-            svc.commit(b, user=user)
+            override = None
+            if b.proposed_client_id is None and b.client_id is None:
+                sid = suggested_client_for(b, org)
+                if sid:
+                    override = {"client_id": sid, "category": (b.proposed_category or "General Client Work")}
+            svc.commit(b, user=user, override=override)
             if b.client_id:
                 with_client += 1
             else:
@@ -4556,7 +4568,30 @@ def today_time(request):
             'proposed_client_name': _b.proposed_client.name if _b.proposed_client_id else None,
             'proposed_confidence':  float(getattr(_b, 'proposed_confidence', 0.0) or 0.0),
             'proposed_category':    getattr(_b, 'proposed_category', '') or '',
+            'proposed_reasoning':   getattr(_b, 'proposed_reasoning', '') or '',
         })
+
+    # ── Mismatch flags: title clearly names a DIFFERENT client than booked ──
+    # Same distinctive-token detector behind the MavOps Mismatches tab / admin
+    # Daily Review. Scoped to THIS user's committed blocks for the day so the
+    # Compact view can badge suspect rows. Keyed separately from the disagreement
+    # `flagged_blocks` list above. Wrapped defensively — a detector hiccup must
+    # never take down the Daily Review page.
+    mismatch_flags = {}
+    try:
+        from tracker.utils.client_name_match import build_token_index, detect_mismatch
+        from tracker.services.billing_totals import committed_block_qs
+        _names = {c.id: c.name for c in Client.objects.filter(org=org).only('id', 'name')} if org else {}
+        if _names:
+            _index = build_token_index(_names)
+            for _b in committed_block_qs(org, start_utc, end_utc, user_id=user.id, can_see_all=False):
+                if not _b.client_id or _b.client_id not in _names or not _b.window_title:
+                    continue
+                _m = detect_mismatch(_b.window_title, _b.client_id, _index, _names, firm_name=org.name)
+                if _m and _m.get('bucket') == 'client' and _b.id is not None:
+                    mismatch_flags[_b.id] = _m['looks_like_client_name']
+    except Exception:
+        mismatch_flags = {}
 
     return Response({
         'clients':            result,
@@ -4567,6 +4602,7 @@ def today_time(request):
         'date':               target_date.isoformat(),
         'flagged_blocks':     flagged_blocks,
         'proposed_inline':    proposed_inline,
+        'mismatch_flags':     mismatch_flags,
 
     })
 

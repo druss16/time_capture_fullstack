@@ -460,6 +460,7 @@ urlpatterns = [
     path('task-management/', include('tracker.api.task_type_urls')),
 
     path("blocks/<int:block_id>/evidence/", views_block_evidence.block_evidence, name="block_evidence"),
+    path("blocks/<int:block_id>/why/", views_block_evidence.block_why, name="block_why"),
 
     path("analytics/query/",
          views_analytics_v2.analytics_query,

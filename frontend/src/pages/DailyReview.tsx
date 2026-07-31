@@ -22,7 +22,6 @@ import { safeFetchJson } from "@/lib/api";
 import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
 import { useSearchParams } from "react-router-dom";
-import CategorySummary from "@/components/CategorySummary";
 import CompactSummary from "@/components/CompactSummary";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
@@ -187,10 +186,6 @@ export default function DailyReview() {
   const [proposedInline, setProposedInline] = useState<ProposedInline[]>([]);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [mismatchFlags, setMismatchFlags] = useState<Record<string, string>>({});
-  const [viewMode, setViewMode] = useState<"compact" | "detailed">(
-    () => (localStorage.getItem("dr_view") === "detailed" ? "detailed" : "compact")
-  );
-  const chooseView = (v: "compact" | "detailed") => { setViewMode(v); localStorage.setItem("dr_view", v); };
 
 
 
@@ -496,23 +491,6 @@ export default function DailyReview() {
               </button>
             </div>
 
-            {/* View toggle — Compact (dense, default) vs Detailed (classic) */}
-            <div className="inline-flex items-center rounded-lg border border-border bg-muted/40 p-0.5">
-              {(["compact", "detailed"] as const).map((v) => (
-                <button
-                  key={v}
-                  onClick={() => chooseView(v)}
-                  aria-pressed={viewMode === v}
-                  className={cn(
-                    "px-3 py-1 text-xs font-semibold rounded-md capitalize transition-colors",
-                    viewMode === v ? "bg-card text-primary shadow-sm" : "text-slate-400 hover:text-slate-600"
-                  )}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-
             {/* Confirm all — accept every pending block at once */}
             <button
               onClick={handleConfirmAll}
@@ -587,35 +565,19 @@ export default function DailyReview() {
         )}
 */}
         {activeTab === "summary" ? (
-          viewMode === "compact" ? (
-            <CompactSummary
-              timeSummary={timeSummary}
-              availableClients={availableClients}
-              availableCategories={availableCategories}
-              flaggedBlocks={flaggedBlocks}
-              proposedInline={proposedInline}
-              busy={busy}
-              onDismissReview={handleDismissReview}
-              onResolveDisagreement={handleResolveDisagreement}
-              onRefresh={handleRefresh}
-              showToast={showToast}
-              mismatchFlags={mismatchFlags}
-            />
-          ) : (
-            <CategorySummary
-              timeSummary={timeSummary}
-              availableClients={availableClients}
-              availableCategories={availableCategories}
-              flaggedBlocks={flaggedBlocks}
-              proposedInline={proposedInline}
-              busy={busy}
-              onDismissReview={handleDismissReview}
-              onResolveDisagreement={handleResolveDisagreement}
-              onRefresh={handleRefresh}
-              showToast={showToast}
-              aiSuggestions={aiSuggestions}
-            />
-          )
+          <CompactSummary
+            timeSummary={timeSummary}
+            availableClients={availableClients}
+            availableCategories={availableCategories}
+            flaggedBlocks={flaggedBlocks}
+            proposedInline={proposedInline}
+            busy={busy}
+            onDismissReview={handleDismissReview}
+            onResolveDisagreement={handleResolveDisagreement}
+            onRefresh={handleRefresh}
+            showToast={showToast}
+            mismatchFlags={mismatchFlags}
+          />
         ) : (
           <ManualCategorization
             date={date}

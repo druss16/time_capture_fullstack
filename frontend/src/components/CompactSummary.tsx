@@ -205,9 +205,93 @@ export default function CompactSummary({
   ) =>
     openMove(anchor, [b.block_id], cardClientId, b.proposed_category || catList[0], "Change client", suggestId);
 
+  // ── Anomalies: activities whose title names a different client than booked ──
+  const anomalies = useMemo(() => {
+    const out: {
+      ids: number[]; title: string; bookedClient: string;
+      looksLike: string; looksLikeId: number | null; category: string;
+    }[] = [];
+    for (const client of timeSummary) {
+      for (const cat of client.categories) {
+        for (const a of cat.sample_activities) {
+          const p = parse(a);
+          const looks = p.blockIds.map((id) => mismatchFlags[String(id)]).find(Boolean);
+          if (looks) {
+            out.push({
+              ids: p.blockIds, title: p.title, bookedClient: client.client,
+              looksLike: looks, category: cat.name,
+              looksLikeId: availableClients.find((c) => c.name === looks)?.id ?? null,
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }, [timeSummary, mismatchFlags, availableClients]);
+
+  const fixAllAnomalies = useCallback(async () => {
+    const fixable = anomalies.filter((a) => a.looksLikeId != null);
+    if (!fixable.length) return;
+    try {
+      await Promise.all(fixable.flatMap((a) =>
+        a.ids.map((id) => safeFetchJson(`${API_BASE}/blocks/${id}/recategorize/`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ category: a.category, client_id: a.looksLikeId }),
+        }))
+      ));
+      showToast(`Fixed ${fixable.length} ${fixable.length > 1 ? "entries" : "entry"}`, "success");
+      onRefresh();
+    } catch {
+      showToast("Couldn’t fix some entries", "error");
+    }
+  }, [anomalies, onRefresh, showToast]);
+
+  // ── Collapse / expand all client cards ──
+  const allClientKeys = useMemo(() => [
+    ...timeSummary.map((c) => `c:${clientKeyOf(c.client_id)}`),
+    ...syntheticPending.map((s) => `c:${s.key}:pending`),
+  ], [timeSummary, syntheticPending]);
+  const allCollapsed = allClientKeys.length > 0 && allClientKeys.every((k) => collapsed.has(k));
+  const toggleCollapseAll = () => setCollapsed(allCollapsed ? new Set() : new Set(allClientKeys));
+
   return (
     <div className={cn(sysDark && "dark")}>
       <div className="bg-background text-foreground rounded-xl">
+
+        {/* ── Anomalies: title names a different client than booked ── */}
+        {anomalies.length > 0 && (
+          <div className="mb-3 rounded-xl border border-rose-500/50 bg-rose-500/[0.06] px-4 py-3">
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="text-[13px] font-bold text-rose-600 dark:text-rose-300">⚠ Anomalies</span>
+              <span className="font-mono text-xs text-rose-600/80 dark:text-rose-300/80">{anomalies.length} to review</span>
+              <span className="font-mono text-[11px] text-muted-foreground">— title names a different client than it&#39;s booked to</span>
+              <span className="flex-1" />
+              <button onClick={fixAllAnomalies} disabled={busy || anomalies.every((a) => a.looksLikeId == null)}
+                className="shrink-0 rounded-full bg-rose-500 px-3.5 py-1 font-sans text-[11.5px] font-semibold text-white transition-colors hover:bg-rose-600 disabled:opacity-50">
+                Fix all
+              </button>
+            </div>
+            <div className="flex flex-col divide-y divide-rose-500/15">
+              {anomalies.map((a, i) => (
+                <div key={i} className="flex items-center gap-3 py-1.5 font-mono text-xs">
+                  <span className="shrink-0">
+                    <span className="text-foreground/80">{a.bookedClient}</span>
+                    <span className="mx-1.5 text-rose-500">→</span>
+                    <span className="text-amber-600 dark:text-amber-300">{a.looksLike}</span>
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{a.title}</span>
+                  {a.looksLikeId != null && (
+                    <button onClick={() => moveBlocks(a.ids, a.looksLikeId as number, a.category)} disabled={busy}
+                      className="shrink-0 rounded-full border border-rose-500/40 px-3 py-0.5 font-sans text-[11px] font-medium text-rose-600 transition-colors hover:bg-rose-500/10 disabled:opacity-50 dark:text-rose-300">
+                      Fix
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── Mobile-entry review prompts ── */}
         {mobileReviews.length > 0 && (
@@ -228,9 +312,19 @@ export default function CompactSummary({
           </div>
         )}
 
-        {/* ── Section label ── */}
-        <div className="mb-2 px-1 font-mono text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">
-          Clients · {clientCount}
+        {/* ── Section label + collapse-all ── */}
+        <div className="mb-2 flex items-center gap-3 px-1">
+          <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">
+            Clients · {clientCount}
+          </span>
+          <span className="flex-1" />
+          {clientCount > 0 && (
+            <button onClick={toggleCollapseAll}
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-3 py-1 font-sans text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary">
+              <ChevronDown className={cn("h-3 w-3 transition-transform", allCollapsed && "-rotate-90")} />
+              {allCollapsed ? "Expand all" : "Collapse all"}
+            </button>
+          )}
         </div>
 
         {clientCount === 0 && !busy && (
@@ -277,9 +371,6 @@ export default function CompactSummary({
                     </span>
                   )}
                   <span className="flex-1" />
-                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                    {client.categories.reduce((s, c) => s + c.block_count, 0)} blocks
-                  </span>
                   <span className="shrink-0 font-mono text-sm font-bold tabular-nums text-primary">
                     {fmtH(client.total_hours)}
                   </span>
@@ -304,7 +395,6 @@ export default function CompactSummary({
                               <ChevronRight className={cn("w-3 h-3 shrink-0 text-muted-foreground transition-transform", catOpen && "rotate-90")} />
                               <span className="font-mono text-[13px] font-semibold text-violet-600 dark:text-violet-300">{cat.name}</span>
                               <span className="font-mono text-xs text-muted-foreground">{fmtH(cat.hours)}</span>
-                              <span className="font-mono text-xs text-muted-foreground">· {cat.block_count} blocks</span>
                             </button>
                             {catBlockIds.length > 0 && (
                               <button

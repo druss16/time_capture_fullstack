@@ -100,6 +100,7 @@ export default function CompactSummary({
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [anomaliesOpen, setAnomaliesOpen] = useState(true);
   const [move, setMove] = useState<MoveState | null>(null);
 
   const toggle = (key: string) =>
@@ -262,9 +263,12 @@ export default function CompactSummary({
         {/* ── Anomalies: title names a different client than booked ── */}
         {anomalies.length > 0 && (
           <div className="mb-3 rounded-xl border border-rose-500/50 bg-rose-500/[0.06] px-4 py-3">
-            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="text-[13px] font-bold text-rose-600 dark:text-rose-300">⚠ Anomalies</span>
-              <span className="font-mono text-xs text-rose-600/80 dark:text-rose-300/80">{anomalies.length} to review</span>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <button onClick={() => setAnomaliesOpen((o) => !o)} className="flex items-center gap-2 text-left">
+                <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-rose-500 transition-transform", anomaliesOpen && "rotate-90")} />
+                <span className="text-[13px] font-bold text-rose-600 dark:text-rose-300">⚠ Anomalies</span>
+                <span className="font-mono text-xs text-rose-600/80 dark:text-rose-300/80">{anomalies.length} to review</span>
+              </button>
               <span className="font-mono text-[11px] text-muted-foreground">— title names a different client than it&#39;s booked to</span>
               <span className="flex-1" />
               <button onClick={fixAllAnomalies} disabled={busy || anomalies.every((a) => a.looksLikeId == null)}
@@ -272,7 +276,8 @@ export default function CompactSummary({
                 Fix all
               </button>
             </div>
-            <div className="flex flex-col divide-y divide-rose-500/15">
+            {anomaliesOpen && (
+            <div className="mt-2 flex flex-col divide-y divide-rose-500/15">
               {anomalies.map((a, i) => (
                 <div key={i} className="flex items-center gap-3 py-1.5 font-mono text-xs">
                   <span className="shrink-0">
@@ -290,6 +295,7 @@ export default function CompactSummary({
                 </div>
               ))}
             </div>
+            )}
           </div>
         )}
 

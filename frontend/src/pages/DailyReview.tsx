@@ -492,7 +492,21 @@ export default function DailyReview() {
             </div>
 
             {/* Confirm all — accept every pending block at once */}
-            {/* "Confirm all" now lives in the Needs-review panel (CompactSummary). */}
+            <button
+              onClick={handleConfirmAll}
+              disabled={confirmingAll || busy}
+              title="Confirm all pending blocks"
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                "bg-primary text-white hover:bg-primary/90",
+                "disabled:opacity-50 disabled:cursor-not-allowed"
+              )}
+            >
+              {confirmingAll
+                ? <RefreshCw className="w-4 h-4 animate-spin" />
+                : <Check className="w-4 h-4" />}
+              {confirmingAll ? "Confirming\u2026" : "Confirm all"}
+            </button>
 
             {/* Refresh — ghost icon, no background until hover */}
             <button
@@ -563,7 +577,6 @@ export default function DailyReview() {
             onRefresh={handleRefresh}
             showToast={showToast}
             mismatchFlags={mismatchFlags}
-            onConfirmAll={handleConfirmAll}
           />
         ) : (
           <ManualCategorization

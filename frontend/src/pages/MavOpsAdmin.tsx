@@ -1413,12 +1413,21 @@ interface DRUserSummary {
   user_id: number; name: string; email: string; role: string;
   billable_hours: number; non_billable_hours: number; total_hours: number; needs_review_hours: number;
 }
+interface DRAnomaly {
+  block_id: number; user: string | null; window_title: string; app_name: string;
+  booked_client_id: number; booked_client_name: string;
+  looks_like_client_id: number; looks_like_client_name: string;
+  bucket: "client" | "internal";
+}
 interface DRResponse {
   org_id: number; org_name: string; timezone: string;
   window: { mode: "day" | "range"; start: string; end: string };
   totals: { billable_hours: number; non_billable_hours: number; total_hours: number; needs_review_hours: number };
   user_summary: DRUserSummary[];
   clients: DRClient[];
+  anomalies: DRAnomaly[];
+  flagged_blocks: Record<string, string>;
+  anomaly_counts: { client: number; internal: number };
 }
 
 interface DailyReviewTabProps {
@@ -1432,6 +1441,10 @@ interface DailyReviewTabProps {
 const fmtH = (n: number) => `${(n || 0).toFixed(2)}h`;
 const cleanActivity = (s: string) => s.replace(/^\[id:[^\]]*\]\s*/, "");
 const clientKey = (c: DRClient) => (c.client_id != null ? `id:${c.client_id}` : `name:${c.client}`);
+const activityBlockIds = (s: string): string[] => {
+  const m = s.match(/^\[id:([^\]]*)\]/);
+  return m ? m[1].split(",").map(x => x.trim()).filter(Boolean) : [];
+};
 
 function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: DailyReviewTabProps) {
   const today = new Date().toISOString().slice(0, 10);
@@ -1470,6 +1483,11 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
     background: T.bg, border: `1px solid ${T.border}`, color: T.text,
     padding: "7px 10px", fontSize: 12, outline: "none", borderRadius: 4, ...mono,
   };
+
+  // Client names that have at least one billing-impacting (client-bucket) anomaly.
+  const flaggedClientNames = new Set(
+    (data?.anomalies || []).filter(a => a.bucket === "client").map(a => a.booked_client_name)
+  );
 
   return (
     <div>
@@ -1524,6 +1542,36 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
             <StatCard label="Needs Review" value={fmtH(data.totals.needs_review_hours)} color={data.totals.needs_review_hours > 0 ? T.yellow : T.textMuted} />
           </div>
 
+          {/* ── Anomalies: titles that clearly name a different client than booked ── */}
+          {data.anomalies.length > 0 && (
+            <div style={{ ...card, marginBottom: 20, borderColor: T.red + "66", background: T.red + "0c" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                <span style={{ color: T.red, fontSize: 13, fontWeight: 700 }}>⚠ Anomalies</span>
+                <span style={{ ...mono, fontSize: 12, color: T.red }}>{data.anomaly_counts.client} client</span>
+                {data.anomaly_counts.internal > 0 && (
+                  <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>· {data.anomaly_counts.internal} internal</span>
+                )}
+                <span style={{ ...mono, fontSize: 11, color: T.textMuted }}>— title names a different client than the one it's booked to</span>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 12, ...mono }}>
+                <tbody>
+                  {data.anomalies.map(a => (
+                    <tr key={a.block_id} style={{ borderTop: `1px solid ${T.border}` }}>
+                      <td style={{ padding: "5px 8px", color: T.textMuted, whiteSpace: "nowrap" as const, verticalAlign: "top" }}>{a.user || "—"}</td>
+                      <td style={{ padding: "5px 8px", whiteSpace: "nowrap" as const, verticalAlign: "top" }}>
+                        <span style={{ color: T.text }}>{a.booked_client_name}</span>
+                        <span style={{ color: T.red, margin: "0 6px" }}>→</span>
+                        <span style={{ color: T.yellow }}>{a.looks_like_client_name}</span>
+                        {a.bucket === "internal" && <span style={{ color: T.textMuted, marginLeft: 6, fontSize: 10 }}>(internal)</span>}
+                      </td>
+                      <td style={{ padding: "5px 8px", color: T.textSub, verticalAlign: "top" }}>{a.window_title}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {/* ── Per-user summary ── */}
           {data.user_summary.length > 0 && (
             <div style={{ ...card, marginBottom: 20 }}>
@@ -1575,6 +1623,9 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
                   <span style={{ fontSize: 14, fontWeight: 600, color: unassigned ? T.yellow : T.text, fontStyle: unassigned ? "italic" as const : "normal" as const }}>
                     {c.client}{unassigned ? "  (unattributed)" : ""}
                   </span>
+                  {flaggedClientNames.has(c.client) && (
+                    <span title="A title booked here clearly names a different client" style={{ color: T.red, fontSize: 12, background: T.red + "1e", border: `1px solid ${T.red}55`, padding: "1px 7px", borderRadius: 3, ...mono }}>⚠ mismatch</span>
+                  )}
                   <div style={{ flex: 1 }} />
                   <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{c.users.length} user{c.users.length > 1 ? "s" : ""}</span>
                   <span style={{ ...mono, fontSize: 13, color: T.teal, fontWeight: 600 }}>{fmtH(c.total_hours)}</span>
@@ -1598,9 +1649,17 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
                             </div>
                             {cat.sample_activities.length > 0 && (
                               <ul style={{ listStyle: "none", margin: "3px 0 0", padding: 0 }}>
-                                {cat.sample_activities.map((s, j) => (
-                                  <li key={j} style={{ color: T.textMuted, fontSize: 11.5, ...mono, padding: "1px 0 1px 14px" }}>· {cleanActivity(s)}</li>
-                                ))}
+                                {cat.sample_activities.map((s, j) => {
+                                  const looksLike = activityBlockIds(s).map(id => data.flagged_blocks[id]).find(Boolean);
+                                  return (
+                                    <li key={j} style={{ color: looksLike ? T.text : T.textMuted, fontSize: 11.5, ...mono, padding: "1px 0 1px 14px" }}>
+                                      · {cleanActivity(s)}
+                                      {looksLike && (
+                                        <span title={`Title clearly names "${looksLike}"`} style={{ color: T.red, marginLeft: 8, fontSize: 10.5, background: T.red + "1e", border: `1px solid ${T.red}55`, padding: "0 6px", borderRadius: 3 }}>⚠ looks like {looksLike}</span>
+                                      )}
+                                    </li>
+                                  );
+                                })}
                               </ul>
                             )}
                           </div>

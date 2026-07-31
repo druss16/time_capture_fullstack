@@ -536,7 +536,9 @@ def mavops_daily_review(request):
     except ImportError:  # pragma: no cover - py<3.9 fallback
         from backports.zoneinfo import ZoneInfo
 
-    from tracker.services.billing_totals import compute_totals, compute_client_cards
+    from tracker.services.billing_totals import (
+        compute_totals, compute_client_cards, committed_block_qs,
+    )
 
     org_id = request.GET.get('org_id')
     if not org_id:
@@ -642,6 +644,51 @@ def mavops_daily_review(request):
         c['users'].sort(key=lambda x: -x['total_hours'])
     user_summary.sort(key=lambda x: -x['total_hours'])
 
+    # ── Anomaly scan ─────────────────────────────────────────────────────────
+    # Reuse the proven distinctive-token detector (same one behind the Mismatches
+    # tab): flag a block whose window title clearly fingerprints a DIFFERENT
+    # client than the one it's booked to. Scanned over the SAME committed block
+    # set the cards come from, so every flag maps to time shown above.
+    #   bucket "client"   = real client<->client billing error (the money bucket)
+    #   bucket "internal" = firm/admin bucket (real, but not a billing error)
+    names = {c.id: c.name for c in Client.objects.filter(org=org).only('id', 'name')}
+    index = build_token_index(names) if names else None
+
+    anomalies = []
+    flagged_blocks = {}   # block_id -> looks_like_client_name (for inline badges)
+    if index:
+        scan_qs = committed_block_qs(
+            org, start_utc, end_utc, user_id=None, can_see_all=True
+        ).select_related('user')
+        for b in scan_qs:
+            if not b.client_id or b.client_id not in names or not b.window_title:
+                continue
+            m = detect_mismatch(
+                b.window_title, b.client_id, index, names, firm_name=org.name
+            )
+            if not m:
+                continue
+            bucket = m.get('bucket', 'client')
+            anomalies.append({
+                'block_id': b.id,
+                'user': (
+                    (b.user.get_full_name() or '').strip() or b.user.username
+                    if b.user_id else None
+                ),
+                'window_title': b.window_title[:200],
+                'app_name': getattr(b, 'app_name', '') or '',
+                'booked_client_id': b.client_id,
+                'booked_client_name': names[b.client_id],
+                'looks_like_client_id': m['looks_like_client_id'],
+                'looks_like_client_name': m['looks_like_client_name'],
+                'bucket': bucket,
+            })
+            if bucket == 'client' and b.id is not None:
+                flagged_blocks[b.id] = m['looks_like_client_name']
+
+    # Money-bucket first, then group by the user for a readable panel.
+    anomalies.sort(key=lambda a: (a['bucket'] != 'client', a['user'] or ''))
+
     return Response({
         'org_id': org.id,
         'org_name': org.name,
@@ -659,6 +706,12 @@ def mavops_daily_review(request):
         },
         'user_summary': user_summary,
         'clients': client_list,
+        'anomalies': anomalies,
+        'flagged_blocks': flagged_blocks,
+        'anomaly_counts': {
+            'client': sum(1 for a in anomalies if a['bucket'] == 'client'),
+            'internal': sum(1 for a in anomalies if a['bucket'] == 'internal'),
+        },
     })
 
 

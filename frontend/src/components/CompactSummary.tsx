@@ -24,7 +24,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  ChevronRight, ChevronDown, AlertTriangle, Check, Smartphone, MousePointerClick, GripVertical,
+  ChevronRight, ChevronDown, Check, Smartphone, MousePointerClick, GripVertical,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -49,6 +49,8 @@ type Props = {
   showToast: (msg: string, type: "success" | "error") => void;
   /** block_id -> looks-like client name, from today-time's detect_mismatch scan */
   mismatchFlags?: Record<string, string>;
+  /** bulk-confirm every pending entry (the toolbar's old "Confirm all") */
+  onConfirmAll?: () => void;
 };
 
 // Left-accent colors — 500-weight reads on both light and dark grounds.
@@ -94,13 +96,14 @@ type MoveState = {
 export default function CompactSummary({
   timeSummary, availableClients, availableCategories, flaggedBlocks,
   proposedInline = [], busy, onDismissReview,
-  onRefresh, showToast, mismatchFlags = {},
+  onRefresh, showToast, mismatchFlags = {}, onConfirmAll,
 }: Props) {
   const sysDark = useSystemDark();
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [anomaliesOpen, setAnomaliesOpen] = useState(true);
+  const [pendingOpen, setPendingOpen] = useState(true);
   const [move, setMove] = useState<MoveState | null>(null);
 
   const toggle = (key: string) =>
@@ -167,44 +170,17 @@ export default function CompactSummary({
   const selCount = selected.size;
   const catList = availableCategories.length ? availableCategories : ["General Client Work"];
 
-  // ── Pending grouped by guessed client (so it renders UNDER that client) ──
-  const pendingByKey = useMemo(() => {
-    const m = new Map<string, ProposedInline[]>();
-    for (const p of proposedInline) {
-      const key = clientKeyOf(p.proposed_client_id);
-      const arr = m.get(key);
-      if (arr) arr.push(p); else m.set(key, [p]);
-    }
-    return m;
-  }, [proposedInline]);
-
-  // Which pending groups get absorbed into an existing client card…
-  const realKeys = new Set(timeSummary.map((c) => clientKeyOf(c.client_id)));
-  // …and which need a synthetic card (guessed client / No Client with no committed time today).
-  const syntheticPending = useMemo(() => {
-    const out: { key: string; name: string; clientId: number | null; items: ProposedInline[] }[] = [];
-    pendingByKey.forEach((items, key) => {
-      if (realKeys.has(key)) return;
-      if (key === "none") out.push({ key, name: "No client", clientId: null, items });
-      else out.push({ key, name: items[0].proposed_client_name || "Client", clientId: items[0].proposed_client_id, items });
-    });
-    return out;
-    // realKeys derives from timeSummary; recompute when either input changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingByKey, timeSummary]);
-
   // Mobile-entry review prompts only (NOT the AI/mail/calendar "suggests" banners).
   const mobileReviews = useMemo(
     () => flaggedBlocks.filter((f) => f.type === "mobile_review"),
     [flaggedBlocks]
   );
 
-  const clientCount = timeSummary.length + syntheticPending.length;
+  const clientCount = timeSummary.length;
 
-  const onChangePending = (
-    anchor: HTMLElement, b: ProposedInline, cardClientId: number | null, suggestId: number | null,
-  ) =>
-    openMove(anchor, [b.block_id], cardClientId, b.proposed_category || catList[0], "Change client", suggestId);
+  // Open the move picker for a pending entry (no current client; pre-select the best guess).
+  const onChangePending = (anchor: HTMLElement, b: ProposedInline, suggestId: number | null) =>
+    openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Change client", suggestId);
 
   // ── Anomalies: activities whose title names a different client than booked ──
   const anomalies = useMemo(() => {
@@ -249,10 +225,10 @@ export default function CompactSummary({
   }, [anomalies, onRefresh, showToast]);
 
   // ── Collapse / expand all client cards ──
-  const allClientKeys = useMemo(() => [
-    ...timeSummary.map((c) => `c:${clientKeyOf(c.client_id)}`),
-    ...syntheticPending.map((s) => `c:${s.key}:pending`),
-  ], [timeSummary, syntheticPending]);
+  const allClientKeys = useMemo(
+    () => timeSummary.map((c) => `c:${clientKeyOf(c.client_id)}`),
+    [timeSummary]
+  );
   const allCollapsed = allClientKeys.length > 0 && allClientKeys.every((k) => collapsed.has(k));
   const toggleCollapseAll = () => setCollapsed(allCollapsed ? new Set() : new Set(allClientKeys));
 
@@ -295,6 +271,37 @@ export default function CompactSummary({
                 </div>
               ))}
             </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Needs review: every pending entry, confirm to count as billable ── */}
+        {proposedInline.length > 0 && (
+          <div className="mb-3 rounded-xl border border-amber-500/50 bg-amber-500/[0.07] px-4 py-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <button onClick={() => setPendingOpen((o) => !o)} className="flex items-center gap-2 text-left">
+                <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400 transition-transform", pendingOpen && "rotate-90")} />
+                <span className="text-[13px] font-bold text-amber-700 dark:text-amber-300">⏳ Needs review</span>
+                <span className="font-mono text-xs text-amber-700/80 dark:text-amber-300/80">{proposedInline.length} to confirm</span>
+              </button>
+              <span className="font-mono text-[11px] text-muted-foreground">— confirm to count as billable</span>
+              <span className="flex-1" />
+              {onConfirmAll && (
+                <button onClick={onConfirmAll} disabled={busy}
+                  className="shrink-0 rounded-full bg-amber-500 px-3.5 py-1 font-sans text-[11.5px] font-semibold text-amber-950 transition-colors hover:bg-amber-600 disabled:opacity-50">
+                  Confirm all
+                </button>
+              )}
+            </div>
+            {pendingOpen && (
+              <div className="mt-2 flex flex-col divide-y divide-amber-500/15">
+                {proposedInline.map((b) => (
+                  <PendingRow key={b.block_id} b={b} busy={busy} allowNoClient
+                    onAccept={(bb, cid) => acceptTo(bb, cid)}
+                    onNoClient={(bb) => acceptTo(bb, null)}
+                    onChange={(anchor, bb, suggestId) => onChangePending(anchor, bb, suggestId)} />
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -345,7 +352,6 @@ export default function CompactSummary({
             const unassigned = client.client_id == null;
             const internal = isInternalClient(client.client);
             const accent = unassigned ? "border-l-amber-400" : ACCENTS[ci % ACCENTS.length];
-            const pending = pendingByKey.get(clientKeyOf(client.client_id)) || [];
 
             const clientFlagged = client.categories.some((cat) =>
               cat.sample_activities.some((a) => parse(a).blockIds.some((id) => mismatchFlags[String(id)]))
@@ -371,11 +377,6 @@ export default function CompactSummary({
                       ⚠ mismatch
                     </span>
                   )}
-                  {pending.length > 0 && (
-                    <span className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[11px] text-amber-600 dark:text-amber-300">
-                      {pending.length} pending
-                    </span>
-                  )}
                   <span className="flex-1" />
                   <span className="shrink-0 font-mono text-sm font-bold tabular-nums text-primary">
                     {fmtH(client.total_hours)}
@@ -384,12 +385,6 @@ export default function CompactSummary({
 
                 {open && (
                   <div className="border-t border-border px-3 pb-3 pt-2">
-                    {pending.length > 0 && (
-                      <PendingStrip items={pending} busy={busy} allowNoClient={client.client_id == null}
-                        onAccept={(b, cid) => acceptTo(b, cid)}
-                        onNoClient={(b) => acceptTo(b, null)}
-                        onChange={(anchor, b, suggestId) => onChangePending(anchor, b, client.client_id, suggestId)} />
-                    )}
                     {client.categories.map((cat, kx) => {
                       const catKey = `${cKey}/cat:${cat.name}`;
                       const catOpen = !collapsed.has(catKey);
@@ -459,39 +454,6 @@ export default function CompactSummary({
                         </div>
                       );
                     })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {/* ── Synthetic cards: pending whose client has no committed time today ── */}
-          {syntheticPending.map((s) => {
-            const cKey = `c:${s.key}:pending`;
-            const open = !collapsed.has(cKey);
-            const noClient = s.clientId == null;
-            return (
-              <div key={cKey}
-                className={cn("overflow-hidden rounded-xl border border-l-4 border-l-amber-400 bg-card",
-                  noClient && "border-dashed border-amber-500/50")}>
-                <button onClick={() => toggle(cKey)}
-                  className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/60">
-                  <ChevronRight className={cn("w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
-                  <span className={cn("text-[15px] font-semibold", noClient ? "italic text-amber-600 dark:text-amber-300" : "text-foreground")}>
-                    {s.name}
-                  </span>
-                  <span className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[11px] text-amber-600 dark:text-amber-300">
-                    {s.items.length} pending
-                  </span>
-                  <span className="flex-1" />
-                  <span className="shrink-0 font-mono text-xs text-muted-foreground">needs review</span>
-                </button>
-                {open && (
-                  <div className="border-t border-border px-3 pb-3 pt-2">
-                    <PendingStrip items={s.items} busy={busy} allowNoClient={s.clientId == null}
-                      onAccept={(b, cid) => acceptTo(b, cid)}
-                      onNoClient={(b) => acceptTo(b, null)}
-                      onChange={(anchor, b, suggestId) => onChangePending(anchor, b, s.clientId, suggestId)} />
                   </div>
                 )}
               </div>
@@ -604,29 +566,6 @@ function PendingRow({ b, busy, allowNoClient, onAccept, onNoClient, onChange }: 
             Change <ChevronDown className="h-3 w-3" />
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function PendingStrip({ items, busy, allowNoClient, onAccept, onNoClient, onChange }: {
-  items: ProposedInline[];
-  busy: boolean;
-  allowNoClient: boolean;
-  onAccept: (b: ProposedInline, clientId: number) => void;
-  onNoClient: (b: ProposedInline) => void;
-  onChange: (anchor: HTMLElement, b: ProposedInline, suggestId: number | null) => void;
-}) {
-  return (
-    <div className="mb-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5">
-      <div className="mb-1 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-300">
-        <AlertTriangle className="w-3.5 h-3.5" /> Pending — confirm to count as billable
-      </div>
-      <div className="flex flex-col divide-y divide-amber-500/20">
-        {items.map((b) => (
-          <PendingRow key={b.block_id} b={b} busy={busy} allowNoClient={allowNoClient}
-            onAccept={onAccept} onNoClient={onNoClient} onChange={onChange} />
-        ))}
       </div>
     </div>
   );

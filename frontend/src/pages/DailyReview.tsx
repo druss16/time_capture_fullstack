@@ -2,15 +2,12 @@
  * DailyReview.tsx — modernized toolbar & layout
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   RefreshCw,
   BarChart3,
   Check,
   X,
-  AlertTriangle,
-  Plus,
-  Clock,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
@@ -23,6 +20,8 @@ import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
 import { useSearchParams } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
+import ClassicSummary from "@/components/ClassicSummary";
+import { deriveLanes, type MismatchBlock } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
 
@@ -101,6 +100,7 @@ type TodayTimeResponse = {
   flagged_blocks: FlaggedBlock[];
   proposed_inline?: ProposedInline[];
   mismatch_flags?: Record<string, string>;
+  mismatch_blocks?: MismatchBlock[];
 };
 
 
@@ -161,8 +161,6 @@ export default function DailyReview() {
   const [timeSummary, setTimeSummary] = useState<ClientTime[]>([]);
   const [uncategorizedCount, setUncategorizedCount] = useState(0);
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
-  const [flaggedBlocks, setFlaggedBlocks] = useState<FlaggedBlock[]>([]);
-  const [needsReviewBlocks, setNeedsReviewBlocks] = useState<FlaggedBlock[]>([]);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [availableClients, setAvailableClients] = useState<ClientOption[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -185,7 +183,32 @@ export default function DailyReview() {
   const [aiInProgress, setAiInProgress] = useState(false);
   const [proposedInline, setProposedInline] = useState<ProposedInline[]>([]);
   const [confirmingAll, setConfirmingAll] = useState(false);
+  const [mismatchBlocks, setMismatchBlocks] = useState<MismatchBlock[]>([]);
+  // Classic view still consumes these; kept alongside the Lightning-view slices.
+  const [flaggedBlocks, setFlaggedBlocks] = useState<FlaggedBlock[]>([]);
   const [mismatchFlags, setMismatchFlags] = useState<Record<string, string>>({});
+  // Which view: Classic (old client-card summary) or Lightning (confidence lanes).
+  const [view, setView] = useState<"classic" | "lightning">(() => {
+    try { return (localStorage.getItem("dr_view") as "classic" | "lightning") || "lightning"; }
+    catch { return "lightning"; }
+  });
+  const chooseView = (v: "classic" | "lightning") => {
+    setView(v);
+    try { localStorage.setItem("dr_view", v); } catch { /* noop */ }
+  };
+  // Mismatch flags the user dismissed as false positives ("Keep here"), per browser.
+  const [ignoredMismatch, setIgnoredMismatch] = useState<Set<string>>(() => {
+    try { return new Set<string>(JSON.parse(localStorage.getItem("dr_ignored_mismatches") || "[]")); }
+    catch { return new Set<string>(); }
+  });
+  const ignoreMismatch = useCallback((ids: number[]) => {
+    setIgnoredMismatch((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(String(id)));
+      try { localStorage.setItem("dr_ignored_mismatches", JSON.stringify([...next])); } catch { /* noop */ }
+      return next;
+    });
+  }, []);
 
 
 
@@ -238,11 +261,10 @@ export default function DailyReview() {
       setNonBillableHours(json.non_billable_hours || 0);
       setNeedsReviewHours(json.needs_review_hours || 0);
       setProposedInline(json.proposed_inline || []);
+      setMismatchBlocks(json.mismatch_blocks || []);
       setMismatchFlags(json.mismatch_flags || {});
-      const allFlagged = json.flagged_blocks || [];
-      const needsReview = allFlagged.filter(b => b.review_reason?.includes("Mixed content"));
+      const allFlagged = (json.flagged_blocks || []).map((b) => ({ ...b, type: b.type || "mobile_review" as const }));
       setFlaggedBlocks(allFlagged);
-      setNeedsReviewBlocks(needsReview);
     } catch (err: any) {
       setErr(err?.message || "Failed to load");
       setTimeSummary([]);
@@ -251,17 +273,15 @@ export default function DailyReview() {
     }
   }, [date]);
 
+  // Classic-view handlers (mobile-review dismiss + AI/mail/calendar disagreement).
   const handleDismissReview = async (blockId: number) => {
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/dismiss-review/`, { method: "POST" });
       setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
       showToast("Entry confirmed", "success");
-    } catch {
-      showToast("Failed to dismiss", "error");
-    }
+    } catch { showToast("Failed to dismiss", "error"); }
   };
-
-  const handleResolveDisagreement = async (blockId: number, action: 'accept' | 'dismiss') => {
+  const handleResolveDisagreement = async (blockId: number, action: "accept" | "dismiss") => {
     try {
       await safeFetchJson(`${API_BASE}/blocks/${blockId}/resolve-disagreement/`, {
         method: "POST",
@@ -269,14 +289,9 @@ export default function DailyReview() {
         body: JSON.stringify({ action }),
       });
       setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
-      showToast(
-        action === 'accept' ? "Switched to suggested client" : "Kept original client",
-        "success"
-      );
+      showToast(action === "accept" ? "Switched to suggested client" : "Kept original client", "success");
       loadTimeSummary();
-    } catch (err: any) {
-      showToast(err?.message || "Failed to resolve", "error");
-    }
+    } catch (err: any) { showToast(err?.message || "Failed to resolve", "error"); }
   };
 
   const loadUncategorizedCount = useCallback(async () => {
@@ -416,6 +431,25 @@ export default function DailyReview() {
   // so it matches the backend global_hours and the Reports total.
   const totalHours = billableHours + nonBillableHours + needsReviewHours;
 
+  // ── Confidence lanes (single source for the header numbers + the body) ──────
+  const lanes = useMemo(
+    () => deriveLanes(timeSummary, proposedInline, mismatchBlocks, ignoredMismatch),
+    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch],
+  );
+  const needsYouCount = lanes.needsYou.count;
+  const autoFiled = lanes.certain.minutes > 0;
+
+  // State-dependent headline (see spec). Leads with a sentence, not a control.
+  const capturedLabel = formatHours(totalHours);
+  const headline =
+    totalHours <= 0
+      ? "Nothing tracked yet."
+      : needsYouCount === 0
+        ? `All ${capturedLabel} is sorted.`
+        : autoFiled
+          ? `${capturedLabel} sorted. ${needsYouCount} ${needsYouCount === 1 ? "thing needs" : "things need"} you.`
+          : `${capturedLabel} captured. ${needsYouCount} ${needsYouCount === 1 ? "item" : "items"} still open.`;
+
   const stepDate = (days: number) => {
     const d = new Date(date + "T00:00:00");
     d.setDate(d.getDate() + days);
@@ -495,7 +529,7 @@ export default function DailyReview() {
             <button
               onClick={handleConfirmAll}
               disabled={confirmingAll || busy}
-              title="Confirm all pending blocks"
+              title="Confirm all pending suggestions"
               className={cn(
                 "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
                 "bg-primary text-white hover:bg-primary/90",
@@ -518,7 +552,7 @@ export default function DailyReview() {
               <RefreshCw className={cn("w-4 h-4", busy && "animate-spin")} />
             </button>
 
-            {/* Stats — clean vertical stacks separated by a thin rule */}
+            {/* Stats — Billable, Needs Review, Total. */}
             <div className="flex items-center gap-4 pl-3 border-l border-border/60">
               <StatCell
                 value={formatHours(billableHours)}
@@ -526,19 +560,14 @@ export default function DailyReview() {
                 valueClass="text-primary"
               />
               <StatCell
-                value={formatHours(nonBillableHours)}
-                label="Non-bill"
-                valueClass="text-slate-400"
-              />
-              <StatCell
                 value={formatHours(needsReviewHours)}
                 label="Needs review"
-                valueClass="text-amber-500"
+                valueClass={needsReviewHours === 0 ? "text-teal-500" : "text-amber-500"}
               />
               <StatCell
                 value={formatHours(totalHours)}
                 label="Total"
-                valueClass="text-slate-700"
+                valueClass="text-slate-800"
               />
             </div>
 
@@ -564,8 +593,50 @@ export default function DailyReview() {
           </div>
         )}
 */}
-        {activeTab === "summary" ? (
-          <CompactSummary
+        {/* ── View toggle: Classic (old client cards) vs Lightning (lanes) ── */}
+        <div className="mb-5 flex items-center">
+          <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 text-sm font-medium">
+            <button onClick={() => chooseView("classic")}
+              className={cn("rounded-md px-3.5 py-1.5 transition-colors",
+                view === "classic" ? "bg-card text-foreground shadow-sm" : "text-slate-500 hover:text-slate-800")}>
+              Classic View
+            </button>
+            <button onClick={() => chooseView("lightning")}
+              className={cn("rounded-md px-3.5 py-1.5 transition-colors",
+                view === "lightning" ? "bg-card text-foreground shadow-sm" : "text-slate-500 hover:text-slate-800")}>
+              ⚡ Lightning View
+            </button>
+          </div>
+        </div>
+
+        {view === "lightning" ? (
+          <>
+            {/* ── Headline: the page leads with a sentence, not a control. ── */}
+            <div className="mb-7 w-full" style={{ fontFamily: '"Inter", sans-serif' }}>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                {new Date(date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+              </div>
+              <h1 className="mt-2.5 text-[32px] font-bold leading-[1.12] tracking-[-0.021em] text-slate-900">{headline}</h1>
+              {autoFiled && needsYouCount > 0 && (
+                <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-500">
+                  Everything else matched a client with high confidence and was filed automatically.
+                  You can look, but you don’t have to.
+                </p>
+              )}
+            </div>
+            <CompactSummary
+              lanes={lanes}
+              availableClients={availableClients}
+              availableCategories={availableCategories}
+              busy={busy}
+              autoFiled={autoFiled}
+              onRefresh={handleRefresh}
+              showToast={showToast}
+              onIgnoreMismatch={ignoreMismatch}
+            />
+          </>
+        ) : (
+          <ClassicSummary
             timeSummary={timeSummary}
             availableClients={availableClients}
             availableCategories={availableCategories}
@@ -577,11 +648,7 @@ export default function DailyReview() {
             onRefresh={handleRefresh}
             showToast={showToast}
             mismatchFlags={mismatchFlags}
-          />
-        ) : (
-          <ManualCategorization
             date={date}
-            onComplete={handleCategorizationComplete}
           />
         )}
       </div>

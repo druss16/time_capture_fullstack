@@ -725,6 +725,41 @@ def suggested_client_for(block, org):
     return suggested_id
 
 
+def _block_breakdown(block):
+    """Foreground time-split within a block — how long each distinct window/doc was
+    actually IN FRONT, from the sub-events. Answers 'was most of it X, or a bit of
+    Y?'. Returns [{label, minutes, pct}] biggest-first (max 6, sub-minute dropped)."""
+    from collections import defaultdict
+    try:
+        from tracker.views import _tabctx_lead_name, _tabctx_is_noise
+    except Exception:
+        _tabctx_lead_name = lambda t: (t or "").strip()          # noqa: E731
+        _tabctx_is_noise = lambda n: False                        # noqa: E731
+
+    secs = defaultdict(float)
+    for ev in RawEvent.objects.filter(block=block).only("window_title", "start_ts", "end_ts"):
+        if not ev.start_ts or not ev.end_ts:
+            continue
+        dur = (ev.end_ts - ev.start_ts).total_seconds()
+        if dur <= 0:
+            continue
+        name = _tabctx_lead_name(ev.window_title or "")
+        if not name or len(name) < 2 or _tabctx_is_noise(name):
+            name = (ev.window_title or "").strip()[:60] or "Other"
+        secs[name] += dur
+
+    total = sum(secs.values())
+    if total <= 0:
+        return []
+    out = []
+    for name, s in sorted(secs.items(), key=lambda x: -x[1])[:6]:
+        mins = round(s / 60)
+        if mins < 1:
+            continue
+        out.append({"label": name, "minutes": mins, "pct": round(100 * s / total)})
+    return out
+
+
 @api_view(["GET"])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
@@ -784,8 +819,16 @@ def block_why(request, block_id: int):
         "explanation": explanation,
         "tier": tier,
         "personal": personal,
+        "breakdown": _safe_breakdown(block),
         "suggested_client_id": suggested_id,
         "suggested_client_name": suggested_name,
         "co_open_files": co_open_files[:5],
         "surrounding": surrounding or None,
     })
+
+
+def _safe_breakdown(block):
+    try:
+        return _block_breakdown(block)
+    except Exception:
+        return []

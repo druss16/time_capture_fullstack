@@ -1,8 +1,17 @@
 /* TEMPORARY visual-preview harness (no login) — delete before PR. */
+import { useState } from "react";
 import { RefreshCw, Check, Plus, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import CompactSummary from "@/components/CompactSummary";
 import type { Lanes } from "@/lib/dailyReviewLanes";
+
+const FONTS = [
+  { label: "Jakarta (current)", css: '"Plus Jakarta Sans", sans-serif' },
+  { label: "Inter", css: '"Inter", sans-serif' },
+  { label: "Space Grotesk", css: '"Space Grotesk", sans-serif' },
+  { label: "Fraunces", css: '"Fraunces", serif' },
+  { label: "Instrument Serif", css: '"Instrument Serif", serif' },
+];
 
 const lanes: Lanes = {
   certain: {
@@ -60,6 +69,7 @@ const Stat = ({ value, label, cls = "text-slate-800" }: { value: string; label: 
 );
 
 export default function LanePreview() {
+  const [font, setFont] = useState(FONTS[3].css); // default: Fraunces
   return (
     <div className="min-h-screen bg-background">
       {/* toolbar — mirrors DailyReview: [Summary tab · + Add time] ... [date · Confirm all · refresh · 3 stats] */}
@@ -90,15 +100,22 @@ export default function LanePreview() {
       </div>
 
       <div className="p-5">
-        <div className="mx-auto mb-2 max-w-3xl">
-          <span className="inline-block rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
-            PREVIEW · mock data · delete before PR
-          </span>
+        {/* font picker — TEMP, pick the winner then I apply it everywhere */}
+        <div className="mx-auto mb-3 flex max-w-5xl flex-wrap items-center gap-2">
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">PREVIEW · mock data</span>
+          <span className="ml-2 text-xs text-slate-400">Headline font:</span>
+          {FONTS.map((f) => (
+            <button key={f.label} onClick={() => setFont(f.css)} style={{ fontFamily: f.css }}
+              className={cn("rounded-full border px-3 py-1 text-xs transition-colors",
+                font === f.css ? "border-primary bg-primary/10 text-primary" : "border-border text-slate-500 hover:bg-muted")}>
+              {f.label}
+            </button>
+          ))}
         </div>
-        <div className="mx-auto mb-5 max-w-3xl">
-          <div className="text-sm font-semibold text-slate-500">Thu, Jul 30</div>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">6h 15m sorted. 5 things need you.</h1>
-          <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-slate-500">
+        <div className="mx-auto mb-7 max-w-5xl">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Thu, Jul 30</div>
+          <h1 style={{ fontFamily: font }} className="mt-2.5 text-[32px] font-bold leading-[1.12] tracking-[-0.021em] text-slate-900">6h 15m sorted. 5 things need you.</h1>
+          <p style={{ fontFamily: font }} className="mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-500">
             Everything else matched a client with high confidence and was filed automatically. You can look, but you don’t have to.
           </p>
         </div>

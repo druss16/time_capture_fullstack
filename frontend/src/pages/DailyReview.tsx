@@ -558,13 +558,13 @@ export default function DailyReview() {
         )}
 */}
         {/* ── Headline: the page leads with a sentence, not a control. ── */}
-        <div className="mx-auto mb-5 max-w-3xl">
-          <div className="text-sm font-semibold text-slate-500">
+        <div className="mx-auto mb-7 max-w-5xl">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
             {new Date(date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
           </div>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{headline}</h1>
+          <h1 className="mt-2.5 text-[32px] font-bold leading-[1.12] tracking-[-0.021em] text-slate-900">{headline}</h1>
           {autoFiled && needsYouCount > 0 && (
-            <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-slate-500">
+            <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-500">
               Everything else matched a client with high confidence and was filed automatically.
               You can look, but you don’t have to.
             </p>

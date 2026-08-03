@@ -36,6 +36,42 @@ _MODEL = "gpt-4o-mini"
 _MAX_ACTIVITIES_PER_CATEGORY = 12
 
 
+def _resolve_range(request):
+    """Date window for a summary. Prefers explicit start/end (billing/monthly);
+    otherwise falls back to date + days (staff/weekly). Returns (start, end) dates."""
+    start_s, end_s = request.GET.get("start"), request.GET.get("end")
+    if start_s and end_s:
+        sd, ed = parse_date(start_s), parse_date(end_s)
+        if sd and ed and sd <= ed:
+            return sd, ed
+    date_s = request.GET.get("date")
+    target = parse_date(date_s) if date_s else timezone.localdate()
+    if not target:
+        return None, None
+    try:
+        days = max(1, min(45, int(request.GET.get("days", "1"))))
+    except (TypeError, ValueError):
+        days = 1
+    return target - timedelta(days=days - 1), target
+
+
+def _range_utc(start_date, end_date):
+    tz = timezone.get_current_timezone()
+    s = timezone.make_aware(datetime.combine(start_date, datetime.min.time()), tz).astimezone(dt_timezone.utc)
+    e = timezone.make_aware(datetime.combine(end_date, datetime.max.time()), tz).astimezone(dt_timezone.utc)
+    return s, e
+
+
+def _firm_authorized(user, org):
+    """Firm-wide (all-staff) summaries are management-only — the invoice-narrative
+    audience: owners, admins, managers."""
+    try:
+        from tracker.views import get_user_role
+        return get_user_role(user, org) in ("owner", "admin", "manager")
+    except Exception:
+        return False
+
+
 def _fmt_period(start_date, end_date) -> str:
     if start_date == end_date:
         return start_date.strftime("%b %-d, %Y")
@@ -153,31 +189,29 @@ def client_work_summary(request, client_id):
             and not (getattr(user, "is_mavops_admin", False) or user.is_superuser):
         return Response({"error": "forbidden"}, status=403)
 
-    # Date window (mirror today_time): a single local day, optionally extended
-    # back `days-1` days to cover a week/period.
-    date_str = request.GET.get("date")
-    target_date = parse_date(date_str) if date_str else timezone.localdate()
-    if not target_date:
-        return Response({"error": "bad date"}, status=400)
-    try:
-        days = max(1, min(31, int(request.GET.get("days", "1"))))
-    except (TypeError, ValueError):
-        days = 1
-    start_date = target_date - timedelta(days=days - 1)
+    # Date window. Prefer explicit start/end (billing/monthly); else date+days.
+    start_date, end_date = _resolve_range(request)
+    if not start_date or not end_date:
+        return Response({"error": "bad date range"}, status=400)
+    start_utc, end_utc = _range_utc(start_date, end_date)
 
-    tz = timezone.get_current_timezone()
-    start_utc = timezone.make_aware(datetime.combine(start_date, datetime.min.time()), tz)\
-        .astimezone(dt_timezone.utc)
-    end_utc = timezone.make_aware(datetime.combine(target_date, datetime.max.time()), tz)\
-        .astimezone(dt_timezone.utc)
+    # Scope: "mine" (default — the requester's own time) or "firm" (all staff's
+    # work on this client, for an invoice narrative). Firm scope is management-only.
+    scope = (request.GET.get("scope") or "mine").lower()
+    firm = scope == "firm"
+    if firm and not _firm_authorized(user, org):
+        return Response({"error": "forbidden"}, status=403)
 
+    block_filter = dict(
+        org=org, client_id=client_id,
+        classification_state="committed", deleted_at__isnull=True,
+        start__gte=start_utc, start__lte=end_utc,
+    )
+    if not firm:
+        block_filter["user"] = user
     blocks = list(
-        Block.objects.filter(
-            org=org, user=user, client_id=client_id,
-            classification_state="committed",
-            deleted_at__isnull=True,
-            start__gte=start_utc, start__lte=end_utc,
-        ).only("minutes", "category_hours", "window_title", "app_name", "day")
+        Block.objects.filter(**block_filter)
+        .only("minutes", "category_hours", "window_title", "app_name", "day")
     )
 
     if not blocks:
@@ -187,7 +221,7 @@ def client_work_summary(request, client_id):
             "message": "No committed work for this client in the selected period.",
         })
 
-    digest = _build_digest(client, blocks, start_date, target_date)
+    digest = _build_digest(client, blocks, start_date, end_date)
 
     t0 = time.monotonic()
     try:
@@ -219,4 +253,55 @@ def client_work_summary(request, client_id):
         "total_hours": digest["total_hours"],
         "summary": summary,
         "categories": digest["categories"],
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def firm_period_clients(request):
+    """GET /api/work-summaries/clients/?start=&end=  (management only)
+
+    Lists clients with committed work across the WHOLE firm in the range, with
+    hours — drives the invoice-narrative picker for owners / admins / managers.
+    Read-only; no LLM call (that happens per client on demand via
+    client_work_summary?scope=firm).
+    """
+    from django.db.models import Sum
+    from tracker.views import get_user_org
+
+    user = request.user
+    org = get_user_org(user)
+    if not org:
+        return Response({"error": "no org"}, status=400)
+    if not _firm_authorized(user, org):
+        return Response({"error": "forbidden"}, status=403)
+
+    start_date, end_date = _resolve_range(request)
+    if not start_date or not end_date:
+        return Response({"error": "bad date range"}, status=400)
+    start_utc, end_utc = _range_utc(start_date, end_date)
+
+    rows = (
+        Block.objects.filter(
+            org=org, classification_state="committed", deleted_at__isnull=True,
+            client_id__isnull=False,
+            start__gte=start_utc, start__lte=end_utc,
+        )
+        .values("client_id", "client__name")
+        .annotate(minutes=Sum("minutes"))
+        .order_by("-minutes")
+    )
+    clients = [
+        {
+            "client_id": r["client_id"],
+            "name": r["client__name"] or "Client",
+            "hours": round((r["minutes"] or 0) / 60.0, 2),
+        }
+        for r in rows if (r["minutes"] or 0) > 0
+    ]
+    return Response({
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "period": _fmt_period(start_date, end_date),
+        "clients": clients,
     })

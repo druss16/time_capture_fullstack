@@ -379,24 +379,24 @@ export default function CompactSummary({
     <div className={cn(sysDark && "dark")}>
       <div className="flex w-full flex-col gap-3 text-foreground">
 
-        {/* ═══ CERTAIN ═════════════════════════════════════════════════════════ */}
-        <section className="overflow-hidden rounded-xl border border-emerald-500/25 bg-emerald-500/5">
+        {/* ═══ CERTAIN ═══ quiet: neutral card, teal dot; color only on actions ══ */}
+        <section className="overflow-hidden rounded-[15px] border border-border/70 bg-card shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
           <button
             onClick={() => setCertainOpen((v) => !v)}
-            className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-emerald-500/10">
-            <ChevronRight className={cn("h-4 w-4 shrink-0 text-emerald-600 transition-transform dark:text-emerald-400", certainOpen && "rotate-90")} />
-            <span className="font-sans text-[15px] font-bold text-emerald-700 dark:text-emerald-300">Certain</span>
-            <span className="truncate font-mono text-[12px] text-muted-foreground">
+            className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/40">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-primary" />
+            <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">Certain</span>
+            <span className="truncate font-mono text-[11.5px] text-muted-foreground">
               {fmtMin(certain.billableMinutes)} billable
             </span>
             <span className="flex-1" />
-            <span className="shrink-0 rounded-md border border-border bg-card px-3 py-1 font-sans text-[12px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 font-sans text-[12px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)]">
               {certainOpen ? "Hide" : "Browse these"}
             </span>
           </button>
 
           {certainOpen && (
-            <div className="border-t border-emerald-500/20 bg-card px-3 pb-3 pt-3">
+            <div className="border-t border-border/70 bg-card px-3 pb-3 pt-3">
               {/* Filter box — 17+ rows is past scanning range. */}
               <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
                 <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -423,27 +423,23 @@ export default function CompactSummary({
           )}
         </section>
 
-        {/* ═══ NEEDS YOU ═══════════════════════════════════════════════════════ */}
-        <section className={cn(
-          "overflow-hidden rounded-xl border",
-          needsYou.count > 0 ? "border-amber-500/40 bg-amber-500/[0.06]" : "border-teal-500/30 bg-teal-500/[0.06]",
-        )}>
-          <div className="flex items-center gap-3 px-4 py-3">
-            <span className={cn("font-sans text-[15px] font-bold",
-              needsYou.count > 0 ? "text-amber-700 dark:text-amber-300" : "text-teal-700 dark:text-teal-300")}>
+        {/* ═══ NEEDS YOU ═══ quiet: neutral card, amber dot; color only on actions ══ */}
+        <section className="overflow-hidden rounded-[15px] border border-border/70 bg-card shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
+          <div className={cn("flex items-center gap-3 px-4 py-3.5", needsYou.count > 0 && "border-b border-border/70")}>
+            <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", needsYou.count > 0 ? "bg-amber-500" : "bg-primary")} />
+            <span className={cn("font-sans text-[15px] font-bold tracking-[-0.01em]",
+              needsYou.count > 0 ? "text-amber-600 dark:text-amber-400" : "text-primary")}>
               Needs you
             </span>
-            {needsYou.count > 0 ? (
-              <span className="font-mono text-[12px] text-muted-foreground">
-                {needsYou.count} {needsYou.count === 1 ? "item" : "items"} · {fmtMin(needsYou.minutes)}
-              </span>
-            ) : (
-              <span className="font-mono text-[12px] text-muted-foreground">nothing — you’re done</span>
-            )}
+            <span className="font-mono text-[11.5px] text-muted-foreground">
+              {needsYou.count > 0
+                ? `${needsYou.count} ${needsYou.count === 1 ? "item" : "items"} · ${fmtMin(needsYou.minutes)}`
+                : "nothing — you’re done"}
+            </span>
           </div>
 
           {needsYou.count > 0 && (
-            <div className="flex flex-col gap-px bg-border">
+            <div className="flex flex-col">
               {/* Unassigned + pending, then mismatches — each block already minutes-desc. */}
               {needsYou.pending.map((b) => (
                 <PendingRow
@@ -529,13 +525,9 @@ function PendingRow({ b, busy, onAccept, onNotBillable, onPick, onChange }: {
   const guessName = whyId != null ? whyName : b.proposed_client_name;
   const reason = ((whyId != null ? whyReason : (b.proposed_reasoning || whyReason)) || "").trim();
 
-  // Soft green pill = suggested client (leads, but calm). Neutral outline = secondary.
-  const green = "inline-flex max-w-[200px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2.5 py-0.5 font-sans text-[11px] font-semibold text-primary transition-colors hover:bg-primary/25 disabled:opacity-50";
-  const ghost = "inline-flex items-center gap-0.5 rounded-full border border-border bg-muted/60 px-2.5 py-0.5 font-sans text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary disabled:opacity-50";
-
   return (
-    <div className="flex items-start gap-3 bg-card px-4 py-3">
-      <span className="mt-0.5 shrink-0 font-mono text-[11px] font-semibold tabular-nums text-muted-foreground">{fmtMin(b.minutes || 0)}</span>
+    <div className={ROW}>
+      <span className={CHIP}>{fmtMin(b.minutes || 0)}</span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-[12.5px] text-foreground">{b.window_title || "(untitled)"}</span>
@@ -546,26 +538,23 @@ function PendingRow({ b, busy, onAccept, onNotBillable, onPick, onChange }: {
             </span>
           )}
         </div>
-        {reason && <div className="mt-0.5 font-sans text-[11.5px] leading-snug text-muted-foreground">{reason}</div>}
+        {reason && <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">{reason}</div>}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {guessId ? (
           <>
-            <button onClick={() => onAccept(guessId)} disabled={busy} title={`Book to ${guessName}`} className={green}>
+            <button onClick={() => onAccept(guessId)} disabled={busy} title={`Book to ${guessName}`} className={PILL_TEAL}>
               <Check className="h-3 w-3 shrink-0" /> <span className="truncate">{guessName}</span>
             </button>
-            <button onClick={onNotBillable} disabled={busy} className={ghost}>No client</button>
-            <button onClick={(e) => onChange(e.currentTarget)} disabled={busy} className={ghost}>
+            <button onClick={(e) => onChange(e.currentTarget)} disabled={busy} className={PILL_GHOST}
+              title="Change client or category, or mark not billable">
               Change <ChevronDown className="h-2.5 w-2.5" />
             </button>
           </>
         ) : (
           <>
-            <button onClick={(e) => onPick(e.currentTarget)} disabled={busy}
-              className="inline-flex items-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/10 px-2.5 py-0.5 font-sans text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-500/20 disabled:opacity-50 dark:text-amber-300">
-              Pick a client…
-            </button>
-            <button onClick={onNotBillable} disabled={busy} className={ghost}>Not billable</button>
+            <button onClick={(e) => onPick(e.currentTarget)} disabled={busy} className={PILL_AMBER}>Pick a client…</button>
+            <button onClick={onNotBillable} disabled={busy} className={PILL_GHOST}>Not billable</button>
           </>
         )}
       </div>
@@ -573,7 +562,18 @@ function PendingRow({ b, busy, onAccept, onNotBillable, onPick, onChange }: {
   );
 }
 
-/** Mismatch: title names a different client than booked. Red; the fix leads. */
+// ── Shared row + pill styles (quiet + sharpened) ────────────────────────────
+// Inset hairline via ::before, hidden on the first row of the lane.
+const ROW = "group relative flex items-start gap-3 bg-card px-4 py-3.5 before:absolute before:left-[68px] before:right-4 before:top-0 before:h-px before:bg-border/60 before:content-[''] first:before:hidden";
+const CHIP = "mt-0.5 min-w-[40px] shrink-0 rounded-md bg-muted px-1 py-1 text-center font-mono text-[10px] font-bold tabular-nums text-muted-foreground";
+const CHIP_AMBER = "mt-0.5 min-w-[40px] shrink-0 rounded-md bg-amber-500/[0.14] px-1 py-1 text-center font-mono text-[10px] font-bold tabular-nums text-amber-600 dark:text-amber-400";
+// Fixed widths so the action buttons line up into clean columns across rows.
+const PILL_TEAL = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-primary/50 bg-primary/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-primary shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-primary/20 disabled:opacity-50";
+const PILL_AMBER = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-amber-700 shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-amber-500/20 disabled:opacity-50 dark:text-amber-400";
+const PILL_GHOST = "inline-flex w-[104px] items-center justify-center gap-0.5 rounded-full border border-border bg-card px-3 py-1.5 font-sans text-[11px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-muted disabled:opacity-50";
+
+/** Mismatch: this block is filed under one client but its title names another.
+ *  Framed as a calm "switch" (amber, not alarm-red): filed under X → looks like Y. */
 function MismatchRow({ m, busy, onFix, onKeep, onPick }: {
   m: MismatchBlock;
   busy: boolean;
@@ -583,24 +583,28 @@ function MismatchRow({ m, busy, onFix, onKeep, onPick }: {
 }) {
   const canFix = m.looks_like_client_id != null;
   return (
-    <div className="flex items-start gap-3 bg-rose-500/[0.06] px-4 py-3">
-      <span className="mt-0.5 shrink-0 font-mono text-[11px] font-semibold tabular-nums text-rose-600 dark:text-rose-300">{fmtMin(m.minutes || 0)}</span>
+    <div className={ROW}>
+      <span className={CHIP_AMBER}>{fmtMin(m.minutes || 0)}</span>
       <div className="min-w-0 flex-1">
         <div className="truncate font-mono text-[12.5px] text-foreground">{m.window_title || "(untitled)"}</div>
-        <div className="mt-0.5 font-sans text-[11.5px] leading-snug text-rose-600/90 dark:text-rose-300/90">
-          Filed under {m.booked_client_name || "this client"}, but the title names {m.looks_like_client_name}.
+        {/* filed under X  →  looks like Y — the title says so */}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-sans text-[11.5px]">
+          <span className="text-muted-foreground">Filed</span>
+          <span className="rounded-md border border-border bg-muted/70 px-2 py-0.5 font-medium text-muted-foreground line-through decoration-muted-foreground/50">
+            {m.booked_client_name || "this client"}
+          </span>
+          <span className="font-bold text-muted-foreground/70">→</span>
+          <span className="rounded-md border border-amber-500/40 bg-amber-500/[0.14] px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400">
+            {m.looks_like_client_name}
+          </span>
+          <span className="text-muted-foreground">— the title says so</span>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <button
-          onClick={(e) => (canFix ? onFix() : onPick(e.currentTarget))} disabled={busy}
-          className="inline-flex max-w-[210px] items-center gap-1 rounded-full border border-rose-500/50 bg-rose-500/15 px-2.5 py-0.5 font-sans text-[11px] font-semibold text-rose-600 transition-colors hover:bg-rose-500/25 disabled:opacity-50 dark:text-rose-300">
-          <span className="truncate">Move to {m.looks_like_client_name}</span>
+        <button onClick={(e) => (canFix ? onFix() : onPick(e.currentTarget))} disabled={busy} className={PILL_AMBER}>
+          <span className="max-w-[190px] truncate">Switch to {m.looks_like_client_name}</span>
         </button>
-        <button onClick={onKeep} disabled={busy}
-          className="rounded-full border border-border bg-card px-2.5 py-0.5 font-sans text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50">
-          Keep here
-        </button>
+        <button onClick={onKeep} disabled={busy} className={PILL_GHOST}>Keep here</button>
       </div>
     </div>
   );

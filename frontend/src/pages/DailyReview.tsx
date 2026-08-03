@@ -439,16 +439,11 @@ export default function DailyReview() {
   const needsYouCount = lanes.needsYou.count;
   const autoFiled = lanes.certain.minutes > 0;
 
-  // State-dependent headline (see spec). Leads with a sentence, not a control.
-  const capturedLabel = formatHours(totalHours);
-  const headline =
-    totalHours <= 0
-      ? "Nothing tracked yet."
-      : needsYouCount === 0
-        ? `All ${capturedLabel} is sorted.`
-        : autoFiled
-          ? `${capturedLabel} sorted. ${needsYouCount} ${needsYouCount === 1 ? "thing needs" : "things need"} you.`
-          : `${capturedLabel} captured. ${needsYouCount} ${needsYouCount === 1 ? "item" : "items"} still open.`;
+  // ── Progress hero numbers: how much of the day is sorted vs still needs you ──
+  const totalMin = Math.round(totalHours * 60);
+  const needsMin = lanes.needsYou.minutes;
+  const sortedMin = Math.max(0, totalMin - needsMin);
+  const sortedPct = totalMin > 0 ? Math.round((sortedMin / totalMin) * 100) : 100;
 
   const stepDate = (days: number) => {
     const d = new Date(date + "T00:00:00");
@@ -532,7 +527,7 @@ export default function DailyReview() {
               title="Confirm all pending suggestions"
               className={cn(
                 "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
-                "bg-primary text-white hover:bg-primary/90",
+                "bg-gradient-to-r from-primary to-accent text-white shadow-sm shadow-primary/25 hover:opacity-90",
                 "disabled:opacity-50 disabled:cursor-not-allowed"
               )}
             >
@@ -610,18 +605,36 @@ export default function DailyReview() {
         </div>
 
         {view === "lightning" ? (
-          <>
-            {/* ── Headline: the page leads with a sentence, not a control. ── */}
-            <div className="mb-7 w-full" style={{ fontFamily: '"Inter", sans-serif' }}>
+          // Faint teal-tinted "canvas" — cool + trustworthy; the white lane cards float on it.
+          <div className="rounded-2xl bg-[#eef4f3] p-5 sm:p-6">
+            {/* ── Progress hero: how much of the day is sorted vs still needs you ── */}
+            <div className="mb-7 w-full max-w-2xl" style={{ fontFamily: '"Inter", sans-serif' }}>
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                 {new Date(date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
               </div>
-              <h1 className="mt-2.5 text-[32px] font-bold leading-[1.12] tracking-[-0.021em] text-slate-900">{headline}</h1>
-              {autoFiled && needsYouCount > 0 && (
-                <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-500">
-                  Everything else matched a client with high confidence and was filed automatically.
-                  You can look, but you don’t have to.
-                </p>
+              {totalMin <= 0 ? (
+                <h1 className="mt-2.5 text-[22px] font-bold tracking-[-0.01em] text-slate-900">Nothing tracked yet.</h1>
+              ) : (
+                <div className="mt-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <div className="text-[20px] font-bold tracking-[-0.01em] text-slate-900">
+                      {needsYouCount > 0 ? (
+                        <><span className="text-amber-600">{needsYouCount} {needsYouCount === 1 ? "thing" : "things"}</span> need{needsYouCount === 1 ? "s" : ""} you</>
+                      ) : "You’re all caught up"}
+                    </div>
+                    <div className="shrink-0 text-[12.5px] tabular-nums text-slate-500">{sortedPct}% sorted</div>
+                  </div>
+                  <div className="mt-2.5 flex h-3 overflow-hidden rounded-full bg-slate-200 shadow-[inset_0_1px_2px_rgba(16,27,46,0.09)]">
+                    <div className="bg-gradient-to-r from-primary to-accent transition-all" style={{ width: `${sortedPct}%` }} />
+                    <div className="bg-amber-500 transition-all" style={{ width: `${100 - sortedPct}%` }} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-slate-500">
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-primary" /><span className="tabular-nums">{formatHours(sortedMin / 60)}</span> sorted</span>
+                    {needsMin > 0 && (
+                      <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-amber-500" /><span className="tabular-nums">{formatHours(needsMin / 60)}</span> needs you</span>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
             <CompactSummary
@@ -634,7 +647,7 @@ export default function DailyReview() {
               showToast={showToast}
               onIgnoreMismatch={ignoreMismatch}
             />
-          </>
+          </div>
         ) : (
           <ClassicSummary
             timeSummary={timeSummary}

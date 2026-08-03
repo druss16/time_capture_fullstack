@@ -86,6 +86,7 @@ urlpatterns = [
     # -------------------------------
     path("today-time/", views.today_time, name="today_time"),
     path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),
+    path("blocks/<int:block_id>/move-task-type/", views.move_block_task_type, name="move_block_task_type"),
     path("blocks/<int:block_id>/split/", views.split_block, name="split_block"),
     path("time-entries/manual/", views.create_manual_time_entry, name="create_manual_time_entry"),
     path("agent/register/", views.register_agent, name="register_agent"),

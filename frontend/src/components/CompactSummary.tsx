@@ -18,7 +18,7 @@
  *   every triage row leads with its minutes.
  */
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { ChevronRight, ChevronDown, Check, X, Search } from "lucide-react";
+import { ChevronRight, ChevronDown, Check, X, Search, Scissors } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 import { MovePopover, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
@@ -127,6 +127,69 @@ export default function CompactSummary({
     } catch { showToast("Failed to move", "error"); }
   }, [onRefresh, showToast]);
 
+  // ── Per-row detail (/why/) + Split ──────────────────────────────────────────
+  // Expanding a Certain block row loads its "where the time went" breakdown and
+  // the reason it was booked. A genuinely-mixed block can then be carved so each
+  // activity books to its own client (opt-in Split — backend /blocks/{id}/split/).
+  const [openWhy, setOpenWhy] = useState<number | null>(null);
+  const [whyData, setWhyData] = useState<Record<number, WhyData>>({});
+  const [whyLoading, setWhyLoading] = useState<number | null>(null);
+  const toggleWhy = async (id: number | null) => {
+    if (id == null) return;
+    if (openWhy === id) { setOpenWhy(null); return; }
+    setOpenWhy(id);
+    if (!whyData[id]) {
+      setWhyLoading(id);
+      try {
+        const d = await safeFetchJson<WhyData>(`${API_BASE}/blocks/${id}/why/`);
+        setWhyData((prev) => ({ ...prev, [id]: d }));
+      } catch { /* noop */ } finally { setWhyLoading(null); }
+    }
+  };
+
+  const [splitFor, setSplitFor] = useState<number | null>(null);
+  const [splitAssign, setSplitAssign] = useState<Record<string, number | null>>({});
+  const [splitBusy, setSplitBusy] = useState(false);
+  const sliceGuess = (r: Slice, currentClientId: number | null) =>
+    r.suggested_client_id !== undefined ? r.suggested_client_id : currentClientId;
+  const openSplit = (bid: number, breakdown: Slice[], currentClientId: number | null) => {
+    if (splitFor === bid) { setSplitFor(null); return; }
+    const init: Record<string, number | null> = {};
+    breakdown.forEach((r) => { init[r.label] = sliceGuess(r, currentClientId); });
+    setSplitAssign(init);
+    setSplitFor(bid);
+  };
+  const splitDistinct = (a: Record<string, number | null>) =>
+    new Set(Object.values(a).map((v) => (v == null ? "none" : v))).size;
+  const postSplit = useCallback(async (
+    bid: number, assignments: Record<string, { client_id: number | null; category: string }>,
+  ) => {
+    setSplitBusy(true);
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${bid}/split/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignments }),
+      });
+      showToast("Split into separate entries", "success");
+      setSplitFor(null);
+      setOpenWhy((cur) => (cur === bid ? null : cur));
+      setWhyData((prev) => { const next = { ...prev }; delete next[bid]; return next; });
+      onRefresh();
+    } catch { showToast("Couldn’t split this entry", "error"); }
+    finally { setSplitBusy(false); }
+  }, [onRefresh, showToast]);
+  const splitBlock = (bid: number, category: string) => {
+    const a: Record<string, { client_id: number | null; category: string }> = {};
+    Object.entries(splitAssign).forEach(([label, cid]) => { a[label] = { client_id: cid, category }; });
+    postSplit(bid, a);
+  };
+  const applySmartSplit = (bid: number, breakdown: Slice[], currentClientId: number | null, category: string) => {
+    const a: Record<string, { client_id: number | null; category: string }> = {};
+    breakdown.forEach((r) => { a[r.label] = { client_id: sliceGuess(r, currentClientId), category }; });
+    postSplit(bid, a);
+  };
+
   // ── Certain lane: filter groups + rows by the query ─────────────────────────
   const q = filter.trim().toLowerCase();
   const filteredGroups = useMemo(() => {
@@ -167,13 +230,131 @@ export default function CompactSummary({
           </button>
         </div>
         {open && (
-          <div className="mb-1 flex flex-col gap-0.5 pb-2 pl-6">
-            {g.rows.map((r, i) => (
-              <div key={i} className="flex items-center gap-3 py-0.5">
-                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground">{r.title}</span>
-                <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">{fmtMin(r.minutes)}</span>
-              </div>
-            ))}
+          <div className="mb-1 flex flex-col pb-2 pl-6">
+            {g.rows.map((r, i) => {
+              const bid = r.ids[0] ?? null;
+              const rowWhy = bid != null ? whyData[bid] : undefined;
+              const rowOpen = bid != null && openWhy === bid;
+              const bd = rowWhy?.breakdown ?? [];
+              const smartClients = new Set(bd.map((s) => {
+                const v = sliceGuess(s, g.clientId);
+                return v == null ? "none" : String(v);
+              }));
+              const canSmart = bd.length > 1 && smartClients.size >= 2;
+              const guessName = (s: Slice) => {
+                const v = sliceGuess(s, g.clientId);
+                if (v == null) return "No client";
+                return s.suggested_client_name || availableClients.find((c) => c.id === v)?.name || "—";
+              };
+              return (
+                <div key={i}>
+                  {/* Click a row to expand its detail; use "Change" / "Split" inside. */}
+                  <div onClick={() => toggleWhy(bid)}
+                    className="flex cursor-pointer items-center gap-2 rounded-md py-0.5 pr-1 text-muted-foreground hover:text-foreground">
+                    <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground/50 transition-transform", rowOpen && "rotate-90")} />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{r.title}</span>
+                    <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">{fmtMin(r.minutes)}</span>
+                  </div>
+                  {rowOpen && (
+                    <div className="mb-2 ml-5 mt-1 flex flex-col items-start gap-3 border-l-2 border-border/60 pl-3 font-sans">
+                      {whyLoading === bid ? (
+                        <span className="text-[11px] text-muted-foreground">Loading details…</span>
+                      ) : (
+                        <>
+                          {bd.length > 1 && (
+                            <div className="w-full max-w-sm">
+                              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Where the time went</div>
+                              <div className="flex flex-col gap-0.5">
+                                {bd.map((s, j) => (
+                                  <div key={j} className="flex items-center gap-2 text-[11px]">
+                                    <span className="w-10 shrink-0 rounded bg-muted px-1 py-0.5 text-center font-mono text-[10.5px] font-semibold tabular-nums text-foreground/80">{fmtMin(s.minutes)}</span>
+                                    <span className="min-w-0 flex-1 truncate text-foreground/80">{s.label}</span>
+                                    {s.pct != null && <span className="shrink-0 tabular-nums text-muted-foreground/60">{s.pct}%</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <div className="max-w-md">
+                            <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Why this client</div>
+                            <div className="text-[11px] leading-snug text-muted-foreground">{rowWhy?.explanation || "No added context for this entry."}</div>
+                          </div>
+                          {/* Smart split — one click books each activity to its guessed client. */}
+                          {bid != null && canSmart && splitFor !== bid && (
+                            <div className="w-full max-w-sm rounded-md border border-primary/30 bg-primary/5 p-2">
+                              <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-primary/80">
+                                <Scissors className="h-3 w-3" /> Suggested split
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                {bd.map((s, j) => (
+                                  <div key={j} className="flex items-center gap-2 text-[11px]">
+                                    <span className="w-10 shrink-0 rounded bg-muted px-1 py-0.5 text-center font-mono text-[10.5px] font-semibold tabular-nums text-foreground/80">{fmtMin(s.minutes)}</span>
+                                    <span className="min-w-0 flex-1 truncate text-foreground/70" title={s.label}>{s.label}</span>
+                                    <span className="shrink-0 text-muted-foreground/40">→</span>
+                                    <span className="max-w-[8rem] shrink-0 truncate font-medium text-foreground/90" title={guessName(s)}>{guessName(s)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <button disabled={splitBusy}
+                                  onClick={() => applySmartSplit(bid, bd, g.clientId, r.category)}
+                                  className="rounded-full bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40">
+                                  {splitBusy ? "Splitting…" : "Split these apart"}
+                                </button>
+                                <button onClick={() => openSplit(bid, bd, g.clientId)}
+                                  className="text-[11px] font-medium text-muted-foreground hover:text-foreground">Adjust</button>
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button onClick={(e) => openMove(e.currentTarget, r.ids, g.clientId, r.category, "Change client / category")}
+                              className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20">
+                              Change client / category <ChevronDown className="h-3 w-3" />
+                            </button>
+                            {bid != null && !canSmart && bd.length > 1 && splitFor !== bid && (
+                              <button onClick={() => openSplit(bid, bd, g.clientId)}
+                                title="This block mixes more than one activity — book each to its own client"
+                                className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                                <Scissors className="h-3 w-3" /> Split
+                              </button>
+                            )}
+                          </div>
+                          {/* Manual split editor */}
+                          {bid != null && splitFor === bid && bd.length > 0 && (
+                            <div className="w-full max-w-sm rounded-md border border-border bg-muted/30 p-2">
+                              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Adjust each activity’s client</div>
+                              <div className="flex flex-col gap-1.5">
+                                {bd.map((s, j) => (
+                                  <div key={j} className="flex items-center gap-2 text-[11px]">
+                                    <span className="w-10 shrink-0 rounded bg-muted px-1 py-0.5 text-center font-mono text-[10.5px] font-semibold tabular-nums text-foreground/80">{fmtMin(s.minutes)}</span>
+                                    <span className="min-w-0 flex-1 truncate text-foreground/80" title={s.label}>{s.label}</span>
+                                    <select value={splitAssign[s.label] ?? ""}
+                                      onChange={(e) => { const v = e.target.value; setSplitAssign((prev) => ({ ...prev, [s.label]: v === "" ? null : Number(v) })); }}
+                                      className="max-w-[8.5rem] shrink-0 rounded border border-border bg-background px-1 py-0.5 text-[11px] text-foreground">
+                                      <option value="">No client</option>
+                                      {availableClients.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                                    </select>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <button disabled={splitBusy || splitDistinct(splitAssign) < 2}
+                                  onClick={() => splitBlock(bid, r.category)}
+                                  className="rounded-full bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40">
+                                  {splitBusy ? "Splitting…" : "Split into separate entries"}
+                                </button>
+                                <button onClick={() => setSplitFor(null)} className="text-[11px] font-medium text-muted-foreground hover:text-foreground">Cancel</button>
+                                {splitDistinct(splitAssign) < 2 && (<span className="text-[10.5px] text-muted-foreground/70">Give two activities different clients.</span>)}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -306,11 +487,13 @@ export default function CompactSummary({
 
 // ── Needs-you rows ──────────────────────────────────────────────────────────
 
+type Slice = { label: string; minutes: number; pct?: number; suggested_client_id?: number | null; suggested_client_name?: string | null };
 type WhyData = {
   explanation: string;
   suggested_client_id: number | null;
   suggested_client_name: string | null;
   personal?: boolean;
+  breakdown?: Slice[];
 };
 
 /** Pending: accept the green suggested client in one tap (with the contextual

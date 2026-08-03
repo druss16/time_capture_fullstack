@@ -118,6 +118,23 @@ export default function CompactSummary({
   const looksLikeFor = (ids: number[]) =>
     ids.map((id) => (ignored.has(String(id)) ? undefined : mismatchFlags[String(id)])).find(Boolean);
 
+  // "why?" for already-attributed rows — lazy-load the /why/ explanation, one open at a time.
+  const [openWhy, setOpenWhy] = useState<number | null>(null);
+  const [whyData, setWhyData] = useState<Record<number, WhyData>>({});
+  const [whyLoading, setWhyLoading] = useState<number | null>(null);
+  const toggleWhy = async (id: number | null) => {
+    if (id == null) return;
+    if (openWhy === id) { setOpenWhy(null); return; }
+    setOpenWhy(id);
+    if (!whyData[id]) {
+      setWhyLoading(id);
+      try {
+        const d = await safeFetchJson<WhyData>(`${API_BASE}/blocks/${id}/why/`);
+        setWhyData((prev) => ({ ...prev, [id]: d }));
+      } catch { /* noop */ } finally { setWhyLoading(null); }
+    }
+  };
+
   const toggle = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -438,7 +455,8 @@ export default function CompactSummary({
                                 const looksLike = looksLikeFor(ids);
                                 const isSel = ids.length > 0 && ids.every((id) => selected.has(id));
                                 return (
-                                  <div key={ax}
+                                  <div key={ax}>
+                                    <div
                                     onClick={(e) => {
                                       if ((e.target as HTMLElement).closest("[data-cbox]")) return;
                                       if (!ids.length) return;
@@ -476,7 +494,17 @@ export default function CompactSummary({
                                         </button>
                                       </span>
                                     )}
+                                    <button onClick={(e) => { e.stopPropagation(); toggleWhy(p.blockId); }}
+                                      className="shrink-0 font-sans text-[10.5px] font-medium text-muted-foreground opacity-0 transition-opacity hover:text-primary group-hover/row:opacity-100">
+                                      {openWhy === p.blockId ? "hide" : "why?"}
+                                    </button>
                                     <MousePointerClick className="w-3 h-3 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100" />
+                                    </div>
+                                    {p.blockId != null && openWhy === p.blockId && (
+                                      <div className="mb-1 ml-8 mt-0.5 font-sans text-[11px] leading-snug text-muted-foreground">
+                                        {whyLoading === p.blockId ? "Figuring out why…" : (whyData[p.blockId]?.explanation || "No added context for this entry.")}
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -568,6 +596,7 @@ type WhyData = {
   local_time: string;
   co_open_files: string[];
   tier: string;
+  personal?: boolean;
   suggested_client_id: number | null;
   suggested_client_name: string | null;
 };
@@ -604,7 +633,16 @@ function PendingRow({ b, busy, allowNoClient, onAccept, onNoClient, onChange }: 
     <div className="py-2.5">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-xs text-foreground/90">{b.window_title || "(untitled)"}</div>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-mono text-xs text-foreground/90">{b.window_title || "(untitled)"}</span>
+            <span className="shrink-0 font-mono text-[11px] font-semibold text-muted-foreground">{fmtH((b.minutes || 0) / 60)}</span>
+            {why?.personal && (
+              <span title="Looks like personal browsing — not client work"
+                className="shrink-0 rounded-full border border-slate-400/40 bg-slate-400/15 px-2 py-0.5 font-sans text-[10px] font-medium text-slate-500 dark:text-slate-300">
+                likely personal
+              </span>
+            )}
+          </div>
           {reason && (
             <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">{reason}</div>
           )}

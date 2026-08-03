@@ -664,6 +664,44 @@ def _compose_why(local_time: str, co_open_client, surrounding: dict) -> "tuple[s
     return ("No added context to go on for this entry.", "none", None, None)
 
 
+_BROWSER_APPS = (
+    "msedge", "chrome", "firefox", "safari", "brave", "opera", "iexplore",
+    "chromium", "vivaldi", "arc",
+)
+
+
+def _is_browser(block) -> bool:
+    app = (getattr(block, "app_name", "") or "").lower()
+    return any(b in app for b in _BROWSER_APPS)
+
+
+def _looks_personal(block) -> bool:
+    """Browser time that reads as personal / non-work (news, social, streaming,
+    shopping…). Conservative: requires a POSITIVE personal signal in the title/URL,
+    since a browser can also host client work (QuickBooks Online, a client portal)."""
+    if not _is_browser(block):
+        return False
+    hay = f"{getattr(block, 'window_title', '') or ''} {getattr(block, 'url', '') or ''}".lower()
+    if not hay.strip():
+        return False
+    try:
+        from tracker.industry_categories import PERSONAL_SITE_DETECTION
+        for grp in PERSONAL_SITE_DETECTION.values():
+            for tok in list(grp.get("keywords", [])) + list(grp.get("domains", [])):
+                if tok and tok.lower() in hay:
+                    return True
+    except Exception:
+        pass
+    # Generic news / opinion reading (common non-work browsing the map above misses).
+    if re.search(r"\|\s*(opinion|editorial|analysis|commentary)\b", hay):
+        return True
+    _NEWS = ("cnn.com", "foxnews.com", "cbsnews.com", "nbcnews.com", "abcnews",
+             "nytimes.com", "washingtonpost.com", "bbc.co", "espn.com",
+             "apnews.com", "usatoday.com", "dailymail", "huffpost", "msn.com/en-us/news",
+             "yahoo.com/news", "politico.com", "thehill.com", "newsweek.com")
+    return any(dom in hay for dom in _NEWS)
+
+
 def suggested_client_for(block, org):
     """The client id the /why/ explanation would point to (co-open > sandwich >
     adjacent neighbor > day-dominant), or None. Shared by the block_why endpoint
@@ -673,6 +711,12 @@ def suggested_client_for(block, org):
         _, co = _co_open_client(block, org)
     except Exception:
         co = None
+    if co and co.get("client_id"):
+        return co["client_id"]
+    # A browser tab shouldn't inherit a client from temporal adjacency — a news or
+    # social tab is not "the client you worked before/after it". Leave it No client.
+    if _is_browser(block):
+        return None
     try:
         surrounding = _build_surrounding(block) or {}
     except Exception:
@@ -719,15 +763,27 @@ def block_why(request, block_id: int):
     except Exception:
         surrounding = {}
 
+    has_co_client = bool(co_open_client and co_open_client.get("client_id"))
+    personal = _looks_personal(block)
+    # Browser tabs don't inherit a client from temporal adjacency (mirrors
+    # suggested_client_for) — drop the surrounding cue so _compose_why won't guess.
+    if _is_browser(block) and not has_co_client:
+        surrounding = {}
+
     explanation, tier, suggested_id, suggested_name = _compose_why(
         local_time, co_open_client, surrounding
     )
+    if personal and not has_co_client:
+        explanation = "Looks like personal browsing (news / social / streaming) — not client work."
+        tier = "personal"
+        suggested_id = suggested_name = None
 
     return Response({
         "block_id": block.id,
         "local_time": local_time,
         "explanation": explanation,
         "tier": tier,
+        "personal": personal,
         "suggested_client_id": suggested_id,
         "suggested_client_name": suggested_name,
         "co_open_files": co_open_files[:5],

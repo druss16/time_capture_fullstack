@@ -33,7 +33,6 @@ import ConnectionsPage from '@/pages/account/ConnectionsPage';
 import ExecutiveGate from '@/routes/ExecutiveGate';
 
 // --------- Lazy pages (code-splitting) ---------
-import LanePreview from "./__LanePreview"; // TEMP preview — delete with the route below
 const DailyReview = lazy(() => import("./DailyReview"));
 const TimecardSummary = lazy(() => import("./TimecardSummary"));
 const OrgAdminSettings = lazy(() => import("./Settings"));
@@ -197,8 +196,6 @@ export default function App() {
               }
             >
               <Routes>
-                {/* TEMP no-login lane preview — delete with __LanePreview.tsx */}
-                <Route path="/__lane-preview" element={<LanePreview />} />
                 {/* Public / marketing */}
                 <Route path="/" element={<HomeOrRedirect />} />
                 <Route path="/request-access" element={<RequestAccess />} />

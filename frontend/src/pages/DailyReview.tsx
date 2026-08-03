@@ -20,6 +20,7 @@ import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
 import { useSearchParams } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
+import ClassicSummary from "@/components/ClassicSummary";
 import { deriveLanes, type MismatchBlock } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
@@ -183,6 +184,18 @@ export default function DailyReview() {
   const [proposedInline, setProposedInline] = useState<ProposedInline[]>([]);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [mismatchBlocks, setMismatchBlocks] = useState<MismatchBlock[]>([]);
+  // Classic view still consumes these; kept alongside the Lightning-view slices.
+  const [flaggedBlocks, setFlaggedBlocks] = useState<FlaggedBlock[]>([]);
+  const [mismatchFlags, setMismatchFlags] = useState<Record<string, string>>({});
+  // Which view: Classic (old client-card summary) or Lightning (confidence lanes).
+  const [view, setView] = useState<"classic" | "lightning">(() => {
+    try { return (localStorage.getItem("dr_view") as "classic" | "lightning") || "lightning"; }
+    catch { return "lightning"; }
+  });
+  const chooseView = (v: "classic" | "lightning") => {
+    setView(v);
+    try { localStorage.setItem("dr_view", v); } catch { /* noop */ }
+  };
   // Mismatch flags the user dismissed as false positives ("Keep here"), per browser.
   const [ignoredMismatch, setIgnoredMismatch] = useState<Set<string>>(() => {
     try { return new Set<string>(JSON.parse(localStorage.getItem("dr_ignored_mismatches") || "[]")); }
@@ -249,6 +262,9 @@ export default function DailyReview() {
       setNeedsReviewHours(json.needs_review_hours || 0);
       setProposedInline(json.proposed_inline || []);
       setMismatchBlocks(json.mismatch_blocks || []);
+      setMismatchFlags(json.mismatch_flags || {});
+      const allFlagged = (json.flagged_blocks || []).map((b) => ({ ...b, type: b.type || "mobile_review" as const }));
+      setFlaggedBlocks(allFlagged);
     } catch (err: any) {
       setErr(err?.message || "Failed to load");
       setTimeSummary([]);
@@ -257,6 +273,26 @@ export default function DailyReview() {
     }
   }, [date]);
 
+  // Classic-view handlers (mobile-review dismiss + AI/mail/calendar disagreement).
+  const handleDismissReview = async (blockId: number) => {
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${blockId}/dismiss-review/`, { method: "POST" });
+      setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
+      showToast("Entry confirmed", "success");
+    } catch { showToast("Failed to dismiss", "error"); }
+  };
+  const handleResolveDisagreement = async (blockId: number, action: "accept" | "dismiss") => {
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${blockId}/resolve-disagreement/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
+      showToast(action === "accept" ? "Switched to suggested client" : "Kept original client", "success");
+      loadTimeSummary();
+    } catch (err: any) { showToast(err?.message || "Failed to resolve", "error"); }
+  };
 
   const loadUncategorizedCount = useCallback(async () => {
     try {
@@ -557,36 +593,62 @@ export default function DailyReview() {
           </div>
         )}
 */}
-        {/* ── Headline: the page leads with a sentence, not a control. ──
-            Headline uses Inter (crisper than the Jakarta body at display size). */}
-        <div className="mx-auto mb-7 max-w-5xl" style={{ fontFamily: '"Inter", sans-serif' }}>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-            {new Date(date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+        {/* ── View toggle: Classic (old client cards) vs Lightning (lanes) ── */}
+        <div className="mb-5 flex items-center">
+          <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 text-sm font-medium">
+            <button onClick={() => chooseView("classic")}
+              className={cn("rounded-md px-3.5 py-1.5 transition-colors",
+                view === "classic" ? "bg-card text-foreground shadow-sm" : "text-slate-500 hover:text-slate-800")}>
+              Classic View
+            </button>
+            <button onClick={() => chooseView("lightning")}
+              className={cn("rounded-md px-3.5 py-1.5 transition-colors",
+                view === "lightning" ? "bg-card text-foreground shadow-sm" : "text-slate-500 hover:text-slate-800")}>
+              ⚡ Lightning View
+            </button>
           </div>
-          <h1 className="mt-2.5 text-[32px] font-bold leading-[1.12] tracking-[-0.021em] text-slate-900">{headline}</h1>
-          {autoFiled && needsYouCount > 0 && (
-            <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-500">
-              Everything else matched a client with high confidence and was filed automatically.
-              You can look, but you don’t have to.
-            </p>
-          )}
         </div>
 
-        {activeTab === "summary" ? (
-          <CompactSummary
-            lanes={lanes}
+        {view === "lightning" ? (
+          <>
+            {/* ── Headline: the page leads with a sentence, not a control. ── */}
+            <div className="mb-7 w-full" style={{ fontFamily: '"Inter", sans-serif' }}>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                {new Date(date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+              </div>
+              <h1 className="mt-2.5 text-[32px] font-bold leading-[1.12] tracking-[-0.021em] text-slate-900">{headline}</h1>
+              {autoFiled && needsYouCount > 0 && (
+                <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-500">
+                  Everything else matched a client with high confidence and was filed automatically.
+                  You can look, but you don’t have to.
+                </p>
+              )}
+            </div>
+            <CompactSummary
+              lanes={lanes}
+              availableClients={availableClients}
+              availableCategories={availableCategories}
+              busy={busy}
+              autoFiled={autoFiled}
+              onRefresh={handleRefresh}
+              showToast={showToast}
+              onIgnoreMismatch={ignoreMismatch}
+            />
+          </>
+        ) : (
+          <ClassicSummary
+            timeSummary={timeSummary}
             availableClients={availableClients}
             availableCategories={availableCategories}
+            flaggedBlocks={flaggedBlocks}
+            proposedInline={proposedInline}
             busy={busy}
-            autoFiled={autoFiled}
+            onDismissReview={handleDismissReview}
+            onResolveDisagreement={handleResolveDisagreement}
             onRefresh={handleRefresh}
             showToast={showToast}
-            onIgnoreMismatch={ignoreMismatch}
-          />
-        ) : (
-          <ManualCategorization
+            mismatchFlags={mismatchFlags}
             date={date}
-            onComplete={handleCategorizationComplete}
           />
         )}
       </div>

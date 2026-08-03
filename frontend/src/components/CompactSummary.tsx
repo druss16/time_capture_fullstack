@@ -377,7 +377,7 @@ export default function CompactSummary({
 
   return (
     <div className={cn(sysDark && "dark")}>
-      <div className="mx-auto flex max-w-5xl flex-col gap-3 text-foreground">
+      <div className="flex w-full flex-col gap-3 text-foreground">
 
         {/* ═══ CERTAIN ═════════════════════════════════════════════════════════ */}
         <section className="overflow-hidden rounded-xl border border-emerald-500/25 bg-emerald-500/5">

@@ -19,6 +19,7 @@ import {
   Download,
   BarChart2,
   PieChart,
+  FileText,
 } from 'lucide-react';
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -108,6 +109,7 @@ export default function Navigation() {
     { path: '/timesheet', label: 'Timesheet',    icon: Clock,     show: true                },
     { path: '/billing',   label: 'Billing',      icon: Receipt,   show: canAccessBilling    },
     { path: '/reports',   label: 'Reports',      icon: PieChart,  show: true                },
+    { path: '/summaries', label: 'Summaries',    icon: FileText,  show: canAccessAnalytics  },
     { path: '/analytics', label: 'Analytics',    icon: BarChart2, show: canAccessAnalytics  },
   ].filter(item => item.show);
 

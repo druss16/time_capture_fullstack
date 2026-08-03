@@ -168,7 +168,12 @@ export default function CompactSummary({
         body: JSON.stringify({ assignments }),
       });
       showToast("Split into separate entries", "success");
+      // The source block just changed shape — collapse its row and drop its cached
+      // /why/ detail so the now-stale breakdown + "Suggested split" card disappear
+      // (re-expanding refetches fresh; the leftover piece no longer offers a split).
       setSplitFor(null);
+      setOpenWhy((cur) => (cur === bid ? null : cur));
+      setWhyData((prev) => { const next = { ...prev }; delete next[bid]; return next; });
       onRefresh();
     } catch {
       showToast("Couldn’t split this entry", "error");

@@ -24,7 +24,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  ChevronRight, ChevronDown, AlertTriangle, Check, Smartphone, MousePointerClick, GripVertical,
+  ChevronRight, ChevronDown, AlertTriangle, Check, Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -414,55 +414,70 @@ export default function CompactSummary({
                                 const ids = p.blockIds;
                                 const looksLike = looksLikeFor(ids);
                                 const isSel = ids.length > 0 && ids.every((id) => selected.has(id));
+                                const bid = p.blockId;
+                                const rowWhy = bid != null ? whyData[bid] : undefined;
+                                const rowOpen = bid != null && openWhy === bid;
+                                const suggestId = looksLike
+                                  ? (availableClients.find((c) => c.name === looksLike)?.id ?? null)
+                                  : null;
                                 return (
                                   <div key={ax}>
+                                    {/* Click a row to expand its detail; use "Change" to move it. */}
                                     <div
-                                    onClick={(e) => {
-                                      if ((e.target as HTMLElement).closest("[data-cbox]")) return;
-                                      if (!ids.length) return;
-                                      // On a flagged row, pre-select the suggested client so Apply fixes it in one click.
-                                      const suggestId = looksLike
-                                        ? (availableClients.find((c) => c.name === looksLike)?.id ?? null)
-                                        : null;
-                                      openMove(
-                                        e.currentTarget as HTMLElement, ids, client.client_id, cat.name,
-                                        looksLike ? `Fix — looks like ${looksLike}` : "Move entry", suggestId,
-                                      );
-                                    }}
-                                    className={cn(
-                                      "group/row flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 font-mono text-[12.5px]",
-                                      isSel ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                                    )}>
-                                    <span data-cbox onClick={(e) => { e.stopPropagation(); if (ids.length) toggleRow(ids); }}
-                                      className={cn("grid h-3.5 w-3.5 shrink-0 place-items-center rounded border text-[10px]",
-                                        isSel ? "border-primary bg-primary text-primary-foreground opacity-100"
-                                          : "border-muted-foreground/50 text-transparent opacity-0 group-hover/row:opacity-100")}>
-                                      <Check className="w-2.5 h-2.5" />
-                                    </span>
-                                    <GripVertical className="w-3 h-3 shrink-0 text-muted-foreground/40 opacity-0 group-hover/row:opacity-100" />
-                                    <span className="min-w-0 flex-1 truncate">{p.title}</span>
-                                    {looksLike && (
-                                      <span className="flex shrink-0 items-center gap-1">
-                                        <span title={`Title clearly names "${looksLike}"`}
-                                          className="rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10.5px] text-rose-600 dark:text-rose-300">
-                                          ⚠ looks like {looksLike}
-                                        </span>
-                                        <button onClick={(e) => { e.stopPropagation(); ignoreMismatch(ids); }}
-                                          title="Not a mistake — hide this flag"
-                                          className="text-[10.5px] font-medium text-muted-foreground hover:text-foreground">
-                                          ignore
-                                        </button>
+                                      onClick={(e) => {
+                                        if ((e.target as HTMLElement).closest("[data-cbox]")) return;
+                                        toggleWhy(bid);
+                                      }}
+                                      className={cn(
+                                        "group/row flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 font-mono text-[12.5px]",
+                                        isSel ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      )}>
+                                      <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground/60 transition-transform", rowOpen && "rotate-90")} />
+                                      <span data-cbox onClick={(e) => { e.stopPropagation(); if (ids.length) toggleRow(ids); }}
+                                        className={cn("grid h-3.5 w-3.5 shrink-0 place-items-center rounded border text-[10px]",
+                                          isSel ? "border-primary bg-primary text-primary-foreground opacity-100"
+                                            : "border-muted-foreground/50 text-transparent opacity-0 group-hover/row:opacity-100")}>
+                                        <Check className="w-2.5 h-2.5" />
                                       </span>
-                                    )}
-                                    <button onClick={(e) => { e.stopPropagation(); toggleWhy(p.blockId); }}
-                                      className="shrink-0 font-sans text-[10.5px] font-medium text-muted-foreground opacity-0 transition-opacity hover:text-primary group-hover/row:opacity-100">
-                                      {openWhy === p.blockId ? "hide" : "why?"}
-                                    </button>
-                                    <MousePointerClick className="w-3 h-3 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100" />
+                                      <span className="min-w-0 flex-1 truncate">{p.title}</span>
+                                      {looksLike && (
+                                        <span className="flex shrink-0 items-center gap-1">
+                                          <span title={`Title clearly names "${looksLike}"`}
+                                            className="rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10.5px] text-rose-600 dark:text-rose-300">
+                                            ⚠ looks like {looksLike}
+                                          </span>
+                                          <button onClick={(e) => { e.stopPropagation(); ignoreMismatch(ids); }}
+                                            title="Not a mistake — hide this flag"
+                                            className="text-[10.5px] font-medium text-muted-foreground hover:text-foreground">
+                                            ignore
+                                          </button>
+                                        </span>
+                                      )}
                                     </div>
-                                    {p.blockId != null && openWhy === p.blockId && (
-                                      <div className="mb-1 ml-8 mt-0.5 font-sans text-[11px] leading-snug text-muted-foreground">
-                                        {whyLoading === p.blockId ? "Figuring out why…" : (whyData[p.blockId]?.explanation || "No added context for this entry.")}
+
+                                    {rowOpen && (
+                                      <div className="mb-2 ml-6 mt-1 flex flex-col items-start gap-1.5 border-l-2 border-border/60 pl-3 font-sans">
+                                        {whyLoading === bid ? (
+                                          <span className="text-[11px] text-muted-foreground">Loading details…</span>
+                                        ) : (
+                                          <>
+                                            {rowWhy?.breakdown && rowWhy.breakdown.length > 1 && (
+                                              <div className="text-[11px] text-muted-foreground">
+                                                <span className="font-semibold text-foreground/80">Time in front:</span>{" "}
+                                                {rowWhy.breakdown.map((r, j) => (
+                                                  <span key={j}>{j > 0 ? "  ·  " : ""}<span className="text-foreground/80">{fmtH(r.minutes / 60)}</span> {r.label}</span>
+                                                ))}
+                                              </div>
+                                            )}
+                                            <div className="text-[11px] leading-snug text-muted-foreground">
+                                              {rowWhy?.explanation || "No added context for this entry."}
+                                            </div>
+                                            <button onClick={(e) => { e.stopPropagation(); openMove(e.currentTarget as HTMLElement, ids, client.client_id, cat.name, "Change client / category", suggestId); }}
+                                              className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20">
+                                              Change client / category <ChevronDown className="h-3 w-3" />
+                                            </button>
+                                          </>
+                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -557,6 +572,7 @@ type WhyData = {
   co_open_files: string[];
   tier: string;
   personal?: boolean;
+  breakdown?: { label: string; minutes: number; pct: number }[];
   suggested_client_id: number | null;
   suggested_client_name: string | null;
 };

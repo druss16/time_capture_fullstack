@@ -10,6 +10,7 @@ import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   ChevronLeft, ChevronRight, ChevronDown, Clock, CheckCircle2, Lock,
   AlertTriangle, Info, RefreshCw, Search, X, Layers, CalendarDays, Sparkles, Copy,
+  FolderInput, Check,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
@@ -65,6 +66,20 @@ interface TimesheetDetail {
   timesheet_id: number;
   days: { date: string; blocks: DetailBlock[]; total_minutes: number }[];
 }
+
+interface TaskTypeOption {
+  id: number;
+  name: string;
+  is_billable: boolean;
+}
+
+// Lets a deeply-nested BlockRow move a block without threading callbacks through
+// four component levels. Null when moves aren't available (e.g. detail failed).
+const MoveContext = React.createContext<{
+  taskTypes: TaskTypeOption[];
+  movingId: number | null;
+  onMove: (blockId: number, taskTypeId: number) => void;
+} | null>(null);
 
 // Index blocks by client + category (and by day) so a category row can list its
 // captured blocks. Detail blocks carry names (no ids), so we join on the same
@@ -277,6 +292,8 @@ const WeeklyTimesheet: React.FC = () => {
   });
   const [timesheetData, setTimesheetData]   = useState<TimesheetData | null>(null);
   const [detail, setDetail]                 = useState<TimesheetDetail | null>(null);
+  const [taskTypes, setTaskTypes]           = useState<TaskTypeOption[]>([]);
+  const [movingId, setMovingId]             = useState<number | null>(null);
   const [submitting, setSubmitting]         = useState(false);
   const [submitNotes, setSubmitNotes]       = useState('');
   const [showSubmitModal, setShowSubmitModal] = useState(false);
@@ -332,6 +349,30 @@ const WeeklyTimesheet: React.FC = () => {
 
   useEffect(() => { fetchTimesheet(); }, [fetchTimesheet]);
   useEffect(() => { setSearch(''); setExpanded(new Set()); setTailOpen(false); }, [weekStart]);
+
+  // Category options for the per-block move menu (loaded once).
+  useEffect(() => {
+    safeFetchJson<TaskTypeOption[]>(`${API_BASE}/options/task-types/`)
+      .then(list => setTaskTypes(Array.isArray(list) ? list : []))
+      .catch(() => setTaskTypes([]));
+  }, []);
+
+  // Move a mis-filed block to a different category, then reload so every view
+  // (this timesheet, its totals) reflects the change.
+  const moveBlock = useCallback(async (blockId: number, taskTypeId: number) => {
+    setMovingId(blockId);
+    setError(null);
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${blockId}/move-task-type/`, {
+        method: 'POST', body: JSON.stringify({ task_type_id: taskTypeId }),
+      });
+      await fetchTimesheet();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not move that block');
+    } finally {
+      setMovingId(null);
+    }
+  }, [fetchTimesheet]);
 
   const goToWeek = (dir: number) => {
     const d = new Date(weekStart + 'T00:00:00');
@@ -403,6 +444,11 @@ const WeeklyTimesheet: React.FC = () => {
       { billable: 0, nonBillable: 0, total: 0 }
     );
   }, [tailClients]);
+
+  const moveValue = useMemo(
+    () => (taskTypes.length ? { taskTypes, movingId, onMove: moveBlock } : null),
+    [taskTypes, movingId, moveBlock]
+  );
 
   const toggleExpand = (key: string) => {
     setExpanded(prev => {
@@ -639,6 +685,7 @@ const WeeklyTimesheet: React.FC = () => {
         </div>
 
         {/* Body */}
+        <MoveContext.Provider value={moveValue}>
         <div className="overflow-auto flex-1">
           {isEmpty ? (
             <div className="text-center py-20 text-slate-400">
@@ -673,6 +720,7 @@ const WeeklyTimesheet: React.FC = () => {
             <WorkSummaryView clients={clients} weekEnd={timesheetData?.week_end ?? weekStart} weekLabel={formatWeekRange(weekStart)} />
           )}
         </div>
+        </MoveContext.Provider>
 
         {/* Footer: week total + read-only note + submit */}
         <div className="px-5 py-3 border-t border-border/50 flex items-center justify-between gap-4 bg-slate-50/40 shrink-0">
@@ -757,12 +805,58 @@ const WeeklyTimesheet: React.FC = () => {
 
 // ── Summary View ──────────────────────────────────────────────────────────────
 
-// One captured block, listed under its category (read-only drill).
+// Popover menu to move a block to a different category (task type).
+const BlockMoveMenu: React.FC<{ block: DetailBlock }> = ({ block }) => {
+  const ctx = React.useContext(MoveContext);
+  const [open, setOpen] = useState(false);
+  if (!ctx) return null;
+  const busy = ctx.movingId === block.id;
+  const currentName = block.task_type_name || 'General';
+  return (
+    <span className="relative shrink-0">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        disabled={busy}
+        title="Move to another category"
+        className="flex items-center justify-center w-6 h-6 rounded-md text-slate-300 hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+      >
+        {busy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FolderInput className="w-3.5 h-3.5" />}
+      </button>
+      {open && !busy && (
+        <>
+          <button className="fixed inset-0 z-40 cursor-default" onClick={(e) => { e.stopPropagation(); setOpen(false); }} aria-label="Close" />
+          <div className="absolute right-0 top-7 z-50 w-56 max-h-64 overflow-auto rounded-lg border border-border bg-white shadow-xl py-1">
+            <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Move to category</p>
+            {ctx.taskTypes.map(tt => {
+              const isCurrent = tt.name === currentName;
+              return (
+                <button
+                  key={tt.id}
+                  onClick={(e) => { e.stopPropagation(); setOpen(false); if (!isCurrent) ctx.onMove(block.id, tt.id); }}
+                  className={cn('w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-slate-50',
+                    isCurrent ? 'text-slate-400' : 'text-slate-700')}
+                >
+                  <span className={tt.is_billable ? DOT_BILL : DOT_NON} />
+                  <span className="flex-1 truncate">{tt.name}</span>
+                  {isCurrent && <Check className="w-3.5 h-3.5 text-slate-300" />}
+                  {!isCurrent && !tt.is_billable && <span className="text-[10px] text-slate-400">non-bill</span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </span>
+  );
+};
+
+// One captured block, listed under its category. Read-only info + a move menu.
 const BlockRow: React.FC<{ block: DetailBlock; withDay: boolean }> = ({ block, withDay }) => (
-  <div className="flex items-center gap-2.5 pl-[76px] pr-5 py-1.5 min-w-0">
+  <div className="group flex items-center gap-2.5 pl-[76px] pr-3 py-1.5 min-w-0">
     <span className="text-[11px] text-slate-400 tabular-nums shrink-0 w-[72px] whitespace-nowrap">{formatBlockWhen(block.started_at, withDay)}</span>
     <span className="flex-1 text-[12px] text-slate-500 truncate">{blockLabel(block)}</span>
     <span className="text-[12px] text-slate-400 tabular-nums shrink-0 w-[52px] text-right">{formatMinutes(block.duration_minutes)}</span>
+    <BlockMoveMenu block={block} />
   </div>
 );
 

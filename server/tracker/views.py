@@ -6403,6 +6403,78 @@ def recategorize_block(request, block_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+def move_block_task_type(request, block_id):
+    """Move a block to a different TaskType (category) from the weekly timesheet.
+
+    The weekly timesheet groups by Block.task_type, while Daily Review and billing
+    read Block.category_hours / Block.is_billable. A category move must keep ALL
+    THREE consistent, or the change would show in one view but not the others.
+    So this endpoint, given a target task_type_id:
+
+      - sets block.task_type            (weekly timesheet regroups)
+      - sets category_hours={name: hrs} (Daily Review relabels)
+      - sets is_billable from the TaskType (billing $ follows; No-Client stays
+        non-billable, and Block.save still enforces internal-client non-billable)
+
+    It preserves the block's real recorded duration and routes through the audited
+    ClassificationService.recommit() path (writes a manual ClassificationAudit and
+    commits the block), same as every other user correction.
+    """
+    try:
+        block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
+    except Block.DoesNotExist:
+        return Response({"error": "Block not found"}, status=404)
+
+    task_type_id = request.data.get("task_type_id")
+    if not task_type_id:
+        return Response({"error": "task_type_id required"}, status=400)
+
+    try:
+        tt = TaskType.objects.get(id=task_type_id, org=block.org, is_active=True)
+    except TaskType.DoesNotExist:
+        return Response({"error": "TaskType not found for this organization"}, status=404)
+
+    # Preserve the real recorded duration (category_hours != end-start for
+    # idle-capped / merged blocks), mirroring recategorize_block's fallback chain.
+    hours = sum((block.category_hours or {}).values())
+    if hours <= 0:
+        if block.end and block.start:
+            hours = (block.end - block.start).total_seconds() / 3600
+        elif getattr(block, "minutes", None):
+            hours = block.minutes / 60.0
+        else:
+            hours = 0.0
+
+    # A No-Client block is never billable regardless of the category picked;
+    # otherwise inherit the TaskType's billable flag. Block.save independently
+    # enforces internal-client → non-billable, so we don't duplicate that here.
+    is_billable = bool(tt.is_billable) and block.client_id is not None
+
+    from tracker.services.classification_service import ClassificationService
+
+    block.task_type = tt
+    service = ClassificationService(org=block.org, user=request.user)
+    service.recommit(
+        block,
+        user=request.user,
+        override={
+            "category": tt.name,
+            "category_hours": {tt.name: round(hours, 4)},
+            "is_billable": is_billable,
+        },
+        audit_detail={"action": "timesheet_move_task_type", "task_type_id": tt.id},
+    )
+
+    return Response({
+        "success": True,
+        "block_id": block.id,
+        "task_type": {"id": tt.id, "name": tt.name},
+        "is_billable": block.is_billable,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def split_block(request, block_id):
     """POST /api/blocks/<id>/split/ — carve ONE block into pieces per client.
 

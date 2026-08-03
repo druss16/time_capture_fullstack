@@ -218,7 +218,6 @@ export default function CompactSummary({
               {g.name}
             </span>
           </button>
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{g.blockCount} blocks</span>
           {/* per-client billable / non-billable split */}
           <span className="shrink-0 font-mono text-[12px] tabular-nums">
             {g.billableMinutes > 0 && <span className="font-semibold text-foreground">{fmtMin(g.billableMinutes)}</span>}
@@ -388,9 +387,7 @@ export default function CompactSummary({
             <ChevronRight className={cn("h-4 w-4 shrink-0 text-emerald-600 transition-transform dark:text-emerald-400", certainOpen && "rotate-90")} />
             <span className="font-sans text-[15px] font-bold text-emerald-700 dark:text-emerald-300">Certain</span>
             <span className="truncate font-mono text-[12px] text-muted-foreground">
-              {certain.blockCount} blocks · {fmtMin(certain.billableMinutes)} billable
-              {certain.nonBillableMinutes > 0 && ` · ${fmtMin(certain.nonBillableMinutes)} overhead`}
-              {" · "}{autoFiled ? "auto-filed" : "exact client match"}
+              {fmtMin(certain.billableMinutes)} billable
             </span>
             <span className="flex-1" />
             <span className="shrink-0 rounded-md border border-border bg-card px-3 py-1 font-sans text-[12px] font-medium text-muted-foreground">
@@ -406,7 +403,7 @@ export default function CompactSummary({
                 <input
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
-                  placeholder={`Filter these ${certain.blockCount} blocks…`}
+                  placeholder="Filter…"
                   className="w-full bg-transparent font-sans text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none" />
                 {filter && (
                   <button onClick={() => setFilter("")} className="shrink-0 text-muted-foreground hover:text-foreground">

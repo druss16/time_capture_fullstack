@@ -203,9 +203,6 @@ export default function CompactSummary({
       .filter(Boolean) as CertainGroup[];
   }, [certain.groups, q]);
 
-  const billableGroups = filteredGroups.filter((g) => g.billable);
-  const overheadGroups = filteredGroups.filter((g) => !g.billable);
-
   // One client group in the Certain browse: header (name · blocks · minutes · Move)
   // over its raw captured titles.
   const renderGroup = (g: CertainGroup) => {
@@ -222,7 +219,18 @@ export default function CompactSummary({
             </span>
           </button>
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{g.blockCount} blocks</span>
-          <span className="shrink-0 font-mono text-[12px] font-semibold tabular-nums text-foreground">{fmtMin(g.minutes)}</span>
+          {/* per-client billable / non-billable split */}
+          <span className="shrink-0 font-mono text-[12px] tabular-nums">
+            {g.billableMinutes > 0 && <span className="font-semibold text-foreground">{fmtMin(g.billableMinutes)}</span>}
+            {g.nonBillableMinutes > 0 && (
+              <span className="text-muted-foreground/70">
+                {g.billableMinutes > 0 ? " · " : ""}{fmtMin(g.nonBillableMinutes)} non-bill
+              </span>
+            )}
+            {g.billableMinutes === 0 && g.nonBillableMinutes === 0 && (
+              <span className="font-semibold text-foreground">{fmtMin(g.minutes)}</span>
+            )}
+          </span>
           <button
             onClick={(e) => openMove(e.currentTarget, allIds, g.clientId, g.repCategory, `Move · ${g.name}`)}
             className="shrink-0 rounded-md px-2 py-0.5 font-sans text-[12px] font-medium text-primary underline-offset-2 hover:underline">
@@ -261,6 +269,13 @@ export default function CompactSummary({
                         <span className="text-[11px] text-muted-foreground">Loading details…</span>
                       ) : (
                         <>
+                          {/* Current category — hidden from the list to stay quiet, but
+                              visible here so a miscategorization is catchable + fixable
+                              (edit it via "Change client / category" below). */}
+                          <div className="text-[11px]">
+                            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Category </span>
+                            <span className="font-mono text-foreground/80">{r.category}</span>
+                          </div>
                           {bd.length > 1 && (
                             <div className="w-full max-w-sm">
                               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Where the time went</div>
@@ -404,22 +419,9 @@ export default function CompactSummary({
                 <div className="py-6 text-center font-mono text-[12px] text-muted-foreground">no matches</div>
               )}
 
-              {billableGroups.length > 0 && (
-                <>
-                  <SectionLabel text="Billable" minutes={certain.billableMinutes} />
-                  <div className="flex flex-col divide-y divide-border">
-                    {billableGroups.map(renderGroup)}
-                  </div>
-                </>
-              )}
-              {overheadGroups.length > 0 && (
-                <>
-                  <SectionLabel text="Non-billable · overhead" minutes={certain.nonBillableMinutes} muted />
-                  <div className="flex flex-col divide-y divide-border">
-                    {overheadGroups.map(renderGroup)}
-                  </div>
-                </>
-              )}
+              <div className="flex flex-col divide-y divide-border">
+                {filteredGroups.map(renderGroup)}
+              </div>
             </div>
           )}
         </section>
@@ -599,20 +601,6 @@ function MismatchRow({ m, busy, onFix, onKeep, onPick }: {
           Keep here
         </button>
       </div>
-    </div>
-  );
-}
-
-// Divider label between the Billable and Non-billable groups in the Certain browse.
-function SectionLabel({ text, minutes, muted }: { text: string; minutes: number; muted?: boolean }) {
-  return (
-    <div className="mt-2 flex items-center gap-2 pb-1 pt-2 first:mt-0 first:pt-0">
-      <span className={cn("font-mono text-[10px] font-semibold uppercase tracking-[0.12em]",
-        muted ? "text-muted-foreground/70" : "text-emerald-600 dark:text-emerald-400")}>
-        {text}
-      </span>
-      <span className="font-mono text-[10px] tabular-nums text-muted-foreground/60">{fmtMin(minutes)}</span>
-      <span className="h-px flex-1 bg-border" />
     </div>
   );
 }

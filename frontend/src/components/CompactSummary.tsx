@@ -139,27 +139,27 @@ export default function CompactSummary({
   // A genuinely-mixed block (e.g. a No-Client timesheet open alongside a client's
   // workbook) can be carved so each activity books to its own client. Only one
   // split editor is open at a time; splitAssign is keyed by breakdown label.
+  type Slice = { label: string; minutes: number; suggested_client_id?: number | null; suggested_client_name?: string | null };
   const [splitFor, setSplitFor] = useState<number | null>(null);
   const [splitAssign, setSplitAssign] = useState<Record<string, number | null>>({});
   const [splitBusy, setSplitBusy] = useState(false);
-  const openSplit = (
-    bid: number, breakdown: { label: string; minutes: number }[], currentClientId: number | null,
-  ) => {
+  // Each slice's best-guess client: the backend's per-slice suggestion, or the
+  // block's current client when it made no confident guess.
+  const sliceGuess = (r: Slice, currentClientId: number | null) =>
+    r.suggested_client_id !== undefined ? r.suggested_client_id : currentClientId;
+  const openSplit = (bid: number, breakdown: Slice[], currentClientId: number | null) => {
     if (splitFor === bid) { setSplitFor(null); return; }
-    // Pre-fill every slice to the block's current client — a no-op until the user
-    // reassigns at least one, which the Split button waits for.
+    // Pre-fill from the smart per-slice guesses — the user reviews, doesn't assign.
     const init: Record<string, number | null> = {};
-    breakdown.forEach((r) => { init[r.label] = currentClientId; });
+    breakdown.forEach((r) => { init[r.label] = sliceGuess(r, currentClientId); });
     setSplitAssign(init);
     setSplitFor(bid);
   };
   const splitDistinct = (a: Record<string, number | null>) =>
     new Set(Object.values(a).map((v) => (v == null ? "none" : v))).size;
-  const splitBlock = useCallback(async (bid: number, category: string) => {
-    const assignments: Record<string, { client_id: number | null; category: string }> = {};
-    Object.entries(splitAssign).forEach(([label, cid]) => {
-      assignments[label] = { client_id: cid, category };
-    });
+  const postSplit = useCallback(async (
+    bid: number, assignments: Record<string, { client_id: number | null; category: string }>,
+  ) => {
     setSplitBusy(true);
     try {
       await safeFetchJson(`${API_BASE}/blocks/${bid}/split/`, {
@@ -175,7 +175,19 @@ export default function CompactSummary({
     } finally {
       setSplitBusy(false);
     }
-  }, [splitAssign, onRefresh, showToast]);
+  }, [onRefresh, showToast]);
+  // Manual editor → apply the user's per-slice dropdown choices.
+  const splitBlock = (bid: number, category: string) => {
+    const a: Record<string, { client_id: number | null; category: string }> = {};
+    Object.entries(splitAssign).forEach(([label, cid]) => { a[label] = { client_id: cid, category }; });
+    postSplit(bid, a);
+  };
+  // One-click → apply the backend's smart per-slice guesses as-is.
+  const applySmartSplit = (bid: number, breakdown: Slice[], currentClientId: number | null, category: string) => {
+    const a: Record<string, { client_id: number | null; category: string }> = {};
+    breakdown.forEach((r) => { a[r.label] = { client_id: sliceGuess(r, currentClientId), category }; });
+    postSplit(bid, a);
+  };
 
   const toggle = (key: string) =>
     setCollapsed((prev) => {
@@ -462,6 +474,21 @@ export default function CompactSummary({
                                 const suggestId = looksLike
                                   ? (availableClients.find((c) => c.name === looksLike)?.id ?? null)
                                   : null;
+                                // Smart split: the block's activity breakdown, with each slice's
+                                // best-guess client. If those guesses span 2+ clients, we can
+                                // propose the whole split with one click instead of hand-assigning.
+                                const bd = rowWhy?.breakdown ?? [];
+                                const smartClients = new Set(bd.map((r) => {
+                                  const v = sliceGuess(r, client.client_id);
+                                  return v == null ? "none" : String(v);
+                                }));
+                                const canSmart = bd.length > 1 && smartClients.size >= 2;
+                                const guessName = (r: Slice) => {
+                                  const v = sliceGuess(r, client.client_id);
+                                  if (v == null) return "No client";
+                                  return r.suggested_client_name
+                                    || availableClients.find((c) => c.id === v)?.name || "—";
+                                };
                                 return (
                                   <div key={ax}>
                                     {/* Click a row to expand its detail; use "Change" to move it. */}
@@ -523,13 +550,43 @@ export default function CompactSummary({
                                                 {rowWhy?.explanation || "No added context for this entry."}
                                               </div>
                                             </div>
+                                            {/* Smart split proposal — one click books each activity to its guessed client. */}
+                                            {bid != null && canSmart && splitFor !== bid && (
+                                              <div onClick={(e) => e.stopPropagation()}
+                                                className="w-full max-w-sm rounded-md border border-primary/30 bg-primary/5 p-2">
+                                                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-primary/80">
+                                                  <Scissors className="h-3 w-3" /> Suggested split
+                                                </div>
+                                                <div className="flex flex-col gap-1">
+                                                  {bd.map((r, j) => (
+                                                    <div key={j} className="flex items-center gap-2 text-[11px]">
+                                                      <span className="w-10 shrink-0 rounded bg-muted px-1 py-0.5 text-center font-mono text-[10.5px] font-semibold tabular-nums text-foreground/80">{fmtH(r.minutes / 60)}</span>
+                                                      <span className="min-w-0 flex-1 truncate text-foreground/70" title={r.label}>{r.label}</span>
+                                                      <span className="shrink-0 text-muted-foreground/40">→</span>
+                                                      <span className="max-w-[8rem] shrink-0 truncate font-medium text-foreground/90" title={guessName(r)}>{guessName(r)}</span>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                  <button disabled={splitBusy}
+                                                    onClick={(e) => { e.stopPropagation(); applySmartSplit(bid, bd, client.client_id, cat.name); }}
+                                                    className="rounded-full bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40">
+                                                    {splitBusy ? "Splitting…" : "Split these apart"}
+                                                  </button>
+                                                  <button onClick={(e) => { e.stopPropagation(); openSplit(bid, bd, client.client_id); }}
+                                                    className="text-[11px] font-medium text-muted-foreground hover:text-foreground">Adjust</button>
+                                                </div>
+                                              </div>
+                                            )}
+
                                             <div className="flex flex-wrap items-center gap-2">
                                               <button onClick={(e) => { e.stopPropagation(); openMove(e.currentTarget as HTMLElement, ids, client.client_id, cat.name, "Change client / category", suggestId); }}
                                                 className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20">
                                                 Change client / category <ChevronDown className="h-3 w-3" />
                                               </button>
-                                              {bid != null && rowWhy?.breakdown && rowWhy.breakdown.length > 1 && (
-                                                <button onClick={(e) => { e.stopPropagation(); openSplit(bid, rowWhy!.breakdown!, client.client_id); }}
+                                              {/* Manual split entry point only when there's no confident multi-client guess. */}
+                                              {bid != null && !canSmart && bd.length > 1 && splitFor !== bid && (
+                                                <button onClick={(e) => { e.stopPropagation(); openSplit(bid, bd, client.client_id); }}
                                                   title="This block mixes more than one activity — book each to its own client"
                                                   className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
                                                   <Scissors className="h-3 w-3" /> Split
@@ -541,7 +598,7 @@ export default function CompactSummary({
                                               <div onClick={(e) => e.stopPropagation()}
                                                 className="w-full max-w-sm rounded-md border border-border bg-muted/30 p-2">
                                                 <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                                                  Give each activity its client
+                                                  Adjust each activity’s client
                                                 </div>
                                                 <div className="flex flex-col gap-1.5">
                                                   {rowWhy.breakdown.map((r, j) => (
@@ -669,7 +726,7 @@ type WhyData = {
   co_open_files: string[];
   tier: string;
   personal?: boolean;
-  breakdown?: { label: string; minutes: number; pct: number }[];
+  breakdown?: { label: string; minutes: number; pct: number; suggested_client_id?: number | null; suggested_client_name?: string | null }[];
   suggested_client_id: number | null;
   suggested_client_name: string | null;
 };

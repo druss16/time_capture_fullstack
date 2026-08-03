@@ -788,6 +788,85 @@ def _block_breakdown(block):
     return out
 
 
+# A slice whose label looks like the employee's own admin (their timesheet,
+# payroll, expenses) is not client work — suggest No client for it.
+_TIMESHEET_RE = re.compile(
+    r"\b(time\s?sheet|payroll|p\.?t\.?o\.?|expense report|expenses?|mileage|reimburse)\b",
+    re.I,
+)
+# A bare app dialog / scratch window names no work of its own — it should inherit
+# whichever real activity it sat next to, not stand on its own.
+_NOISE_LABEL_RE = re.compile(
+    r"^(move or copy|save as|save|open|print|page setup|find and replace|"
+    r"format cells|autorecover|document recovery|microsoft excel|microsoft word|"
+    r"book\d*|sheet\d*|untitled|new tab|calculator)\b",
+    re.I,
+)
+
+
+def _slice_suggestions(block, org, breakdown=None):
+    """Best-guess client for each breakdown slice, so a split can be PRE-FILLED
+    instead of hand-assigned. Returns {label: {"client_id", "client_name"}}.
+
+    Per slice, in order:
+      1. the label distinctively names a business client  → that client
+      2. the label looks like a timesheet / personal admin → No client
+      3. the label is a bare app dialog (noise)            → inherit the dominant slice
+      4. otherwise                                          → the block's current client
+         (a safe no-op — we don't invent a move we're unsure of)."""
+    from tracker.utils.client_name_match import build_token_index, detect_title_client
+
+    bd = breakdown if breakdown is not None else _block_breakdown(block)
+    if not bd:
+        return {}
+
+    names = {c.id: c.name for c in Client.objects.filter(org=org).only("id", "name")}
+    index = build_token_index(names) if names else None
+    firm = getattr(org, "name", None)
+    cur_id = block.client_id
+    cur_name = getattr(getattr(block, "client", None), "name", None)
+
+    INHERIT = object()
+    raw = {}  # label -> client_id | None | INHERIT
+    for item in bd:
+        label = item["label"]
+        hit = None
+        if index:
+            try:
+                hit = detect_title_client(label, index, names, firm_name=firm)
+            except Exception:
+                hit = None
+        if hit and hit.get("client_id"):
+            raw[label] = hit["client_id"]
+        elif _TIMESHEET_RE.search(label):
+            raw[label] = None
+        elif _NOISE_LABEL_RE.match(label.strip()):
+            raw[label] = INHERIT
+        else:
+            raw[label] = cur_id
+
+    # Resolve INHERIT → the largest slice that DID resolve to a concrete client.
+    # (bd is biggest-first, so the first non-INHERIT is the dominant one.)
+    dominant = cur_id
+    for item in bd:
+        v = raw[item["label"]]
+        if v is not INHERIT:
+            dominant = v
+            break
+
+    out = {}
+    for item in bd:
+        label = item["label"]
+        v = raw[label]
+        if v is INHERIT:
+            v = dominant
+        out[label] = {
+            "client_id": v,
+            "client_name": (cur_name if v == cur_id else names.get(v)) if v is not None else None,
+        }
+    return out
+
+
 def block_slices(block):
     """Same slice grouping as `_block_breakdown`, but returns the RawEvent ids in
     each slice — so a split can regroup the block's sub-events by the very labels
@@ -870,13 +949,25 @@ def block_why(request, block_id: int):
         tier = "personal"
         suggested_id = suggested_name = None
 
+    # Per-slice client guesses, so a Split can be pre-filled (not hand-assigned).
+    breakdown = _safe_breakdown(block)
+    try:
+        sug = _slice_suggestions(block, org, breakdown=breakdown)
+        for item in breakdown:
+            s = sug.get(item["label"])
+            if s:
+                item["suggested_client_id"] = s["client_id"]
+                item["suggested_client_name"] = s["client_name"]
+    except Exception:
+        pass
+
     return Response({
         "block_id": block.id,
         "local_time": local_time,
         "explanation": explanation,
         "tier": tier,
         "personal": personal,
-        "breakdown": _safe_breakdown(block),
+        "breakdown": breakdown,
         "suggested_client_id": suggested_id,
         "suggested_client_name": suggested_name,
         "co_open_files": co_open_files[:5],

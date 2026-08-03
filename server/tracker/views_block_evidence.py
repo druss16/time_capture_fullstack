@@ -725,6 +725,33 @@ def suggested_client_for(block, org):
     return suggested_id
 
 
+# Trailing " - <x>" app/mode segments to peel off a window title for a clean label.
+_LABEL_SUFFIXES = {
+    "protected view", "compatibility mode", "read-only", "read only",
+    "excel", "word", "powerpoint", "microsoft excel", "microsoft word",
+    "microsoft powerpoint", "message (html)", "message (plain text)",
+    "google chrome", "microsoft edge", "mozilla firefox", "adobe acrobat",
+    "adobe acrobat reader (64-bit)", "outlook", "microsoft outlook",
+}
+
+
+def _clean_label(s: str) -> str:
+    """Human-legible short label for a window: peel app/mode suffixes, drop a
+    leading date, collapse whitespace, and cap the length."""
+    s = re.sub(r"\s+", " ", (s or "").strip())
+    changed = True
+    while changed and " - " in s:
+        changed = False
+        head, _, tail = s.rpartition(" - ")
+        if tail.strip().lower() in _LABEL_SUFFIXES:
+            s = head.strip()
+            changed = True
+    s = re.sub(r"^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\s+", "", s)  # drop a leading date prefix
+    if len(s) > 40:
+        s = s[:38].rstrip() + "…"
+    return s
+
+
 def _block_breakdown(block):
     """Foreground time-split within a block — how long each distinct window/doc was
     actually IN FRONT, from the sub-events. Answers 'was most of it X, or a bit of
@@ -745,7 +772,8 @@ def _block_breakdown(block):
             continue
         name = _tabctx_lead_name(ev.window_title or "")
         if not name or len(name) < 2 or _tabctx_is_noise(name):
-            name = (ev.window_title or "").strip()[:60] or "Other"
+            name = (ev.window_title or "").strip()
+        name = _clean_label(name) or "Other"
         secs[name] += dur
 
     total = sum(secs.values())

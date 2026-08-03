@@ -456,21 +456,30 @@ export default function CompactSummary({
                                     </div>
 
                                     {rowOpen && (
-                                      <div className="mb-2 ml-6 mt-1 flex flex-col items-start gap-1.5 border-l-2 border-border/60 pl-3 font-sans">
+                                      <div className="mb-2 ml-6 mt-1 flex flex-col items-start gap-3 border-l-2 border-border/60 pl-3 font-sans">
                                         {whyLoading === bid ? (
                                           <span className="text-[11px] text-muted-foreground">Loading details…</span>
                                         ) : (
                                           <>
                                             {rowWhy?.breakdown && rowWhy.breakdown.length > 1 && (
-                                              <div className="text-[11px] text-muted-foreground">
-                                                <span className="font-semibold text-foreground/80">Time in front:</span>{" "}
-                                                {rowWhy.breakdown.map((r, j) => (
-                                                  <span key={j}>{j > 0 ? "  ·  " : ""}<span className="text-foreground/80">{fmtH(r.minutes / 60)}</span> {r.label}</span>
-                                                ))}
+                                              <div className="w-full max-w-sm">
+                                                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Where the time went</div>
+                                                <div className="flex flex-col gap-0.5">
+                                                  {rowWhy.breakdown.map((r, j) => (
+                                                    <div key={j} className="flex items-center gap-2 text-[11px]">
+                                                      <span className="w-10 shrink-0 rounded bg-muted px-1 py-0.5 text-center font-mono text-[10.5px] font-semibold tabular-nums text-foreground/80">{fmtH(r.minutes / 60)}</span>
+                                                      <span className="min-w-0 flex-1 truncate text-foreground/80">{r.label}</span>
+                                                      <span className="shrink-0 tabular-nums text-muted-foreground/60">{r.pct}%</span>
+                                                    </div>
+                                                  ))}
+                                                </div>
                                               </div>
                                             )}
-                                            <div className="text-[11px] leading-snug text-muted-foreground">
-                                              {rowWhy?.explanation || "No added context for this entry."}
+                                            <div className="max-w-md">
+                                              <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Why this client</div>
+                                              <div className="text-[11px] leading-snug text-muted-foreground">
+                                                {rowWhy?.explanation || "No added context for this entry."}
+                                              </div>
                                             </div>
                                             <button onClick={(e) => { e.stopPropagation(); openMove(e.currentTarget as HTMLElement, ids, client.client_id, cat.name, "Change client / category", suggestId); }}
                                               className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20">

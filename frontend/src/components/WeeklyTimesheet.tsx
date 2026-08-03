@@ -817,10 +817,11 @@ const BlockMoveMenu: React.FC<{ block: DetailBlock }> = ({ block }) => {
       <button
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
         disabled={busy}
-        title="Move to another category"
-        className="flex items-center justify-center w-6 h-6 rounded-md text-slate-300 hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+        title="Move this block to another category"
+        className="flex items-center gap-1 rounded-md border border-primary/25 bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary/15 transition-colors disabled:opacity-50"
       >
-        {busy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FolderInput className="w-3.5 h-3.5" />}
+        {busy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FolderInput className="w-3 h-3" />}
+        Move
       </button>
       {open && !busy && (
         <>

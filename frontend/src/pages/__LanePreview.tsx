@@ -69,7 +69,7 @@ const Stat = ({ value, label, cls = "text-slate-800" }: { value: string; label: 
 );
 
 export default function LanePreview() {
-  const [font, setFont] = useState(FONTS[3].css); // default: Fraunces
+  const [font, setFont] = useState(FONTS[1].css); // default: Inter
   return (
     <div className="min-h-screen bg-background">
       {/* toolbar — mirrors DailyReview: [Summary tab · + Add time] ... [date · Confirm all · refresh · 3 stats] */}

@@ -557,8 +557,9 @@ export default function DailyReview() {
           </div>
         )}
 */}
-        {/* ── Headline: the page leads with a sentence, not a control. ── */}
-        <div className="mx-auto mb-7 max-w-5xl">
+        {/* ── Headline: the page leads with a sentence, not a control. ──
+            Headline uses Inter (crisper than the Jakarta body at display size). */}
+        <div className="mx-auto mb-7 max-w-5xl" style={{ fontFamily: '"Inter", sans-serif' }}>
           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
             {new Date(date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
           </div>

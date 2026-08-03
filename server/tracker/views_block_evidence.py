@@ -725,6 +725,27 @@ def suggested_client_for(block, org):
     return suggested_id
 
 
+def why_summary(block, org):
+    """(explanation, suggested_client_id, suggested_client_name) — the pending-row
+    parts of the /why/ explanation, so Daily Review can embed them in the
+    today-time payload and the frontend needn't fetch /why/ per row (kills the
+    post-load lag on the green suggested-client pills). Read-only; mirrors
+    suggested_client_for + the /why/ sentence so they never disagree."""
+    try:
+        _, co = _co_open_client(block, org)
+    except Exception:
+        co = None
+    try:
+        # Browser tabs don't inherit an adjacent client (matches suggested_client_for).
+        surrounding = {} if _is_browser(block) else (_build_surrounding(block) or {})
+    except Exception:
+        surrounding = {}
+    sentence, _tier, sid, sname = _compose_why("", co, surrounding)
+    if _is_browser(block) and not (co and co.get("client_id")):
+        sid, sname = None, None
+    return (sentence, sid, sname)
+
+
 # Trailing " - <x>" app/mode segments to peel off a window title for a clean label.
 _LABEL_SUFFIXES = {
     "protected view", "compatibility mode", "read-only", "read only",

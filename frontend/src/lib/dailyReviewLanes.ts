@@ -40,16 +40,24 @@ export type CertainGroup = {
   internal: boolean;      // firm-internal client -> dimmed, non-billable
   unassigned: boolean;    // committed with no client (overhead / browsing)
   minutes: number;        // display minutes = committed total minus any mismatch pulled out
+  billableMinutes: number;     // per-client billable minutes (from today-time)
+  nonBillableMinutes: number;  // per-client non-billable minutes
+  billable: boolean;      // which section this group belongs in
   blockCount: number;     // number of captured lines shown
   repCategory: string;    // dominant category (for the Move popover default)
   rows: CertainRow[];
 };
+
+/** today-time client cards now carry a per-client billable split. */
+type ClientCard = ClientTime & { billable_hours?: number; non_billable_hours?: number };
 
 export type Lanes = {
   certain: {
     groups: CertainGroup[];
     blockCount: number;
     minutes: number;
+    billableMinutes: number;
+    nonBillableMinutes: number;
   };
   needsYou: {
     pending: ProposedInline[];  // guessed + no-guess, minutes desc
@@ -71,7 +79,7 @@ const clientKeyOf = (clientId: number | null) => (clientId != null ? `id:${clien
  * @param ignored  mismatch block_ids the user dismissed as false positives.
  */
 export function deriveLanes(
-  timeSummary: ClientTime[],
+  timeSummary: ClientCard[],
   proposedInline: ProposedInline[],
   mismatchBlocks: MismatchBlock[],
   ignored: Set<string>,
@@ -92,6 +100,8 @@ export function deriveLanes(
   const groups: CertainGroup[] = [];
   let certainBlockCount = 0;
   let certainMinutes = 0;
+  let certainBillable = 0;
+  let certainNonBillable = 0;
 
   for (const client of timeSummary) {
     const key = clientKeyOf(client.client_id);
@@ -115,6 +125,10 @@ export function deriveLanes(
 
     const pulled = mismatchMinByClient.get(key) || 0;
     const minutes = Math.max(0, Math.round(client.total_hours * 60 - pulled));
+    // Per-client billable split from today-time. Mismatch minutes (pulled into
+    // Needs-you) come off billable, since a booked client's time is billable.
+    const billableMinutes = Math.max(0, Math.round((client.billable_hours ?? 0) * 60 - pulled));
+    const nonBillableMinutes = Math.max(0, Math.round((client.non_billable_hours ?? 0) * 60));
     const repCategory =
       [...catMinutes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ||
       client.categories[0]?.name ||
@@ -127,19 +141,24 @@ export function deriveLanes(
       internal: isInternalClientName(client.client),
       unassigned: client.client_id == null,
       minutes,
+      billableMinutes,
+      nonBillableMinutes,
+      // A group is billable if it holds any billable time (a real client's work);
+      // internal / no-client overhead has none and falls to the non-billable section.
+      billable: billableMinutes > 0,
       blockCount: rows.length,
       repCategory,
       rows,
     });
     certainBlockCount += rows.length;
     certainMinutes += minutes;
+    certainBillable += billableMinutes;
+    certainNonBillable += nonBillableMinutes;
   }
 
-  // Real clients first, then internal/no-client overhead; each by time desc.
+  // Billable section first, then non-billable overhead; each by time desc.
   groups.sort((a, b) => {
-    const oa = a.unassigned || a.internal ? 1 : 0;
-    const ob = b.unassigned || b.internal ? 1 : 0;
-    if (oa !== ob) return oa - ob;
+    if (a.billable !== b.billable) return a.billable ? -1 : 1;
     return b.minutes - a.minutes;
   });
 
@@ -151,7 +170,13 @@ export function deriveLanes(
     mismatch.reduce((s, m) => s + (m.minutes || 0), 0);
 
   return {
-    certain: { groups, blockCount: certainBlockCount, minutes: certainMinutes },
+    certain: {
+      groups,
+      blockCount: certainBlockCount,
+      minutes: certainMinutes,
+      billableMinutes: certainBillable,
+      nonBillableMinutes: certainNonBillable,
+    },
     needsYou: {
       pending,
       mismatch,

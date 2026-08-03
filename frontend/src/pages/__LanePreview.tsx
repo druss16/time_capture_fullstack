@@ -6,12 +6,14 @@ import type { Lanes } from "@/lib/dailyReviewLanes";
 
 const lanes: Lanes = {
   certain: {
-    blockCount: 17,
-    minutes: 262, // 4h 22m
+    blockCount: 18,
+    minutes: 297,
+    billableMinutes: 262, // 4h 22m
+    nonBillableMinutes: 35,
     groups: [
       {
         key: "id:1", clientId: 1, name: "Spirit of Hope Catholic Comm", internal: false, unassigned: false,
-        minutes: 73, blockCount: 5, repCategory: "General Client Work",
+        minutes: 73, billableMinutes: 73, nonBillableMinutes: 0, billable: true, blockCount: 5, repCategory: "General Client Work",
         rows: [
           { ids: [1], title: "Qbw.Exe — Spirit of Hope Parish (Secondary)", category: "General Client Work", minutes: 35 },
           { ids: [2], title: "Qbw.Exe — Spirit of Hope Parish", category: "General Client Work", minutes: 23 },
@@ -20,10 +22,12 @@ const lanes: Lanes = {
           { ids: [5], title: "Excel.Exe — Column Width", category: "General Client Work", minutes: 1 },
         ],
       },
-      { key: "id:2", clientId: 2, name: "St. Mary's of the Assumption", internal: false, unassigned: false, minutes: 41, blockCount: 3, repCategory: "General Client Work", rows: [{ ids: [6], title: "Qbw.Exe — St Mary's", category: "General Client Work", minutes: 41 }] },
-      { key: "id:3", clientId: 3, name: "St. Francis of Assisi Church", internal: false, unassigned: false, minutes: 35, blockCount: 5, repCategory: "General Client Work", rows: [{ ids: [7], title: "Qbw.Exe — St Francis", category: "General Client Work", minutes: 35 }] },
-      { key: "id:4", clientId: 4, name: "Immaculate Conception", internal: false, unassigned: false, minutes: 27, blockCount: 2, repCategory: "General Client Work", rows: [{ ids: [8], title: "Qbw.Exe — Immaculate Conception", category: "General Client Work", minutes: 27 }] },
-      { key: "id:5", clientId: 5, name: "Basilica of The Sacred Heart of Jesus", internal: false, unassigned: false, minutes: 19, blockCount: 2, repCategory: "General Client Work", rows: [{ ids: [9], title: "Qbw.Exe — Sacred Heart", category: "General Client Work", minutes: 19 }] },
+      { key: "id:2", clientId: 2, name: "St. Mary's of the Assumption", internal: false, unassigned: false, minutes: 41, billableMinutes: 41, nonBillableMinutes: 0, billable: true, blockCount: 3, repCategory: "General Client Work", rows: [{ ids: [6], title: "Qbw.Exe — St Mary's", category: "General Client Work", minutes: 41 }] },
+      { key: "id:3", clientId: 3, name: "St. Francis of Assisi Church", internal: false, unassigned: false, minutes: 35, billableMinutes: 35, nonBillableMinutes: 0, billable: true, blockCount: 5, repCategory: "General Client Work", rows: [{ ids: [7], title: "Qbw.Exe — St Francis", category: "General Client Work", minutes: 35 }] },
+      { key: "id:4", clientId: 4, name: "Immaculate Conception", internal: false, unassigned: false, minutes: 27, billableMinutes: 27, nonBillableMinutes: 0, billable: true, blockCount: 2, repCategory: "General Client Work", rows: [{ ids: [8], title: "Qbw.Exe — Immaculate Conception", category: "General Client Work", minutes: 27 }] },
+      { key: "id:5", clientId: 5, name: "Basilica of The Sacred Heart of Jesus", internal: false, unassigned: false, minutes: 19, billableMinutes: 19, nonBillableMinutes: 0, billable: true, blockCount: 2, repCategory: "General Client Work", rows: [{ ids: [9], title: "Qbw.Exe — Sacred Heart", category: "General Client Work", minutes: 19 }] },
+      { key: "none", clientId: null, name: "No client (browsing)", internal: false, unassigned: true, minutes: 22, billableMinutes: 0, nonBillableMinutes: 22, billable: false, blockCount: 3, repCategory: "Personal/Non-Billable", rows: [{ ids: [10], title: "Chrome — Gmail", category: "Personal/Non-Billable", minutes: 14 }, { ids: [11], title: "Chrome — news", category: "Personal/Non-Billable", minutes: 8 }] },
+      { key: "id:9", clientId: 9, name: "Internal – Admin", internal: true, unassigned: false, minutes: 13, billableMinutes: 0, nonBillableMinutes: 13, billable: false, blockCount: 2, repCategory: "Billing / Admin", rows: [{ ids: [12], title: "Excel.Exe — TL Wall timesheet", category: "Billing / Admin", minutes: 13 }] },
     ],
   },
   needsYou: {

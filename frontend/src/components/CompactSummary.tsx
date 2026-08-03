@@ -140,6 +140,46 @@ export default function CompactSummary({
       .filter(Boolean) as CertainGroup[];
   }, [certain.groups, q]);
 
+  const billableGroups = filteredGroups.filter((g) => g.billable);
+  const overheadGroups = filteredGroups.filter((g) => !g.billable);
+
+  // One client group in the Certain browse: header (name · blocks · minutes · Move)
+  // over its raw captured titles.
+  const renderGroup = (g: CertainGroup) => {
+    const open = openGroups.has(g.key) || !!q;
+    const allIds = g.rows.flatMap((r) => r.ids);
+    return (
+      <div key={g.key}>
+        <div className="group flex items-center gap-2 py-2">
+          <button onClick={() => toggleGroup(g.key)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+            <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+            <span className={cn("truncate font-sans text-[14px] font-semibold",
+              g.unassigned ? "italic text-muted-foreground" : g.internal ? "text-muted-foreground" : "text-foreground")}>
+              {g.name}
+            </span>
+          </button>
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{g.blockCount} blocks</span>
+          <span className="shrink-0 font-mono text-[12px] font-semibold tabular-nums text-foreground">{fmtMin(g.minutes)}</span>
+          <button
+            onClick={(e) => openMove(e.currentTarget, allIds, g.clientId, g.repCategory, `Move · ${g.name}`)}
+            className="shrink-0 rounded-md px-2 py-0.5 font-sans text-[12px] font-medium text-primary underline-offset-2 hover:underline">
+            Move
+          </button>
+        </div>
+        {open && (
+          <div className="mb-1 flex flex-col gap-0.5 pb-2 pl-6">
+            {g.rows.map((r, i) => (
+              <div key={i} className="flex items-center gap-3 py-0.5">
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground">{r.title}</span>
+                <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">{fmtMin(r.minutes)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className={cn(sysDark && "dark")}>
       <div className="mx-auto flex max-w-3xl flex-col gap-3 text-foreground">
@@ -152,7 +192,9 @@ export default function CompactSummary({
             <ChevronRight className={cn("h-4 w-4 shrink-0 text-emerald-600 transition-transform dark:text-emerald-400", certainOpen && "rotate-90")} />
             <span className="font-sans text-[15px] font-bold text-emerald-700 dark:text-emerald-300">Certain</span>
             <span className="truncate font-mono text-[12px] text-muted-foreground">
-              {certain.blockCount} blocks · {fmtMin(certain.minutes)} · {autoFiled ? "auto-filed, exact client match" : "exact client match"}
+              {certain.blockCount} blocks · {fmtMin(certain.billableMinutes)} billable
+              {certain.nonBillableMinutes > 0 && ` · ${fmtMin(certain.nonBillableMinutes)} overhead`}
+              {" · "}{autoFiled ? "auto-filed" : "exact client match"}
             </span>
             <span className="flex-1" />
             <span className="shrink-0 rounded-md border border-border bg-card px-3 py-1 font-sans text-[12px] font-medium text-muted-foreground">
@@ -181,42 +223,22 @@ export default function CompactSummary({
                 <div className="py-6 text-center font-mono text-[12px] text-muted-foreground">no matches</div>
               )}
 
-              <div className="flex flex-col divide-y divide-border">
-                {filteredGroups.map((g) => {
-                  const open = openGroups.has(g.key) || !!q;
-                  const allIds = g.rows.flatMap((r) => r.ids);
-                  return (
-                    <div key={g.key}>
-                      <div className="group flex items-center gap-2 py-2">
-                        <button onClick={() => toggleGroup(g.key)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                          <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
-                          <span className={cn("truncate font-sans text-[14px] font-semibold",
-                            g.unassigned ? "italic text-muted-foreground" : g.internal ? "text-muted-foreground" : "text-foreground")}>
-                            {g.name}
-                          </span>
-                        </button>
-                        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{g.blockCount} blocks</span>
-                        <span className="shrink-0 font-mono text-[12px] font-semibold tabular-nums text-foreground">{fmtMin(g.minutes)}</span>
-                        <button
-                          onClick={(e) => openMove(e.currentTarget, allIds, g.clientId, g.repCategory, `Move · ${g.name}`)}
-                          className="shrink-0 rounded-md px-2 py-0.5 font-sans text-[12px] font-medium text-primary underline-offset-2 hover:underline">
-                          Move
-                        </button>
-                      </div>
-                      {open && (
-                        <div className="mb-1 flex flex-col gap-0.5 pb-2 pl-6">
-                          {g.rows.map((r, i) => (
-                            <div key={i} className="flex items-center gap-3 py-0.5">
-                              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground">{r.title}</span>
-                              <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">{fmtMin(r.minutes)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+              {billableGroups.length > 0 && (
+                <>
+                  <SectionLabel text="Billable" minutes={certain.billableMinutes} />
+                  <div className="flex flex-col divide-y divide-border">
+                    {billableGroups.map(renderGroup)}
+                  </div>
+                </>
+              )}
+              {overheadGroups.length > 0 && (
+                <>
+                  <SectionLabel text="Non-billable · overhead" minutes={certain.nonBillableMinutes} muted />
+                  <div className="flex flex-col divide-y divide-border">
+                    {overheadGroups.map(renderGroup)}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </section>
@@ -392,6 +414,20 @@ function MismatchRow({ m, busy, onFix, onKeep, onPick }: {
           Keep here
         </button>
       </div>
+    </div>
+  );
+}
+
+// Divider label between the Billable and Non-billable groups in the Certain browse.
+function SectionLabel({ text, minutes, muted }: { text: string; minutes: number; muted?: boolean }) {
+  return (
+    <div className="mt-2 flex items-center gap-2 pb-1 pt-2 first:mt-0 first:pt-0">
+      <span className={cn("font-mono text-[10px] font-semibold uppercase tracking-[0.12em]",
+        muted ? "text-muted-foreground/70" : "text-emerald-600 dark:text-emerald-400")}>
+        {text}
+      </span>
+      <span className="font-mono text-[10px] tabular-nums text-muted-foreground/60">{fmtMin(minutes)}</span>
+      <span className="h-px flex-1 bg-border" />
     </div>
   );
 }

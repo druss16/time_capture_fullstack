@@ -22,7 +22,15 @@ GENERIC_TITLE = ('select reconciliation','begin reconciliation','reconciliation 
   'preview paycheck','print checks','print preview','past transactions','preparer options',
   'quickbooks accountant desktop','(primary) quickbooks','(secondary) quickbooks',
   'special paycheck','missing client info','account spreadsheet','enter memorized',
-  'save print output')
+  'save print output',
+  # QuickBooks modal/chrome dialogs — identical across every client & user, so
+  # same-title matching on them cross-contaminates clients (a committed
+  # "QuickBooks Desktop Information" for one client was stamping New School onto
+  # everyone else's identically-titled block). These carry no client identity.
+  'quickbooks desktop information','select checks to print','delete transaction',
+  'print checks - confirmation','write checks','create invoice','receive payment',
+  'make deposit','pay bills','transfer funds','memorized transaction','chart of accounts',
+  'quickbooks information','recording transaction','create item receipts')
 
 JUNK = ('idle/uncategorized','calculator','crossword','breitbart','milb.com',
   'overall standings','gwen stefani','google search','windows shell experience',

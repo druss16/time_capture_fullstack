@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -86,6 +86,7 @@ urlpatterns = [
     # -------------------------------
     path("today-time/", views.today_time, name="today_time"),
     path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),
+    path("blocks/<int:block_id>/split/", views.split_block, name="split_block"),
     path("time-entries/manual/", views.create_manual_time_entry, name="create_manual_time_entry"),
     path("agent/register/", views.register_agent, name="register_agent"),
 
@@ -461,6 +462,7 @@ urlpatterns = [
 
     path("blocks/<int:block_id>/evidence/", views_block_evidence.block_evidence, name="block_evidence"),
     path("blocks/<int:block_id>/why/", views_block_evidence.block_why, name="block_why"),
+    path("clients/<int:client_id>/work-summary/", views_work_summary.client_work_summary, name="client_work_summary"),
 
     path("analytics/query/",
          views_analytics_v2.analytics_query,

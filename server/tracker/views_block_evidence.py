@@ -725,6 +725,33 @@ def suggested_client_for(block, org):
     return suggested_id
 
 
+# Trailing " - <x>" app/mode segments to peel off a window title for a clean label.
+_LABEL_SUFFIXES = {
+    "protected view", "compatibility mode", "read-only", "read only",
+    "excel", "word", "powerpoint", "microsoft excel", "microsoft word",
+    "microsoft powerpoint", "message (html)", "message (plain text)",
+    "google chrome", "microsoft edge", "mozilla firefox", "adobe acrobat",
+    "adobe acrobat reader (64-bit)", "outlook", "microsoft outlook",
+}
+
+
+def _clean_label(s: str) -> str:
+    """Human-legible short label for a window: peel app/mode suffixes, drop a
+    leading date, collapse whitespace, and cap the length."""
+    s = re.sub(r"\s+", " ", (s or "").strip())
+    changed = True
+    while changed and " - " in s:
+        changed = False
+        head, _, tail = s.rpartition(" - ")
+        if tail.strip().lower() in _LABEL_SUFFIXES:
+            s = head.strip()
+            changed = True
+    s = re.sub(r"^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\s+", "", s)  # drop a leading date prefix
+    if len(s) > 40:
+        s = s[:38].rstrip() + "…"
+    return s
+
+
 def _block_breakdown(block):
     """Foreground time-split within a block — how long each distinct window/doc was
     actually IN FRONT, from the sub-events. Answers 'was most of it X, or a bit of
@@ -745,7 +772,8 @@ def _block_breakdown(block):
             continue
         name = _tabctx_lead_name(ev.window_title or "")
         if not name or len(name) < 2 or _tabctx_is_noise(name):
-            name = (ev.window_title or "").strip()[:60] or "Other"
+            name = (ev.window_title or "").strip()
+        name = _clean_label(name) or "Other"
         secs[name] += dur
 
     total = sum(secs.values())
@@ -758,6 +786,130 @@ def _block_breakdown(block):
             continue
         out.append({"label": name, "minutes": mins, "pct": round(100 * s / total)})
     return out
+
+
+# A slice whose label looks like the employee's own admin (their timesheet,
+# payroll, expenses) is not client work — suggest No client for it.
+_TIMESHEET_RE = re.compile(
+    r"\b(time\s?sheet|payroll|p\.?t\.?o\.?|expense report|expenses?|mileage|reimburse)\b",
+    re.I,
+)
+# A bare app dialog / scratch window names no work of its own — it should inherit
+# whichever real activity it sat next to, not stand on its own.
+_NOISE_LABEL_RE = re.compile(
+    r"^(move or copy|save as|save|open|print|page setup|find and replace|"
+    r"format cells|autorecover|document recovery|microsoft excel|microsoft word|"
+    r"book\d*|sheet\d*|untitled|new tab|calculator)\b",
+    re.I,
+)
+
+
+def _slice_suggestions(block, org, breakdown=None):
+    """Best-guess client for each breakdown slice, so a split can be PRE-FILLED
+    instead of hand-assigned. Returns {label: {"client_id", "client_name"}}.
+
+    Per slice, in order:
+      1. the label distinctively names a business client  → that client
+      2. the label looks like a timesheet / personal admin → No client
+      3. the label is a bare app dialog (noise)            → inherit the dominant slice
+      4. otherwise                                          → the block's current client
+         (a safe no-op — we don't invent a move we're unsure of)."""
+    from tracker.utils.client_name_match import build_token_index, detect_title_client
+
+    bd = breakdown if breakdown is not None else _block_breakdown(block)
+    if not bd:
+        return {}
+
+    names = {c.id: c.name for c in Client.objects.filter(org=org).only("id", "name")}
+    index = build_token_index(names) if names else None
+    firm = getattr(org, "name", None)
+    cur_id = block.client_id
+    cur_name = getattr(getattr(block, "client", None), "name", None)
+
+    INHERIT = object()
+    raw = {}  # label -> client_id | None | INHERIT
+    for item in bd:
+        label = item["label"]
+        hit = None
+        if index:
+            try:
+                hit = detect_title_client(label, index, names, firm_name=firm)
+            except Exception:
+                hit = None
+        if hit and hit.get("client_id"):
+            raw[label] = hit["client_id"]
+        elif _TIMESHEET_RE.search(label):
+            raw[label] = None
+        elif _NOISE_LABEL_RE.match(label.strip()):
+            raw[label] = INHERIT
+        else:
+            raw[label] = cur_id
+
+    # Resolve INHERIT → the largest slice that DID resolve to a concrete client.
+    # (bd is biggest-first, so the first non-INHERIT is the dominant one.)
+    dominant = cur_id
+    for item in bd:
+        v = raw[item["label"]]
+        if v is not INHERIT:
+            dominant = v
+            break
+
+    out = {}
+    for item in bd:
+        label = item["label"]
+        v = raw[label]
+        if v is INHERIT:
+            v = dominant
+        out[label] = {
+            "client_id": v,
+            "client_name": (cur_name if v == cur_id else names.get(v)) if v is not None else None,
+        }
+    return out
+
+
+def _looks_like_timesheet(block):
+    """True if the block's own title / dominant activity reads as the employee's
+    personal timesheet or payroll admin — internal work that touches many clients,
+    not one. Used to avoid the misleading temporal-neighbor guess ('right after
+    this you worked on X') on a timesheet, which just names whoever came next."""
+    if _TIMESHEET_RE.search(block.window_title or ""):
+        return True
+    try:
+        bd = _block_breakdown(block)
+        if bd and _TIMESHEET_RE.search(bd[0]["label"]):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def block_slices(block):
+    """Same slice grouping as `_block_breakdown`, but returns the RawEvent ids in
+    each slice — so a split can regroup the block's sub-events by the very labels
+    the user saw in the breakdown. Returns {label: [event_id, ...]}.
+
+    Every event with a positive duration is placed in exactly one slice (no events
+    dropped, unlike the display breakdown which hides sub-minute slices), so a
+    split can account for the whole block."""
+    from collections import defaultdict
+    try:
+        from tracker.views import _tabctx_lead_name, _tabctx_is_noise
+    except Exception:
+        _tabctx_lead_name = lambda t: (t or "").strip()          # noqa: E731
+        _tabctx_is_noise = lambda n: False                        # noqa: E731
+
+    groups = defaultdict(list)
+    for ev in RawEvent.objects.filter(block=block).only("id", "window_title", "start_ts", "end_ts"):
+        if not ev.start_ts or not ev.end_ts:
+            continue
+        if (ev.end_ts - ev.start_ts).total_seconds() <= 0:
+            continue
+        name = _tabctx_lead_name(ev.window_title or "")
+        if not name or len(name) < 2 or _tabctx_is_noise(name):
+            name = (ev.window_title or "").strip()
+        label = _clean_label(name) or "Other"
+        groups[label].append(ev.id)
+    return dict(groups)
 
 
 @api_view(["GET"])
@@ -812,6 +964,24 @@ def block_why(request, block_id: int):
         explanation = "Looks like personal browsing (news / social / streaming) — not client work."
         tier = "personal"
         suggested_id = suggested_name = None
+    # A personal timesheet touches many clients — the temporal-neighbor guess would
+    # misleadingly name whoever came next. Label it honestly and suggest no client.
+    elif not has_co_client and _looks_like_timesheet(block):
+        explanation = "Looks like your own timesheet — internal, not tied to one client."
+        tier = "timesheet"
+        suggested_id = suggested_name = None
+
+    # Per-slice client guesses, so a Split can be pre-filled (not hand-assigned).
+    breakdown = _safe_breakdown(block)
+    try:
+        sug = _slice_suggestions(block, org, breakdown=breakdown)
+        for item in breakdown:
+            s = sug.get(item["label"])
+            if s:
+                item["suggested_client_id"] = s["client_id"]
+                item["suggested_client_name"] = s["client_name"]
+    except Exception:
+        pass
 
     return Response({
         "block_id": block.id,
@@ -819,7 +989,7 @@ def block_why(request, block_id: int):
         "explanation": explanation,
         "tier": tier,
         "personal": personal,
-        "breakdown": _safe_breakdown(block),
+        "breakdown": breakdown,
         "suggested_client_id": suggested_id,
         "suggested_client_name": suggested_name,
         "co_open_files": co_open_files[:5],

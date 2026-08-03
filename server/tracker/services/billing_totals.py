@@ -109,6 +109,8 @@ def compute_client_cards(org, start_utc, end_utc, *, user_id, can_see_all=False)
     data = defaultdict(lambda: {
         "client_id": None,
         "total_min": 0.0,
+        "billable_min": 0.0,
+        "non_billable_min": 0.0,
         "categories": defaultdict(lambda: {
             "minutes": 0.0,
             "block_count": 0,
@@ -137,9 +139,11 @@ def compute_client_cards(org, start_utc, end_utc, *, user_id, can_see_all=False)
         # total but get no category row — matches _aggregate's immaterial fold.
         if not _is_material(b) and not billable:
             d["total_min"] += minutes
+            d["non_billable_min"] += minutes
             continue
 
         d["total_min"] += minutes
+        d["billable_min" if billable else "non_billable_min"] += minutes
         cd = d["categories"][cat_raw]
         cd["minutes"] += minutes
         cd["block_count"] += 1
@@ -211,6 +215,8 @@ def compute_client_cards(org, start_utc, end_utc, *, user_id, can_see_all=False)
             "client_id": client_data["client_id"],
             "client": client_name,
             "total_hours": round(client_data["total_min"] / 60, 2),
+            "billable_hours": round(client_data["billable_min"] / 60, 2),
+            "non_billable_hours": round(client_data["non_billable_min"] / 60, 2),
             "categories": categories,
         })
 

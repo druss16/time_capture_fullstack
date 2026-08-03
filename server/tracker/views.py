@@ -4577,7 +4577,12 @@ def today_time(request):
     # Compact view can badge suspect rows. Keyed separately from the disagreement
     # `flagged_blocks` list above. Wrapped defensively — a detector hiccup must
     # never take down the Daily Review page.
+    # `mismatch_flags` (legacy) = {block_id: looks_like_name} for the old Compact
+    # view's inline chips. `mismatch_blocks` (redesign) carries the full row the
+    # Daily Review "Needs you" lane renders: minutes (every triage row leads with
+    # its minutes), the booked client, and the target so "Move to X" is one click.
     mismatch_flags = {}
+    mismatch_blocks = []
     try:
         from tracker.utils.client_name_match import build_token_index, detect_mismatch
         from tracker.services.billing_totals import committed_block_qs
@@ -4590,8 +4595,20 @@ def today_time(request):
                 _m = detect_mismatch(_b.window_title, _b.client_id, _index, _names, firm_name=org.name)
                 if _m and _m.get('bucket') == 'client' and _b.id is not None:
                     mismatch_flags[_b.id] = _m['looks_like_client_name']
+                    _cat = list((_b.category_hours or {}).keys())[0] if _b.category_hours else 'General Client Work'
+                    mismatch_blocks.append({
+                        'block_id':               _b.id,
+                        'window_title':           _b.window_title or '',
+                        'minutes':                _b.minutes or 0,
+                        'category':               _cat,
+                        'booked_client_id':       _b.client_id,
+                        'booked_client_name':     _names.get(_b.client_id, ''),
+                        'looks_like_client_id':   _m.get('looks_like_client_id'),
+                        'looks_like_client_name': _m['looks_like_client_name'],
+                    })
     except Exception:
         mismatch_flags = {}
+        mismatch_blocks = []
 
     return Response({
         'clients':            result,
@@ -4603,6 +4620,7 @@ def today_time(request):
         'flagged_blocks':     flagged_blocks,
         'proposed_inline':    proposed_inline,
         'mismatch_flags':     mismatch_flags,
+        'mismatch_blocks':    mismatch_blocks,
 
     })
 

@@ -39,6 +39,7 @@ import {
 } from "@/lib/timeframes";
 import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
 import ReportsMatrix from "./ReportsMatrix";
+import WorkSummariesSection from "@/components/WorkSummariesSection";
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -164,6 +165,7 @@ const REPORT_WIDGETS: { key: string; label: string }[] = [
   { key: "clients", label: "Where the billable hours went" },
   { key: "employees", label: "Employees" },
   { key: "matrix", label: "Client grid" },
+  { key: "work_summaries", label: "Work summaries (AI)" },
 ];
 const HIDDEN_WIDGETS_LS_KEY = "reports_hidden_widgets";
 
@@ -821,6 +823,17 @@ export default function ReportsSummary({
             appliedEnd={appliedEnd}
             timeframeLabel={timeframe}
           />
+        </div>
+      )}
+
+      {/* ══ WORK SUMMARIES (AI) ══════════════════════════════════════════════ */}
+      {/* Invoice narratives — firm-wide, per client, monthly. Management-only:
+          gated on `data` (the employee-scoped payload only owners/admins/managers
+          receive), same signal as the Employees section. The endpoint enforces
+          the same role gate server-side. */}
+      {showWidget("work_summaries") && data && !loading && !error && (
+        <div className="pt-4 border-t border-slate-200">
+          <WorkSummariesSection />
         </div>
       )}
     </div>

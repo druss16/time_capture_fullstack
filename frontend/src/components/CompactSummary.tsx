@@ -505,25 +505,29 @@ function PendingRow({ b, busy, onAccept, onNotBillable, onPick, onChange }: {
   onPick: (anchor: HTMLElement) => void;
   onChange: (anchor: HTMLElement) => void;
 }) {
-  // Load the explanation + contextual suggestion so the reason line and the
-  // green best-guess button are visible without expanding anything.
+  // The /why/ suggestion is embedded in the today-time payload (why_*), so the
+  // green client + reason paint with the page — no per-row fetch, no lag. Fall
+  // back to a lazy /why/ fetch only if the backend didn't embed it (deploy skew).
+  const hasEmbedded = b.why_suggested_client_id !== undefined || b.why_explanation !== undefined;
   const [why, setWhy] = useState<WhyData | null>(null);
   useEffect(() => {
+    if (hasEmbedded) return;
     let alive = true;
     safeFetchJson<WhyData>(`${API_BASE}/blocks/${b.block_id}/why/`)
       .then((w) => { if (alive) setWhy(w); })
       .catch(() => { if (alive) setWhy(null); });
     return () => { alive = false; };
-  }, [b.block_id]);
+  }, [b.block_id, hasEmbedded]);
 
-  // The green client and its reason MUST be the same client — otherwise the row
-  // shows one name ("The New School") with another's reason ("…St. Joseph's").
-  // Prefer the /why/ contextual suggestion (it carries the friendly explanation);
-  // fall back to the classifier's stored proposal + its own reasoning. Never mix.
-  const whyId = why?.suggested_client_id ?? null;
+  // The green client and its reason MUST be the same client — prefer the /why/
+  // contextual suggestion (carries the friendly explanation), else the
+  // classifier's stored proposal + its own reasoning. Never mix.
+  const whyId = (hasEmbedded ? b.why_suggested_client_id : why?.suggested_client_id) ?? null;
+  const whyName = (hasEmbedded ? b.why_suggested_client_name : why?.suggested_client_name) ?? null;
+  const whyReason = (hasEmbedded ? b.why_explanation : why?.explanation) || "";
   const guessId = whyId ?? b.proposed_client_id ?? null;
-  const guessName = whyId != null ? why?.suggested_client_name ?? null : b.proposed_client_name;
-  const reason = ((whyId != null ? why?.explanation : (b.proposed_reasoning || why?.explanation)) || "").trim();
+  const guessName = whyId != null ? whyName : b.proposed_client_name;
+  const reason = ((whyId != null ? whyReason : (b.proposed_reasoning || whyReason)) || "").trim();
 
   // Soft green pill = suggested client (leads, but calm). Neutral outline = secondary.
   const green = "inline-flex max-w-[200px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2.5 py-0.5 font-sans text-[11px] font-semibold text-primary transition-colors hover:bg-primary/25 disabled:opacity-50";

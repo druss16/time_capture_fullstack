@@ -4552,6 +4552,7 @@ def today_time(request):
     # captured-but-unattributed material blocks (rendered as no-guess "Assign
     # client" / "No Client" rows).
     from tracker.views_reports import is_pending_review_block
+    from tracker.views_block_evidence import why_summary
     proposed_inline = []
     _pending = Block.objects.filter(
         user=user, day=target_date,
@@ -4560,6 +4561,12 @@ def today_time(request):
     for _b in _pending:
         if not is_pending_review_block(_b):
             continue
+        # Embed the /why/ suggestion + reason up front so the pending row's green
+        # client + explanation paint with the page (no per-row /why/ fetch → no lag).
+        try:
+            _why_reason, _why_sid, _why_sname = why_summary(_b, org)
+        except Exception:
+            _why_reason, _why_sid, _why_sname = ('', None, None)
         proposed_inline.append({
             'block_id':             _b.id,
             'window_title':         getattr(_b, 'window_title', '') or '',
@@ -4569,6 +4576,9 @@ def today_time(request):
             'proposed_confidence':  float(getattr(_b, 'proposed_confidence', 0.0) or 0.0),
             'proposed_category':    getattr(_b, 'proposed_category', '') or '',
             'proposed_reasoning':   getattr(_b, 'proposed_reasoning', '') or '',
+            'why_explanation':          _why_reason,
+            'why_suggested_client_id':  _why_sid,
+            'why_suggested_client_name': _why_sname,
         })
 
     # ── Mismatch flags: title clearly names a DIFFERENT client than booked ──

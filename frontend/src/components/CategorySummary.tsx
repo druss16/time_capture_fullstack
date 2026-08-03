@@ -89,6 +89,11 @@ export type ProposedInline = {
   proposed_confidence: number;
   proposed_category: string;
   proposed_reasoning?: string;
+  // /why/ suggestion embedded in the today-time payload so the pending row's
+  // green client + reason paint immediately (no per-row /why/ fetch).
+  why_explanation?: string;
+  why_suggested_client_id?: number | null;
+  why_suggested_client_name?: string | null;
 };
 
 type ParsedActivity = { blockId: number | null; blockIds: number[]; title: string };

@@ -24,7 +24,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  ChevronRight, ChevronDown, AlertTriangle, Check, Smartphone,
+  ChevronRight, ChevronDown, AlertTriangle, Check, Smartphone, Scissors,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -134,6 +134,48 @@ export default function CompactSummary({
       } catch { /* noop */ } finally { setWhyLoading(null); }
     }
   };
+
+  // ── Split ONE block into per-client pieces (opt-in) ──────────────────────────
+  // A genuinely-mixed block (e.g. a No-Client timesheet open alongside a client's
+  // workbook) can be carved so each activity books to its own client. Only one
+  // split editor is open at a time; splitAssign is keyed by breakdown label.
+  const [splitFor, setSplitFor] = useState<number | null>(null);
+  const [splitAssign, setSplitAssign] = useState<Record<string, number | null>>({});
+  const [splitBusy, setSplitBusy] = useState(false);
+  const openSplit = (
+    bid: number, breakdown: { label: string; minutes: number }[], currentClientId: number | null,
+  ) => {
+    if (splitFor === bid) { setSplitFor(null); return; }
+    // Pre-fill every slice to the block's current client — a no-op until the user
+    // reassigns at least one, which the Split button waits for.
+    const init: Record<string, number | null> = {};
+    breakdown.forEach((r) => { init[r.label] = currentClientId; });
+    setSplitAssign(init);
+    setSplitFor(bid);
+  };
+  const splitDistinct = (a: Record<string, number | null>) =>
+    new Set(Object.values(a).map((v) => (v == null ? "none" : v))).size;
+  const splitBlock = useCallback(async (bid: number, category: string) => {
+    const assignments: Record<string, { client_id: number | null; category: string }> = {};
+    Object.entries(splitAssign).forEach(([label, cid]) => {
+      assignments[label] = { client_id: cid, category };
+    });
+    setSplitBusy(true);
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${bid}/split/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignments }),
+      });
+      showToast("Split into separate entries", "success");
+      setSplitFor(null);
+      onRefresh();
+    } catch {
+      showToast("Couldn’t split this entry", "error");
+    } finally {
+      setSplitBusy(false);
+    }
+  }, [splitAssign, onRefresh, showToast]);
 
   const toggle = (key: string) =>
     setCollapsed((prev) => {
@@ -481,10 +523,56 @@ export default function CompactSummary({
                                                 {rowWhy?.explanation || "No added context for this entry."}
                                               </div>
                                             </div>
-                                            <button onClick={(e) => { e.stopPropagation(); openMove(e.currentTarget as HTMLElement, ids, client.client_id, cat.name, "Change client / category", suggestId); }}
-                                              className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20">
-                                              Change client / category <ChevronDown className="h-3 w-3" />
-                                            </button>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <button onClick={(e) => { e.stopPropagation(); openMove(e.currentTarget as HTMLElement, ids, client.client_id, cat.name, "Change client / category", suggestId); }}
+                                                className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20">
+                                                Change client / category <ChevronDown className="h-3 w-3" />
+                                              </button>
+                                              {bid != null && rowWhy?.breakdown && rowWhy.breakdown.length > 1 && (
+                                                <button onClick={(e) => { e.stopPropagation(); openSplit(bid, rowWhy!.breakdown!, client.client_id); }}
+                                                  title="This block mixes more than one activity — book each to its own client"
+                                                  className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                                                  <Scissors className="h-3 w-3" /> Split
+                                                </button>
+                                              )}
+                                            </div>
+
+                                            {bid != null && splitFor === bid && rowWhy?.breakdown && (
+                                              <div onClick={(e) => e.stopPropagation()}
+                                                className="w-full max-w-sm rounded-md border border-border bg-muted/30 p-2">
+                                                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                                                  Give each activity its client
+                                                </div>
+                                                <div className="flex flex-col gap-1.5">
+                                                  {rowWhy.breakdown.map((r, j) => (
+                                                    <div key={j} className="flex items-center gap-2 text-[11px]">
+                                                      <span className="w-10 shrink-0 rounded bg-muted px-1 py-0.5 text-center font-mono text-[10.5px] font-semibold tabular-nums text-foreground/80">{fmtH(r.minutes / 60)}</span>
+                                                      <span className="min-w-0 flex-1 truncate text-foreground/80" title={r.label}>{r.label}</span>
+                                                      <select value={splitAssign[r.label] ?? ""}
+                                                        onChange={(e) => { const v = e.target.value; setSplitAssign((prev) => ({ ...prev, [r.label]: v === "" ? null : Number(v) })); }}
+                                                        className="max-w-[8.5rem] shrink-0 rounded border border-border bg-background px-1 py-0.5 text-[11px] text-foreground">
+                                                        <option value="">No client</option>
+                                                        {availableClients.map((c) => (
+                                                          <option key={c.id} value={c.id}>{c.name}</option>
+                                                        ))}
+                                                      </select>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                  <button disabled={splitBusy || splitDistinct(splitAssign) < 2}
+                                                    onClick={(e) => { e.stopPropagation(); splitBlock(bid, cat.name); }}
+                                                    className="rounded-full bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40">
+                                                    {splitBusy ? "Splitting…" : "Split into separate entries"}
+                                                  </button>
+                                                  <button onClick={(e) => { e.stopPropagation(); setSplitFor(null); }}
+                                                    className="text-[11px] font-medium text-muted-foreground hover:text-foreground">Cancel</button>
+                                                  {splitDistinct(splitAssign) < 2 && (
+                                                    <span className="text-[10.5px] text-muted-foreground/70">Give two activities different clients.</span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            )}
                                           </>
                                         )}
                                       </div>

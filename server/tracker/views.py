@@ -6372,6 +6372,160 @@ def recategorize_block(request, block_id):
         "client_id": block.client_id,
     })
 
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def split_block(request, block_id):
+    """POST /api/blocks/<id>/split/ — carve ONE block into pieces per client.
+
+    A genuinely-mixed block (e.g. 5m in a No-Client timesheet + 2m in a client's
+    workbook) can be split so each slice books to its own client, instead of the
+    whole block landing on one attribution.
+
+    Body: {"assignments": {"<slice label>": {"client_id": int|null, "category": str}}}
+    where the labels are the breakdown slices the user saw (from /blocks/<id>/why/).
+    Any slice not named keeps the block's current client.
+
+    Mechanics (migration-free, all-or-nothing):
+      - regroup the block's sub-events by those same slice labels,
+      - group the events by their assigned (client, category),
+      - the largest group stays as THIS block (re-attributed in place),
+      - each other group becomes a NEW committed block built from its events,
+      - minutes are the real interval-union of each group's events, so the pieces
+        sum to (at most) the original — no invented or double-counted time.
+
+    Refuses to split time that's already been invoiced or synced to QB/Xero.
+    """
+    from django.db import transaction
+    from tracker.models import RawEvent
+    from tracker.services.classification_service import ClassificationService
+    from tracker.services.compaction import _calculate_minutes_from_events
+    from tracker.views_block_evidence import block_slices
+    from collections import defaultdict
+
+    user = request.user
+    try:
+        block = Block.objects.get(id=block_id, user=user, deleted_at__isnull=True)
+    except Block.DoesNotExist:
+        return Response({"error": "Block not found"}, status=404)
+
+    if block.invoiced or getattr(block, "qb_time_activity_id", None) or getattr(block, "xero_invoice_id", None):
+        return Response(
+            {"error": "This entry is already invoiced or synced to your billing system, so it can't be split."},
+            status=400,
+        )
+
+    assignments = (request.data or {}).get("assignments") or {}
+    if not isinstance(assignments, dict) or not assignments:
+        return Response({"error": "assignments required"}, status=400)
+
+    slices = block_slices(block)  # {label: [event_id, ...]}
+    if not slices:
+        return Response({"error": "This entry has no sub-activity to split."}, status=400)
+
+    # Defaults for any slice the user didn't reassign: keep the block's current attribution.
+    default_client_id = block.client_id
+    ch = block.category_hours or {}
+    default_category = (
+        max(ch, key=ch.get) if ch
+        else (getattr(block, "proposed_category", None) or "General Client Work")
+    )
+
+    # Validate assigned client ids belong to this org.
+    org = block.org
+    assigned_ids = {
+        a.get("client_id") for a in assignments.values()
+        if isinstance(a, dict) and a.get("client_id") is not None
+    }
+    if assigned_ids:
+        valid = set(
+            Client.objects.filter(org=org, id__in=assigned_ids).values_list("id", flat=True)
+        )
+        bad = assigned_ids - valid
+        if bad:
+            return Response({"error": f"Unknown client(s): {sorted(bad)}"}, status=400)
+
+    # Map each slice's events to its assigned (client, category); merge slices that
+    # land on the same client+category into one group.
+    groups = defaultdict(list)  # (client_id, category) -> [event_id, ...]
+    for label, ev_ids in slices.items():
+        a = assignments.get(label)
+        if isinstance(a, dict):
+            cid = a.get("client_id")
+            cat = (a.get("category") or default_category)
+        else:
+            cid, cat = default_client_id, default_category
+        groups[(cid, cat)].extend(ev_ids)
+
+    if len(groups) <= 1:
+        return Response(
+            {"error": "Every slice goes to the same client — nothing to split. Use “Change client” instead."},
+            status=400,
+        )
+
+    # Largest group (by real minutes) keeps the original block; the rest split off.
+    def _group_minutes(ev_ids):
+        return _calculate_minutes_from_events(
+            RawEvent.objects.filter(id__in=ev_ids, start_ts__isnull=False, end_ts__isnull=False)
+        )
+
+    ordered = sorted(groups.items(), key=lambda kv: -_group_minutes(kv[1]))
+    (keep_key, keep_ev_ids), *carve = ordered
+
+    svc = ClassificationService(org=org, user=user)
+    created = []
+    try:
+        with transaction.atomic():
+            for (cid, cat), ev_ids in carve:
+                evs = list(
+                    RawEvent.objects.filter(id__in=ev_ids)
+                    .order_by("start_ts")
+                    .only("id", "start_ts", "end_ts", "window_title", "app_name", "file_path", "url")
+                )
+                if not evs:
+                    continue
+                rep = max(
+                    evs,
+                    key=lambda e: ((e.end_ts - e.start_ts).total_seconds()
+                                   if e.end_ts and e.start_ts else 0),
+                )
+                nb = Block.objects.create(
+                    org=org, user=user,
+                    device_id=block.device_id, hostname=block.hostname,
+                    day=block.day, start=evs[0].start_ts, end=evs[-1].end_ts,
+                    window_title=(rep.window_title or block.window_title or ""),
+                    app_name=(rep.app_name or block.app_name or ""),
+                    file_path=(rep.file_path or ""), url=(rep.url or ""),
+                    category_hours={}, is_categorized=False, is_billable=True,
+                )
+                RawEvent.objects.filter(id__in=ev_ids).update(block=nb)
+                nb.minutes = max(1, _calculate_minutes_from_events(
+                    RawEvent.objects.filter(block=nb, start_ts__isnull=False, end_ts__isnull=False)
+                ))
+                svc.commit(nb, user=user, override={
+                    "client_id": cid, "category": cat, "is_billable": cid is not None,
+                })
+                created.append({"id": nb.id, "client_id": cid, "minutes": nb.minutes})
+
+            # Re-attribute the retained block to its group's client, on its remaining events.
+            keep_cid, keep_cat = keep_key
+            block.minutes = max(1, _calculate_minutes_from_events(
+                RawEvent.objects.filter(block=block, start_ts__isnull=False, end_ts__isnull=False)
+            ))
+            svc.recommit(block, user=user, override={
+                "client_id": keep_cid, "category": keep_cat, "is_billable": keep_cid is not None,
+            })
+    except Exception as e:
+        log(f"[SPLIT] block {block_id} failed: {e}")
+        return Response({"error": f"Split failed: {e}"}, status=500)
+
+    return Response({
+        "success": True,
+        "kept_block": {"id": block.id, "client_id": block.client_id, "minutes": block.minutes},
+        "new_blocks": created,
+    })
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])  # No auth - uses org token
 def register_agent(request):

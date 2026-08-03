@@ -788,6 +788,35 @@ def _block_breakdown(block):
     return out
 
 
+def block_slices(block):
+    """Same slice grouping as `_block_breakdown`, but returns the RawEvent ids in
+    each slice — so a split can regroup the block's sub-events by the very labels
+    the user saw in the breakdown. Returns {label: [event_id, ...]}.
+
+    Every event with a positive duration is placed in exactly one slice (no events
+    dropped, unlike the display breakdown which hides sub-minute slices), so a
+    split can account for the whole block."""
+    from collections import defaultdict
+    try:
+        from tracker.views import _tabctx_lead_name, _tabctx_is_noise
+    except Exception:
+        _tabctx_lead_name = lambda t: (t or "").strip()          # noqa: E731
+        _tabctx_is_noise = lambda n: False                        # noqa: E731
+
+    groups = defaultdict(list)
+    for ev in RawEvent.objects.filter(block=block).only("id", "window_title", "start_ts", "end_ts"):
+        if not ev.start_ts or not ev.end_ts:
+            continue
+        if (ev.end_ts - ev.start_ts).total_seconds() <= 0:
+            continue
+        name = _tabctx_lead_name(ev.window_title or "")
+        if not name or len(name) < 2 or _tabctx_is_noise(name):
+            name = (ev.window_title or "").strip()
+        label = _clean_label(name) or "Other"
+        groups[label].append(ev.id)
+    return dict(groups)
+
+
 @api_view(["GET"])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])

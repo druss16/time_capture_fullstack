@@ -24,7 +24,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  ChevronRight, ChevronDown, AlertTriangle, Check, Smartphone, Scissors,
+  ChevronRight, ChevronDown, AlertTriangle, Check, Smartphone, Scissors, Sparkles, Copy,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -49,6 +49,8 @@ type Props = {
   showToast: (msg: string, type: "success" | "error") => void;
   /** block_id -> looks-like client name, from today-time's detect_mismatch scan */
   mismatchFlags?: Record<string, string>;
+  /** the date being viewed (YYYY-MM-DD); scopes the AI work-summary window */
+  date?: string;
 };
 
 // Left-accent colors — 500-weight reads on both light and dark grounds.
@@ -94,7 +96,7 @@ type MoveState = {
 export default function CompactSummary({
   timeSummary, availableClients, availableCategories, flaggedBlocks,
   proposedInline = [], busy, onDismissReview,
-  onRefresh, showToast, mismatchFlags = {},
+  onRefresh, showToast, mismatchFlags = {}, date,
 }: Props) {
   const sysDark = useSystemDark();
 
@@ -192,6 +194,32 @@ export default function CompactSummary({
     const a: Record<string, { client_id: number | null; category: string }> = {};
     breakdown.forEach((r) => { a[r.label] = { client_id: sliceGuess(r, currentClientId), category }; });
     postSplit(bid, a);
+  };
+
+  // ── AI work summary (opt-in, read-only, per client) ──────────────────────────
+  // Turns a client's committed activity into a professional, client-readable
+  // narrative for an invoice/status note. Never touches billing — a draft to review.
+  type SummaryState = { loading: boolean; text?: string; period?: string; empty?: boolean; error?: boolean };
+  const [summaryState, setSummaryState] = useState<Record<string, SummaryState>>({});
+  const genSummary = useCallback(async (clientId: number, clientKey: string, days: number) => {
+    setSummaryState((p) => ({ ...p, [clientKey]: { loading: true } }));
+    try {
+      const qs = new URLSearchParams({ days: String(days) });
+      if (date) qs.set("date", date);
+      const d = await safeFetchJson<{ summary: string; period?: string; empty?: boolean; message?: string }>(
+        `${API_BASE}/clients/${clientId}/work-summary/?${qs.toString()}`
+      );
+      const next: SummaryState = d.empty
+        ? { loading: false, empty: true, ...(d.message ? { text: d.message } : {}) }
+        : { loading: false, text: d.summary || "", ...(d.period ? { period: d.period } : {}) };
+      setSummaryState((p) => ({ ...p, [clientKey]: next }));
+    } catch {
+      setSummaryState((p) => ({ ...p, [clientKey]: { loading: false, error: true } }));
+      showToast("Couldn’t generate a summary", "error");
+    }
+  }, [date, showToast]);
+  const copyText = (text: string) => {
+    try { navigator.clipboard?.writeText(text); showToast("Copied", "success"); } catch { /* noop */ }
   };
 
   const toggle = (key: string) =>
@@ -439,6 +467,53 @@ export default function CompactSummary({
 
                 {open && (
                   <div className="border-t border-border px-3 pb-3 pt-2">
+                    {/* AI work summary — real clients only (not "No client"/internal). */}
+                    {client.client_id != null && !internal && (() => {
+                      const cid = client.client_id;
+                      const s = summaryState[cKey];
+                      const idle = !s || (!s.loading && !s.text && !s.error);
+                      return (
+                        <div className="mb-2">
+                          {idle ? (
+                            <button onClick={() => genSummary(cid, cKey, 7)}
+                              title="Draft a client-ready summary of this week's work (AI — review before sending)"
+                              className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/15">
+                              <Sparkles className="h-3 w-3" /> Generate work summary
+                            </button>
+                          ) : (
+                            <div className="rounded-lg border border-primary/25 bg-primary/[0.04] p-3">
+                              <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-primary/80">
+                                <Sparkles className="h-3 w-3" /> Work summary{s.period ? ` · ${s.period}` : ""}
+                                <span className="ml-auto rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium normal-case tracking-normal text-primary/70">
+                                  AI draft — review before sending
+                                </span>
+                              </div>
+                              {s.loading ? (
+                                <div className="text-[12px] text-muted-foreground">Writing a summary…</div>
+                              ) : s.error ? (
+                                <div className="text-[12px] text-muted-foreground">
+                                  Couldn’t generate right now.{" "}
+                                  <button onClick={() => genSummary(cid, cKey, 7)} className="font-medium text-primary hover:underline">Try again</button>
+                                </div>
+                              ) : s.empty ? (
+                                <div className="text-[12px] text-muted-foreground">{s.text}</div>
+                              ) : (
+                                <>
+                                  <div className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">{s.text}</div>
+                                  <div className="mt-2 flex flex-wrap items-center gap-3">
+                                    <button onClick={() => copyText(s.text || "")} className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline">
+                                      <Copy className="h-3 w-3" /> Copy
+                                    </button>
+                                    <button onClick={() => genSummary(cid, cKey, 7)} className="text-[11px] font-medium text-muted-foreground hover:text-foreground">Regenerate</button>
+                                    <button onClick={() => genSummary(cid, cKey, 1)} className="text-[11px] font-medium text-muted-foreground hover:text-foreground">Just this day</button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {pending.length > 0 && (
                       <PendingStrip items={pending} busy={busy} allowNoClient={client.client_id == null}
                         onAccept={(b, cid) => acceptTo(b, cid)}

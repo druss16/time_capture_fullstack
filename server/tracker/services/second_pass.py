@@ -78,15 +78,21 @@ def _build_client_forms(org_id):
 
 
 def _build_title_index(org_id, since):
+    """Map (user_id, window_title) -> {client_ids that user committed it to}.
+
+    Keyed by USER, not just title: another user's committed title carries no
+    attribution weight for this user, and org-wide keying let a shared title
+    (esp. generic QB dialogs) cross-contaminate clients across users.
+    """
     committed = Block.objects.filter(
         org_id=org_id, deleted_at__isnull=True, start__date__gte=since,
         classification_state='committed', client_id__isnull=False
-    ).values('window_title', 'client_id')
+    ).values('user_id', 'window_title', 'client_id')
     idx = defaultdict(set)
     for c in committed:
         t = (c['window_title'] or '').strip().lower()
         if t:
-            idx[t].add(c['client_id'])
+            idx[(c['user_id'], t)].add(c['client_id'])
     return idx
 
 
@@ -107,11 +113,14 @@ def classify_block(block, client_forms, title_index):
         if any(len(f) >= 8 and f in t for f in fset) and (distinct & tset):
             return ('propose_high', cid, 0.85, f'second-pass: name in title ({cname})')
 
-    # High-confidence: exact same title as a committed block (non-generic only)
+    # High-confidence: same title as a block THIS USER previously committed
+    # (non-generic only). Same-user scoped — another user's committed title is
+    # not evidence for this block, and org-wide matching cross-contaminated
+    # clients on shared/generic titles.
     if not any(g in tl for g in GENERIC_TITLE):
-        cids = title_index.get(raw.strip().lower())
+        cids = title_index.get((block.user_id, raw.strip().lower()))
         if cids and len(cids) == 1:
-            return ('propose_high', list(cids)[0], 0.80, 'second-pass: matches committed same-title')
+            return ('propose_high', list(cids)[0], 0.80, 'second-pass: matches your committed same-title')
 
     # Affirmatively personal -> commit non-billable
     if any(p in tl for p in PERSONAL_LOW) and not any(w in tl for w in WORKHINT):

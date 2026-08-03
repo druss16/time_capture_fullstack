@@ -867,6 +867,22 @@ def _slice_suggestions(block, org, breakdown=None):
     return out
 
 
+def _looks_like_timesheet(block):
+    """True if the block's own title / dominant activity reads as the employee's
+    personal timesheet or payroll admin — internal work that touches many clients,
+    not one. Used to avoid the misleading temporal-neighbor guess ('right after
+    this you worked on X') on a timesheet, which just names whoever came next."""
+    if _TIMESHEET_RE.search(block.window_title or ""):
+        return True
+    try:
+        bd = _block_breakdown(block)
+        if bd and _TIMESHEET_RE.search(bd[0]["label"]):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def block_slices(block):
     """Same slice grouping as `_block_breakdown`, but returns the RawEvent ids in
     each slice — so a split can regroup the block's sub-events by the very labels
@@ -947,6 +963,12 @@ def block_why(request, block_id: int):
     if personal and not has_co_client:
         explanation = "Looks like personal browsing (news / social / streaming) — not client work."
         tier = "personal"
+        suggested_id = suggested_name = None
+    # A personal timesheet touches many clients — the temporal-neighbor guess would
+    # misleadingly name whoever came next. Label it honestly and suggest no client.
+    elif not has_co_client and _looks_like_timesheet(block):
+        explanation = "Looks like your own timesheet — internal, not tied to one client."
+        tier = "timesheet"
         suggested_id = suggested_name = None
 
     # Per-slice client guesses, so a Split can be pre-filled (not hand-assigned).

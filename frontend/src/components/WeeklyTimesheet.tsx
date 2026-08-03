@@ -1,6 +1,7 @@
 // src/components/WeeklyTimesheet.tsx
-// Read-only weekly timesheet. Default "Summary" view ranks clients by time with a
-// billable/non-billable split bar; "By day" view keeps the full Mon–Sun matrix.
+// Read-only weekly timesheet, styled to match the refreshed Daily Review "Lightning"
+// look (faint teal ground, quiet dotted rows, billable/non-billable badges).
+// "Summary" drills client → category; "By day" drills day → client → category.
 // Time is auto-captured by the desktop agent, so cells are not editable here —
 // adjustments happen in Daily Review.
 
@@ -49,6 +50,7 @@ interface DayHeader {
 // A client aggregated across all its task rows for the Summary view.
 interface ClientAgg {
   key: string;
+  clientId: number | null;
   clientName: string;
   total: number;
   billable: number;
@@ -59,6 +61,11 @@ interface ClientAgg {
   allNonBillable: boolean;
   entries: TimesheetEntry[];
 }
+
+// The unassigned bucket ("No client") always sorts to the bottom of the list.
+const isNoClient = (agg: Pick<ClientAgg, 'clientId'>) => agg.clientId == null;
+const displayClientName = (agg: Pick<ClientAgg, 'clientId' | 'clientName'>) =>
+  isNoClient(agg) ? 'No client' : agg.clientName;
 
 // Clients whose whole week is under this many hours get rolled into one row.
 const TAIL_THRESHOLD_HOURS = 0.25; // 15 minutes
@@ -175,26 +182,6 @@ const Banner: React.FC<{
   );
 };
 
-// ── Billable-split bar (shared: headline + per-row) ─────────────────────────────
-
-const SplitBar: React.FC<{
-  billable: number;
-  nonBillable: number;
-  /** Fraction (0–100) of the track this bar should fill. Defaults to full width. */
-  fill?: number;
-  className?: string;
-}> = ({ billable, nonBillable, fill = 100, className }) => {
-  const total = billable + nonBillable;
-  return (
-    <div className={cn('rounded-full bg-slate-100 overflow-hidden', className)}>
-      <div className="h-full flex" style={{ width: `${fill}%` }}>
-        <div className="h-full bg-primary" style={{ width: `${pct(billable, total)}%` }} />
-        <div className="h-full bg-slate-300" style={{ width: `${pct(nonBillable, total)}%` }} />
-      </div>
-    </div>
-  );
-};
-
 const ClientDot: React.FC<{ agg: Pick<ClientAgg, 'allBillable' | 'allNonBillable'> }> = ({ agg }) => {
   if (agg.allNonBillable) return <span className="w-2.5 h-2.5 rounded-full bg-slate-300 shrink-0" />;
   if (agg.allBillable)    return <span className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />;
@@ -206,6 +193,20 @@ const ClientDot: React.FC<{ agg: Pick<ClientAgg, 'allBillable' | 'allNonBillable
     </span>
   );
 };
+
+// ── Design language (shared by Summary + By-day drills) ─────────────────────────
+// Faint teal ground + quiet dotted rows + calm billable/non-billable badges,
+// matching the refreshed Daily Review "Lightning" look.
+const GROUND      = '#eef4f3';                         // faint teal canvas
+const DOT_BILL    = 'w-2 h-2 rounded-full bg-primary shrink-0';
+const DOT_NON     = 'w-2 h-2 rounded-full bg-slate-300 shrink-0';
+const BADGE_BILL  = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-primary/10 text-primary';
+const BADGE_NON   = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-slate-100 text-slate-500';
+const HOURS_CELL  = 'text-right text-[13px] font-bold text-slate-800 tabular-nums shrink-0 w-[64px]';
+
+const Badge: React.FC<{ billable: boolean }> = ({ billable }) => (
+  <span className={billable ? BADGE_BILL : BADGE_NON}>{billable ? 'Billable' : 'Non-billable'}</span>
+);
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
@@ -279,7 +280,7 @@ const WeeklyTimesheet: React.FC = () => {
       let agg = map.get(key);
       if (!agg) {
         agg = {
-          key, clientName: e.client_name, total: 0, billable: 0, nonBillable: 0,
+          key, clientId: e.client_id, clientName: e.client_name, total: 0, billable: 0, nonBillable: 0,
           taskCount: 0, primaryTask: e.task_type_name, allBillable: true, allNonBillable: true,
           entries: [],
         };
@@ -298,14 +299,19 @@ const WeeklyTimesheet: React.FC = () => {
       agg.entries.sort((a, b) => b.total - a.total);
       agg.primaryTask = agg.entries[0]?.task_type_name ?? agg.primaryTask;
     }
-    return list.sort((a, b) => b.total - a.total);
+    // Rank by time, but the "No client" bucket always sinks to the bottom.
+    return list.sort((a, b) => {
+      const au = isNoClient(a) ? 1 : 0;
+      const bu = isNoClient(b) ? 1 : 0;
+      if (au !== bu) return au - bu;
+      return b.total - a.total;
+    });
   }, [searchedEntries]);
 
-  const { mainClients, tailClients, maxTotal } = useMemo(() => {
+  const { mainClients, tailClients } = useMemo(() => {
     const main = clients.filter(c => c.total >= TAIL_THRESHOLD_HOURS);
     const tail = clients.filter(c => c.total < TAIL_THRESHOLD_HOURS);
-    const max = clients.reduce((m, c) => Math.max(m, c.total), 0);
-    return { mainClients: main, tailClients: tail, maxTotal: max };
+    return { mainClients: main, tailClients: tail };
   }, [clients]);
 
   const tailTotals = useMemo(() => {
@@ -424,7 +430,7 @@ const WeeklyTimesheet: React.FC = () => {
   })();
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px-48px-32px)] min-h-0 space-y-2.5">
+    <div className="flex flex-col h-[calc(100vh-56px-48px-32px)] min-h-0 space-y-2.5 bg-[#eef4f3] p-2.5 rounded-2xl">
 
       {/* ── Toolbar: title / status / week nav ─────────────────────────── */}
       <div className="bg-white rounded-xl border border-border/60 px-5 h-14 flex items-center justify-between gap-4 shrink-0">
@@ -456,26 +462,34 @@ const WeeklyTimesheet: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Headline: total + billable split ───────────────────────────── */}
-      <div className="bg-white rounded-xl border border-border/60 px-5 py-3.5 flex items-center gap-5 shrink-0">
-        <div className="flex flex-col shrink-0">
-          <span className="text-2xl font-extrabold tracking-tight text-slate-800 leading-none tabular-nums">
-            {formatHours(grandTotal)}
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">This week</span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <SplitBar billable={billable} nonBillable={nonBillable} className="h-4" />
-          <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2">
-            <span className="flex items-center gap-2 text-xs text-slate-500">
-              <span className="w-2.5 h-2.5 rounded-sm bg-primary inline-block" />
-              <b className="text-slate-700 font-bold tabular-nums">{formatHours(billable)}</b> billable · {billablePctLabel}%
+      {/* ── Hero: week total + billable split (Lightning look) ─────────── */}
+      <div className="bg-white rounded-xl border border-border/60 px-5 py-4 shrink-0">
+        <div className="flex items-baseline justify-between gap-4">
+          <div className="flex items-baseline gap-2.5 min-w-0">
+            <span className="text-[26px] font-extrabold tracking-tight text-slate-900 leading-none tabular-nums">
+              {formatHours(grandTotal)}
             </span>
-            <span className="flex items-center gap-2 text-xs text-slate-500">
-              <span className="w-2.5 h-2.5 rounded-sm bg-slate-300 inline-block" />
-              <b className="text-slate-700 font-bold tabular-nums">{formatHours(nonBillable)}</b> non-billable · {100 - billablePctLabel}%
+            <span className="text-[13px] font-semibold text-slate-500 truncate">
+              tracked this week · <b className="text-primary tabular-nums">{billablePctLabel}%</b> billable
             </span>
           </div>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 shrink-0">
+            {totalClients} client{totalClients !== 1 ? 's' : ''}
+          </span>
+        </div>
+        <div className="mt-2.5 h-2.5 rounded-full bg-slate-100 overflow-hidden flex">
+          <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${pct(billable, grandTotal)}%` }} />
+          <div className="h-full bg-slate-300" style={{ width: `${pct(nonBillable, grandTotal)}%` }} />
+        </div>
+        <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2">
+          <span className="flex items-center gap-2 text-xs text-slate-500">
+            <span className="w-2.5 h-2.5 rounded-sm bg-gradient-to-r from-primary to-accent inline-block" />
+            <b className="text-slate-700 font-bold tabular-nums">{formatHours(billable)}</b> billable
+          </span>
+          <span className="flex items-center gap-2 text-xs text-slate-500">
+            <span className="w-2.5 h-2.5 rounded-sm bg-slate-300 inline-block" />
+            <b className="text-slate-700 font-bold tabular-nums">{formatHours(nonBillable)}</b> non-billable
+          </span>
         </div>
       </div>
 
@@ -564,7 +578,6 @@ const WeeklyTimesheet: React.FC = () => {
               mainClients={mainClients}
               tailClients={tailClients}
               tailTotals={tailTotals}
-              maxTotal={maxTotal}
               expanded={expanded}
               tailOpen={tailOpen}
               onToggle={toggleExpand}
@@ -660,62 +673,47 @@ const WeeklyTimesheet: React.FC = () => {
 
 // ── Summary View ──────────────────────────────────────────────────────────────
 
+// A single billable/non-billable category row inside a client (or a day→client).
+// `hours` lets callers pass a day-scoped subtotal; defaults to the week total.
+const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number }> = ({ entry, hours }) => (
+  <div className="flex items-center gap-3 pl-[52px] pr-5 py-2 min-w-0">
+    <span className={entry.is_billable ? DOT_BILL : DOT_NON} />
+    <span className="flex-1 text-[13px] text-slate-600 truncate">{entry.task_type_name}</span>
+    <Badge billable={entry.is_billable} />
+    <span className={HOURS_CELL}>{formatHours(hours ?? entry.total)}</span>
+  </div>
+);
+
 const ClientRow: React.FC<{
   agg: ClientAgg;
-  maxTotal: number;
   isExpanded: boolean;
   onToggle: (key: string) => void;
-}> = ({ agg, maxTotal, isExpanded, onToggle }) => {
-  const multi = agg.taskCount > 1;
-  const sub = multi
-    ? `${agg.primaryTask} · +${agg.taskCount - 1} task${agg.taskCount - 1 !== 1 ? 's' : ''}`
-    : agg.primaryTask;
-
-  const rowClass = 'w-full grid grid-cols-[1fr_minmax(120px,200px)_84px_24px] items-center gap-4 px-5 py-3 text-left';
-  const inner = (
-    <>
-      <div className="flex items-center gap-3 min-w-0">
-        <ClientDot agg={agg} />
-        <div className="min-w-0">
-          <p className="text-sm font-bold text-slate-800 truncate leading-tight">{agg.clientName}</p>
-          <p className="text-[11px] text-slate-400 truncate mt-0.5">{sub}</p>
-        </div>
-      </div>
-      <div className="hidden sm:block">
-        <SplitBar billable={agg.billable} nonBillable={agg.nonBillable} fill={pct(agg.total, maxTotal)} className="h-2.5" />
-      </div>
-      <span className="text-right text-[15px] font-extrabold text-slate-800 tabular-nums">{formatHours(agg.total)}</span>
-      <span className="flex justify-center text-slate-300">
-        {multi && <ChevronRight className={cn('w-4 h-4 transition-transform', isExpanded && 'rotate-90')} />}
-      </span>
-    </>
-  );
-
+}> = ({ agg, isExpanded, onToggle }) => {
+  const noClient = isNoClient(agg);
   return (
     <>
-      {multi ? (
-        <button onClick={() => onToggle(agg.key)} className={cn(rowClass, 'hover:bg-slate-50/70 transition-colors')}>
-          {inner}
-        </button>
-      ) : (
-        <div className={rowClass}>{inner}</div>
-      )}
+      <button
+        onClick={() => onToggle(agg.key)}
+        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-black/[0.02] transition-colors"
+      >
+        <ChevronRight className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', isExpanded && 'rotate-90')} />
+        <ClientDot agg={agg} />
+        <span className={cn('flex-1 text-sm font-bold truncate leading-tight',
+          noClient ? 'italic text-slate-400 font-semibold' : 'text-slate-800')}>
+          {displayClientName(agg)}
+        </span>
+        <span className="text-[11px] text-slate-400 tabular-nums shrink-0 hidden sm:inline">
+          {agg.taskCount} categor{agg.taskCount !== 1 ? 'ies' : 'y'}
+        </span>
+        <span className="text-right text-[15px] font-extrabold text-slate-800 tabular-nums shrink-0 w-[64px]">
+          {formatHours(agg.total)}
+        </span>
+      </button>
 
-      {isExpanded && multi && (
-        <div className="bg-slate-50/50 border-t border-border/20">
+      {isExpanded && (
+        <div className="border-t border-border/20" style={{ background: GROUND }}>
           {agg.entries.map(e => (
-            <div
-              key={`${e.client_id}-${e.task_type_id}`}
-              className="grid grid-cols-[1fr_84px_24px] items-center gap-4 pl-14 pr-5 py-2"
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', e.is_billable ? 'bg-primary' : 'bg-slate-300')} />
-                <span className="text-[13px] text-slate-600 truncate">{e.task_type_name}</span>
-                {!e.is_billable && <span className="text-[10px] text-slate-400 shrink-0">non-billable</span>}
-              </div>
-              <span className="text-right text-[13px] font-semibold text-slate-600 tabular-nums">{formatHours(e.total)}</span>
-              <span />
-            </div>
+            <CategoryRow key={`${e.client_id}-${e.task_type_id}`} entry={e} />
           ))}
         </div>
       )}
@@ -865,175 +863,171 @@ const SummaryView: React.FC<{
   mainClients: ClientAgg[];
   tailClients: ClientAgg[];
   tailTotals: { billable: number; nonBillable: number; total: number };
-  maxTotal: number;
   expanded: Set<string>;
   tailOpen: boolean;
   onToggle: (key: string) => void;
   onToggleTail: () => void;
-}> = ({ mainClients, tailClients, tailTotals, maxTotal, expanded, tailOpen, onToggle, onToggleTail }) => (
+}> = ({ mainClients, tailClients, tailTotals, expanded, tailOpen, onToggle, onToggleTail }) => (
   <div className="divide-y divide-border/30">
     {mainClients.map(agg => (
-      <ClientRow key={agg.key} agg={agg} maxTotal={maxTotal} isExpanded={expanded.has(agg.key)} onToggle={onToggle} />
+      <ClientRow key={agg.key} agg={agg} isExpanded={expanded.has(agg.key)} onToggle={onToggle} />
     ))}
 
     {tailClients.length > 0 && (
       <>
         <button
           onClick={onToggleTail}
-          className="w-full grid grid-cols-[1fr_minmax(120px,200px)_84px_24px] items-center gap-4 px-5 py-2.5 text-left bg-slate-50/50 hover:bg-slate-100/60 transition-colors"
+          className="w-full flex items-center gap-3 px-5 py-2.5 text-left hover:bg-black/[0.02] transition-colors"
         >
-          <div className="flex items-center gap-3 min-w-0">
-            <span className="w-2.5 h-2.5 rounded-full bg-slate-200 shrink-0" />
-            <p className="text-[13px] font-semibold text-slate-500 truncate">
-              {tailClients.length} more client{tailClients.length !== 1 ? 's' : ''} under 15 min
-            </p>
-          </div>
-          <div className="hidden sm:block">
-            <SplitBar billable={tailTotals.billable} nonBillable={tailTotals.nonBillable} fill={pct(tailTotals.total, maxTotal)} className="h-2.5" />
-          </div>
-          <span className="text-right text-[13px] font-bold text-slate-500 tabular-nums">{formatHours(tailTotals.total)}</span>
-          <span className="flex justify-center text-slate-400">
-            <ChevronDown className={cn('w-4 h-4 transition-transform', tailOpen && 'rotate-180')} />
+          <ChevronDown className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', tailOpen && 'rotate-180')} />
+          <span className="w-2 h-2 rounded-full bg-slate-200 shrink-0" />
+          <span className="flex-1 text-[13px] font-semibold text-slate-500 truncate">
+            {tailClients.length} more client{tailClients.length !== 1 ? 's' : ''} under 15 min
           </span>
+          <span className="text-right text-[13px] font-bold text-slate-500 tabular-nums shrink-0 w-[64px]">{formatHours(tailTotals.total)}</span>
         </button>
 
         {tailOpen && tailClients.map(agg => (
-          <ClientRow key={agg.key} agg={agg} maxTotal={maxTotal} isExpanded={expanded.has(agg.key)} onToggle={onToggle} />
+          <ClientRow key={agg.key} agg={agg} isExpanded={expanded.has(agg.key)} onToggle={onToggle} />
         ))}
       </>
     )}
   </div>
 );
 
-// ── By-day View (read-only matrix) ──────────────────────────────────────────────
+// ── By-day View (day → client → category drill, mirrors Summary) ────────────────
+
+type DayClient = { agg: ClientAgg; dayTotal: number; entries: TimesheetEntry[] };
+type DayGroup  = { day: DayHeader; total: number; clients: DayClient[] };
+
+const ByDayClientRow: React.FC<{
+  dc: DayClient;
+  date: string;
+  isOpen: boolean;
+  onToggle: (id: string) => void;
+}> = ({ dc, date, isOpen, onToggle }) => {
+  const { agg } = dc;
+  const noClient = isNoClient(agg);
+  const id = `${date}::${agg.key}`;
+  return (
+    <>
+      <button
+        onClick={() => onToggle(id)}
+        className="w-full flex items-center gap-3 pl-9 pr-5 py-2.5 text-left hover:bg-black/[0.02] transition-colors"
+      >
+        <ChevronRight className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', isOpen && 'rotate-90')} />
+        <ClientDot agg={agg} />
+        <span className={cn('flex-1 text-[13px] font-bold truncate leading-tight',
+          noClient ? 'italic text-slate-400 font-semibold' : 'text-slate-800')}>
+          {displayClientName(agg)}
+        </span>
+        <span className={HOURS_CELL}>{formatHours(dc.dayTotal)}</span>
+      </button>
+      {isOpen && (
+        <div style={{ background: GROUND }}>
+          {dc.entries.map(e => (
+            <CategoryRow key={`${e.client_id}-${e.task_type_id}`} entry={e} hours={e.days[date] || 0} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+};
 
 const ByDayView: React.FC<{
   clients: ClientAgg[];
   days: DayHeader[];
   dailyTotals: Record<string, number>;
   grandTotal: number;
-}> = ({ clients, days, dailyTotals, grandTotal }) => (
-  <table className="w-full border-collapse text-sm" style={{ minWidth: 720 }}>
-    <thead className="sticky top-0 z-20">
-      <tr className="border-b border-border/60 bg-white">
-        <th className="sticky left-0 z-20 text-left px-5 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50 min-w-[220px] shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
-          Client / Task
-        </th>
-        {days.map(day => (
-          <th
-            key={day.date}
-            className={cn(
-              'text-center px-2 py-3 font-semibold min-w-[68px]',
-              day.isWeekend ? 'bg-slate-50/80 text-slate-400' : 'bg-slate-50 text-slate-600',
-            )}
-          >
-            <div className="text-[10px] uppercase tracking-wider font-semibold">{day.label}</div>
-            <div className={cn(
-              'text-sm font-bold mt-0.5 w-6 h-6 flex items-center justify-center rounded-full mx-auto',
-              day.isToday ? 'bg-primary text-white' : ''
-            )}>
-              {day.dayNum}
-            </div>
-          </th>
-        ))}
-        <th className="text-center px-4 py-3 bg-slate-50 font-semibold text-slate-600 text-xs uppercase tracking-wider min-w-[72px]">
-          Total
-        </th>
-      </tr>
-    </thead>
+}> = ({ clients, days, dailyTotals, grandTotal }) => {
+  // One group per day that had time; clients ranked by that day's minutes, No client last.
+  const groups = useMemo<DayGroup[]>(() =>
+    days.map(day => {
+      const dayClients: DayClient[] = clients
+        .map(agg => {
+          const entries = agg.entries.filter(e => (e.days[day.date] || 0) > 0);
+          const dayTotal = entries.reduce((s, e) => s + (e.days[day.date] || 0), 0);
+          return { agg, dayTotal, entries };
+        })
+        .filter(c => c.dayTotal > 0)
+        .sort((a, b) => {
+          const au = isNoClient(a.agg) ? 1 : 0;
+          const bu = isNoClient(b.agg) ? 1 : 0;
+          if (au !== bu) return au - bu;
+          return b.dayTotal - a.dayTotal;
+        });
+      return { day, clients: dayClients, total: dailyTotals[day.date] || dayClients.reduce((s, c) => s + c.dayTotal, 0) };
+    }).filter(g => g.clients.length > 0),
+  [clients, days, dailyTotals]);
 
-    <tbody className="divide-y divide-border/30">
-      {clients.map(agg => {
-        const multi = agg.taskCount > 1;
+  // Days open by default (a day is open unless collapsed); clients closed by default.
+  const [closedDays, setClosedDays]   = useState<Set<string>>(new Set());
+  const [openClients, setOpenClients] = useState<Set<string>>(new Set());
+  const toggleDay    = (d: string) => setClosedDays(p => { const n = new Set(p); n.has(d) ? n.delete(d) : n.add(d); return n; });
+  const toggleClient = (id: string) => setOpenClients(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  if (!groups.length) {
+    return (
+      <div className="text-center py-20 text-slate-400">
+        <CalendarDays className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+        <p className="font-medium text-slate-500">No time tracked on any day this week</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="divide-y divide-border/40">
+      {groups.map(({ day, total, clients: dayClients }) => {
+        const dayOpen = !closedDays.has(day.date);
         return (
-          <React.Fragment key={agg.key}>
-            {multi && (
-              <tr className="bg-slate-50/70">
-                <td className="sticky left-0 z-10 px-5 py-2 bg-slate-50/90 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
-                  <div className="flex items-center gap-2">
-                    <ClientDot agg={agg} />
-                    <span className="font-semibold text-slate-700 text-xs">{agg.clientName}</span>
-                    <span className="text-[10px] text-slate-400">{agg.taskCount} tasks</span>
-                  </div>
-                </td>
-                {days.map(day => {
-                  const dayTotal = agg.entries.reduce((s, e) => s + (e.days[day.date] || 0), 0);
-                  return (
-                    <td key={day.date} className={cn(
-                      'text-right px-3 py-2 text-xs tabular-nums',
-                      day.isWeekend ? 'bg-slate-50/60' : '',
-                      dayTotal > 0 ? 'font-semibold text-slate-600' : 'text-slate-200'
-                    )}>
-                      {formatHours(dayTotal)}
-                    </td>
-                  );
-                })}
-                <td className={cn('text-right px-3 py-2 text-xs tabular-nums font-bold', agg.total > 0 ? 'text-slate-700' : 'text-slate-200')}>
-                  {formatHours(agg.total)}
-                </td>
-              </tr>
+          <div key={day.date}>
+            <button
+              onClick={() => toggleDay(day.date)}
+              className={cn('w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors',
+                day.isWeekend ? 'bg-slate-50/40' : '', 'hover:bg-black/[0.02]')}
+            >
+              <ChevronDown className={cn('w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform', !dayOpen && '-rotate-90')} />
+              <span className={cn('text-[10px] font-bold uppercase tracking-widest shrink-0 w-9',
+                day.isToday ? 'text-primary' : 'text-slate-400')}>
+                {day.label}
+              </span>
+              <span className={cn('text-sm font-bold shrink-0 tabular-nums',
+                day.isToday ? 'text-primary' : 'text-slate-700')}>
+                {day.dayNum}
+              </span>
+              {day.isToday && <span className="text-[10px] font-bold text-primary">Today</span>}
+              <span className="flex-1" />
+              <span className="text-[11px] text-slate-400 tabular-nums shrink-0 hidden sm:inline">
+                {dayClients.length} client{dayClients.length !== 1 ? 's' : ''}
+              </span>
+              <span className="text-right text-[15px] font-extrabold text-slate-800 tabular-nums shrink-0 w-[64px]">
+                {formatHours(total)}
+              </span>
+            </button>
+            {dayOpen && (
+              <div className="divide-y divide-border/20 border-t border-border/20">
+                {dayClients.map(dc => (
+                  <ByDayClientRow
+                    key={dc.agg.key}
+                    dc={dc}
+                    date={day.date}
+                    isOpen={openClients.has(`${day.date}::${dc.agg.key}`)}
+                    onToggle={toggleClient}
+                  />
+                ))}
+              </div>
             )}
-
-            {agg.entries.map(entry => (
-              <tr key={`${entry.client_id}-${entry.task_type_id}`} className="hover:bg-slate-50/50 transition-colors">
-                <td className={cn(
-                  'sticky left-0 z-10 px-5 py-2.5 bg-white shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]',
-                  multi && 'pl-10'
-                )}>
-                  <div className="flex items-center gap-3">
-                    <div className={cn('w-1 h-6 rounded-full shrink-0', entry.is_billable ? 'bg-primary' : 'bg-slate-200')} />
-                    <div>
-                      <p className={cn('leading-tight', multi ? 'text-slate-600 font-medium text-sm' : 'font-semibold text-slate-800')}>
-                        {multi ? entry.task_type_name : entry.client_name}
-                      </p>
-                      {!multi && <p className="text-xs text-slate-400 mt-0.5">{entry.task_type_name}</p>}
-                    </div>
-                  </div>
-                </td>
-                {days.map(day => {
-                  const v = entry.days[day.date] || 0;
-                  return (
-                    <td key={day.date} className={cn('border-l border-border/20', day.isWeekend ? 'bg-slate-50/40' : '')}>
-                      <div className={cn(
-                        'px-3 py-2.5 text-right text-sm tabular-nums',
-                        v > 0 ? 'text-slate-700 font-medium' : 'text-slate-300'
-                      )}>
-                        {formatHours(v)}
-                      </div>
-                    </td>
-                  );
-                })}
-                <td className="border-l border-border/40 bg-slate-50/40">
-                  <div className={cn('px-3 py-2.5 text-right text-sm font-bold tabular-nums', entry.total > 0 ? 'text-slate-800' : 'text-slate-300')}>
-                    {formatHours(entry.total)}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </React.Fragment>
+          </div>
         );
       })}
-    </tbody>
 
-    <tfoot className="sticky bottom-0 z-10">
-      <tr className="border-t-2 border-border/60 bg-slate-50">
-        <td className="sticky left-0 z-20 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-500 bg-slate-50 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
-          Daily Totals
-        </td>
-        {days.map(day => (
-          <td key={day.date} className={cn(
-            'text-center px-3 py-2.5 font-bold text-slate-700 tabular-nums border-l border-border/30 text-sm',
-            day.isWeekend ? 'bg-slate-100/80' : ''
-          )}>
-            {formatHours(dailyTotals[day.date] || 0)}
-          </td>
-        ))}
-        <td className="text-center px-4 py-2.5 font-bold text-primary tabular-nums border-l border-border/50 text-sm">
-          {formatHours(grandTotal)}
-        </td>
-      </tr>
-    </tfoot>
-  </table>
-);
+      <div className="flex items-center gap-3 px-5 py-3 bg-white border-t-2 border-border/50">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Week total</span>
+        <span className="flex-1" />
+        <span className="text-right text-[15px] font-extrabold text-primary tabular-nums w-[64px]">{formatHours(grandTotal)}</span>
+      </div>
+    </div>
+  );
+};
 
 export default WeeklyTimesheet;

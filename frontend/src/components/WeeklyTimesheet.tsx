@@ -47,6 +47,60 @@ interface DayHeader {
   isToday: boolean;
 }
 
+// One captured block from the timesheet-detail timeline (block-level drill).
+interface DetailBlock {
+  id: number;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_minutes: number;
+  client_name: string | null;
+  task_type_name: string | null;
+  is_billable: boolean;
+  window_title: string | null;
+  application: string | null;
+  taxpayer_name: string | null;
+}
+
+interface TimesheetDetail {
+  timesheet_id: number;
+  days: { date: string; blocks: DetailBlock[]; total_minutes: number }[];
+}
+
+// Index blocks by client + category (and by day) so a category row can list its
+// captured blocks. Detail blocks carry names (no ids), so we join on the same
+// fallbacks the weekly grid uses: null client → "Unassigned", null task → "General".
+const blockClientKey = (name: string | null) => name || 'Unassigned';
+const blockCatKey    = (name: string | null) => name || 'General';
+const wKey = (clientName: string, taskName: string) => `${clientName}||${taskName}`;
+const dKey = (date: string, clientName: string, taskName: string) => `${date}||${clientName}||${taskName}`;
+
+// A friendly one-line label for a captured block.
+const blockLabel = (b: DetailBlock): string =>
+  (b.window_title || b.application || b.taxpayer_name || b.task_type_name || 'Captured activity').trim();
+
+const formatClock = (iso: string | null): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+};
+
+// Week-view block rows span days, so lead with a weekday; day view uses the clock.
+const formatBlockWhen = (iso: string | null, withDay: boolean): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const t = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/\s/g, '').toLowerCase();
+  return withDay ? `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${t}` : formatClock(iso);
+};
+
+const formatMinutes = (m: number): string => {
+  if (!m) return '—';
+  const h = Math.floor(m / 60);
+  const min = m % 60;
+  if (h === 0) return `${min}m`;
+  if (min === 0) return `${h}h`;
+  return `${h}h ${min}m`;
+};
+
 // A client aggregated across all its task rows for the Summary view.
 interface ClientAgg {
   key: string;
@@ -222,6 +276,7 @@ const WeeklyTimesheet: React.FC = () => {
     return getMonday(new Date()).toISOString().split('T')[0];
   });
   const [timesheetData, setTimesheetData]   = useState<TimesheetData | null>(null);
+  const [detail, setDetail]                 = useState<TimesheetDetail | null>(null);
   const [submitting, setSubmitting]         = useState(false);
   const [submitNotes, setSubmitNotes]       = useState('');
   const [showSubmitModal, setShowSubmitModal] = useState(false);
@@ -240,12 +295,40 @@ const WeeklyTimesheet: React.FC = () => {
         `${API_BASE}/billing/weekly/?week_start=${weekStart}`
       );
       setTimesheetData(data);
+      // Block-level detail powers the category → block drill. Best-effort:
+      // if it fails, the page still works (categories just don't expand).
+      setDetail(null);
+      if (data?.timesheet_id) {
+        safeFetchJson<TimesheetDetail>(
+          `${API_BASE}/billing/timesheets/${data.timesheet_id}/detail/`
+        ).then(setDetail).catch(() => setDetail(null));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load timesheet');
     } finally {
       setLoading(false);
     }
   }, [weekStart]);
+
+  // Index detail blocks by client+category (week) and day+client+category.
+  const { weekBlocks, dayBlocks } = useMemo(() => {
+    const week = new Map<string, DetailBlock[]>();
+    const day  = new Map<string, DetailBlock[]>();
+    const push = (m: Map<string, DetailBlock[]>, k: string, b: DetailBlock) => {
+      const arr = m.get(k);
+      if (arr) arr.push(b); else m.set(k, [b]);
+    };
+    for (const d of detail?.days ?? []) {
+      for (const b of d.blocks) {
+        if (!b.duration_minutes) continue;
+        const ck = blockClientKey(b.client_name);
+        const tk = blockCatKey(b.task_type_name);
+        push(week, wKey(ck, tk), b);
+        push(day, dKey(d.date, ck, tk), b);
+      }
+    }
+    return { weekBlocks: week, dayBlocks: day };
+  }, [detail]);
 
   useEffect(() => { fetchTimesheet(); }, [fetchTimesheet]);
   useEffect(() => { setSearch(''); setExpanded(new Set()); setTailOpen(false); }, [weekStart]);
@@ -582,9 +665,10 @@ const WeeklyTimesheet: React.FC = () => {
               tailOpen={tailOpen}
               onToggle={toggleExpand}
               onToggleTail={() => setTailOpen(o => !o)}
+              weekBlocks={weekBlocks}
             />
           ) : view === 'byday' ? (
-            <ByDayView clients={clients} days={days} dailyTotals={timesheetData?.daily_totals ?? {}} grandTotal={grandTotal} />
+            <ByDayView clients={clients} days={days} dailyTotals={timesheetData?.daily_totals ?? {}} grandTotal={grandTotal} dayBlocks={dayBlocks} />
           ) : (
             <WorkSummaryView clients={clients} weekEnd={timesheetData?.week_end ?? weekStart} weekLabel={formatWeekRange(weekStart)} />
           )}
@@ -673,22 +757,52 @@ const WeeklyTimesheet: React.FC = () => {
 
 // ── Summary View ──────────────────────────────────────────────────────────────
 
-// A single billable/non-billable category row inside a client (or a day→client).
-// `hours` lets callers pass a day-scoped subtotal; defaults to the week total.
-const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number }> = ({ entry, hours }) => (
-  <div className="flex items-center gap-3 pl-[52px] pr-5 py-2 min-w-0">
-    <span className={entry.is_billable ? DOT_BILL : DOT_NON} />
-    <span className="flex-1 text-[13px] text-slate-600 truncate">{entry.task_type_name}</span>
-    <Badge billable={entry.is_billable} />
-    <span className={HOURS_CELL}>{formatHours(hours ?? entry.total)}</span>
+// One captured block, listed under its category (read-only drill).
+const BlockRow: React.FC<{ block: DetailBlock; withDay: boolean }> = ({ block, withDay }) => (
+  <div className="flex items-center gap-2.5 pl-[76px] pr-5 py-1.5 min-w-0">
+    <span className="text-[11px] text-slate-400 tabular-nums shrink-0 w-[72px] whitespace-nowrap">{formatBlockWhen(block.started_at, withDay)}</span>
+    <span className="flex-1 text-[12px] text-slate-500 truncate">{blockLabel(block)}</span>
+    <span className="text-[12px] text-slate-400 tabular-nums shrink-0 w-[52px] text-right">{formatMinutes(block.duration_minutes)}</span>
   </div>
 );
+
+// A single billable/non-billable category row inside a client (or a day→client).
+// `hours` lets callers pass a day-scoped subtotal; defaults to the week total.
+// `blocks` (when present) makes the row expand to its captured blocks.
+const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; blocks?: DetailBlock[] | undefined; blocksWithDay?: boolean }> = ({ entry, hours, blocks, blocksWithDay = false }) => {
+  const [open, setOpen] = useState(false);
+  const hasBlocks = !!blocks && blocks.length > 0;
+  return (
+    <>
+      <div
+        role={hasBlocks ? 'button' : undefined}
+        onClick={hasBlocks ? () => setOpen(o => !o) : undefined}
+        className={cn('flex items-center gap-3 pl-[52px] pr-5 py-2 min-w-0', hasBlocks && 'cursor-pointer hover:bg-black/[0.02]')}
+      >
+        {hasBlocks
+          ? <ChevronRight className={cn('w-3 h-3 text-slate-300 shrink-0 -ml-[18px] transition-transform', open && 'rotate-90')} />
+          : <span className="w-3 shrink-0 -ml-[18px]" />}
+        <span className={entry.is_billable ? DOT_BILL : DOT_NON} />
+        <span className="flex-1 text-[13px] text-slate-600 truncate">{entry.task_type_name}</span>
+        {hasBlocks && <span className="text-[10px] text-slate-300 tabular-nums shrink-0 hidden sm:inline">{blocks!.length}</span>}
+        <Badge billable={entry.is_billable} />
+        <span className={HOURS_CELL}>{formatHours(hours ?? entry.total)}</span>
+      </div>
+      {hasBlocks && open && (
+        <div className="border-t border-black/[0.04]">
+          {blocks!.map(b => <BlockRow key={b.id} block={b} withDay={blocksWithDay} />)}
+        </div>
+      )}
+    </>
+  );
+};
 
 const ClientRow: React.FC<{
   agg: ClientAgg;
   isExpanded: boolean;
   onToggle: (key: string) => void;
-}> = ({ agg, isExpanded, onToggle }) => {
+  weekBlocks: Map<string, DetailBlock[]>;
+}> = ({ agg, isExpanded, onToggle, weekBlocks }) => {
   const noClient = isNoClient(agg);
   return (
     <>
@@ -713,7 +827,12 @@ const ClientRow: React.FC<{
       {isExpanded && (
         <div className="border-t border-border/20" style={{ background: GROUND }}>
           {agg.entries.map(e => (
-            <CategoryRow key={`${e.client_id}-${e.task_type_id}`} entry={e} />
+            <CategoryRow
+              key={`${e.client_id}-${e.task_type_id}`}
+              entry={e}
+              blocks={weekBlocks.get(wKey(blockClientKey(e.client_name), blockCatKey(e.task_type_name)))}
+              blocksWithDay
+            />
           ))}
         </div>
       )}
@@ -867,10 +986,11 @@ const SummaryView: React.FC<{
   tailOpen: boolean;
   onToggle: (key: string) => void;
   onToggleTail: () => void;
-}> = ({ mainClients, tailClients, tailTotals, expanded, tailOpen, onToggle, onToggleTail }) => (
+  weekBlocks: Map<string, DetailBlock[]>;
+}> = ({ mainClients, tailClients, tailTotals, expanded, tailOpen, onToggle, onToggleTail, weekBlocks }) => (
   <div className="divide-y divide-border/30">
     {mainClients.map(agg => (
-      <ClientRow key={agg.key} agg={agg} isExpanded={expanded.has(agg.key)} onToggle={onToggle} />
+      <ClientRow key={agg.key} agg={agg} isExpanded={expanded.has(agg.key)} onToggle={onToggle} weekBlocks={weekBlocks} />
     ))}
 
     {tailClients.length > 0 && (
@@ -888,7 +1008,7 @@ const SummaryView: React.FC<{
         </button>
 
         {tailOpen && tailClients.map(agg => (
-          <ClientRow key={agg.key} agg={agg} isExpanded={expanded.has(agg.key)} onToggle={onToggle} />
+          <ClientRow key={agg.key} agg={agg} isExpanded={expanded.has(agg.key)} onToggle={onToggle} weekBlocks={weekBlocks} />
         ))}
       </>
     )}
@@ -905,7 +1025,8 @@ const ByDayClientRow: React.FC<{
   date: string;
   isOpen: boolean;
   onToggle: (id: string) => void;
-}> = ({ dc, date, isOpen, onToggle }) => {
+  dayBlocks: Map<string, DetailBlock[]>;
+}> = ({ dc, date, isOpen, onToggle, dayBlocks }) => {
   const { agg } = dc;
   const noClient = isNoClient(agg);
   const id = `${date}::${agg.key}`;
@@ -926,7 +1047,12 @@ const ByDayClientRow: React.FC<{
       {isOpen && (
         <div style={{ background: GROUND }}>
           {dc.entries.map(e => (
-            <CategoryRow key={`${e.client_id}-${e.task_type_id}`} entry={e} hours={e.days[date] || 0} />
+            <CategoryRow
+              key={`${e.client_id}-${e.task_type_id}`}
+              entry={e}
+              hours={e.days[date] || 0}
+              blocks={dayBlocks.get(dKey(date, blockClientKey(e.client_name), blockCatKey(e.task_type_name)))}
+            />
           ))}
         </div>
       )}
@@ -939,7 +1065,8 @@ const ByDayView: React.FC<{
   days: DayHeader[];
   dailyTotals: Record<string, number>;
   grandTotal: number;
-}> = ({ clients, days, dailyTotals, grandTotal }) => {
+  dayBlocks: Map<string, DetailBlock[]>;
+}> = ({ clients, days, dailyTotals, grandTotal, dayBlocks }) => {
   // One group per day that had time; clients ranked by that day's minutes, No client last.
   const groups = useMemo<DayGroup[]>(() =>
     days.map(day => {
@@ -1013,6 +1140,7 @@ const ByDayView: React.FC<{
                     date={day.date}
                     isOpen={openClients.has(`${day.date}::${dc.agg.key}`)}
                     onToggle={toggleClient}
+                    dayBlocks={dayBlocks}
                   />
                 ))}
               </div>

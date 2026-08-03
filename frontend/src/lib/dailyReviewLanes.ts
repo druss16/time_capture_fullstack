@@ -125,10 +125,20 @@ export function deriveLanes(
 
     const pulled = mismatchMinByClient.get(key) || 0;
     const minutes = Math.max(0, Math.round(client.total_hours * 60 - pulled));
-    // Per-client billable split from today-time. Mismatch minutes (pulled into
-    // Needs-you) come off billable, since a booked client's time is billable.
-    const billableMinutes = Math.max(0, Math.round((client.billable_hours ?? 0) * 60 - pulled));
-    const nonBillableMinutes = Math.max(0, Math.round((client.non_billable_hours ?? 0) * 60));
+    // Per-client billable split. Prefer today-time's exact per-client figures;
+    // when the backend hasn't shipped them yet (fields absent), fall back to a
+    // heuristic — a real (non-internal) client's time is billable, internal /
+    // no-client overhead is not — so the split still works. Mismatch minutes
+    // (pulled into Needs-you) come off billable, since booked time is billable.
+    const hasBackendSplit =
+      client.billable_hours !== undefined || client.non_billable_hours !== undefined;
+    const inferBillable = client.client_id != null && !isInternalClientName(client.client);
+    const billableMinutes = hasBackendSplit
+      ? Math.max(0, Math.round((client.billable_hours ?? 0) * 60 - pulled))
+      : Math.max(0, (inferBillable ? minutes : 0));
+    const nonBillableMinutes = hasBackendSplit
+      ? Math.max(0, Math.round((client.non_billable_hours ?? 0) * 60))
+      : (inferBillable ? 0 : minutes);
     const repCategory =
       [...catMinutes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ||
       client.categories[0]?.name ||

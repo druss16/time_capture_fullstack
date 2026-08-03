@@ -517,12 +517,14 @@ function PendingRow({ b, busy, onAccept, onNotBillable, onPick, onChange }: {
     return () => { alive = false; };
   }, [b.block_id]);
 
-  // Best guess = classifier's proposed client, else the contextual suggestion.
-  const guessId = b.proposed_client_id ?? why?.suggested_client_id ?? null;
-  const guessName = b.proposed_client_name ?? why?.suggested_client_name ?? null;
-  // Prefer the friendly /why/ explanation ("Right before this, you were working
-  // on X") over the raw classifier reasoning ("second-pass: unrecognized").
-  const reason = (why?.explanation || b.proposed_reasoning || "").trim();
+  // The green client and its reason MUST be the same client — otherwise the row
+  // shows one name ("The New School") with another's reason ("…St. Joseph's").
+  // Prefer the /why/ contextual suggestion (it carries the friendly explanation);
+  // fall back to the classifier's stored proposal + its own reasoning. Never mix.
+  const whyId = why?.suggested_client_id ?? null;
+  const guessId = whyId ?? b.proposed_client_id ?? null;
+  const guessName = whyId != null ? why?.suggested_client_name ?? null : b.proposed_client_name;
+  const reason = ((whyId != null ? why?.explanation : (b.proposed_reasoning || why?.explanation)) || "").trim();
 
   // Soft green pill = suggested client (leads, but calm). Neutral outline = secondary.
   const green = "inline-flex max-w-[200px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2.5 py-0.5 font-sans text-[11px] font-semibold text-primary transition-colors hover:bg-primary/25 disabled:opacity-50";

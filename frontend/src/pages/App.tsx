@@ -47,7 +47,6 @@ const RequestAccess = lazy(() => import("./RequestAccess"));
 const MavOpsAdmin = lazy(() => import("./MavOpsAdmin"));
 const DashboardV2 = lazy(() => import("./DashboardV2"));
 const ReportsSummary = lazy(() => import("./ReportsSummary"));
-const WorkSummariesPage = lazy(() => import("./WorkSummariesPage"));
 const AIBlindSpots = lazy(() => import("./AIBlindSpots"));
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -216,7 +215,6 @@ export default function App() {
                 <Route path="/reports/blind-spots" element={<MaybeProtected><AdminRoute><AppLayout><AIBlindSpots /></AppLayout></AdminRoute></MaybeProtected>} />
                 <Route path="/timesheet" element={<MaybeProtected><AppLayout><BillingPage section="timesheet" /></AppLayout></MaybeProtected>} />
                 <Route path="/billing" element={<MaybeProtected><AppLayout><BillingPage section="billing" /></AppLayout></MaybeProtected>} />
-                <Route path="/summaries" element={<MaybeProtected><AdminRoute><AppLayout><WorkSummariesPage /></AppLayout></AdminRoute></MaybeProtected>} />
                 <Route path="/devices" element={<MaybeProtected><AppLayout><Devices /></AppLayout></MaybeProtected>} />
 
                 {/* Protected — admin/manager */}

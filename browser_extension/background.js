@@ -44,15 +44,46 @@ const KEEPALIVE_ALARM = "tt_url_keepalive";
 const DEBOUNCE_MS = 250;
 let debounceTimer = null;
 
-// --- URL hygiene: strip query + fragment, keep scheme://host/path ----------
+// --- URL hygiene: keep scheme://host/path, drop query + fragment ------------
+// We NEVER keep the query string — that's where session tokens, account ids,
+// and PII live. What we keep is only the location: the host + path (or, for a
+// local file, the folder path), which is where the CLIENT name tends to be
+// (a portal domain, or a "…/Clients/St Marys/…" folder).
 function sanitizeUrl(raw) {
   if (!raw) return null;
   try {
     const u = new URL(raw);
-    // Only report http/https. Skip edge://, chrome://, about:, file:, etc.
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    // Drop query + fragment entirely
-    return `${u.protocol}//${u.host}${u.pathname}`;
+
+    // Normal web pages / web PDFs.
+    if (u.protocol === "http:" || u.protocol === "https:") {
+      return `${u.protocol}//${u.host}${u.pathname}`;
+    }
+
+    // A local file opened in the browser (e.g. a client's PDF from a client
+    // folder). The FOLDER usually names the client, and there is no query
+    // string on a file: URL. Decode %20 etc. so "St%20Marys" reads as a name.
+    // NOTE: the browser only exposes file: URLs to the extension when "Allow
+    // access to file URLs" is enabled (set via MDM); otherwise tab.url is empty.
+    if (u.protocol === "file:") {
+      try { return "file://" + decodeURIComponent(u.pathname); }
+      catch (e) { return "file://" + u.pathname; }
+    }
+
+    // A blob download (e.g. a PDF streamed from a portal): blob:https://host/uuid.
+    // The random object id is useless + potentially sensitive — keep only the
+    // originating host, which identifies the portal/app.
+    if (u.protocol === "blob:") {
+      try {
+        const inner = new URL(raw.slice(5)); // strip leading "blob:"
+        if (inner.protocol === "http:" || inner.protocol === "https:") {
+          return `${inner.protocol}//${inner.host}`;
+        }
+      } catch (e) { /* fall through */ }
+      return null;
+    }
+
+    // Everything else (edge://, chrome://, about:, data:, …) — skip.
+    return null;
   } catch (e) {
     return null;
   }

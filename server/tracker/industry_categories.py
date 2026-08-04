@@ -320,6 +320,26 @@ CPA_TOOL_DETECTION = {
         "category": "Administration",
         "confidence": 0.85
     },
+    # Thomson Reuters practice/document management + the CS tax-platform shell.
+    # These are the login / portal / navigation screens (the ACTUAL tax prep runs
+    # in UltraTax, detected separately → Tax Preparation + client). Recognizing
+    # them as Administration keeps firm-overhead time out of the personal bucket
+    # and out of "needs review", instead of being mislabeled or left uncategorized.
+    "onvio": {
+        "keywords": ["onvio"],
+        "domains": ["onvio.us", "onvio.com", "onvio.thomsonreuters.com"],
+        "category": "Administration",
+        "confidence": 0.90
+    },
+    "cs_professional_suite": {
+        "keywords": [
+            "cs professional suite", "cs connect", "netstaff cs",
+            "netclient cs", "practice cs", "fileroom cs", "gofileroom",
+        ],
+        "domains": ["cs.thomsonreuters.com", "netlinksolution.com"],
+        "category": "Administration",
+        "confidence": 0.90
+    },
 }
 
 CPA_TASK_TYPES = [

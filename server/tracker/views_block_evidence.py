@@ -825,6 +825,69 @@ _NOISE_LABEL_RE = re.compile(
 )
 
 
+def _norm_name_toks(text: str) -> list[str]:
+    """Tokenize for phrase matching, folding possessives so 'St. Peter's',
+    'St Peters', and 'St. Peter's' all yield the same 'peters' token (otherwise
+    a 'Church' file mis-matches the 'Cemetery' client, or vice-versa)."""
+    from tracker.utils.client_name_match import _tokenize
+    return _tokenize((text or "").replace("’", "").replace("'", ""))
+
+
+def _contiguous_run(ctoks: list[str], label_join: str, distinct) -> tuple[int, float]:
+    """Longest run of consecutive client-name tokens (in name order) that appears
+    as a contiguous phrase in the label. Returns (run_length, distinctive_mass)."""
+    best_len, best_mass = 0, 0.0
+    L = len(ctoks)
+    for i in range(L):
+        for j in range(i + 1, L + 1):
+            if (" " + " ".join(ctoks[i:j]) + " ") in label_join:
+                length = j - i
+                mass = sum(distinct(t) for t in ctoks[i:j])
+                if (length, mass) > (best_len, best_mass):
+                    best_len, best_mass = length, mass
+            else:
+                break  # ctoks[i:j] not contiguous → i:j+1 can't be either
+    return best_len, best_mass
+
+
+def _phrase_client_for_label(label, names, index):
+    """Suggestion-only fallback for the split pre-fill: when the strict matcher
+    (detect_title_client) abstains, attribute a slice to the client whose name
+    forms the LONGEST contiguous token-run inside the label — the case where a
+    filename literally embeds the client name (e.g. "St. John the Baptist Rome
+    bills.pdf" → St. John the Baptist Church).
+
+    Deliberately more lenient than detect_title_client because the result only
+    PRE-FILLS a dropdown the user reviews before committing a Split — it never
+    auto-commits. Precision is still guarded: the winning run must be >=2 tokens,
+    carry real distinctive mass (so bare "st the" runs don't count), and be
+    STRICTLY longer than any other client's run (ties → abstain, which preserves
+    the same-family safety, e.g. two "St. Mary's …" clients on a bare "St Mary's"
+    slice). Returns a client_id or None."""
+    label_toks = _norm_name_toks(label)
+    if not label_toks:
+        return None
+    label_join = " " + " ".join(label_toks) + " "
+    distinct = index["distinctiveness"] if index else (lambda t: 1.0)
+
+    scored = []
+    for cid, name in names.items():
+        ctoks = _norm_name_toks(name)
+        if not ctoks:
+            continue
+        run_len, run_mass = _contiguous_run(ctoks, label_join, distinct)
+        if run_len:
+            scored.append((run_len, run_mass, cid))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    run_len, run_mass, cid = scored[0]
+    second_len = scored[1][0] if len(scored) > 1 else 0
+    if run_len < 2 or run_mass < 0.8 or run_len <= second_len:
+        return None
+    return cid
+
+
 def _slice_suggestions(block, org, breakdown=None):
     """Best-guess client for each breakdown slice, so a split can be PRE-FILLED
     instead of hand-assigned. Returns {label: {"client_id", "client_name"}}.
@@ -864,7 +927,11 @@ def _slice_suggestions(block, org, breakdown=None):
         elif _NOISE_LABEL_RE.match(label.strip()):
             raw[label] = INHERIT
         else:
-            raw[label] = cur_id
+            # Strict matcher abstained. Before falling back to the block's own
+            # client, try the lenient phrase match — a filename that embeds a
+            # distinct client's name should pre-fill that client for the split.
+            pc = _phrase_client_for_label(label, names, index) if index else None
+            raw[label] = pc if pc is not None else cur_id
 
     # Resolve INHERIT → the largest slice that DID resolve to a concrete client.
     # (bd is biggest-first, so the first non-INHERIT is the dominant one.)

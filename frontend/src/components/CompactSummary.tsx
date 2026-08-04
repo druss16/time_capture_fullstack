@@ -613,13 +613,29 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
         </div>
         {reason && <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">{reason}</div>}
         {guessId != null && (
-          <button
-            onClick={() => onAlwaysFile(guessId)}
-            disabled={busy}
-            title={`Make a firm-wide rule: always file titles like this under ${guessName}`}
-            className="mt-1.5 inline-flex items-center gap-1 font-sans text-[11px] font-medium text-primary/75 transition-colors hover:text-primary hover:underline disabled:opacity-50">
-            <Check className="h-3 w-3" /> Always file titles like this here
-          </button>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            {b.learning && !b.learning.mature && b.learning.remaining != null && (
+              <span className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/[0.08] px-2.5 py-1"
+                title={`This suggestion is being learned — after about ${b.learning.remaining} more confirm${b.learning.remaining === 1 ? "" : "s"}, blocks like this file automatically.`}>
+                <span className="inline-flex gap-[3px]" aria-hidden>
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <span key={i} className={cn("h-1.5 w-1.5 rounded-full",
+                      i < Math.min(5, Math.max(0, 5 - (b.learning!.remaining || 0))) ? "bg-primary" : "bg-primary/25")} />
+                  ))}
+                </span>
+                <span className="font-sans text-[10.5px] font-medium text-primary/80">
+                  Learning — ~{b.learning.remaining} more to auto-file
+                </span>
+              </span>
+            )}
+            <button
+              onClick={() => onAlwaysFile(guessId)}
+              disabled={busy}
+              title={`Make a firm-wide rule: always file titles like this under ${guessName}`}
+              className="inline-flex items-center gap-1 font-sans text-[11px] font-medium text-primary/75 transition-colors hover:text-primary hover:underline disabled:opacity-50">
+              <Check className="h-3 w-3" /> Always file titles like this here
+            </button>
+          </div>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2">

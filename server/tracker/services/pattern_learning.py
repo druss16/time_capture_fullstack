@@ -324,6 +324,62 @@ class PatternLearningService:
     LEARNING_SOURCES = {'correction', 'single_confirm', 'manual'}
 
     @staticmethod
+    def _strength(pattern) -> float:
+        """Signal strength of a learned pattern — mirror of ClassificationService
+        ._learned_pattern_strength (KEEP IN SYNC): weak until CONFIRMED 5+ times
+        (occurrence_count), then its confidence capped at 0.80."""
+        occ = pattern.occurrence_count or 0
+        if occ < 5:
+            return min(0.50, (pattern.confidence_score or 0) * 0.6)
+        base = min(0.80, pattern.confidence_score or 0)
+        if occ >= 50:
+            base = min(0.80, base + 0.05)
+        return round(base, 3)
+
+    @staticmethod
+    def progress_for_block(block, user, client_id):
+        """Maturity of the learned pattern (if any) backing this block's suggested
+        client — powers the "Learning… ~N more to auto-file" hint on pending rows.
+
+        Returns:
+          None                              — no learned pattern yet for this client
+          {'mature': True}                  — already strong enough to auto-file
+          {'seen': int, 'remaining': int}   — still learning; ~remaining confirms to go
+
+        "Auto-file" here means clearing the 0.65 moderate bar the broad
+        auto-confirm gate uses; a pattern needs BOTH confidence >= 0.65 (+0.05 per
+        confirm from 0.50) AND >= 5 applications, so `remaining` is the binding of
+        the two — an honest approximation, not a literal gauge.
+        """
+        import math
+        from tracker.models import UserWorkPattern
+        if not user or not client_id:
+            return None
+        try:
+            keys = []
+            for p in (PatternLearningService.extract_app_patterns(block)
+                      + PatternLearningService.extract_file_patterns(block)):
+                keys.append((p['type'], p['key']))
+            if not keys:
+                return None
+            q = Q()
+            for ptype, pkey in keys:
+                q |= Q(pattern_type=ptype, pattern_key=pkey)
+            match = (UserWorkPattern.objects
+                     .filter(q, user=user, client_id=client_id)
+                     .order_by('-confidence_score').first())
+            if not match:
+                return None
+            if PatternLearningService._strength(match) >= 0.65:
+                return {'mature': True}
+            conf_gap = max(0, math.ceil((0.65 - (match.confidence_score or 0)) / 0.05))
+            occ_gap = max(0, 5 - (match.occurrence_count or 0))
+            return {'seen': int(match.occurrence_count or 1),
+                    'remaining': max(1, conf_gap, occ_gap)}
+        except Exception:
+            return None
+
+    @staticmethod
     def learn_from_block(block, user, source='single_confirm'):
         """
         Extract and store all patterns from a confirmed/categorized block.

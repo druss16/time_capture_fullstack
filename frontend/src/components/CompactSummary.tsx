@@ -18,7 +18,7 @@
  *   every triage row leads with its minutes.
  */
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { ChevronRight, ChevronDown, Check, X, Search, Scissors } from "lucide-react";
+import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 import { MovePopover, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
@@ -75,6 +75,24 @@ export default function CompactSummary({
   const { certain, needsYou } = lanes;
 
   const [certainOpen, setCertainOpen] = useState(false);
+
+  // Lane order is a personal preference (some users want "Needs you" on top).
+  // Drag either section's grip handle onto the other to swap; persisted locally.
+  const [laneOrder, setLaneOrder] = useState<("certain" | "needsYou")[]>(() =>
+    (typeof localStorage !== "undefined" && localStorage.getItem("dr_lane_order") === "needs-first")
+      ? ["needsYou", "certain"]
+      : ["certain", "needsYou"]
+  );
+  const [dragLane, setDragLane] = useState<string | null>(null);
+  const swapLanes = () => setLaneOrder((prev) => {
+    const next = [prev[1], prev[0]] as ("certain" | "needsYou")[];
+    try { localStorage.setItem("dr_lane_order", next[0] === "needsYou" ? "needs-first" : "certain-first"); } catch { /* noop */ }
+    return next;
+  });
+  const laneDnd = (id: "certain" | "needsYou") => ({
+    onDragOver: (e: React.DragEvent) => { if (dragLane && dragLane !== id) e.preventDefault(); },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); if (dragLane && dragLane !== id) swapLanes(); },
+  });
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [move, setMove] = useState<MoveState | null>(null);
@@ -228,17 +246,9 @@ export default function CompactSummary({
               {g.name}
             </span>
           </button>
-          {/* per-client billable / non-billable split */}
-          <span className="shrink-0 font-mono text-[12px] tabular-nums">
-            {g.billableMinutes > 0 && <span className="font-semibold text-foreground">{fmtMin(g.billableMinutes)}</span>}
-            {g.nonBillableMinutes > 0 && (
-              <span className="text-muted-foreground/70">
-                {g.billableMinutes > 0 ? " · " : ""}{fmtMin(g.nonBillableMinutes)} non-bill
-              </span>
-            )}
-            {g.billableMinutes === 0 && g.nonBillableMinutes === 0 && (
-              <span className="font-semibold text-foreground">{fmtMin(g.minutes)}</span>
-            )}
+          {/* per-client total time (billable split lives in the hero, not per row) */}
+          <span className="shrink-0 font-mono text-[12px] tabular-nums font-semibold text-foreground">
+            {fmtMin(g.minutes)}
           </span>
           <button
             onClick={(e) => openMove(e.currentTarget, allIds, g.clientId, g.repCategory, `Move · ${g.name}`)}
@@ -390,10 +400,23 @@ export default function CompactSummary({
       <div className="flex w-full flex-col gap-3 text-foreground">
 
         {/* ═══ CERTAIN ═══ quiet: neutral card, teal dot; color only on actions ══ */}
-        <section className="overflow-hidden rounded-[15px] border border-border/70 bg-card shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
+        <section
+          style={{ order: laneOrder.indexOf("certain") }}
+          {...laneDnd("certain")}
+          className={cn("overflow-hidden rounded-[15px] border bg-card shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)] transition-colors",
+            dragLane && dragLane !== "certain" ? "border-primary/50" : "border-border/70")}>
           <button
             onClick={() => setCertainOpen((v) => !v)}
             className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/40">
+            <span
+              draggable
+              onDragStart={() => setDragLane("certain")}
+              onDragEnd={() => setDragLane(null)}
+              onClick={(e) => e.stopPropagation()}
+              title="Drag to reorder"
+              className="-ml-1 shrink-0 cursor-grab text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing">
+              <GripVertical className="h-3.5 w-3.5" />
+            </span>
             <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-primary" />
             <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">Certain</span>
             <span className="truncate font-mono text-[11.5px] text-muted-foreground">
@@ -434,8 +457,20 @@ export default function CompactSummary({
         </section>
 
         {/* ═══ NEEDS YOU ═══ quiet: neutral card, amber dot; color only on actions ══ */}
-        <section className="overflow-hidden rounded-[15px] border border-border/70 bg-card shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
+        <section
+          style={{ order: laneOrder.indexOf("needsYou") }}
+          {...laneDnd("needsYou")}
+          className={cn("overflow-hidden rounded-[15px] border bg-card shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)] transition-colors",
+            dragLane && dragLane !== "needsYou" ? "border-primary/50" : "border-border/70")}>
           <div className={cn("flex items-center gap-3 px-4 py-3.5", needsYou.count > 0 && "border-b border-border/70")}>
+            <span
+              draggable
+              onDragStart={() => setDragLane("needsYou")}
+              onDragEnd={() => setDragLane(null)}
+              title="Drag to reorder"
+              className="-ml-1 shrink-0 cursor-grab text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing">
+              <GripVertical className="h-3.5 w-3.5" />
+            </span>
             <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", needsYou.count > 0 ? "bg-amber-500" : "bg-primary")} />
             <span className={cn("font-sans text-[15px] font-bold tracking-[-0.01em]",
               needsYou.count > 0 ? "text-amber-600 dark:text-amber-400" : "text-primary")}>

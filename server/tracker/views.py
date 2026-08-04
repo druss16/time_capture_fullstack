@@ -6654,9 +6654,28 @@ def split_block(request, block_id):
 
             # Re-attribute the retained block to its group's client, on its remaining events.
             keep_cid, keep_cat = keep_key
+            remaining = list(
+                RawEvent.objects.filter(id__in=keep_ev_ids)
+                .only("id", "start_ts", "end_ts", "window_title", "app_name", "file_path", "url")
+            )
             block.minutes = max(1, _calculate_minutes_from_events(
                 RawEvent.objects.filter(block=block, start_ts__isnull=False, end_ts__isnull=False)
             ))
+            # Refresh the representative title from what's LEFT — otherwise the kept
+            # block keeps the pre-split dominant title and displays a carved-off
+            # slice's filename (e.g. it retains St Peter's events but still reads
+            # "St. Paul's Church bills"). Mirrors how carved blocks pick a rep event.
+            rep = max(
+                (e for e in remaining if e.window_title),
+                key=lambda e: ((e.end_ts - e.start_ts).total_seconds()
+                               if e.end_ts and e.start_ts else 0),
+                default=None,
+            )
+            if rep:
+                block.window_title = rep.window_title
+                block.app_name = rep.app_name or block.app_name
+                block.file_path = rep.file_path or ""
+                block.url = rep.url or ""
             svc.recommit(block, user=user, override={
                 "client_id": keep_cid, "category": keep_cat, "is_billable": keep_cid is not None,
             })

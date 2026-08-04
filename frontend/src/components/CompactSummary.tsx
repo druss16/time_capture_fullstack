@@ -22,7 +22,7 @@ import { ChevronRight, ChevronDown, Check, X, Search, Scissors } from "lucide-re
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 import { MovePopover, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
-import type { Lanes, CertainGroup, MismatchBlock } from "@/lib/dailyReviewLanes";
+import type { Lanes, CertainGroup, MismatchBlock, SplitCandidate } from "@/lib/dailyReviewLanes";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -187,6 +187,13 @@ export default function CompactSummary({
     Object.entries(splitAssign).forEach(([label, cid]) => { a[label] = { client_id: cid, category }; });
     postSplit(bid, a);
   };
+  // One-click apply a flagged split candidate: book each activity to the client
+  // its filename names (the backend's per-slice guess).
+  const applySplitCandidate = useCallback((sc: SplitCandidate) => {
+    const a: Record<string, { client_id: number | null; category: string }> = {};
+    sc.slices.forEach((s) => { a[s.label] = { client_id: s.suggested_client_id, category: sc.category }; });
+    postSplit(sc.block_id, a);
+  }, [postSplit]);
   const applySmartSplit = (bid: number, breakdown: Slice[], currentClientId: number | null, category: string) => {
     const a: Record<string, { client_id: number | null; category: string }> = {};
     breakdown.forEach((r) => { a[r.label] = { client_id: sliceGuess(r, currentClientId), category }; });
@@ -461,6 +468,13 @@ export default function CompactSummary({
                   onPick={(anchor) => openMove(anchor, [m.block_id], m.booked_client_id, m.category || catList[0], "Move to…", m.looks_like_client_id, true)}
                 />
               ))}
+              {needsYou.split.map((sc) => (
+                <SplitCandidateRow
+                  key={`s${sc.block_id}`} sc={sc} busy={busy || splitBusy}
+                  onSplit={() => applySplitCandidate(sc)}
+                  onKeep={() => onIgnoreMismatch([sc.block_id])}
+                />
+              ))}
             </div>
           )}
         </section>
@@ -607,6 +621,44 @@ function MismatchRow({ m, busy, onFix, onKeep, onPick }: {
       <div className="flex shrink-0 items-center gap-2">
         <button onClick={(e) => (canFix ? onFix() : onPick(e.currentTarget))} disabled={busy} className={PILL_AMBER}>
           <span className="max-w-[190px] truncate">Switch to {m.looks_like_client_name}</span>
+        </button>
+        <button onClick={onKeep} disabled={busy} className={PILL_GHOST}>Keep here</button>
+      </div>
+    </div>
+  );
+}
+
+/** Split candidate: one committed block whose activities point at 2+ clients.
+ *  Offers a one-click split that books each activity to the client it names. */
+function SplitCandidateRow({ sc, busy, onSplit, onKeep }: {
+  sc: SplitCandidate;
+  busy: boolean;
+  onSplit: () => void;
+  onKeep: () => void;
+}) {
+  // Distinct client names across the slices, in first-seen order.
+  const seen = new Set<string>();
+  const clients: string[] = [];
+  for (const s of sc.slices) {
+    const name = s.suggested_client_name || (s.suggested_client_id == null ? "No client" : "");
+    if (name && !seen.has(name)) { seen.add(name); clients.push(name); }
+  }
+  return (
+    <div className={ROW}>
+      <span className={CHIP_AMBER}>{fmtMin(sc.minutes || 0)}</span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-mono text-[12.5px] text-foreground">{sc.window_title || "(untitled)"}</div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-sans text-[11.5px]">
+          <span className="text-muted-foreground">Mixes {clients.length} clients:</span>
+          {clients.slice(0, 4).map((c) => (
+            <span key={c} className="rounded-md border border-amber-500/40 bg-amber-500/[0.14] px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400">{c}</span>
+          ))}
+          {clients.length > 4 && <span className="text-muted-foreground">+{clients.length - 4} more</span>}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <button onClick={onSplit} disabled={busy} className={PILL_AMBER}>
+          <Scissors className="h-3 w-3" /> <span>Split apart</span>
         </button>
         <button onClick={onKeep} disabled={busy} className={PILL_GHOST}>Keep here</button>
       </div>

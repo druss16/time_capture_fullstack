@@ -29,6 +29,25 @@ export type MismatchBlock = {
   looks_like_client_name: string;
 };
 
+/** One activity slice inside a split candidate (title → its own client guess). */
+export type SplitSlice = {
+  label: string;
+  minutes: number;
+  suggested_client_id: number | null;
+  suggested_client_name: string | null;
+};
+
+/** A committed block whose activities point at 2+ clients → offer a split. */
+export type SplitCandidate = {
+  block_id: number;
+  window_title: string;
+  minutes: number;
+  category: string;
+  booked_client_id: number | null;
+  booked_client_name: string;
+  slices: SplitSlice[];
+};
+
 /** One captured activity line inside a Certain client group. */
 export type CertainRow = { ids: number[]; title: string; category: string; minutes: number };
 
@@ -62,6 +81,7 @@ export type Lanes = {
   needsYou: {
     pending: ProposedInline[];  // guessed + no-guess, minutes desc
     mismatch: MismatchBlock[];  // minutes desc
+    split: SplitCandidate[];    // multi-client blocks to split, minutes desc
     count: number;
     minutes: number;
   };
@@ -83,17 +103,23 @@ export function deriveLanes(
   proposedInline: ProposedInline[],
   mismatchBlocks: MismatchBlock[],
   ignored: Set<string>,
+  splitCandidates: SplitCandidate[] = [],
 ): Lanes {
   // Active (non-ignored) mismatches, indexed by the block they flag.
   const activeMismatch = mismatchBlocks.filter((m) => !ignored.has(String(m.block_id)));
-  const mismatchIds = new Set(activeMismatch.map((m) => m.block_id));
+  const activeSplit = splitCandidates.filter((s) => !ignored.has(String(s.block_id)));
+  // Blocks pulled out of the Certain browse (shown in Needs-you instead).
+  const pulledIds = new Set<number>([
+    ...activeMismatch.map((m) => m.block_id),
+    ...activeSplit.map((s) => s.block_id),
+  ]);
 
   // Minutes pulled OUT of each booked client so the Certain browse total for
   // that client doesn't double-count the block now living in Needs-you.
-  const mismatchMinByClient = new Map<string, number>();
-  for (const m of activeMismatch) {
-    const k = clientKeyOf(m.booked_client_id);
-    mismatchMinByClient.set(k, (mismatchMinByClient.get(k) || 0) + (m.minutes || 0));
+  const pulledMinByClient = new Map<string, number>();
+  for (const row of [...activeMismatch, ...activeSplit]) {
+    const k = clientKeyOf(row.booked_client_id);
+    pulledMinByClient.set(k, (pulledMinByClient.get(k) || 0) + (row.minutes || 0));
   }
 
   // ── Certain lane: one group per committed client card ──────────────────────
@@ -114,8 +140,8 @@ export function deriveLanes(
         : 0;
       for (const a of cat.sample_activities) {
         const p = parse(a);
-        // A line whose block is flagged as a mismatch is shown in Needs-you, not here.
-        if (p.blockIds.some((id) => mismatchIds.has(id))) continue;
+        // A line whose block is flagged (mismatch or split) is shown in Needs-you.
+        if (p.blockIds.some((id) => pulledIds.has(id))) continue;
         rows.push({ ids: p.blockIds, title: p.title, category: cat.name, minutes: Math.round(perLine) });
         catMinutes.set(cat.name, (catMinutes.get(cat.name) || 0) + perLine);
       }
@@ -123,7 +149,7 @@ export function deriveLanes(
 
     if (!rows.length) continue; // whole client was mismatches -> nothing left to browse
 
-    const pulled = mismatchMinByClient.get(key) || 0;
+    const pulled = pulledMinByClient.get(key) || 0;
     const minutes = Math.max(0, Math.round(client.total_hours * 60 - pulled));
     // Per-client billable split. Prefer today-time's exact per-client figures;
     // when the backend hasn't shipped them yet (fields absent), fall back to a
@@ -172,12 +198,14 @@ export function deriveLanes(
     return b.minutes - a.minutes;
   });
 
-  // ── Needs-you lane: pending (minutes desc) + mismatch (minutes desc) ────────
+  // ── Needs-you lane: pending + mismatch + split (each minutes desc) ──────────
   const pending = [...proposedInline].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
   const mismatch = [...activeMismatch].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
+  const split = [...activeSplit].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
   const needsMinutes =
     pending.reduce((s, p) => s + (p.minutes || 0), 0) +
-    mismatch.reduce((s, m) => s + (m.minutes || 0), 0);
+    mismatch.reduce((s, m) => s + (m.minutes || 0), 0) +
+    split.reduce((s, x) => s + (x.minutes || 0), 0);
 
   return {
     certain: {
@@ -190,7 +218,8 @@ export function deriveLanes(
     needsYou: {
       pending,
       mismatch,
-      count: pending.length + mismatch.length,
+      split,
+      count: pending.length + mismatch.length + split.length,
       minutes: needsMinutes,
     },
   };

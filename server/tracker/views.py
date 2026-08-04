@@ -4591,21 +4591,64 @@ def today_time(request):
     # view's inline chips. `mismatch_blocks` (redesign) carries the full row the
     # Daily Review "Needs you" lane renders: minutes (every triage row leads with
     # its minutes), the booked client, and the target so "Move to X" is one click.
+    # `split_candidates` (redesign) = committed blocks whose per-activity
+    # breakdown resolves to 2+ DISTINCT clients (one Edge/Excel window that
+    # touched several clients' files, e.g. St John / St Paul / St Peter bills).
+    # detect_mismatch only sees the block's single representative title, and the
+    # STRICT matcher abstains on same-family churches — so those never surface.
+    # Here we reuse the block breakdown + the same lenient per-slice matcher the
+    # Split pre-fill uses, so a genuinely-mixed block gets flagged for a split in
+    # "Needs you" instead of sitting silently under one client.
     mismatch_flags = {}
     mismatch_blocks = []
+    split_candidates = []
     try:
         from tracker.utils.client_name_match import build_token_index, detect_mismatch
         from tracker.services.billing_totals import committed_block_qs
+        from tracker.views_block_evidence import _block_breakdown, _slice_suggestions
         _names = {c.id: c.name for c in Client.objects.filter(org=org).only('id', 'name')} if org else {}
         if _names:
             _index = build_token_index(_names)
-            for _b in committed_block_qs(org, start_utc, end_utc, user_id=user.id, can_see_all=False):
+            for _b in list(committed_block_qs(org, start_utc, end_utc, user_id=user.id, can_see_all=False)[:200]):
                 if not _b.client_id or _b.client_id not in _names or not _b.window_title:
                     continue
+                _cat = list((_b.category_hours or {}).keys())[0] if _b.category_hours else 'General Client Work'
+
+                # SPLIT: does the activity breakdown point at 2+ distinct clients?
+                _is_split = False
+                try:
+                    _bd = _block_breakdown(_b)
+                    if _bd and len(_bd) > 1:
+                        _sug = _slice_suggestions(_b, org, breakdown=_bd)
+                        _cids = {s['client_id'] for s in _sug.values() if s.get('client_id') is not None}
+                        if len(_cids) >= 2:
+                            _is_split = True
+                            split_candidates.append({
+                                'block_id':           _b.id,
+                                'window_title':       _b.window_title or '',
+                                'minutes':            _b.minutes or 0,
+                                'category':           _cat,
+                                'booked_client_id':   _b.client_id,
+                                'booked_client_name': _names.get(_b.client_id, ''),
+                                'slices': [
+                                    {
+                                        'label':                 it['label'],
+                                        'minutes':               it.get('minutes', 0),
+                                        'suggested_client_id':   (_sug.get(it['label']) or {}).get('client_id'),
+                                        'suggested_client_name': (_sug.get(it['label']) or {}).get('client_name'),
+                                    }
+                                    for it in _bd
+                                ],
+                            })
+                except Exception:
+                    pass
+                if _is_split:
+                    continue  # a multi-client split isn't also a single-client mismatch
+
+                # MISMATCH: title clearly names ONE different client than booked.
                 _m = detect_mismatch(_b.window_title, _b.client_id, _index, _names, firm_name=org.name)
                 if _m and _m.get('bucket') == 'client' and _b.id is not None:
                     mismatch_flags[_b.id] = _m['looks_like_client_name']
-                    _cat = list((_b.category_hours or {}).keys())[0] if _b.category_hours else 'General Client Work'
                     mismatch_blocks.append({
                         'block_id':               _b.id,
                         'window_title':           _b.window_title or '',
@@ -4619,6 +4662,7 @@ def today_time(request):
     except Exception:
         mismatch_flags = {}
         mismatch_blocks = []
+        split_candidates = []
 
     return Response({
         'clients':            result,
@@ -4631,6 +4675,7 @@ def today_time(request):
         'proposed_inline':    proposed_inline,
         'mismatch_flags':     mismatch_flags,
         'mismatch_blocks':    mismatch_blocks,
+        'split_candidates':   split_candidates,
 
     })
 

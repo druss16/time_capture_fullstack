@@ -21,7 +21,7 @@ import { cn } from "@/lib/design-system";
 import { useSearchParams } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
 import ClassicSummary from "@/components/ClassicSummary";
-import { deriveLanes, type MismatchBlock } from "@/lib/dailyReviewLanes";
+import { deriveLanes, type MismatchBlock, type SplitCandidate } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
 
@@ -101,6 +101,7 @@ type TodayTimeResponse = {
   proposed_inline?: ProposedInline[];
   mismatch_flags?: Record<string, string>;
   mismatch_blocks?: MismatchBlock[];
+  split_candidates?: SplitCandidate[];
 };
 
 
@@ -184,6 +185,7 @@ export default function DailyReview() {
   const [proposedInline, setProposedInline] = useState<ProposedInline[]>([]);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [mismatchBlocks, setMismatchBlocks] = useState<MismatchBlock[]>([]);
+  const [splitCandidates, setSplitCandidates] = useState<SplitCandidate[]>([]);
   // Classic view still consumes these; kept alongside the Lightning-view slices.
   const [flaggedBlocks, setFlaggedBlocks] = useState<FlaggedBlock[]>([]);
   const [mismatchFlags, setMismatchFlags] = useState<Record<string, string>>({});
@@ -262,6 +264,7 @@ export default function DailyReview() {
       setNeedsReviewHours(json.needs_review_hours || 0);
       setProposedInline(json.proposed_inline || []);
       setMismatchBlocks(json.mismatch_blocks || []);
+      setSplitCandidates(json.split_candidates || []);
       setMismatchFlags(json.mismatch_flags || {});
       const allFlagged = (json.flagged_blocks || []).map((b) => ({ ...b, type: b.type || "mobile_review" as const }));
       setFlaggedBlocks(allFlagged);
@@ -433,8 +436,8 @@ export default function DailyReview() {
 
   // ── Confidence lanes (single source for the header numbers + the body) ──────
   const lanes = useMemo(
-    () => deriveLanes(timeSummary, proposedInline, mismatchBlocks, ignoredMismatch),
-    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch],
+    () => deriveLanes(timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates),
+    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates],
   );
   const needsYouCount = lanes.needsYou.count;
   const autoFiled = lanes.certain.minutes > 0;

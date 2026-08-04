@@ -18,7 +18,7 @@
  *   every triage row leads with its minutes.
  */
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { ChevronRight, ChevronDown, Check, X, Search, Scissors, Move } from "lucide-react";
+import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 import { MovePopover, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
@@ -415,7 +415,7 @@ export default function CompactSummary({
               onClick={(e) => e.stopPropagation()}
               title="Drag to reorder"
               className="-ml-1 shrink-0 cursor-grab text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing">
-              <Move className="h-3.5 w-3.5" />
+              <GripVertical className="h-3.5 w-3.5" />
             </span>
             <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-primary" />
             <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">Certain</span>
@@ -469,7 +469,7 @@ export default function CompactSummary({
               onDragEnd={() => setDragLane(null)}
               title="Drag to reorder"
               className="-ml-1 shrink-0 cursor-grab text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing">
-              <Move className="h-3.5 w-3.5" />
+              <GripVertical className="h-3.5 w-3.5" />
             </span>
             <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", needsYou.count > 0 ? "bg-amber-500" : "bg-primary")} />
             <span className={cn("font-sans text-[15px] font-bold tracking-[-0.01em]",

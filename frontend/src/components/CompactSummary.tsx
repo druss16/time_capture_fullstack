@@ -62,6 +62,9 @@ type MoveState = {
   currentCategory: string;
   label: string;
   suggestClientId?: number | null;
+  // Pending / mismatch rows are UNRESOLVED, so applying the current selection
+  // (even unchanged, e.g. "keep as No client · Non-Billable") is a valid commit.
+  allowUnchanged?: boolean;
 };
 
 export default function CompactSummary({
@@ -87,8 +90,8 @@ export default function CompactSummary({
 
   const openMove = (
     anchor: HTMLElement, ids: number[], clientId: number | null, category: string,
-    label: string, suggestClientId: number | null = null,
-  ) => setMove({ anchor, ids, currentClientId: clientId, currentCategory: category, label, suggestClientId });
+    label: string, suggestClientId: number | null = null, allowUnchanged = false,
+  ) => setMove({ anchor, ids, currentClientId: clientId, currentCategory: category, label, suggestClientId, allowUnchanged });
 
   // ── Mutations (both hit the shared recategorize endpoint) ───────────────────
   const recategorize = (id: number, clientId: number | null, category: string, source?: string) =>
@@ -446,8 +449,8 @@ export default function CompactSummary({
                   key={`p${b.block_id}`} b={b} busy={busy}
                   onAccept={(cid) => acceptTo(b, cid)}
                   onNotBillable={() => acceptTo(b, null)}
-                  onPick={(anchor) => openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Pick a client")}
-                  onChange={(anchor) => openMove(anchor, [b.block_id], b.proposed_client_id, b.proposed_category || catList[0], "Change client", b.proposed_client_id)}
+                  onPick={(anchor) => openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Pick a client", null, true)}
+                  onChange={(anchor) => openMove(anchor, [b.block_id], b.proposed_client_id, b.proposed_category || catList[0], "Change client", b.proposed_client_id, true)}
                 />
               ))}
               {needsYou.mismatch.map((m) => (
@@ -455,7 +458,7 @@ export default function CompactSummary({
                   key={`m${m.block_id}`} m={m} busy={busy}
                   onFix={() => fixMismatch(m)}
                   onKeep={() => onIgnoreMismatch([m.block_id])}
-                  onPick={(anchor) => openMove(anchor, [m.block_id], m.booked_client_id, m.category || catList[0], "Move to…", m.looks_like_client_id)}
+                  onPick={(anchor) => openMove(anchor, [m.block_id], m.booked_client_id, m.category || catList[0], "Move to…", m.looks_like_client_id, true)}
                 />
               ))}
             </div>
@@ -472,6 +475,7 @@ export default function CompactSummary({
           currentCategory={move.currentCategory}
           label={move.label}
           suggestClientId={move.suggestClientId ?? null}
+          allowUnchanged={move.allowUnchanged ?? false}
           onApply={(clientId, category) => { moveBlocks(move.ids, clientId, category); setMove(null); }}
           onClose={() => setMove(null)}
         />

@@ -170,7 +170,7 @@ const CLIENT_ACCENTS = [
 // ─── Move Popover ─────────────────────────────────────────────────────────────
 
 export function MovePopover({
-  anchorEl, clients, categories, currentClientId, currentCategory, label, defaultAlias, suggestClientId, onApply, onClose,
+  anchorEl, clients, categories, currentClientId, currentCategory, label, defaultAlias, suggestClientId, allowUnchanged, onApply, onClose,
 }: {
   anchorEl?: HTMLElement | null;
   clients: ClientOption[]; categories: string[];
@@ -180,6 +180,10 @@ export function MovePopover({
   // Pre-select a DIFFERENT client than the current one (e.g. an anomaly's
   // "looks like X" suggestion) so Apply is armed to accept it in one click.
   suggestClientId?: number | null;
+  // Allow Apply even when the selection matches the current values — for
+  // UNRESOLVED rows (pending / mismatch) where committing "as-is" (e.g. keep as
+  // No client · Non-Billable) is itself the meaningful action.
+  allowUnchanged?: boolean;
   onApply: (clientId: number | null, category: string) => void;
   onClose: () => void;
 }) {
@@ -227,7 +231,7 @@ export function MovePopover({
   // Only honor the alias when the field is open, so a pre-filled default is
   // never added without the user opening/seeing it.
   const alias = aliasOpen ? aliasVal.trim() : "";
-  const canApply = (hasChanged || !!alias) && !aliasBusy;
+  const canApply = (hasChanged || !!alias || !!allowUnchanged) && !aliasBusy;
 
   // Apply = optionally teach the alias, then move. The alias add is done here
   // (self-contained) so a "too close to another client" rejection can be shown
@@ -249,7 +253,7 @@ export function MovePopover({
       }
       setAliasBusy(false);
     }
-    if (hasChanged) onApply(selClient, selCat); // moves (and closes) as before
+    if (hasChanged || allowUnchanged) onApply(selClient, selCat); // move / commit-as-is
     else onClose(); // alias-only: nothing to move
   };
   applyRef.current = apply;

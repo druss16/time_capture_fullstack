@@ -4567,6 +4567,16 @@ def today_time(request):
             _why_reason, _why_sid, _why_sname = why_summary(_b, org)
         except Exception:
             _why_reason, _why_sid, _why_sname = ('', None, None)
+        # Learning progress for the suggested client — powers the "Learning… ~N
+        # more to auto-file" hint so a repeated suggestion visibly graduates.
+        _learning = None
+        try:
+            from tracker.services.pattern_learning import PatternLearningService
+            _sid = _why_sid or _b.proposed_client_id
+            if _sid:
+                _learning = PatternLearningService.progress_for_block(_b, user, _sid)
+        except Exception:
+            _learning = None
         proposed_inline.append({
             'block_id':             _b.id,
             'window_title':         getattr(_b, 'window_title', '') or '',
@@ -4579,6 +4589,7 @@ def today_time(request):
             'why_explanation':          _why_reason,
             'why_suggested_client_id':  _why_sid,
             'why_suggested_client_name': _why_sname,
+            'learning':                 _learning,
         })
 
     # ── Mismatch flags: title clearly names a DIFFERENT client than booked ──

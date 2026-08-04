@@ -4027,22 +4027,32 @@ class ClassificationService:
     @staticmethod
     def _learned_pattern_strength(pattern) -> float:
         """
-        Compute signal strength from a UserWorkPattern with v1.2.96 hardening.
+        Compute signal strength from a UserWorkPattern.
+
+        Maturity is gated on occurrence_count — the number of times the user has
+        CONFIRMED this pattern. (It used to gate on total_predictions, but that
+        counter is only bumped by UserWorkPattern.update_confidence(), which is
+        never called anywhere — so total_predictions was permanently 0 and EVERY
+        learned pattern was stuck ≤0.50 strength, below the 0.65 auto-file bar.
+        Net effect: learned patterns never auto-categorized no matter how many
+        times a user confirmed them. Confirmations are the real reinforcement.)
 
         Rules:
-          - Patterns with < 5 predictions are weak (max 0.50) regardless of confidence
-          - Patterns with high occurrence_count (>= 50) get a small boost
-          - Confidence score is weighted by sqrt of total_predictions to favor proven patterns
+          - < 5 confirmations → weak (≤0.50) regardless of confidence
+          - otherwise → confidence_score, capped at 0.80 (never a lone strong signal)
+          - occurrence_count >= 50 → small boost
         """
-        # Hardening: insufficient data = weak signal
-        if pattern.total_predictions < 5:
-            return min(0.50, pattern.confidence_score * 0.6)
+        occ = pattern.occurrence_count or 0
+
+        # Not yet reinforced enough — weak signal (suggest, don't auto-file).
+        if occ < 5:
+            return min(0.50, (pattern.confidence_score or 0) * 0.6)
 
         # Use confidence_score as base, capped at 0.80 (learned patterns NEVER strong-signal)
-        base = min(0.80, pattern.confidence_score)
+        base = min(0.80, pattern.confidence_score or 0)
 
         # Occurrence boost: patterns seen many times are more trustworthy
-        if pattern.occurrence_count >= 50:
+        if occ >= 50:
             base = min(0.80, base + 0.05)
 
         return round(base, 3)

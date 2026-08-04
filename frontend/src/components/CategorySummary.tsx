@@ -94,6 +94,9 @@ export type ProposedInline = {
   why_explanation?: string;
   why_suggested_client_id?: number | null;
   why_suggested_client_name?: string | null;
+  // Learned-pattern maturity for the suggested client (the "Learning… ~N more to
+  // auto-file" hint). null = no pattern yet; {mature} = will auto-file already.
+  learning?: { mature?: boolean; seen?: number; remaining?: number } | null;
 };
 
 type ParsedActivity = { blockId: number | null; blockIds: number[]; title: string };

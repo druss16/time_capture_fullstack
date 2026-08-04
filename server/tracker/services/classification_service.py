@@ -4042,6 +4042,19 @@ class ClassificationService:
           - otherwise → confidence_score, capped at 0.80 (never a lone strong signal)
           - occurrence_count >= 50 → small boost
         """
+        # A generic app/QB dialog title ("Print Checks", "Write Checks"…) carries
+        # no client identity — such blocks are attributed by temporal/co-open
+        # context, not the title. Never let a title-prefix pattern built from one
+        # auto-file (it would stamp EVERY "Print Checks" block onto whichever
+        # client it once landed under). Keep it weak so it never crosses 0.65.
+        if getattr(pattern, 'pattern_type', None) == 'window_title_prefix':
+            try:
+                from tracker.services.pattern_learning import PatternLearningService
+                if PatternLearningService._is_generic_title_key((pattern.pattern_key or '').lower()):
+                    return round(min(0.40, (pattern.confidence_score or 0) * 0.4), 3)
+            except Exception:
+                pass
+
         occ = pattern.occurrence_count or 0
 
         # Not yet reinforced enough — weak signal (suggest, don't auto-file).

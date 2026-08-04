@@ -4071,6 +4071,30 @@ class ClassificationService:
         return round(base, 3)
 
 
+    # Apps whose "title" is a person / conversation, not a document — so the
+    # window title never proves which client the work belongs to.
+    EMAIL_CHAT_APPS = ('outlook', 'teams', 'slack', 'thunderbird', 'gmail')
+
+    @staticmethod
+    def _email_chat_temporal_only(block, signals, client_id) -> bool:
+        """True for an email/chat block whose client is attested ONLY by
+        contextual signals (temporal 'prior_block' / co-open / agent) — with no
+        name match AND no learned pattern. A person-named Outlook/Teams thread
+        pinned to a client purely by "you worked on X right before/after" is too
+        shaky to auto-bill, so the broad auto-confirm gate must skip it and leave
+        it in "Needs you" for a human. (A real name-in-title, or a pattern the
+        user has taught, still auto-files as normal.)"""
+        app = (getattr(block, 'app_name', '') or '').lower()
+        if not any(k in app for k in ClassificationService.EMAIL_CHAT_APPS):
+            return False
+        trusted = set(AUTO_CONFIRM_NAME_SIGNAL_TYPES) | {'learned_pattern'}
+        has_trusted = any(
+            s.type in trusted and getattr(s, 'proposed_client_id', None) == client_id
+            for s in signals
+        )
+        return not has_trusted
+
+
     def _stage_10_ai_inference(self, block, decision: ClassificationDecision):
         """
         Call OpenAI to classify with full block context (titles, paths, URLs,
@@ -5310,6 +5334,7 @@ class ClassificationService:
                 and decision.recommended_state != 'committed'
                 and decision.client_id is not None
                 and not decision.needs_review
+                and not self._email_chat_temporal_only(block, signals, decision.client_id)
                 and not self._has_contradicting_signal(signals, decision.client_id)
             ):
                 decision.confidence = max(s.strength for s in moderate_or_better)

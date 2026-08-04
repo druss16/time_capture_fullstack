@@ -84,6 +84,40 @@ PERSONAL_SITE_DETECTION = {
         "category": "Personal/Non-Billable",
         "confidence": 0.82  # Lower - Reddit can be work research
     },
+    "news_media": {
+        # Consumer news/media outlets → personal browsing, non-billable.
+        # Matched against the window-title haystack (so a page title like
+        # "Fox News viewers turn on … - Fox News" is caught even with no URL)
+        # and the URL domain. Keywords are kept DISTINCTIVE on purpose:
+        #   • no bare "news" (would hit "Google News", client names, tax news)
+        #   • no "reuters"/"bloomberg" keyword (would hit Thomson Reuters /
+        #     Bloomberg Tax — professional research tools). Their news domains
+        #     are matched instead.
+        # Finance/market research a CPA may legitimately bill (Bloomberg, CNBC,
+        # MarketWatch, Yahoo Finance, Seeking Alpha, Morningstar) is intentionally
+        # NOT included here.
+        "keywords": [
+            "fox news", "cnn", "msnbc", "nbc news", "abc news", "cbs news",
+            "bbc news", "npr", "usa today", "the guardian", "politico",
+            "breitbart", "newsmax", "huffpost", "huffington post",
+            "daily mail", "new york post", "the daily beast", "al jazeera",
+            "google news", "associated press", "new york times",
+            "washington post", "wall street journal", "los angeles times",
+        ],
+        "domains": [
+            "foxnews.com", "cnn.com", "msnbc.com", "nbcnews.com",
+            "abcnews.go.com", "cbsnews.com", "bbc.com", "bbc.co.uk",
+            "npr.org", "usatoday.com", "theguardian.com", "politico.com",
+            "thehill.com", "breitbart.com", "newsmax.com", "huffpost.com",
+            "dailymail.co.uk", "nypost.com", "thedailybeast.com",
+            "apnews.com", "reuters.com", "aljazeera.com", "vox.com",
+            "slate.com", "salon.com", "news.yahoo.com", "news.google.com",
+            "nytimes.com", "washingtonpost.com", "wsj.com",
+            "latimes.com", "chicagotribune.com",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.88
+    },
     "shopping": {
         "keywords": [
             "amazon.com/gp", "amazon.com/dp", "ebay", "etsy", "walmart",

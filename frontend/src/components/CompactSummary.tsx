@@ -603,6 +603,12 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
       <span className={CHIP}>{fmtMin(b.minutes || 0)}</span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
+          {sourceLabel(b.app_name) && (
+            <span className="shrink-0 rounded-md border border-border bg-muted/60 px-1.5 py-0.5 font-sans text-[10px] font-medium text-muted-foreground"
+              title={`Captured from ${b.app_name}`}>
+              {sourceLabel(b.app_name)}
+            </span>
+          )}
           <span className="truncate font-mono text-[12.5px] text-foreground">{b.window_title || "(untitled)"}</span>
           {why?.personal && (
             <span title="Looks like personal browsing — not client work"
@@ -744,6 +750,28 @@ function SplitCandidateRow({ sc, busy, onSplit, onKeep }: {
       </div>
     </div>
   );
+}
+
+// A friendly "where did this come from" label from the capturing app, so a
+// bare title like "Kennedy Barnes" reads as "Email · Kennedy Barnes" (an Outlook
+// thread), not a mystery. Returns null when the app is unknown/uninformative.
+function sourceLabel(app?: string): string | null {
+  const a = (app || "").toLowerCase();
+  if (!a) return null;
+  if (a.includes("outlook")) return "Email";
+  if (a.includes("teams")) return "Teams";
+  if (a.includes("slack")) return "Slack";
+  if (a.includes("qbw") || a.includes("quickbook")) return "QuickBooks";
+  if (a.includes("excel")) return "Excel";
+  if (a.includes("winword") || a.includes("word.exe")) return "Word";
+  if (a.includes("powerpnt") || a.includes("powerpoint")) return "PowerPoint";
+  if (a.includes("acrobat") || a.includes("acrord") || a.includes("acrodist")) return "PDF";
+  if (a.includes("lacerte") || a.includes("ultratax") || a.includes("proseries") ||
+      a.includes("drake") || a.includes("professional suite")) return "Tax software";
+  if (a.includes("msedge") || a.includes("chrome") || a.includes("firefox") ||
+      a.includes("edge") || a.includes("opera") || a.includes("brave")) return "Web";
+  const cleaned = (app || "").replace(/\.exe$/i, "").trim();
+  return cleaned || null;
 }
 
 // minutes -> "1h 13m" / "45m" / "2h"

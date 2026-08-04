@@ -4580,6 +4580,7 @@ def today_time(request):
         proposed_inline.append({
             'block_id':             _b.id,
             'window_title':         getattr(_b, 'window_title', '') or '',
+            'app_name':             getattr(_b, 'app_name', '') or '',
             'minutes':              _b.minutes or 0,
             'proposed_client_id':   _b.proposed_client_id,
             'proposed_client_name': _b.proposed_client.name if _b.proposed_client_id else None,

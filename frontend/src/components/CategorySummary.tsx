@@ -83,6 +83,7 @@ export type FlaggedBlock = {
 export type ProposedInline = {
   block_id: number;
   window_title: string;
+  app_name?: string;
   minutes: number;
   proposed_client_id: number | null;
   proposed_client_name: string | null;

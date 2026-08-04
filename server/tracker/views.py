@@ -7305,6 +7305,75 @@ def add_client_alias(request, client_id):
     return Response({"success": True, "aliases": existing})
 
 
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def always_file_block(request, block_id):
+    """One-click "always file titles like this under this client".
+
+    Turns a single confirmation into a HARD, firm-wide rule: derives the
+    distinctive client-name phrase already present in the block's title (e.g.
+    "CNY Coin" from "CNY Coin Client Information — Excel") and adds it as a
+    client alias, so future titles carrying that phrase auto-attribute to this
+    client on the very next capture — no waiting for pattern-learning confidence
+    to build. Reuses add_client_alias's sibling-collision safety gate.
+
+    Aliases are org-scoped, so this applies FIRM-WIDE (everyone's captures).
+    """
+    try:
+        block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
+    except Block.DoesNotExist:
+        return Response({"error": "Block not found"}, status=404)
+
+    cid = request.data.get("client_id")
+    if not cid:
+        return Response({"error": "client_id required"}, status=400)
+
+    org = block.org
+    try:
+        client = Client.objects.get(id=cid, org=org)
+    except Client.DoesNotExist:
+        return Response({"error": "Client not found"}, status=404)
+
+    # Derive the alias = the longest contiguous run of the CLIENT's name tokens
+    # that appears in the title (possessives folded, generic 1-char tokens gone).
+    from tracker.views_block_evidence import _norm_name_toks
+    ltoks = _norm_name_toks(block.window_title or "")
+    ctoks = _norm_name_toks(client.name)
+    label_join = " " + " ".join(ltoks) + " "
+    alias = ""
+    for i in range(len(ctoks)):
+        for j in range(i + 1, len(ctoks) + 1):
+            phrase = " ".join(ctoks[i:j])
+            if (" " + phrase + " ") in label_join and len(phrase) > len(alias):
+                alias = phrase
+    if len(alias) < 5:
+        return Response(
+            {"error": "This title doesn’t clearly contain the client’s name, so a "
+                      "safe rule can’t be auto-made. Use “Change → Remember a name”."},
+            status=422,
+        )
+
+    existing = list(client.aliases or [])
+    if any(isinstance(a, str) and a.lower() == alias.lower() for a in existing):
+        return Response({"success": True, "alias": alias, "client_name": client.name, "already": True})
+
+    from tracker.services.alias_suggestion import alias_is_safe_to_add
+    siblings = list(Client.objects.filter(org=org).only("id", "name"))
+    if not alias_is_safe_to_add(alias, client, siblings):
+        return Response(
+            {"error": f"“{alias}” is too close to another client to make a safe rule."},
+            status=409,
+        )
+
+    existing.append(alias)
+    client.aliases = existing
+    sources = dict(client.alias_sources or {})
+    sources.setdefault(alias.lower(), "manual")
+    client.alias_sources = sources
+    client.save(update_fields=["aliases", "alias_sources"])
+    return Response({"success": True, "alias": alias, "client_name": client.name})
+
+
 # ============================================================================
 # Devices (Agent Registrations)
 # ============================================================================

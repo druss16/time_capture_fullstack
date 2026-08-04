@@ -137,6 +137,24 @@ export default function CompactSummary({
     } catch { showToast("Couldn’t update this entry", "error"); }
   }, [onRefresh, showToast]);
 
+  // "Always file titles like this here": confirm this block AND turn it into a
+  // hard, firm-wide rule (a client alias derived from the title) so future
+  // matching captures auto-file on the next occurrence — no waiting for
+  // pattern-learning confidence to build.
+  const alwaysFile = useCallback(async (b: ProposedInline, clientId: number) => {
+    try {
+      const r = await safeFetchJson<{ alias?: string; client_name?: string }>(
+        `${API_BASE}/blocks/${b.block_id}/always-file/`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_id: clientId }) },
+      );
+      await recategorize(b.block_id, clientId, b.proposed_category || "General Client Work", "single_confirm");
+      showToast(r?.alias ? `Now always filing “${r.alias}” here` : "Rule created", "success");
+      onRefresh();
+    } catch (e: any) {
+      showToast(e?.data?.error || "Couldn’t make that a rule", "error");
+    }
+  }, [onRefresh, showToast]);
+
   // One-click mismatch fix: reassign to the client the title actually names,
   // preserving the block's category.
   const fixMismatch = useCallback(async (m: MismatchBlock) => {
@@ -490,6 +508,7 @@ export default function CompactSummary({
                 <PendingRow
                   key={`p${b.block_id}`} b={b} busy={busy}
                   onAccept={(cid) => acceptTo(b, cid)}
+                  onAlwaysFile={(cid) => alwaysFile(b, cid)}
                   onNotBillable={() => acceptTo(b, null)}
                   onPick={(anchor) => openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Pick a client", null, true)}
                   onChange={(anchor) => openMove(anchor, [b.block_id], b.proposed_client_id, b.proposed_category || catList[0], "Change client", b.proposed_client_id, true)}
@@ -546,10 +565,11 @@ type WhyData = {
 
 /** Pending: accept the green suggested client in one tap (with the contextual
  *  reason from /why/), or pick a client / mark not billable when there's no guess. */
-function PendingRow({ b, busy, onAccept, onNotBillable, onPick, onChange }: {
+function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, onChange }: {
   b: ProposedInline;
   busy: boolean;
   onAccept: (clientId: number) => void;
+  onAlwaysFile: (clientId: number) => void;
   onNotBillable: () => void;
   onPick: (anchor: HTMLElement) => void;
   onChange: (anchor: HTMLElement) => void;
@@ -592,6 +612,15 @@ function PendingRow({ b, busy, onAccept, onNotBillable, onPick, onChange }: {
           )}
         </div>
         {reason && <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">{reason}</div>}
+        {guessId != null && (
+          <button
+            onClick={() => onAlwaysFile(guessId)}
+            disabled={busy}
+            title={`Make a firm-wide rule: always file titles like this under ${guessName}`}
+            className="mt-1.5 inline-flex items-center gap-1 font-sans text-[11px] font-medium text-primary/75 transition-colors hover:text-primary hover:underline disabled:opacity-50">
+            <Check className="h-3 w-3" /> Always file titles like this here
+          </button>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {guessId ? (

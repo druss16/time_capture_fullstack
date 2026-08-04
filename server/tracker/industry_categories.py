@@ -63,11 +63,16 @@ PERSONAL_SITE_DETECTION = {
             "netflix", "hulu", "disney+", "disneyplus", "amazon prime video",
             "hbo max", "max.com", "peacock", "paramount+", "apple tv+",
             "crunchyroll", "spotify", "pandora", "apple music",
+            # music / internet radio
+            "iheartradio", "iheart", "tunein", "audacy", "siriusxm", "soundcloud",
+            "listen to your favorite music",  # iHeartRadio's page title
         ],
         "domains": [
             "netflix.com", "hulu.com", "disneyplus.com", "max.com",
             "peacocktv.com", "paramountplus.com", "tv.apple.com",
             "crunchyroll.com", "spotify.com", "pandora.com",
+            "iheart.com", "iheartradio.com", "tunein.com", "audacy.com",
+            "siriusxm.com", "soundcloud.com",
         ],
         "category": "Personal/Non-Billable",
         "confidence": 0.95
@@ -104,6 +109,7 @@ PERSONAL_SITE_DETECTION = {
             "daily mail", "new york post", "the daily beast", "al jazeera",
             "google news", "associated press", "new york times",
             "washington post", "wall street journal", "los angeles times",
+            "personalized news, top headlines",  # MSN news portal title
             # finance/market news (owner opted in — non-billable)
             "bloomberg", "cnbc", "marketwatch", "yahoo finance",
             "seeking alpha", "morningstar",
@@ -117,7 +123,7 @@ PERSONAL_SITE_DETECTION = {
             "apnews.com", "reuters.com", "aljazeera.com", "vox.com",
             "slate.com", "salon.com", "news.yahoo.com", "news.google.com",
             "nytimes.com", "washingtonpost.com", "wsj.com",
-            "latimes.com", "chicagotribune.com",
+            "latimes.com", "chicagotribune.com", "msn.com",
             # finance/market news
             "bloomberg.com", "cnbc.com", "marketwatch.com",
             "finance.yahoo.com", "seekingalpha.com", "morningstar.com",
@@ -129,10 +135,14 @@ PERSONAL_SITE_DETECTION = {
         "keywords": [
             "amazon.com/gp", "amazon.com/dp", "ebay", "etsy", "walmart",
             "target.com", "bestbuy", "wayfair", "aliexpress",
+            "costco", "home depot", "lowe's", "macy's", "kohl's",
+            "nordstrom", "chewy", "temu", "shein",
         ],
         "domains": [
             "amazon.com", "ebay.com", "etsy.com", "walmart.com",
             "target.com", "bestbuy.com", "wayfair.com", "aliexpress.com",
+            "costco.com", "homedepot.com", "lowes.com", "macys.com",
+            "kohls.com", "nordstrom.com", "chewy.com", "temu.com", "shein.com",
         ],
         "category": "Personal/Non-Billable",
         "confidence": 0.85
@@ -156,6 +166,65 @@ PERSONAL_SITE_DETECTION = {
         "domains": ["tinder.com", "bumble.com", "hinge.co", "match.com"],
         "category": "Personal/Non-Billable",
         "confidence": 0.98
+    },
+    "weather": {
+        "keywords": ["accuweather", "weather.com", "wunderground", "weather forecast"],
+        "domains": ["weather.com", "accuweather.com", "wunderground.com", "weather.gov"],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.88
+    },
+    "sports": {
+        "keywords": [
+            "espn", "bleacher report", "the athletic", "barstool",
+            "yahoo sports", "cbs sports", "fox sports", "nfl.com",
+            "nba.com", "mlb.com", "nhl.com",
+        ],
+        "domains": [
+            "espn.com", "bleacherreport.com", "theathletic.com",
+            "sports.yahoo.com", "cbssports.com", "foxsports.com",
+            "nfl.com", "nba.com", "mlb.com", "nhl.com",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.85
+    },
+    "travel": {
+        "keywords": [
+            "expedia", "tripadvisor", "booking.com", "airbnb", "kayak",
+            "priceline", "travelocity", "hotels.com", "vrbo", "trivago",
+        ],
+        "domains": [
+            "expedia.com", "tripadvisor.com", "booking.com", "airbnb.com",
+            "kayak.com", "priceline.com", "travelocity.com", "hotels.com",
+            "vrbo.com", "trivago.com",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.90
+    },
+    "real_estate": {
+        # Personal home/apartment browsing (not a client's property valuation).
+        "keywords": ["zillow", "realtor.com", "redfin", "trulia", "apartments.com"],
+        "domains": [
+            "zillow.com", "realtor.com", "redfin.com", "trulia.com",
+            "apartments.com",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.85
+    },
+    "food_recipes": {
+        "keywords": ["allrecipes", "food network", "epicurious", "recipe", "doordash", "grubhub", "ubereats"],
+        "domains": [
+            "allrecipes.com", "foodnetwork.com", "epicurious.com",
+            "doordash.com", "grubhub.com", "ubereats.com",
+        ],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.82
+    },
+    "novelty_apps": {
+        # Prank / novelty consumer apps (owner confirmed personal, not clients).
+        "keywords": ["prankhotline", "prankportal", "prank call", "prank calling"],
+        "domains": ["prankhotline.com", "prankportal.com"],
+        "category": "Personal/Non-Billable",
+        "confidence": 0.92
     },
 }
 

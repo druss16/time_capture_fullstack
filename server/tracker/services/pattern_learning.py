@@ -324,6 +324,19 @@ class PatternLearningService:
     LEARNING_SOURCES = {'correction', 'single_confirm', 'manual'}
 
     @staticmethod
+    def _is_generic_title_key(key_lower: str) -> bool:
+        """True if a title-derived pattern key is a generic app/QB dialog that
+        carries no client identity (so it must never become a title→client rule).
+        Reuses the curated GENERIC_TITLE denylist from second_pass."""
+        if not key_lower:
+            return False
+        try:
+            from tracker.services.second_pass import GENERIC_TITLE
+        except Exception:
+            return False
+        return any(g in key_lower for g in GENERIC_TITLE)
+
+    @staticmethod
     def _strength(pattern) -> float:
         """Signal strength of a learned pattern — mirror of ClassificationService
         ._learned_pattern_strength (KEEP IN SYNC): weak until CONFIRMED 5+ times
@@ -369,6 +382,10 @@ class PatternLearningService:
                      .filter(q, user=user, client_id=client_id)
                      .order_by('-confidence_score').first())
             if not match:
+                return None
+            # A generic-title pattern must never auto-file, so don't promise it —
+            # no "learning… will auto-file" hint on generic app/QB dialog blocks.
+            if PatternLearningService._is_generic_title_key((match.pattern_key or '').lower()):
                 return None
             if PatternLearningService._strength(match) >= 0.65:
                 return {'mature': True}
@@ -432,6 +449,14 @@ class PatternLearningService:
             if len(key_lower) < 8:
                 continue
             if key_lower in LEARNED_PATTERN_BLACKLIST:
+                continue
+            # Generic app/QB dialog titles ("Print Checks", "Write Checks",
+            # "Reconcile"…) carry NO client identity — such a block is attributed
+            # by temporal/co-open context, not the title. Learning a title→client
+            # pattern from it would auto-file EVERY "Print Checks" block to
+            # whichever client it happened to land under. Reuse second_pass's
+            # curated GENERIC_TITLE denylist (which already lists these).
+            if PatternLearningService._is_generic_title_key(key_lower):
                 continue
             try:
                 pattern, created = UserWorkPattern.objects.get_or_create(

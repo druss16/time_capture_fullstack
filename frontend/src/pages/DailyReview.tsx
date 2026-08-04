@@ -446,7 +446,15 @@ export default function DailyReview() {
   const totalMin = Math.round(totalHours * 60);
   const needsMin = lanes.needsYou.minutes;
   const sortedMin = Math.max(0, totalMin - needsMin);
-  const sortedPct = totalMin > 0 ? Math.round((sortedMin / totalMin) * 100) : 100;
+  // 100% is reserved for a truly-clear day (nothing in "Needs you"). While
+  // anything remains, never round up to 100 — cap at 99 so 1m left still reads
+  // 99%, not a misleading "100% sorted".
+  const sortedPct =
+    lanes.needsYou.count === 0
+      ? 100
+      : totalMin > 0
+        ? Math.min(99, Math.round((sortedMin / totalMin) * 100))
+        : 0;
 
   const stepDate = (days: number) => {
     const d = new Date(date + "T00:00:00");

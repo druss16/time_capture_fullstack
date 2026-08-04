@@ -85,17 +85,18 @@ PERSONAL_SITE_DETECTION = {
         "confidence": 0.82  # Lower - Reddit can be work research
     },
     "news_media": {
-        # Consumer news/media outlets → personal browsing, non-billable.
-        # Matched against the window-title haystack (so a page title like
-        # "Fox News viewers turn on … - Fox News" is caught even with no URL)
+        # Consumer news/media outlets (incl. finance news) → personal browsing,
+        # non-billable. Matched against the window-title haystack (so a page title
+        # like "Fox News viewers turn on … - Fox News" is caught even with no URL)
         # and the URL domain. Keywords are kept DISTINCTIVE on purpose:
         #   • no bare "news" (would hit "Google News", client names, tax news)
-        #   • no "reuters"/"bloomberg" keyword (would hit Thomson Reuters /
-        #     Bloomberg Tax — professional research tools). Their news domains
-        #     are matched instead.
-        # Finance/market research a CPA may legitimately bill (Bloomberg, CNBC,
-        # MarketWatch, Yahoo Finance, Seeking Alpha, Morningstar) is intentionally
-        # NOT included here.
+        #   • no "reuters" keyword (would hit Thomson Reuters — its news domain
+        #     reuters.com is matched instead)
+        # Professional tax/accounting research is PROTECTED by confidence, not by
+        # exclusion: CPA_TOOL_DETECTION.tax_research (Checkpoint / Thomson Reuters
+        # / Bloomberg Tax, conf 0.92) outranks this bucket (0.88) in Stage 9.6, so
+        # e.g. a "Bloomberg Tax" title stays Tax Research even though "bloomberg"
+        # is a news keyword here.
         "keywords": [
             "fox news", "cnn", "msnbc", "nbc news", "abc news", "cbs news",
             "bbc news", "npr", "usa today", "the guardian", "politico",
@@ -103,6 +104,9 @@ PERSONAL_SITE_DETECTION = {
             "daily mail", "new york post", "the daily beast", "al jazeera",
             "google news", "associated press", "new york times",
             "washington post", "wall street journal", "los angeles times",
+            # finance/market news (owner opted in — non-billable)
+            "bloomberg", "cnbc", "marketwatch", "yahoo finance",
+            "seeking alpha", "morningstar",
         ],
         "domains": [
             "foxnews.com", "cnn.com", "msnbc.com", "nbcnews.com",
@@ -114,6 +118,9 @@ PERSONAL_SITE_DETECTION = {
             "slate.com", "salon.com", "news.yahoo.com", "news.google.com",
             "nytimes.com", "washingtonpost.com", "wsj.com",
             "latimes.com", "chicagotribune.com",
+            # finance/market news
+            "bloomberg.com", "cnbc.com", "marketwatch.com",
+            "finance.yahoo.com", "seekingalpha.com", "morningstar.com",
         ],
         "category": "Personal/Non-Billable",
         "confidence": 0.88

@@ -363,7 +363,7 @@ export default function CompactSummary({
                             </div>
                           )}
                           <div className="flex flex-wrap items-center gap-2">
-                            <button onClick={(e) => openMove(e.currentTarget, r.ids, g.clientId, r.category, "Change client / category")}
+                            <button onClick={(e) => openMove(e.currentTarget, r.ids, g.clientId, r.category, "Change client / category", null, false, suggestAliasFromTitle(r.title))}
                               className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20">
                               Change client / category <ChevronDown className="h-3 w-3" />
                             </button>

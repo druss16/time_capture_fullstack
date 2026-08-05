@@ -22,6 +22,10 @@ work to the correct client.
   is focused.
 - Before use, the **query string and fragment are removed** from the URL, so
   session tokens, account identifiers, and sharing links are discarded.
+- On **QuickBooks Online (`qbo.intuit.com`) only**, one cookie —
+  `qbo.currentcompanyid`, the id of the company you currently have open — so time
+  can be attributed to the correct client when staff switch between client
+  companies. No other cookies are read, and no page contents are accessed.
 
 It does **not** access:
 
@@ -51,6 +55,9 @@ the same terms covering the desktop agent your organization already runs.
 ## Permissions
 
 - **`tabs`** — to read the active tab's URL and title for attribution.
+- **`cookies` + host access to `qbo.intuit.com`** — to read the single
+  `qbo.currentcompanyid` cookie (the active QuickBooks company id) so time is
+  attributed to the right client. No other cookies or page contents are read.
 - **Host access to `http://127.0.0.1/*`** — the only network destination, used
   to reach the local desktop agent.
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TimeTracker URL Reporter",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Reports the active tab's URL to the local TimeTracker agent for accurate client attribution. Reads tab URL/title only; never page contents.",
 
   "minimum_chrome_version": "102",
@@ -9,11 +9,14 @@
   "permissions": [
     "tabs",
     "storage",
-    "alarms"
+    "alarms",
+    "cookies"
   ],
 
   "host_permissions": [
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "https://qbo.intuit.com/*",
+    "https://*.qbo.intuit.com/*"
   ],
 
   "background": {

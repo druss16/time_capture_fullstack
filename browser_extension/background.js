@@ -58,6 +58,7 @@ const DEFAULT_STATS = {
   lastUrl: "",      // last reported (sanitized) URL
   lastTitle: "",    // last reported title
   lastAt: "",       // ISO timestamp of the last report
+  lastQboCompanyId: "", // last QBO active-company id (realmId) captured, if any
 };
 
 async function getStats() {
@@ -75,6 +76,34 @@ async function setStats(s) {
 
 async function resetStats() {
   await setStats(Object.assign({}, DEFAULT_STATS));
+}
+
+// --- QBO active-company id (Model B) ----------------------------------------
+// QuickBooks Online never puts the company id in the working URL — it lives in
+// the session. But QBO stores the CURRENTLY-ACTIVE company id in a readable
+// cookie named "qbo.currentcompanyid" (the realmId), and it changes the moment
+// an accountant switches into a different client's books. We read exactly that
+// one cookie via chrome.cookies (no page content, no DOM) so the agent always
+// knows WHICH client a QBO session is working on. Requires the "cookies"
+// permission + host access to qbo.intuit.com.
+const QBO_HOST_RE = /(^|\.)qbo\.intuit\.com$/i;
+const QBO_COMPANY_COOKIE = "qbo.currentcompanyid";
+
+async function qboCompanyId(rawUrl) {
+  try {
+    if (!rawUrl || !chrome.cookies || !chrome.cookies.get) return null;
+    const u = new URL(rawUrl);
+    if (u.protocol !== "https:" || !QBO_HOST_RE.test(u.hostname)) return null;
+    const c = await chrome.cookies.get({
+      url: `${u.protocol}//${u.host}/`,
+      name: QBO_COMPANY_COOKIE,
+    });
+    const val = c && c.value ? c.value.trim() : "";
+    // realmId is a long numeric id; ignore anything that doesn't look like one.
+    return /^\d{6,25}$/.test(val) ? val : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 // --- URL hygiene: keep scheme://host/path, drop query + fragment ------------
@@ -171,20 +200,29 @@ async function reportActiveTab() {
     const title = tab.title || "";
     const nowIso = new Date().toISOString();
 
+    // If this is a QuickBooks Online tab, read the active company id (realmId)
+    // from the qbo.currentcompanyid cookie so the agent knows which client's
+    // books are open. Null for non-QBO tabs.
+    const qboId = await qboCompanyId(tab.url || tab.pendingUrl || "");
+
     // Count the capture and record what we saw, then record the send outcome.
     const stats = await getStats();
     stats.captured += 1;
     stats.lastUrl = url;
     stats.lastTitle = title;
     stats.lastAt = nowIso;
+    if (qboId) stats.lastQboCompanyId = qboId;
 
-    const ok = await postToAgent({
+    const payload = {
       source: "browser_extension",
       url: url,
       title: title,
       window_focused: true,
       tab_focused_at: nowIso,
-    });
+    };
+    if (qboId) payload.qbo_company_id = qboId;
+
+    const ok = await postToAgent(payload);
 
     if (ok) stats.sentOk += 1; else stats.sendFailed += 1;
     await setStats(stats);

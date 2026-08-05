@@ -295,12 +295,26 @@ def _titlecase(form: str) -> str:
 # ("church", "cemetery") are shared across many religious clients, so an
 # alias must retain at least one token OUTSIDE this set that is unique to
 # the client (typically a town or distinctive saint name).
-_NON_DISTINGUISHING = {
+#
+# Split into two roles:
+#   _GENERIC_PREFIXES — titles/articles that never distinguish anyone
+#     ("St", "the", "of"…).
+#   _ENTITY_HEADNOUNS — the org/entity TYPE noun ("Church", "Cemetery",
+#     "School"…). Between two SAME-named entities (St Patrick Church-Jordan
+#     vs -Taberg) the head-noun is shared and useless — hence it's stripped
+#     for the general subset guard. But between DIFFERENT entity types with
+#     the same saint (St John *Cemetery* vs St John *Church*) the head-noun
+#     is the ONLY differentiator, so a signature that keeps it (see
+#     _entity_aware_token_sig) can tell them apart.
+_GENERIC_PREFIXES = {
     "st", "saint", "mt", "mount", "ft", "fort", "dr", "doctor",
     "the", "of", "and", "for", "a", "an",
+}
+_ENTITY_HEADNOUNS = {
     "church", "cemetery", "parish", "catholic", "chapel", "fund",
     "foundation", "school", "ministry", "ministries", "mission",
 }
+_NON_DISTINGUISHING = _GENERIC_PREFIXES | _ENTITY_HEADNOUNS
 
 
 def _distinctive_token_sig(alias: str) -> frozenset:
@@ -316,6 +330,26 @@ def _distinctive_token_sig(alias: str) -> frozenset:
     return frozenset(
         t for t in toks
         if len(t) >= 3 and t not in _NON_DISTINGUISHING
+    )
+
+
+def _entity_aware_token_sig(alias: str) -> frozenset:
+    """Like _distinctive_token_sig, but KEEPS the entity head-noun
+    (church/cemetery/school…) as a distinguishing token.
+
+    So 'St John Cemetery' -> {john, cemetery} and 'St John Church' ->
+    {john, church} are no longer mistaken for each other, while two
+    same-type siblings ('St Patrick Church-Jordan' vs '-Taberg') still
+    share {patrick, church} and a bare 'St Patrick Church' still reads as a
+    subset of both (correctly ambiguous). Used by the manual add-alias gate,
+    where a human is explicitly teaching a full, specific name.
+    """
+    s = _strip_periods(_strip_possessives(alias)).lower()
+    s = s.replace("_", " ")
+    toks = [t for t in re.split(r"[\s\-]+", s) if t]
+    return frozenset(
+        t for t in toks
+        if len(t) >= 3 and t not in _GENERIC_PREFIXES
     )
 
 

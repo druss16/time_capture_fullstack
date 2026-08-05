@@ -72,11 +72,24 @@ Edge asks you to justify every permission in `manifest.json`. Answer verbatim:
 > last capture) so the extension's troubleshooting popup can display them.
 > `chrome.storage.local` only — never synced, never transmitted.
 
+**`cookies` (+ host access to `qbo.intuit.com`)**
+> Reads exactly one cookie, `qbo.currentcompanyid`, on `qbo.intuit.com`. This is
+> the id of the QuickBooks Online company the user currently has open. Accounting
+> staff switch between many client companies in QBO, and this id is how the local
+> TimeTracker agent attributes the session to the correct client. No other
+> cookies are read, and no page contents are accessed. The value is sent only to
+> the local agent (127.0.0.1), never to any external host.
+
 **Host permission `http://127.0.0.1/*`**
 > The only network destination the extension contacts. It POSTs the active tab's
 > sanitized URL and title to the TimeTracker desktop agent's local context
 > endpoint (http://127.0.0.1:7321/context) running on the same machine. No
 > external hosts are contacted.
+
+**Host permission `https://qbo.intuit.com/*` (and `https://*.qbo.intuit.com/*`)**
+> Grants the `cookies` API access to read the single `qbo.currentcompanyid`
+> cookie described above. The extension does not inject scripts into QBO pages or
+> read their contents; it only reads that one cookie value.
 
 **Why not `activeTab` instead of `tabs`?**  (reviewers sometimes ask)
 > `activeTab` only grants access after a user gesture (toolbar click). This

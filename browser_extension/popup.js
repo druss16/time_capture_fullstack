@@ -19,6 +19,7 @@ function render(s) {
   document.getElementById("sentOk").textContent = s.sentOk || 0;
   document.getElementById("sendFailed").textContent = s.sendFailed || 0;
   document.getElementById("lastAt").textContent = fmtTime(s.lastAt);
+  document.getElementById("qboId").textContent = s.lastQboCompanyId || "—";
   document.getElementById("lastUrl").textContent = s.lastUrl || "";
 }
 

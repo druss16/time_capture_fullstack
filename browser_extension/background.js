@@ -59,6 +59,7 @@ const DEFAULT_STATS = {
   lastTitle: "",    // last reported title
   lastAt: "",       // ISO timestamp of the last report
   lastQboCompanyId: "", // last QBO active-company id (realmId) captured, if any
+  lastQboCompanyName: "", // last QBO company name read from the page, if any
 };
 
 async function getStats() {
@@ -103,6 +104,48 @@ async function qboCompanyId(rawUrl) {
     return /^\d{6,25}$/.test(val) ? val : null;
   } catch (e) {
     return null;
+  }
+}
+
+// QBO embeds the active company's NAME + id in the page shell config
+// ("companyName" / "serverGroupCompanyId"). The name is NOT in any cookie/URL,
+// so we read it with a one-shot script injection into the QBO tab — reading
+// ONLY those two config values (a company name + id), never financial content.
+// Requires the "scripting" permission + host access to qbo.intuit.com. Returns
+// {id, name} (either may be ""); null if not a QBO tab or injection is blocked.
+async function qboCompanyFromPage(tabId, rawUrl) {
+  try {
+    if (!chrome.scripting || !chrome.scripting.executeScript || tabId == null) return null;
+    const u = new URL(rawUrl || "");
+    if (u.protocol !== "https:" || !QBO_HOST_RE.test(u.hostname)) return null;
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        // Runs in the QBO page. Extract only the company name + id from the
+        // embedded shell config; return nothing else.
+        try {
+          const html = document.documentElement.innerHTML || "";
+          const nameM =
+            html.match(/"companyName"\s*:\s*"([^"]{1,80})"/) ||
+            html.match(/companyName\\?"\s*:\s*\\?"([^"\\]{1,80})/);
+          const idM =
+            html.match(/"serverGroupCompanyId"\s*:\s*"(\d{6,25})"/) ||
+            html.match(/serverGroupCompanyId\\?"\s*:\s*\\?"(\d{6,25})/);
+          return { name: nameM ? nameM[1] : "", id: idM ? idM[1] : "" };
+        } catch (e) {
+          return { name: "", id: "" };
+        }
+      },
+    });
+
+    const r = results && results[0] && results[0].result ? results[0].result : null;
+    if (!r) return null;
+    const id = /^\d{6,25}$/.test((r.id || "").trim()) ? r.id.trim() : "";
+    const name = (r.name || "").trim().slice(0, 80);
+    return { id, name };
+  } catch (e) {
+    return null; // injection blocked / tab gone — fall back to the cookie id
   }
 }
 
@@ -200,10 +243,16 @@ async function reportActiveTab() {
     const title = tab.title || "";
     const nowIso = new Date().toISOString();
 
-    // If this is a QuickBooks Online tab, read the active company id (realmId)
-    // from the qbo.currentcompanyid cookie so the agent knows which client's
-    // books are open. Null for non-QBO tabs.
-    const qboId = await qboCompanyId(tab.url || tab.pendingUrl || "");
+    // If this is a QuickBooks Online tab, capture WHICH company is open so the
+    // agent can attribute to the right client. The realmId comes from the
+    // qbo.currentcompanyid cookie; the company NAME (which lets the backend
+    // auto-match to an existing client, no manual mapping) is read from the
+    // page's shell config. Both null/empty for non-QBO tabs.
+    const rawUrl = tab.url || tab.pendingUrl || "";
+    const cookieId = await qboCompanyId(rawUrl);
+    const fromPage = await qboCompanyFromPage(tab.id, rawUrl);
+    const qboId = (fromPage && fromPage.id) || cookieId || null;
+    const qboName = (fromPage && fromPage.name) || "";
 
     // Count the capture and record what we saw, then record the send outcome.
     const stats = await getStats();
@@ -212,6 +261,7 @@ async function reportActiveTab() {
     stats.lastTitle = title;
     stats.lastAt = nowIso;
     if (qboId) stats.lastQboCompanyId = qboId;
+    if (qboName) stats.lastQboCompanyName = qboName;
 
     const payload = {
       source: "browser_extension",
@@ -221,6 +271,7 @@ async function reportActiveTab() {
       tab_focused_at: nowIso,
     };
     if (qboId) payload.qbo_company_id = qboId;
+    if (qboName) payload.qbo_company_name = qboName;
 
     const ok = await postToAgent(payload);
 

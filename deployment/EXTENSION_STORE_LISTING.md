@@ -86,10 +86,18 @@ Edge asks you to justify every permission in `manifest.json`. Answer verbatim:
 > endpoint (http://127.0.0.1:7321/context) running on the same machine. No
 > external hosts are contacted.
 
+**`scripting` (QBO pages only)**
+> On `qbo.intuit.com` tabs, the extension runs a one-shot script that reads only
+> two values from the page's shell config — the active company's display name
+> (`companyName`) and id (`serverGroupCompanyId`) — so the local agent can
+> attribute the session to the correct client. It reads no other page content
+> (no transactions, balances, customers, or form data) and injects nothing into
+> any other site. These values are sent only to the local agent (127.0.0.1).
+
 **Host permission `https://qbo.intuit.com/*` (and `https://*.qbo.intuit.com/*`)**
-> Grants the `cookies` API access to read the single `qbo.currentcompanyid`
-> cookie described above. The extension does not inject scripts into QBO pages or
-> read their contents; it only reads that one cookie value.
+> Scopes the `cookies` and `scripting` access above to QuickBooks Online only —
+> to read the `qbo.currentcompanyid` cookie and the company name/id from the QBO
+> page. No other site is affected.
 
 **Why not `activeTab` instead of `tabs`?**  (reviewers sometimes ask)
 > `activeTab` only grants access after a user gesture (toolbar click). This

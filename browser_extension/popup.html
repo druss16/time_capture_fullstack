@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      width: 300px; margin: 0; padding: 14px 14px 12px;
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      background: #0f1626; color: #e7ecf5;
+    }
+    h1 { font-size: 15px; margin: 0 0 10px; color: #6ea8ff; font-weight: 600; }
+    .row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      padding: 7px 0; border-bottom: 1px solid #223252; font-size: 13px;
+    }
+    .row .label { color: #aab6cc; }
+    .row .val { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .ok { color: #46d17a; }
+    .fail { color: #ff6b6b; }
+    .url { font-size: 11px; color: #8aa0c0; word-break: break-all; padding: 9px 0 2px; min-height: 14px; }
+    .btns { display: flex; gap: 8px; margin: 12px 0 6px; }
+    button {
+      flex: 1; padding: 8px; border: 0; border-radius: 6px; cursor: pointer;
+      font-size: 13px; color: #fff;
+    }
+    #capture { background: #2a63c7; }
+    #reset { background: #33405c; }
+    button:active { filter: brightness(0.9); }
+    .help { font-size: 10.5px; color: #8592a8; line-height: 1.55; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>TimeTracker URL Reporter</h1>
+
+  <div class="row"><span class="label">URLs captured</span><span class="val" id="captured">0</span></div>
+  <div class="row"><span class="label">Sent to agent OK</span><span class="val ok" id="sentOk">0</span></div>
+  <div class="row"><span class="label">Send failed</span><span class="val fail" id="sendFailed">0</span></div>
+  <div class="row"><span class="label">Last capture</span><span class="val" id="lastAt">—</span></div>
+  <div class="url" id="lastUrl"></div>
+
+  <div class="btns">
+    <button id="capture">Capture now</button>
+    <button id="reset">Reset</button>
+  </div>
+
+  <div class="help">
+    <b>Captured</b> = extension read the active tab URL (the part that matters).
+    <b>Sent OK</b> = the local agent bus received it. If captured climbs but
+    Sent OK stays 0, the extension works and only the agent/bus isn't running.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

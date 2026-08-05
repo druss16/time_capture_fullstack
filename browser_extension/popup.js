@@ -20,6 +20,7 @@ function render(s) {
   document.getElementById("sendFailed").textContent = s.sendFailed || 0;
   document.getElementById("lastAt").textContent = fmtTime(s.lastAt);
   document.getElementById("qboId").textContent = s.lastQboCompanyId || "—";
+  document.getElementById("qboName").textContent = s.lastQboCompanyName || "—";
   document.getElementById("lastUrl").textContent = s.lastUrl || "";
 }
 

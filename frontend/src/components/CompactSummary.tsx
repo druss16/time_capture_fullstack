@@ -511,7 +511,10 @@ export default function CompactSummary({
                   onAlwaysFile={(cid) => alwaysFile(b, cid)}
                   onNotBillable={() => acceptTo(b, null)}
                   onPick={(anchor) => openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Pick a client", null, true)}
-                  onChange={(anchor) => openMove(anchor, [b.block_id], b.proposed_client_id, b.proposed_category || catList[0], "Change client", b.proposed_client_id, true)}
+                  // "Change" means the shown suggestion was wrong, so open on a
+                  // neutral No client · Non-Billable default — never pre-fill an
+                  // unrelated client the user would have to notice and undo.
+                  onChange={(anchor) => openMove(anchor, [b.block_id], null, "Personal/Non-Billable", "Change client", null, true)}
                 />
               ))}
               {needsYou.mismatch.map((m) => (

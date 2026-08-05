@@ -5496,6 +5496,62 @@ class ClassificationService:
                 )
                 return decision
 
+            # MATERIALITY AUTO-COMMIT: a sub-2-minute block is an immaterial
+            # sliver — not worth a human review click. Commit it so it never
+            # nags in "Needs you": to its attributed client (→ Certain, its
+            # is_billable flag rides along untouched) when one client clearly
+            # wins, else as a No-Client / non-billable sliver. Keeps the broad
+            # gate's contradicting-signal guard, so a genuinely disputed sliver
+            # (rare below 2 min) still gets a human look rather than a silent
+            # mis-bill. New captures only; the existing pile is handled by the
+            # backfill_immaterial_slivers command.
+            if (
+                decision.recommended_state != 'committed'
+                and (block.minutes or 0) < IMMATERIAL_MAX_MINUTES
+            ):
+                if (
+                    decision.client_id is not None
+                    and not self._has_contradicting_signal(signals, decision.client_id)
+                ):
+                    decision.recommended_state = 'committed'
+                    decision.confidence = max(s.strength for s in moderate_or_better)
+                    decision.matched_signals.append(Signal(
+                        type='auto_confirm_immaterial',
+                        strength=decision.confidence,
+                        evidence=(
+                            f'Auto-committed: immaterial sub-{IMMATERIAL_MAX_MINUTES}min '
+                            f'sliver ({block.minutes or 0}m) attributed to client '
+                            f'{decision.client_id}, no competing client'
+                        ),
+                        detail={'auto_confirmed': True, 'immaterial': True,
+                                'client_id': decision.client_id},
+                    ))
+                    logger.info(
+                        f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                        f"auto-committing immaterial sub-2min sliver → client "
+                        f"{decision.client_id}"
+                    )
+                    return decision
+                if decision.client_id is None:
+                    decision.recommended_state = 'committed'
+                    decision.is_billable = False
+                    decision.matched_signals.append(Signal(
+                        type='auto_confirm_immaterial_noclient',
+                        strength=max(s.strength for s in moderate_or_better),
+                        evidence=(
+                            f'Auto-committed: immaterial sub-{IMMATERIAL_MAX_MINUTES}min '
+                            f'sliver ({block.minutes or 0}m) with no client → non-billable'
+                        ),
+                        detail={'auto_confirmed': True, 'immaterial': True,
+                                'client_id': None},
+                    ))
+                    logger.info(
+                        f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                        f"auto-committing immaterial sub-2min no-client sliver → "
+                        f"non-billable"
+                    )
+                    return decision
+
             # Don't downgrade an overhead auto-commit back to 'proposed'.
             if not any(s.type == 'overhead_auto_nonbillable' for s in decision.matched_signals):
                 decision.recommended_state = 'proposed'
@@ -5783,6 +5839,14 @@ AUTO_CONFIRM_NAME_SIGNAL_TYPES = frozenset({
 # the specificity score) never reach the moderate band — so 0.80 targets exactly
 # the "almost a literal match" pile without loosening any tuned threshold.
 AUTO_CONFIRM_MIN_STRENGTH = 0.80
+
+# A block shorter than this is an IMMATERIAL sliver — too small to be worth a
+# human review click. Mirrors _MATERIAL_MIN_MINUTES in views_reports (which
+# already hides sub-2min CAPTURED blocks from review); the finalize gate extends
+# the same materiality floor to PROPOSED blocks by auto-committing them (to their
+# attributed client, or as a non-billable no-client sliver) so a 1-minute scrap
+# never lands in "Needs you".
+IMMATERIAL_MAX_MINUTES = 2
 
 
 # Signatures that are ALWAYS firm overhead → non-billable, safe to AUTO-COMMIT

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type CSSProperties } from "react";
 
 import {
   TemplatePickerModal,
@@ -1677,12 +1677,151 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
   );
 }
 
+// ─── QBO Mapping tab ──────────────────────────────────────────────────────
+interface QboMapRow {
+  realm_id: string; client_id: number | null; client_name: string | null;
+  suggested_name: string; times_seen: number; last_seen_at: string | null;
+}
+interface QboMappingData {
+  org: { id: number; name: string };
+  summary: {
+    total_clients: number; clients_matched: number; clients_unmatched: number;
+    companies_seen: number; companies_mapped: number; companies_queued: number; coverage_pct: number;
+  };
+  mapped: QboMapRow[];
+  queued: QboMapRow[];
+  unmatched_clients: { id: number; name: string }[];
+}
+interface QboMappingTabProps {
+  apiFetch: (path: string, opts?: RequestInit) => Promise<any>;
+  flash: (msg: string, type?: "ok" | "err") => void;
+  orgs: Org[];
+}
+
+function QboMappingTab({ apiFetch, flash, orgs }: QboMappingTabProps) {
+  const [orgId, setOrgId] = useState<number | null>(null);
+  const [data, setData] = useState<QboMappingData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async (id: number) => {
+    setLoading(true);
+    try { setData(await apiFetch(`/mavops/qbo-mappings/?org_id=${id}`)); }
+    catch { flash("Failed to load QBO mappings.", "err"); }
+    finally { setLoading(false); }
+  }, [apiFetch, flash]);
+
+  useEffect(() => { if (orgId) load(orgId); }, [orgId, load]);
+
+  const allClients = data
+    ? [
+        ...data.unmatched_clients,
+        ...data.mapped.filter(m => m.client_id).map(m => ({ id: m.client_id as number, name: m.client_name || "" })),
+      ].filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i)
+       .sort((a, b) => a.name.localeCompare(b.name))
+    : [];
+
+  const setMapping = async (realmId: string, clientId: number | "") => {
+    if (!orgId) return;
+    try {
+      await apiFetch(`/mavops/qbo-map/`, {
+        method: "POST",
+        body: JSON.stringify({ org_id: orgId, realm_id: realmId, client_id: clientId === "" ? null : clientId }),
+      });
+      flash("Mapping saved.", "ok");
+      load(orgId);
+    } catch { flash("Failed to save mapping.", "err"); }
+  };
+
+  const th: CSSProperties = { textAlign: "left", padding: "8px 10px", color: T.textMuted, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderBottom: `1px solid ${T.border}`, ...mono };
+  const td: CSSProperties = { padding: "8px 10px", color: T.text, fontSize: 13, borderBottom: `1px solid ${T.border}`, ...mono };
+  const sel: CSSProperties = { background: T.bg, border: `1px solid ${T.border}`, color: T.text, padding: "5px 8px", fontSize: 12, borderRadius: 4, ...mono, maxWidth: 220 };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <span style={{ color: T.textSub, fontSize: 13, ...mono }}>Org:</span>
+        <select value={orgId ?? ""} onChange={e => setOrgId(e.target.value ? Number(e.target.value) : null)} style={sel}>
+          <option value="">— select an org —</option>
+          {[...orgs].sort((a, b) => a.name.localeCompare(b.name)).map(o => (
+            <option key={o.id} value={o.id}>{o.name}</option>
+          ))}
+        </select>
+        {orgId && <button onClick={() => load(orgId)} style={{ background: "none", border: `1px solid ${T.border}`, color: T.textSub, padding: "5px 12px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>↻ refresh</button>}
+      </div>
+
+      {!orgId && <div style={{ color: T.textMuted, fontSize: 14, ...mono, paddingTop: 40, textAlign: "center" }}>select an org to see its QuickBooks Online auto-match coverage</div>}
+      {loading && <div style={{ color: T.textMuted, ...mono, fontSize: 13 }}>loading…</div>}
+
+      {orgId && data && !loading && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 24 }}>
+            <StatCard label="Coverage" value={`${data.summary.coverage_pct}%`} color={data.summary.coverage_pct >= 80 ? T.green : data.summary.coverage_pct >= 40 ? T.yellow : T.red} />
+            <StatCard label="Clients Matched" value={`${data.summary.clients_matched}/${data.summary.total_clients}`} color={T.green} />
+            <StatCard label="Companies Seen" value={data.summary.companies_seen} color={T.text} />
+            <StatCard label="Needs Mapping" value={data.summary.companies_queued} color={data.summary.companies_queued ? T.yellow : T.textMuted} />
+          </div>
+
+          {/* QUEUE — seen but not auto-matched */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ color: T.yellow, fontSize: 13, fontWeight: 600, marginBottom: 8, ...mono, letterSpacing: 1 }}>NEEDS MAPPING — {data.queued.length} compan{data.queued.length === 1 ? "y" : "ies"} seen, no client match</div>
+            {data.queued.length === 0 ? (
+              <div style={{ color: T.textMuted, fontSize: 13, ...mono }}>None — every QBO company seen so far auto-matched. 🎉</div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse" as const, background: T.surface, borderRadius: 6, overflow: "hidden" }}>
+                <thead><tr><th style={th}>Company (from QBO)</th><th style={th}>Realm ID</th><th style={th}>Seen</th><th style={th}>Map to client</th></tr></thead>
+                <tbody>
+                  {data.queued.map(r => (
+                    <tr key={r.realm_id}>
+                      <td style={td}>{r.suggested_name || <span style={{ color: T.textMuted }}>(no name)</span>}</td>
+                      <td style={{ ...td, color: T.textMuted }}>{r.realm_id}</td>
+                      <td style={{ ...td, color: T.textMuted }}>{r.times_seen}×</td>
+                      <td style={td}>
+                        <select defaultValue="" onChange={e => setMapping(r.realm_id, e.target.value ? Number(e.target.value) : "")} style={sel}>
+                          <option value="">— pick client —</option>
+                          {allClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* MATCHED */}
+          <div>
+            <div style={{ color: T.green, fontSize: 13, fontWeight: 600, marginBottom: 8, ...mono, letterSpacing: 1 }}>AUTO-MATCHED — {data.mapped.length} compan{data.mapped.length === 1 ? "y" : "ies"} → client</div>
+            {data.mapped.length === 0 ? (
+              <div style={{ color: T.textMuted, fontSize: 13, ...mono }}>No companies mapped yet.</div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse" as const, background: T.surface, borderRadius: 6, overflow: "hidden" }}>
+                <thead><tr><th style={th}>Company (from QBO)</th><th style={th}>Client</th><th style={th}>Realm ID</th><th style={th}>Seen</th><th style={th}></th></tr></thead>
+                <tbody>
+                  {data.mapped.map(r => (
+                    <tr key={r.realm_id}>
+                      <td style={td}>{r.suggested_name || <span style={{ color: T.textMuted }}>—</span>}</td>
+                      <td style={{ ...td, color: T.teal }}>{r.client_name}</td>
+                      <td style={{ ...td, color: T.textMuted }}>{r.realm_id}</td>
+                      <td style={{ ...td, color: T.textMuted }}>{r.times_seen}×</td>
+                      <td style={td}><button onClick={() => setMapping(r.realm_id, "")} style={{ background: "none", border: `1px solid ${T.border}`, color: T.textMuted, padding: "3px 8px", fontSize: 11, cursor: "pointer", borderRadius: 3, ...mono }}>unmap</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function MavOpsAdmin() {
   const [latestVersion, setLatestVersion] = useState<string>("0.0.0");
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
-  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "suggestions" | "mismatches" | "daily-review">("orgs");
+  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "suggestions" | "mismatches" | "daily-review" | "qbo-mapping">("orgs");
 
   const [filterOrg, setFilterOrg] = useState<number | null>(null);
   const [filterHostname, setFilterHostname] = useState("");
@@ -1853,8 +1992,8 @@ export default function MavOpsAdmin() {
     return [d.machine_name, d.user, d.org_name].some(s => s.toLowerCase().includes(search.toLowerCase()));
   });
 
-  const TABS = ["orgs", "devices", "logs", "errors", "rules", "suggestions", "mismatches", "daily-review"] as const;
-  const TAB_LABELS: Record<string, string> = { "daily-review": "Daily Review" };
+  const TABS = ["orgs", "devices", "logs", "errors", "rules", "suggestions", "mismatches", "daily-review", "qbo-mapping"] as const;
+  const TAB_LABELS: Record<string, string> = { "daily-review": "Daily Review", "qbo-mapping": "QBO Mapping" };
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'DM Sans', sans-serif" }}>
@@ -2323,6 +2462,10 @@ export default function MavOpsAdmin() {
 
         {tab === "mismatches" && (
           <MismatchesTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} />
+        )}
+
+        {tab === "qbo-mapping" && (
+          <QboMappingTab apiFetch={apiFetch} flash={flash} orgs={orgs} />
         )}
 
         {/* ══ DAILY REVIEW (firm-wide accuracy audit) ══ */}

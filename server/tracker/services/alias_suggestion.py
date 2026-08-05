@@ -20,7 +20,7 @@ from typing import Optional
 # classifier is imported lazily (see _C) only where its normalize gates are
 # actually needed.
 from tracker.services.alias_derivation import (
-    MIN_ALIAS_LEN, _collapse_ws, _distinctive_token_sig,
+    MIN_ALIAS_LEN, _collapse_ws, _distinctive_token_sig, _entity_aware_token_sig,
 )
 
 
@@ -95,17 +95,23 @@ def alias_is_safe_to_add(candidate: str, client, siblings) -> bool:
     Mirrors alias_derivation's guards: reject too-short aliases, aliases equal
     to another client's name, and aliases whose distinctive tokens are a subset
     of a sibling's name signature (the multi-parish case).
+
+    Uses the ENTITY-AWARE signature so the entity head-noun (church/cemetery/
+    school…) counts as a differentiator: 'St John Cemetery' is allowed even
+    when 'St John's Church' exists, because the head-noun tells them apart.
+    Two SAME-type siblings still collide (they share the head-noun), and a bare
+    'St John' (no head-noun) still reads as an ambiguous subset of both.
     """
     cand = _collapse_ws(candidate or '')
     if len(cand) < MIN_ALIAS_LEN:
         return False
     cand_key = cand.lower()
-    cand_sig = _distinctive_token_sig(cand)
+    cand_sig = _entity_aware_token_sig(cand)
     for s in siblings:
         if s.id == client.id:
             continue
         if _collapse_ws(s.name).lower() == cand_key:
             return False  # equals another client's name → would match them
-        if cand_sig and cand_sig <= _distinctive_token_sig(s.name):
+        if cand_sig and cand_sig <= _entity_aware_token_sig(s.name):
             return False  # can't tell this alias apart from the sibling
     return True

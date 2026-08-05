@@ -66,6 +66,28 @@ check("too short -> unsafe",
 check("unique alias -> safe",
       alias_is_safe_to_add("Wexford Holdings", target, siblings) is True)
 
+# Entity head-noun (church/cemetery/…) distinguishes same-saint clients.
+# Real org-21 shape: one St John *cemetery*, several St John *churches*.
+cemetery = _client(385, "St John Cemetery-Rome")
+parish_family = [
+    cemetery,
+    _client(402, "St. John's Church"),
+    _client(404, "St. John the Baptist Church"),
+    _client(394, "St. John the Evangelist"),
+    _client(403, "St. John's Episcopal Church"),
+]
+check("cemetery alias allowed despite same-saint churches -> safe",
+      alias_is_safe_to_add("St. John's Cemetery", cemetery, parish_family) is True)
+check("bare saint (no head-noun) still ambiguous -> unsafe",
+      alias_is_safe_to_add("St John", cemetery, parish_family) is False)
+check("alias equal to a sibling church name -> unsafe",
+      alias_is_safe_to_add("St. John's Church", cemetery, parish_family) is False)
+# But if a SECOND cemetery exists, the bare-cemetery alias is genuinely
+# ambiguous between the two and must stay blocked.
+two_cemeteries = parish_family + [_client(999, "St John Cemetery-Utica")]
+check("cemetery alias blocked when two cemeteries exist -> unsafe",
+      alias_is_safe_to_add("St. John's Cemetery", cemetery, two_cemeteries) is False)
+
 # --- suggest_alias_for_block (needs the classifier; skip if unavailable) ----
 print("suggest_alias_for_block:")
 smith = _client(1, "John Smith PC")

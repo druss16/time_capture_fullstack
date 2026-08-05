@@ -132,7 +132,7 @@ export const parse = (activity: string): ParsedActivity => {
 // _subject: drop the [id:] marker, "(1m)"/"(Primary)" tags, the "Qbw.Exe - "
 // process prefix, the app suffix ("- Excel"), the file extension, and a
 // trailing year. Approximate on purpose — it's a starting point, not the gate.
-const suggestAliasFromTitle = (raw: string): string => {
+export const suggestAliasFromTitle = (raw: string): string => {
   let t = (raw || "").replace(/\[id:[\d,]+\]\s*/g, "");
   t = t.replace(/\s*\((?:\d+m|primary|secondary)\)\s*/gi, " ");
   t = t.replace(/\s*[-|]\s*(excel|word|quickbooks[^-|]*|outlook|adobe[^-|]*|acrobat|reader|microsoft[^-|]*|google[^-|]*|work|file explorer|edge|chrome|\d+ more.*)$/i, "");

@@ -14,7 +14,8 @@ from datetime import timedelta
 
 from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
 from tracker.models import (
-    AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client, MismatchFlag
+    AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client, MismatchFlag,
+    QboCompanyMapping
 )
 
 from django.db import transaction
@@ -36,6 +37,112 @@ class IsStaff(BasePermission):
             and request.user.is_authenticated
             and (request.user.is_staff or request.user.is_superuser)
         )
+
+
+# ── QBO company → client mapping coverage ────────────────────────────────────
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_qbo_mappings(request):
+    """QuickBooks Online company → client auto-match coverage for one org.
+
+    GET /api/mavops/qbo-mappings/?org_id=<id>
+
+    Shows, for the org's QBO work: which client companies have been seen and
+    auto-matched to a client, which were seen but not matched (the review
+    queue), and which active clients have no QBO company linked yet.
+    """
+    org_id = request.GET.get('org_id')
+    if not org_id:
+        return Response({'error': 'org_id required'}, status=400)
+    try:
+        org = Organization.objects.get(id=org_id)
+    except (Organization.DoesNotExist, ValueError):
+        return Response({'error': 'org not found'}, status=404)
+
+    mappings = list(
+        QboCompanyMapping.objects.filter(org=org)
+        .select_related('client')
+        .order_by('-times_seen', '-last_seen_at')
+    )
+    mapped = [m for m in mappings if m.client_id]
+    queued = [m for m in mappings if not m.client_id]
+    mapped_client_ids = {m.client_id for m in mapped}
+
+    active_clients = list(
+        Client.objects.filter(org=org, is_active=True)
+        .order_by('name').values('id', 'name')
+    )
+    total_clients = len(active_clients)
+    unmatched_clients = [c for c in active_clients if c['id'] not in mapped_client_ids]
+
+    def _row(m):
+        return {
+            'realm_id': m.realm_id,
+            'client_id': m.client_id,
+            'client_name': m.client.name if m.client_id else None,
+            'suggested_name': m.suggested_name or '',
+            'times_seen': m.times_seen or 0,
+            'last_seen_at': m.last_seen_at.isoformat() if m.last_seen_at else None,
+        }
+
+    return Response({
+        'org': {'id': org.id, 'name': org.name},
+        'summary': {
+            'total_clients': total_clients,
+            'clients_matched': len(mapped_client_ids),
+            'clients_unmatched': total_clients - len(mapped_client_ids),
+            'companies_seen': len(mappings),
+            'companies_mapped': len(mapped),
+            'companies_queued': len(queued),
+            'coverage_pct': round(100.0 * len(mapped_client_ids) / total_clients, 1) if total_clients else 0.0,
+        },
+        'mapped': [_row(m) for m in mapped],
+        'queued': [_row(m) for m in queued],
+        'unmatched_clients': unmatched_clients,
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_qbo_map(request):
+    """Manually map (or clear) a QBO company → client for an org.
+
+    POST /api/mavops/qbo-map/  { org_id, realm_id, client_id | null }
+
+    Lets ops resolve a queued/unmatched company or fix a wrong auto-match.
+    """
+    org_id = request.data.get('org_id')
+    realm_id = str(request.data.get('realm_id') or '').strip()
+    client_id = request.data.get('client_id')  # may be None to clear
+    if not org_id or not realm_id:
+        return Response({'error': 'org_id and realm_id required'}, status=400)
+    try:
+        org = Organization.objects.get(id=org_id)
+    except (Organization.DoesNotExist, ValueError):
+        return Response({'error': 'org not found'}, status=404)
+
+    client = None
+    if client_id is not None:
+        client = Client.objects.filter(org=org, id=client_id).first()
+        if client is None:
+            return Response({'error': 'client not found in this org'}, status=404)
+
+    mapping, _created = QboCompanyMapping.objects.get_or_create(
+        org=org, realm_id=realm_id,
+        defaults={'suggested_name': (client.name if client else '')},
+    )
+    mapping.client = client
+    mapping.save(update_fields=['client', 'updated_at'])
+
+    return Response({
+        'ok': True,
+        'realm_id': realm_id,
+        'client_id': client.id if client else None,
+        'client_name': client.name if client else None,
+    })
 
 
 # ── Org overview ─────────────────────────────────────────────────────────────

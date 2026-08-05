@@ -241,17 +241,26 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 });
 
 // Keepalive + periodic refresh for long single-page dwells.
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
-});
-chrome.runtime.onStartup.addListener(() => {
-  chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
-});
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === KEEPALIVE_ALARM) {
-    reportActiveTab();
-  }
-});
+// Guarded: chrome.alarms only exists with the "alarms" permission. If it's ever
+// missing, we must NOT throw at load (that would kill the whole worker and stop
+// all capturing) — we simply lose the periodic refresh; event-based capture
+// (tab/focus changes) still works.
+function ensureKeepaliveAlarm() {
+  try {
+    if (chrome.alarms && chrome.alarms.create) {
+      chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+    }
+  } catch (e) { /* ignore */ }
+}
+chrome.runtime.onInstalled.addListener(ensureKeepaliveAlarm);
+chrome.runtime.onStartup.addListener(ensureKeepaliveAlarm);
+if (chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === KEEPALIVE_ALARM) {
+      reportActiveTab();
+    }
+  });
+}
 
 // Report once as soon as the worker spins up (covers the case where the
 // worker was killed and respawned by an event).

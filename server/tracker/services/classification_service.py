@@ -3549,6 +3549,71 @@ class ClassificationService:
     # STAGE 8 — Recent context (current_client_id, prior block)
     # -------------------------------------------------------------------------
 
+    def _try_emit_qbo_company_id_signal(self, block, decision: ClassificationDecision) -> bool:
+        """Server-owned QuickBooks Online company (realmId) -> client resolution.
+
+        The browser extension captures the active company id from the
+        `qbo.currentcompanyid` cookie; compaction lifts it to
+        `block.hints['qbo_company_id']`. Here we resolve it against
+        `QboCompanyMapping` (server-owned) and, when it's mapped, emit an
+        authoritative signal for that client — the working QBO URL never names
+        the company, so this is the only reliable client signal for QBO work.
+
+        First-seen companies are recorded as an UNMAPPED row (a review queue)
+        with an advisory name from the block title; they emit no signal until a
+        human maps them. Fail-open: any error is swallowed so classification
+        proceeds unaffected. Dormant for every block without a qbo_company_id.
+        """
+        try:
+            realm = str((block.hints or {}).get('qbo_company_id') or '').strip()
+            if not realm.isdigit():
+                return False
+
+            from django.utils import timezone
+            from tracker.models import QboCompanyMapping
+
+            mapping = QboCompanyMapping.objects.filter(
+                org_id=block.org_id, realm_id=realm
+            ).first()
+
+            if mapping is None:
+                # First sighting of this company — queue it, unmapped.
+                suggested = (block.window_title or block.title or '')[:255]
+                try:
+                    QboCompanyMapping.objects.get_or_create(
+                        org_id=block.org_id, realm_id=realm,
+                        defaults={
+                            'suggested_name': suggested,
+                            'times_seen': 1,
+                            'last_seen_at': timezone.now(),
+                        },
+                    )
+                except Exception:
+                    pass
+                return False
+
+            # Known company — bump usage stats (best-effort).
+            try:
+                QboCompanyMapping.objects.filter(pk=mapping.pk).update(
+                    times_seen=(mapping.times_seen or 0) + 1,
+                    last_seen_at=timezone.now(),
+                )
+            except Exception:
+                pass
+
+            if not mapping.client_id:
+                return False  # known but not yet mapped to a client
+
+            decision.matched_signals.append(Signal(
+                type='qbo_company_id',
+                strength=0.95,
+                evidence=f"QuickBooks Online company {realm} is mapped to this client",
+                detail={'client_id': mapping.client_id, 'realm_id': realm},
+            ))
+            return True
+        except Exception:
+            return False
+
     def _stage_8_recent_context(self, block, decision: ClassificationDecision):
         """
         Use agent's current_client_id and the previous block as weak-to-moderate
@@ -3569,6 +3634,10 @@ class ClassificationService:
         is the architectural fix for the inheritance bug.
         """
         from tracker.models import Block
+
+        # QBO active-company (realmId) resolution runs first — it's an
+        # authoritative server-owned mapping, stronger than any agent guess.
+        self._try_emit_qbo_company_id_signal(block, decision)
 
         # v1.4.0: New confidence-graded inference path. If the block's
         # RawEvents have structured inference data (post-v1.4.0 agents),

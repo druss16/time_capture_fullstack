@@ -1130,6 +1130,48 @@ class Integration(models.Model):
         unique_together = ['organization', 'provider']
 
 
+class QboCompanyMapping(models.Model):
+    """Server-owned map: a QuickBooks Online company (realmId) -> a Client.
+
+    The browser extension reads the active company id from the
+    `qbo.currentcompanyid` cookie and the desktop agent carries it to the
+    backend as `qbo_company_id` (persisted on RawEvent.ctx and lifted onto
+    Block.hints in compaction). Accountants switch between many client
+    *companies* in QBO, and the working URL never names the company — so this
+    map is how a QBO work block is attributed to the right client.
+
+    A row with `client=None` is an UNMAPPED company that has been seen but not
+    yet linked — i.e. a review queue. `suggested_name` is an advisory best guess
+    (e.g. the block's window title) to help whoever maps it. This is the online
+    cousin of the QuickBooks Desktop company-id mapping.
+    """
+    org = models.ForeignKey('Organization', on_delete=models.CASCADE, related_name='qbo_company_mappings')
+    realm_id = models.CharField(
+        max_length=50, db_index=True,
+        help_text='QBO company id (realmId) from the qbo.currentcompanyid cookie',
+    )
+    client = models.ForeignKey(
+        'Client', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='qbo_company_mappings',
+        help_text='Mapped client; null = unmapped / queued for review',
+    )
+    suggested_name = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text='Advisory best-guess company/client name shown in the mapping UI',
+    )
+    times_seen = models.PositiveIntegerField(default=0)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['org', 'realm_id']]
+        indexes = [models.Index(fields=['org', 'client'], name='tracker_qbo_org_id_client_idx')]
+
+    def __str__(self):
+        return f"QBO {self.realm_id} -> {self.client_id or 'UNMAPPED'} (org {self.org_id})"
+
+
 
 
 class Project(models.Model):

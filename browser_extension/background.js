@@ -20,6 +20,8 @@
  *   - MV3 service workers are EPHEMERAL: Chrome/Edge kill them after ~30s idle
  *     and respawn on the next event. All state must be derivable from events;
  *     we keep none that matters across restarts. Each event fully recomputes.
+ *   - Diagnostic counters therefore live in chrome.storage.local (not memory),
+ *     so the popup can read them even after the worker was recycled.
  *   - chrome.alarms is used as a lightweight keepalive + periodic re-report so
  *     a long dwell on one page still refreshes the agent (which expires stale
  *     context after ~10s). This mirrors the desktop agent's heartbeat idea.
@@ -43,6 +45,37 @@ const KEEPALIVE_ALARM = "tt_url_keepalive";
 // spam the bus. We coalesce to the latest state after this quiet period.
 const DEBOUNCE_MS = 250;
 let debounceTimer = null;
+
+// --- Diagnostic counters (persisted; the popup renders these) ---------------
+// MV3 workers are ephemeral, so counters cannot live in memory — they go in
+// chrome.storage.local. Every real report bumps them. Local-only; nothing here
+// is ever transmitted.
+const STATS_KEY = "tt_stats";
+const DEFAULT_STATS = {
+  captured: 0,      // times we read an active-tab URL worth reporting
+  sentOk: 0,        // of those, the local agent bus accepted it
+  sendFailed: 0,    // of those, the post failed (agent not running / blocked)
+  lastUrl: "",      // last reported (sanitized) URL
+  lastTitle: "",    // last reported title
+  lastAt: "",       // ISO timestamp of the last report
+};
+
+async function getStats() {
+  try {
+    const o = await chrome.storage.local.get(STATS_KEY);
+    return Object.assign({}, DEFAULT_STATS, o[STATS_KEY] || {});
+  } catch (e) {
+    return Object.assign({}, DEFAULT_STATS);
+  }
+}
+
+async function setStats(s) {
+  try { await chrome.storage.local.set({ [STATS_KEY]: s }); } catch (e) { /* ignore */ }
+}
+
+async function resetStats() {
+  await setStats(Object.assign({}, DEFAULT_STATS));
+}
 
 // --- URL hygiene: keep scheme://host/path, drop query + fragment ------------
 // We NEVER keep the query string — that's where session tokens, account ids,
@@ -90,19 +123,22 @@ function sanitizeUrl(raw) {
 }
 
 // --- POST to the local agent context bus ------------------------------------
+// Returns true if the local agent bus accepted the post, false otherwise.
 async function postToAgent(payload) {
   try {
-    await fetch(AGENT_URL, {
+    const res = await fetch(AGENT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       // Don't let a hung agent block the worker; bail fast.
       signal: AbortSignal.timeout ? AbortSignal.timeout(1500) : undefined,
     });
+    return !!(res && res.ok);
   } catch (e) {
-    // Agent not running, not listening, or browser blocked it — silently
-    // ignore. The desktop agent falls back to its existing behavior when no
-    // context arrives. Never surface errors to the user.
+    // Agent not running, not listening, or browser blocked it — treat as a
+    // send failure. The desktop agent falls back to its existing behavior when
+    // no context arrives. Never surface errors to the user.
+    return false;
   }
 }
 
@@ -132,13 +168,26 @@ async function reportActiveTab() {
     const url = sanitizeUrl(tab.url || tab.pendingUrl || "");
     if (!url) return; // new tab page, internal page, or unsanitizable
 
-    await postToAgent({
+    const title = tab.title || "";
+    const nowIso = new Date().toISOString();
+
+    // Count the capture and record what we saw, then record the send outcome.
+    const stats = await getStats();
+    stats.captured += 1;
+    stats.lastUrl = url;
+    stats.lastTitle = title;
+    stats.lastAt = nowIso;
+
+    const ok = await postToAgent({
       source: "browser_extension",
       url: url,
-      title: tab.title || "",
+      title: title,
       window_focused: true,
-      tab_focused_at: new Date().toISOString(),
+      tab_focused_at: nowIso,
     });
+
+    if (ok) stats.sentOk += 1; else stats.sendFailed += 1;
+    await setStats(stats);
   } catch (e) {
     // Never throw out of the worker.
   }
@@ -152,6 +201,25 @@ function scheduleReport() {
     reportActiveTab();
   }, DEBOUNCE_MS);
 }
+
+// --- Popup messaging --------------------------------------------------------
+// The popup asks for the current stats, can force a capture, and can reset.
+// Each handler replies with the latest stats so the popup re-renders.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || !msg.type) return;
+  if (msg.type === "getStats") {
+    getStats().then(sendResponse);
+    return true; // async response
+  }
+  if (msg.type === "captureNow") {
+    reportActiveTab().then(getStats).then(sendResponse);
+    return true;
+  }
+  if (msg.type === "reset") {
+    resetStats().then(getStats).then(sendResponse);
+    return true;
+  }
+});
 
 // --- Event wiring -----------------------------------------------------------
 // Active tab changed within a window

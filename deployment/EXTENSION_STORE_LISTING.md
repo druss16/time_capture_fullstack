@@ -67,6 +67,11 @@ Edge asks you to justify every permission in `manifest.json`. Answer verbatim:
 > Only the active tab's URL and title are accessed; page contents are never
 > read. No content scripts are injected.
 
+**`storage`**
+> Stores small local diagnostic counters (URLs captured, sent-OK, send-failed,
+> last capture) so the extension's troubleshooting popup can display them.
+> `chrome.storage.local` only — never synced, never transmitted.
+
 **Host permission `http://127.0.0.1/*`**
 > The only network destination the extension contacts. It POSTs the active tab's
 > sanitized URL and title to the TimeTracker desktop agent's local context

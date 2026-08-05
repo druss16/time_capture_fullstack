@@ -1300,6 +1300,20 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             billing_amount=0,
         )
     else:
+        # Carry the QuickBooks Online active-company id (realmId) forward from the
+        # browser extension's context onto the block, so the classifier can
+        # attribute QBO work to the right client (the working URL never names the
+        # company). Prefer the most recent source event that carries one.
+        _qbo_company_id = ""
+        for _ev in reversed(block_data.get('source_events', []) or []):
+            _bx = (getattr(_ev, 'ctx', {}) or {}).get('browser_extension') or {}
+            _cand = _bx.get('qbo_company_id')
+            _cand = str(_cand).strip() if _cand is not None else ""
+            if _cand:
+                _qbo_company_id = _cand
+                break
+        _normal_hints = {'qbo_company_id': _qbo_company_id} if _qbo_company_id else {}
+
         new_block = Block.objects.create(
             org=org,
             user=user,
@@ -1316,7 +1330,7 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             file_path=block_data.get("file_path") or "",
             app_name=block_data.get("app_name") or "",
             bundle_id=block_data.get("bundle_id") or "",
-            hints={},
+            hints=_normal_hints,
             client=client,
             category_hours={},
             is_categorized=False,

@@ -1,7 +1,7 @@
 # tracker/admin.py
 from django.contrib import admin
 from django.contrib.admin.sites import NotRegistered
-from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OrgInstallToken, AgentRegistration, OnboardingBatch, DeviceProvisioningMap
+from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OrgInstallToken, AgentRegistration, OnboardingBatch, DeviceProvisioningMap, QboCompanyMapping
 
 
 # ---- Helpers to be idempotent ----
@@ -14,6 +14,17 @@ def _unregister(model):
 # Unregister before (re)register to avoid AlreadyRegistered on reloads / refactors
 for m in (Block, Client, Project, Task, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern):
     _unregister(m)
+
+@admin.register(QboCompanyMapping)
+class QboCompanyMappingAdmin(admin.ModelAdmin):
+    # Map a QuickBooks Online company (realmId) to a Client. Rows with no client
+    # are the unmapped queue — set the client to enable auto-attribution.
+    list_display = ("realm_id", "org", "client", "suggested_name", "times_seen", "last_seen_at")
+    list_filter = ("org",)
+    search_fields = ("realm_id", "suggested_name", "client__name")
+    raw_id_fields = ("client",)
+    readonly_fields = ("times_seen", "last_seen_at", "created_at", "updated_at")
+    list_select_related = ("org", "client")
 
 @admin.register(Block)
 class BlockAdmin(admin.ModelAdmin):

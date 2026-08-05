@@ -21,7 +21,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
-import { MovePopover, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
+import { MovePopover, suggestAliasFromTitle, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
 import type { Lanes, CertainGroup, MismatchBlock, SplitCandidate } from "@/lib/dailyReviewLanes";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -65,6 +65,9 @@ type MoveState = {
   // Pending / mismatch rows are UNRESOLVED, so applying the current selection
   // (even unchanged, e.g. "keep as No client · Non-Billable") is a valid commit.
   allowUnchanged?: boolean;
+  // Pre-fills the "Remember as alias" field when it's opened — a distinctive
+  // token derived from the block title, so teaching the mapping is one click.
+  defaultAlias?: string;
 };
 
 export default function CompactSummary({
@@ -109,7 +112,8 @@ export default function CompactSummary({
   const openMove = (
     anchor: HTMLElement, ids: number[], clientId: number | null, category: string,
     label: string, suggestClientId: number | null = null, allowUnchanged = false,
-  ) => setMove({ anchor, ids, currentClientId: clientId, currentCategory: category, label, suggestClientId, allowUnchanged });
+    defaultAlias = "",
+  ) => setMove({ anchor, ids, currentClientId: clientId, currentCategory: category, label, suggestClientId, allowUnchanged, defaultAlias });
 
   // ── Mutations (both hit the shared recategorize endpoint) ───────────────────
   const recategorize = (id: number, clientId: number | null, category: string, source?: string) =>
@@ -510,11 +514,11 @@ export default function CompactSummary({
                   onAccept={(cid) => acceptTo(b, cid)}
                   onAlwaysFile={(cid) => alwaysFile(b, cid)}
                   onNotBillable={() => acceptTo(b, null)}
-                  onPick={(anchor) => openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Pick a client", null, true)}
+                  onPick={(anchor) => openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Pick a client", null, true, suggestAliasFromTitle(b.window_title || ""))}
                   // "Change" means the shown suggestion was wrong, so open on a
                   // neutral No client · Non-Billable default — never pre-fill an
                   // unrelated client the user would have to notice and undo.
-                  onChange={(anchor) => openMove(anchor, [b.block_id], null, "Personal/Non-Billable", "Change client", null, true)}
+                  onChange={(anchor) => openMove(anchor, [b.block_id], null, "Personal/Non-Billable", "Change client", null, true, suggestAliasFromTitle(b.window_title || ""))}
                 />
               ))}
               {needsYou.mismatch.map((m) => (
@@ -522,7 +526,7 @@ export default function CompactSummary({
                   key={`m${m.block_id}`} m={m} busy={busy}
                   onFix={() => fixMismatch(m)}
                   onKeep={() => onIgnoreMismatch([m.block_id])}
-                  onPick={(anchor) => openMove(anchor, [m.block_id], m.booked_client_id, m.category || catList[0], "Move to…", m.looks_like_client_id, true)}
+                  onPick={(anchor) => openMove(anchor, [m.block_id], m.booked_client_id, m.category || catList[0], "Move to…", m.looks_like_client_id, true, suggestAliasFromTitle(m.window_title || ""))}
                 />
               ))}
               {needsYou.split.map((sc) => (
@@ -547,6 +551,7 @@ export default function CompactSummary({
           label={move.label}
           suggestClientId={move.suggestClientId ?? null}
           allowUnchanged={move.allowUnchanged ?? false}
+          defaultAlias={move.defaultAlias ?? ""}
           onApply={(clientId, category) => { moveBlocks(move.ids, clientId, category); setMove(null); }}
           onClose={() => setMove(null)}
         />

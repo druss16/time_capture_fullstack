@@ -48,11 +48,12 @@ Zip `browser_extension/` (the folder's *contents*: `manifest.json`, `background.
 > This extension is intended for managed deployment alongside the TimeTracker
 > desktop agent. Without that local agent it takes no action.
 
-**Privacy policy URL** (required — host the page below, see EXTENSION_PRIVACY_POLICY.md)
-> https://<your-domain>/timetracker-extension-privacy
+**Privacy policy URL** (required — add the Browser Extension section from
+`deployment/privacy_extension_section.html` to this existing page first)
+> https://timetracker.mavops.ai/privacy.html
 
 **Support / website URL**
-> https://<your-domain>  (or a support mailbox link)
+> https://timetracker.mavops.ai   (or mailto:support@mavops.ai)
 
 ---
 
@@ -127,10 +128,15 @@ data handling is disclosed in the privacy policy (it is — see the policy page)
 
 > This extension is a localhost-only companion to a desktop agent. It reads the
 > active tab's URL + title and POSTs them exclusively to http://127.0.0.1:7321
-> on the same machine (see background.js `postToAgent`). It injects no content
-> scripts, reads no page DOM, and contacts no external servers. Query strings
-> and fragments are stripped before sending. It is deployed to managed
-> workstations that also run the TimeTracker desktop agent.
+> on the same machine (see background.js `postToAgent`); it never contacts any
+> external server, and query strings/fragments are stripped before sending.
+> On `qbo.intuit.com` tabs ONLY, it additionally reads two values so QuickBooks
+> Online work can be attributed to the right client: the `qbo.currentcompanyid`
+> cookie and the active company's display name (`companyName`), the latter via a
+> one-shot `chrome.scripting` injection that reads only those config values — no
+> transactions, balances, customers, or other page content, and no injection on
+> any other site. It is deployed to managed workstations that also run the
+> TimeTracker desktop agent.
 
 ---
 

@@ -1,0 +1,70 @@
+<!--
+  Paste-ready "Browser Extension" section for https://timetracker.mavops.ai/privacy.html
+  Add it right after the existing "Desktop Agent" section (renumber to fit your page).
+  Wording matches exactly what the "TimeTracker URL Reporter" extension v1.3.0 does.
+-->
+<section id="browser-extension">
+  <h2>Browser Extension (TimeTracker URL Reporter)</h2>
+
+  <p>
+    The optional <strong>TimeTracker URL Reporter</strong> browser extension is a
+    companion to the TimeTracker desktop agent. It helps attribute browser-based
+    work to the correct client. It takes no action unless the desktop agent is
+    running on the same computer.
+  </p>
+
+  <h3>What the extension accesses</h3>
+  <ul>
+    <li>
+      <strong>The URL and title of the active browser tab</strong>, only while a
+      browser window is focused. The query string and fragment are removed from
+      the URL first, so session tokens, account identifiers, and sharing links
+      are discarded.
+    </li>
+    <li>
+      <strong>On QuickBooks Online (<code>qbo.intuit.com</code>) only:</strong>
+      the identifier of the company you currently have open (the
+      <code>qbo.currentcompanyid</code> cookie) and that company's display name
+      (read from the page), so time can be attributed to the correct client when
+      staff switch between client companies. On QuickBooks Online, no other
+      cookies and no other page content are read &mdash; not transactions,
+      balances, customers, or anything you type.
+    </li>
+  </ul>
+
+  <h3>Where the data goes</h3>
+  <ul>
+    <li>
+      The information above is sent <strong>only to the TimeTracker desktop
+      agent running on the same computer</strong> (<code>http://127.0.0.1:7321</code>).
+      The extension itself transmits nothing over the internet &mdash; not to
+      MavOps, not to any third party. If the local agent is not running, nothing
+      is sent.
+    </li>
+    <li>
+      The extension stores no data itself beyond small local counters used for
+      its own troubleshooting popup, and retains nothing between browser sessions.
+    </li>
+  </ul>
+
+  <h3>What the extension does <em>not</em> do</h3>
+  <ul>
+    <li>It does not read page contents on ordinary websites (no content scripts).</li>
+    <li>It does not access your browsing history, bookmarks, saved passwords, or other tabs.</li>
+    <li>It does nothing while the browser is not the focused window.</li>
+    <li>It does not sell or share data with third parties.</li>
+  </ul>
+
+  <h3>Permissions</h3>
+  <p>
+    <code>tabs</code> (active tab URL/title), <code>storage</code> (local
+    troubleshooting counters), <code>cookies</code> and <code>scripting</code>
+    scoped to <code>qbo.intuit.com</code> (the QuickBooks company id and name),
+    and host access to <code>http://127.0.0.1</code> (the local desktop agent).
+  </p>
+
+  <p>
+    Questions about the extension or your data:
+    <a href="mailto:support@mavops.ai">support@mavops.ai</a>.
+  </p>
+</section>

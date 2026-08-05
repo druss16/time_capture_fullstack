@@ -1305,14 +1305,21 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
         # attribute QBO work to the right client (the working URL never names the
         # company). Prefer the most recent source event that carries one.
         _qbo_company_id = ""
+        _qbo_company_name = ""
         for _ev in reversed(block_data.get('source_events', []) or []):
             _bx = (getattr(_ev, 'ctx', {}) or {}).get('browser_extension') or {}
             _cand = _bx.get('qbo_company_id')
             _cand = str(_cand).strip() if _cand is not None else ""
             if _cand:
                 _qbo_company_id = _cand
+                _nm = _bx.get('qbo_company_name')
+                _qbo_company_name = str(_nm).strip() if _nm is not None else ""
                 break
-        _normal_hints = {'qbo_company_id': _qbo_company_id} if _qbo_company_id else {}
+        _normal_hints = {}
+        if _qbo_company_id:
+            _normal_hints['qbo_company_id'] = _qbo_company_id
+            if _qbo_company_name:
+                _normal_hints['qbo_company_name'] = _qbo_company_name
 
         new_block = Block.objects.create(
             org=org,

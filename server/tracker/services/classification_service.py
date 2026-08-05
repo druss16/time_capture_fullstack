@@ -3565,9 +3565,11 @@ class ClassificationService:
         proceeds unaffected. Dormant for every block without a qbo_company_id.
         """
         try:
-            realm = str((block.hints or {}).get('qbo_company_id') or '').strip()
+            hints = block.hints or {}
+            realm = str(hints.get('qbo_company_id') or '').strip()
             if not realm.isdigit():
                 return False
+            company_name = str(hints.get('qbo_company_name') or '').strip()
 
             from django.utils import timezone
             from tracker.models import QboCompanyMapping
@@ -3576,43 +3578,112 @@ class ClassificationService:
                 org_id=block.org_id, realm_id=realm
             ).first()
 
+            # Resolve (or auto-create) the client for this company. When the
+            # company is unmapped but we captured its NAME, try to auto-match it
+            # to an existing client by exact/normalized name — this is what makes
+            # mapping hands-off (no per-company manual step). Only a UNIQUE match
+            # auto-maps; ambiguous/no match stays queued for a one-time review.
+            client_id = mapping.client_id if mapping else None
+
+            if client_id is None and company_name:
+                auto = self._match_client_by_company_name(company_name)
+                if auto is not None:
+                    client_id = auto.id
+
             if mapping is None:
-                # First sighting of this company — queue it, unmapped.
-                suggested = (block.window_title or block.title or '')[:255]
+                suggested = company_name or (block.window_title or block.title or '')[:255]
                 try:
-                    QboCompanyMapping.objects.get_or_create(
+                    mapping, _ = QboCompanyMapping.objects.get_or_create(
                         org_id=block.org_id, realm_id=realm,
                         defaults={
+                            'client_id': client_id,
                             'suggested_name': suggested,
                             'times_seen': 1,
                             'last_seen_at': timezone.now(),
                         },
                     )
                 except Exception:
+                    return False
+            else:
+                # Known company — bump usage; fill in an auto-matched client and
+                # a better suggested name if we now have them (best-effort).
+                update = {
+                    'times_seen': (mapping.times_seen or 0) + 1,
+                    'last_seen_at': timezone.now(),
+                }
+                if not mapping.client_id and client_id is not None:
+                    update['client_id'] = client_id
+                if company_name and not mapping.suggested_name:
+                    update['suggested_name'] = company_name
+                try:
+                    QboCompanyMapping.objects.filter(pk=mapping.pk).update(**update)
+                except Exception:
                     pass
-                return False
 
-            # Known company — bump usage stats (best-effort).
-            try:
-                QboCompanyMapping.objects.filter(pk=mapping.pk).update(
-                    times_seen=(mapping.times_seen or 0) + 1,
-                    last_seen_at=timezone.now(),
-                )
-            except Exception:
-                pass
-
-            if not mapping.client_id:
-                return False  # known but not yet mapped to a client
+            if client_id is None:
+                return False  # seen, but not yet mapped to a client
 
             decision.matched_signals.append(Signal(
                 type='qbo_company_id',
                 strength=0.95,
-                evidence=f"QuickBooks Online company {realm} is mapped to this client",
-                detail={'client_id': mapping.client_id, 'realm_id': realm},
+                evidence=(
+                    f"QuickBooks Online company {realm}"
+                    f"{(' (' + company_name + ')') if company_name else ''} "
+                    f"mapped to this client"
+                ),
+                detail={'client_id': client_id, 'realm_id': realm,
+                        'company_name': company_name},
             ))
             return True
         except Exception:
             return False
+
+    def _match_client_by_company_name(self, name):
+        """Strictly match a QBO company name to one of this org's clients.
+
+        Returns the Client (from the already-loaded self._clients) only on a
+        UNIQUE normalized match against a client name or alias — first exact
+        (punctuation/case-insensitive), then a suffix-stripped fallback
+        (Inc/LLC/CPAs/etc.). Zero or multiple candidates -> None (stay queued),
+        so we never guess a wrong client. Safe/no-op if clients aren't loaded.
+        """
+        try:
+            import re
+            clients = self._clients
+            if not clients:
+                return None
+
+            def norm(s):
+                s = re.sub(r'[^a-z0-9\s]', ' ', (s or '').lower())
+                return re.sub(r'\s+', ' ', s).strip()
+
+            _SUFFIX = r'\b(inc|llc|l l c|co|corp|corporation|ltd|limited|pllc|pc|cpa|cpas|company|group|the)\b'
+
+            def norm_ns(s):
+                return re.sub(r'\s+', ' ', re.sub(_SUFFIX, '', norm(s))).strip()
+
+            target = norm(name)
+            if not target:
+                return None
+            target_ns = norm_ns(name)
+
+            exact, loose = [], []
+            for c in clients:
+                names = [c.name] + list(getattr(c, 'aliases', None) or [])
+                nset = {norm(n) for n in names if n}
+                if target in nset:
+                    exact.append(c)
+                    continue
+                if target_ns and target_ns in {norm_ns(n) for n in names if n}:
+                    loose.append(c)
+
+            if len(exact) == 1:
+                return exact[0]
+            if not exact and len(loose) == 1:
+                return loose[0]
+            return None
+        except Exception:
+            return None
 
     def _stage_8_recent_context(self, block, decision: ClassificationDecision):
         """

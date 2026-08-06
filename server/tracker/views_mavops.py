@@ -154,15 +154,30 @@ def mavops_orgs(request):
     """
     All organizations with seat counts, device counts, plan info.
     GET /api/mavops/orgs/
+
+    Query params:
+      include_archived=1  — also return orgs hidden via mavops_archived.
+                            Default hides them from the ops list.
     """
+    include_archived = request.query_params.get('include_archived') in ('1', 'true', 'yes')
+
     orgs = Organization.objects.all().order_by('name')
+    if not include_archived:
+        orgs = orgs.filter(mavops_archived=False)
 
     result = []
+    archived_count = 0
     for org in orgs:
         member_count = OrganizationMembership.objects.filter(organization=org).count()
         device_count = AgentDevice.objects.filter(
             user__memberships__organization=org,
             is_active=True
+        ).values('user_id', 'hostname').distinct().count()
+        # Devices that were deactivated (subscription/seat block, revoke, etc.).
+        # These are the agents that silently get 403'd and pop a desktop dialog.
+        deactivated_devices = AgentDevice.objects.filter(
+            user__memberships__organization=org,
+            is_active=False
         ).values('user_id', 'hostname').distinct().count()
 
         # Last activity — most recent device seen
@@ -170,14 +185,29 @@ def mavops_orgs(request):
             user__memberships__organization=org
         ).order_by('-last_seen_at').first()
 
+        seat_count = getattr(org, 'seat_count', 0) or 0
+        plan = getattr(org, 'plan', 'unknown') or 'unknown'
+        health = _org_health(
+            plan=plan,
+            seat_count=seat_count,
+            member_count=member_count,
+            active_devices=device_count,
+            deactivated_devices=deactivated_devices,
+        )
+        if getattr(org, 'mavops_archived', False):
+            archived_count += 1
+
         result.append({
             'id': org.id,
             'name': org.name,
             'slug': getattr(org, 'slug', '') or '',
-            'plan': getattr(org, 'plan', 'unknown') or 'unknown',
-            'seat_count': getattr(org, 'seat_count', 0) or 0,
+            'plan': plan,
+            'seat_count': seat_count,
             'member_count': member_count,
             'active_devices': device_count,
+            'deactivated_devices': deactivated_devices,
+            'mavops_archived': getattr(org, 'mavops_archived', False),
+            'health': health,
             'last_activity': last_device.last_seen_at.isoformat() if last_device and last_device.last_seen_at else None,
             'trial_ends_at': org.trial_ends_at.isoformat() if getattr(org, 'trial_ends_at', None) else None,
             'created_at': org.created_at.isoformat() if getattr(org, 'created_at', None) else None,
@@ -186,7 +216,49 @@ def mavops_orgs(request):
     return Response({
         'orgs': result,
         'total': len(result),
+        'archived_shown': include_archived,
+        'archived_count': archived_count,
     })
+
+
+def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_devices):
+    """
+    Derive a health signal for the MavOps org row.
+
+    status:
+      'critical' — users are almost certainly blocked right now
+                   (seats oversubscribed or plan gone, AND no active devices
+                    while members exist / devices sit deactivated).
+      'warn'     — a seat/device problem worth a look, but not fully blocking.
+      'ok'       — nothing notable.
+
+    reasons is a short list of human-readable strings for the badge tooltip.
+    """
+    reasons = []
+    seats_over = seat_count > 0 and member_count > seat_count
+    plan_none = plan == 'none'
+    no_active_but_members = active_devices == 0 and member_count > 0
+
+    if seats_over:
+        reasons.append(f"{member_count}/{seat_count} seats — over limit")
+    if plan_none:
+        reasons.append("plan is 'none' (billing inactive)")
+    if deactivated_devices > 0:
+        reasons.append(
+            f"{deactivated_devices} device{'s' if deactivated_devices != 1 else ''} deactivated"
+        )
+    if no_active_but_members:
+        reasons.append("no active devices")
+
+    blocking = (seats_over or plan_none) and (no_active_but_members or deactivated_devices > 0)
+    if blocking:
+        status = 'critical'
+    elif reasons:
+        status = 'warn'
+    else:
+        status = 'ok'
+
+    return {'status': status, 'reasons': reasons}
 
 
 # ── All devices ───────────────────────────────────────────────────────────────
@@ -428,6 +500,33 @@ def mavops_resolve_error(request, error_id):
     error.save()
 
     return Response({'ok': True})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_set_org_archived(request, org_id):
+    """
+    Archive / unarchive an org from the MavOps ops list.
+    POST /api/mavops/orgs/<org_id>/archive/   body: {"archived": true|false}
+
+    This only toggles mavops_archived (ops-list visibility). It does NOT
+    soft-delete the org or affect the org's own members / product access.
+    """
+    try:
+        # all_objects so a soft-deleted-but-not-really org is still reachable.
+        org = Organization.all_objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    archived = request.data.get('archived', True)
+    if isinstance(archived, str):
+        archived = archived.lower() in ('1', 'true', 'yes')
+
+    org.mavops_archived = bool(archived)
+    org.save(update_fields=['mavops_archived', 'updated_at'])
+
+    return Response({'ok': True, 'id': org.id, 'mavops_archived': org.mavops_archived})
 
 
 @api_view(['POST'])

@@ -255,6 +255,19 @@ def check_subscription_response(http_error):
         if "subscription_inactive" in body:
             _subscription_active = False
             log("[SUB] ⚠️ Subscription inactive — agent paused")
+            # Surface this to the backend so it shows in the MavOps admin
+            # errors tab. Without this, a subscription/seat block only ever
+            # appears as the desktop dialog below and is invisible to us.
+            # The errors endpoint is unauthenticated (keyed by device_id),
+            # so this still lands even though our DeviceKey is being 403'd.
+            try:
+                report_error_to_backend(
+                    error_type="subscription_inactive",
+                    error_msg="Agent paused: org subscription inactive or seat unavailable (HTTP 403).",
+                    context={"http_status": 403, "source": "check_subscription_response"},
+                )
+            except Exception as _report_err:
+                log(f"[SUB] Could not report subscription_inactive: {_report_err}")
             show_subscription_inactive_notification()
             return True
     except:

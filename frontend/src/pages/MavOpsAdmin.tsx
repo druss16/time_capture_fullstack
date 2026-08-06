@@ -10,9 +10,11 @@ const API = "https://timetracker-api-k375.onrender.com/api";
 const SEAT_PRICES: Record<string, number> = { professional: 34.99, executive: 49.99, trial: 0, none: 0 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+interface OrgHealth { status: "ok" | "warn" | "critical"; reasons: string[]; }
 interface Org {
   id: number; name: string; plan: string; seat_count: number;
   member_count: number; active_devices: number;
+  deactivated_devices?: number; mavops_archived?: boolean; health?: OrgHealth;
   last_activity: string | null; trial_ends_at: string | null; created_at: string | null;
 }
 interface Device {
@@ -1842,6 +1844,9 @@ export default function MavOpsAdmin() {
   const [msg, setMsg] = useState("");
   const [msgType, setMsgType] = useState<"ok" | "err">("ok");
 
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivingOrg, setArchivingOrg] = useState<number | null>(null);
+
   const [impersonatingOrg, setImpersonatingOrg] = useState<{ id: number; name: string } | null>(null);
   const [viewAsPickerOrg, setViewAsPickerOrg] = useState<number | null>(null);
   const [orgMembers, setOrgMembers] = useState<Record<number, OrgMember[]>>({});
@@ -1868,7 +1873,7 @@ export default function MavOpsAdmin() {
     finally { setMembersLoading(null); }
   }, [apiFetch, orgMembers]);
 
-  useEffect(() => { if (token && tab === "orgs") loadOrgs(); }, []); // eslint-disable-line
+  useEffect(() => { if (token && tab === "orgs") loadOrgs(); }, [showArchived]); // eslint-disable-line
 
   useEffect(() => {
     fetch("https://api.github.com/repos/druss16/timetracker-releases/releases/latest")
@@ -1879,10 +1884,23 @@ export default function MavOpsAdmin() {
 
   const loadOrgs = useCallback(async () => {
     if (!token) return; setLoading(true);
-    try { const d = await apiFetch("/mavops/orgs/"); setOrgs(d.orgs || []); }
+    try { const d = await apiFetch(`/mavops/orgs/${showArchived ? "?include_archived=1" : ""}`); setOrgs(d.orgs || []); }
     catch { flash("Failed — make sure your account has is_staff=True.", "err"); }
     finally { setLoading(false); }
-  }, [token, apiFetch]);
+  }, [token, apiFetch, showArchived]);
+
+  const archiveOrg = useCallback(async (org: Org, archived: boolean) => {
+    setArchivingOrg(org.id);
+    try {
+      await apiFetch(`/mavops/orgs/${org.id}/archive/`, {
+        method: "POST",
+        body: JSON.stringify({ archived }),
+      });
+      flash(archived ? `Archived "${org.name}" — hidden from the list.` : `Restored "${org.name}".`);
+      await loadOrgs();
+    } catch { flash("Failed to update archive state.", "err"); }
+    finally { setArchivingOrg(null); }
+  }, [apiFetch, loadOrgs]);
 
   const loadDevices = useCallback(async () => {
     if (!token) return; setLoading(true);
@@ -2118,7 +2136,30 @@ export default function MavOpsAdmin() {
               </div>
             )}
 
-            {/* Column headers */}
+            {/* List controls — health summary + show-archived toggle */}
+            {orgs.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, paddingLeft: 4 }}>
+                {(() => {
+                  const flagged = filteredOrgs.filter(o => o.health && o.health.status !== "ok").length;
+                  return flagged > 0 ? (
+                    <span style={{ ...mono, fontSize: 12, color: T.yellow, fontWeight: 600 }}>
+                      ⚠ {flagged} org{flagged === 1 ? "" : "s"} need attention
+                    </span>
+                  ) : (
+                    <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>all orgs healthy</span>
+                  );
+                })()}
+                <div style={{ flex: 1 }} />
+                <Btn
+                  label={showArchived ? "● showing archived" : "show archived"}
+                  onClick={() => setShowArchived(v => !v)}
+                  outline
+                  color={showArchived ? T.teal : T.textMuted}
+                  small
+                />
+              </div>
+            )}
+
             {/* Column headers */}
             {filteredOrgs.length > 0 && (
               <div style={{
@@ -2196,6 +2237,23 @@ export default function MavOpsAdmin() {
                       )}
                       {isViewing && (
                         <Badge label="viewing" color={T.purple} />
+                      )}
+                      {org.health && org.health.status !== "ok" && (
+                        <span
+                          title={org.health.reasons.join(" · ")}
+                          style={{
+                            ...mono, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" as const,
+                            padding: "2px 8px", borderRadius: 3, cursor: "help",
+                            color: org.health.status === "critical" ? T.red : T.yellow,
+                            background: (org.health.status === "critical" ? T.red : T.yellow) + "22",
+                            border: `1px solid ${(org.health.status === "critical" ? T.red : T.yellow)}55`,
+                          }}
+                        >
+                          {org.health.status === "critical" ? "⚠ blocked" : "⚠ check"}
+                        </span>
+                      )}
+                      {org.mavops_archived && (
+                        <Badge label="archived" color={T.textMuted} />
                       )}
                     </div>
 
@@ -2298,6 +2356,13 @@ export default function MavOpsAdmin() {
                           small
                         />
                       ))}
+                      <Btn
+                        label={archivingOrg === org.id ? "…" : org.mavops_archived ? "restore" : "archive"}
+                        onClick={() => archiveOrg(org, !org.mavops_archived)}
+                        outline
+                        color={org.mavops_archived ? T.teal : T.textMuted}
+                        small
+                      />
                     </div>
                   </div>
                 </div>

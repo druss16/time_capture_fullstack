@@ -180,7 +180,13 @@ class Organization(models.Model):
 
     is_demo = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
-    
+
+    # MavOps-admin-only "hide from the ops list" flag. Distinct from
+    # deleted_at (soft delete): this does NOT hide the org from its own
+    # members / product views — it only removes clutter (stale duplicates,
+    # decommissioned firms) from the internal MavOps org list. Reversible.
+    mavops_archived = models.BooleanField(default=False)
+
     objects = ActiveOrgManager()
     all_objects = models.Manager()
 

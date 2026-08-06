@@ -7806,12 +7806,21 @@ logger = logging.getLogger(__name__)
 
 
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def agent_error_report(request):
     """
     Receive error reports from desktop agents.
     POST /api/agent/errors/
-    
-    No auth required - uses device_id to find user.
+
+    Intentionally unauthenticated - uses device_id to find user/org.
+
+    This MUST bypass the default AgentKeyAuthentication: a device whose
+    org subscription is inactive (or whose device row was deactivated)
+    gets a 403 `subscription_inactive` from that authenticator, which would
+    otherwise reject the very error reports that tell us the agent is stuck.
+    Those blocked devices are exactly the ones we most need to hear from,
+    so error ingest is keyed by device_id, not by a valid DeviceKey.
     """
     from tracker.models import AgentError, AgentDevice
     

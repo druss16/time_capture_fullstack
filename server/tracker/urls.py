@@ -352,6 +352,7 @@ urlpatterns = [
     path('agent/request-logs/', views.request_agent_logs, name='agent-request-logs'),
 
     path('mavops/orgs/',                  views_mavops.mavops_orgs,          name='mavops-orgs'),
+    path('mavops/orgs/<int:org_id>/archive/', views_mavops.mavops_set_org_archived, name='mavops-set-org-archived'),
     path('mavops/qbo-mappings/',          views_mavops.mavops_qbo_mappings,  name='mavops-qbo-mappings'),
     path('mavops/qbo-map/',               views_mavops.mavops_qbo_map,       name='mavops-qbo-map'),
     path('mavops/devices/',               views_mavops.mavops_devices,       name='mavops-devices'),

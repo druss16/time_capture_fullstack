@@ -187,6 +187,12 @@ class Organization(models.Model):
     # decommissioned firms) from the internal MavOps org list. Reversible.
     mavops_archived = models.BooleanField(default=False)
 
+    # Seat-overage grace. Set when member_count first exceeds seat_count; the
+    # org keeps working until this deadline, then the excess is blocked
+    # (check_seat_overage_grace). DISTINCT from payment_grace_deadline, which
+    # is owned by the Stripe past-due flow — do not conflate the two.
+    seat_grace_deadline = models.DateTimeField(null=True, blank=True)
+
     objects = ActiveOrgManager()
     all_objects = models.Manager()
 
@@ -507,6 +513,10 @@ class AgentDevice(models.Model):
     )
 
     is_active = models.BooleanField(default=False)
+    # Why a device was deactivated, when we did it programmatically. Lets us
+    # reactivate only the devices WE blocked for seat overage (not ones a
+    # payment failure or an admin turned off). Blank for manual/unknown.
+    deactivated_reason = models.CharField(max_length=32, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
 

@@ -1405,6 +1405,111 @@ def check_payment_grace_periods():
     return {'expired_orgs': expired_orgs.count(), 'devices_deactivated': total_deactivated}
 
 
+SEAT_GRACE_DAYS = 15
+
+
+def _notify_seat_overage(org, member_count):
+    """Email the org's owner/admins that they're over their seat count."""
+    from tracker.models import OrganizationMembership
+    try:
+        from tracker.email_service import send_seat_overage_notice
+    except Exception:
+        return
+    admins = (
+        OrganizationMembership.objects
+        .filter(organization=org, role__in=['owner', 'admin'])
+        .select_related('user')
+        .order_by('joined_at', 'id')
+    )
+    recipients = [m.user.email for m in admins if getattr(m.user, 'email', None)]
+    if not recipients:
+        return
+    for email in recipients:
+        try:
+            send_seat_overage_notice(
+                to_email=email,
+                org_name=org.name,
+                member_count=member_count,
+                seat_count=org.seat_count,
+                grace_days=SEAT_GRACE_DAYS,
+            )
+        except Exception as e:
+            logger.error(f"[SEAT-GRACE] notice failed for {email}: {e}")
+
+
+@shared_task(name='tracker.check_seat_overage_grace')
+def check_seat_overage_grace():
+    """
+    Enforce seat limits with a 15-day grace window.
+
+    When an org's member count first exceeds its paid seats, start a grace
+    deadline and email the admins. If still over when the deadline passes,
+    block only the EXCESS members' devices (keep the earliest-joined
+    seat_count members working). When resolved, clear grace and reactivate
+    only the devices we blocked for seat overage.
+
+    Distinct from check_payment_grace_periods (Stripe past-due): this uses
+    seat_grace_deadline and never touches org.plan / seat_count.
+    """
+    from tracker.models import Organization, OrganizationMembership, AgentDevice
+
+    now = timezone.now()
+    started = enforced = resolved = 0
+
+    # Only paid plans with a real seat cap can be "over". Skip archived/demo
+    # orgs — we never email or enforce against junk duplicates or demos.
+    orgs = (
+        Organization.objects
+        .filter(seat_count__gt=0, mavops_archived=False, is_demo=False)
+        .exclude(plan='none')
+    )
+    for org in orgs:
+        members = list(
+            OrganizationMembership.objects
+            .filter(organization=org)
+            .order_by('joined_at', 'id')
+        )
+        member_count = len(members)
+        over = member_count > org.seat_count
+
+        if not over:
+            if org.seat_grace_deadline:
+                org.seat_grace_deadline = None
+                org.save(update_fields=['seat_grace_deadline'])
+                reactivated = AgentDevice.objects.filter(
+                    user__memberships__organization=org,
+                    is_active=False,
+                    deactivated_reason='seat_overage',
+                ).update(is_active=True, deactivated_reason='')
+                resolved += 1
+                logger.info(f"[SEAT-GRACE] Resolved for {org.name}; reactivated {reactivated} device(s)")
+            continue
+
+        if not org.seat_grace_deadline:
+            org.seat_grace_deadline = now + timedelta(days=SEAT_GRACE_DAYS)
+            org.save(update_fields=['seat_grace_deadline'])
+            started += 1
+            logger.info(
+                f"[SEAT-GRACE] Started for {org.name}: {member_count}/{org.seat_count} seats, "
+                f"deadline {org.seat_grace_deadline:%Y-%m-%d}"
+            )
+            _notify_seat_overage(org, member_count)
+        elif now >= org.seat_grace_deadline:
+            excess_user_ids = [m.user_id for m in members[org.seat_count:]]
+            blocked = AgentDevice.objects.filter(
+                user_id__in=excess_user_ids, is_active=True,
+            ).update(is_active=False, deactivated_reason='seat_overage')
+            if blocked:
+                enforced += 1
+                logger.info(
+                    f"[SEAT-GRACE] Enforced for {org.name}: blocked {blocked} device(s) "
+                    f"beyond {org.seat_count} seats"
+                )
+        # else: still within grace — MavOps shows the countdown, no action.
+
+    return {'grace_started': started, 'enforced': enforced, 'resolved': resolved}
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
     """

@@ -522,8 +522,17 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
         for needle in needles_raw:
             if len(needle) < 3:
                 continue
-            escaped = re.escape(needle.lower())
-            flex = re.sub(r'[\\\s_\-\.&]+', r'[\\s_\\-.&]*', escaped)
+            # Split on separators/punctuation, escape each token individually,
+            # then rejoin with a flexible separator so spacing/punctuation
+            # differences still match ("Smith (Trust)" vs "SMITH_TRUST" vs
+            # "smith trust"). Escaping each token means a stray "(" in a client
+            # name can never leak an unbalanced group into re.compile() and
+            # crash matcher construction (previously `re.escape` + a second
+            # sub swallowed the escaping backslash before "(").
+            tokens = [t for t in re.split(r'[\s_\-.&()\[\]]+', needle.lower()) if t]
+            flex = r'[\s_\-.&()\[\]]*'.join(re.escape(t) for t in tokens)
+            if not flex:
+                continue
             pat = re.compile(
                 r'(?:^|' + _BOUNDARY + r')' + flex + r'(?:$|' + _BOUNDARY + r')',
                 re.IGNORECASE,

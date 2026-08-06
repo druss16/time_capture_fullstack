@@ -77,6 +77,24 @@ _PATH_NOISE_SEGMENTS = {
     'google drive', 'googledrive',
 }
 
+def _is_proper_contiguous_subsequence(short_toks, long_toks) -> bool:
+    """True iff `short_toks` appears as a CONTIGUOUS run inside `long_toks` and
+    is strictly shorter (proper containment).
+
+    The substring-domination rule in Stage 3 uses this to decide when one
+    client's whole name is embedded inside a longer, more-specific client's
+    name (e.g. ['assumption','church'] inside ['saint','mary','of','the',
+    'assumption','church']). Contiguity + proper-length is deliberate: it must
+    NOT fire on shared-token OVERLAP (['sacred','heart','cicero'] vs
+    ['sacred','heart','rome']) or the same-family collision deferral would
+    collapse into a wrong pick.
+    """
+    s, l = len(short_toks), len(long_toks)
+    if s == 0 or s >= l:
+        return False
+    return any(long_toks[i:i + s] == short_toks for i in range(l - s + 1))
+
+
 def _is_office_protected_view(window_title) -> bool:
     """Return True when the block's window title indicates Office Protected View.
  
@@ -1925,6 +1943,67 @@ class ClassificationService:
             else _file_path_hits if best_match_type == 'file_path'
             else []
         )
+
+        # SUBSTRING DOMINATION (v-specific-name-wins): when a shorter client's
+        # WHOLE name is embedded as a contiguous run inside a longer, more-
+        # specific client's name AND both matched, the longer client is the real
+        # subject — drop the embedded shorter one before the tie/clear-winner
+        # logic. Example: title "St Mary of the Assumption Church" matches both
+        # "Assumption Church" (169) and "St Mary of the Assumption Church" (395);
+        # since {assumption, church} is a contiguous run of {st, mary, of, the,
+        # assumption, church}, 169 is dropped and 395 wins.
+        #
+        # Gated STRICTLY on proper contiguous token-subsequence containment
+        # (never shared-token overlap), so same-family collisions where no name
+        # contains another — "St Marys Church Jordan" vs "…Taberg", the Sacred
+        # Heart siblings (each has a unique 3rd token) — are untouched and still
+        # defer below. A short name that matched ALONE is never dropped: a
+        # container must be a DIFFERENT client that also matched.
+        if best_match_type in ('title_alias', 'file_path') and len(_active_hits) >= 2:
+            _by_id = {c.id: c for c in self._clients}
+
+            def _names_n(cid):
+                c = _by_id.get(cid)
+                if not c:
+                    return []
+                raw = [c.name] + list(c.aliases or [])
+                out = []
+                for x in raw:
+                    n = self._normalize_name(x or '')
+                    if n:
+                        out.append(n.split())
+                return out
+
+            _hit_ids = [cid for cid, _, _ in _active_hits]
+            _dominated = set()
+            for _a in _hit_ids:
+                a_names = _names_n(_a)
+                for _b in _hit_ids:
+                    if _b == _a:
+                        continue
+                    b_names = _names_n(_b)
+                    if any(_is_proper_contiguous_subsequence(an, bn)
+                           for an in a_names for bn in b_names):
+                        _dominated.add(_a)
+                        break
+            if _dominated and len(_dominated) < len(_hit_ids):
+                _active_hits = [h for h in _active_hits if h[0] not in _dominated]
+                # Re-derive the winner from the surviving hits so best_* reflects
+                # the drop (the dropped client may have been best_client).
+                _sb_id, _sb_strg = None, 0.0
+                for _cid, _strg, _ in _active_hits:
+                    if _strg > _sb_strg:
+                        _sb_strg, _sb_id = _strg, _cid
+                if _sb_id is not None:
+                    best_client = _by_id.get(_sb_id)
+                    best_strength = _sb_strg
+                logger.info(
+                    f"[STAGE-3-DOMINATION] dropped embedded client(s) "
+                    f"{sorted(_dominated)} in favor of more-specific match "
+                    f"{best_client.id if best_client else '?'} "
+                    f"({best_client.name if best_client else '?'!r})"
+                )
+
         if best_match_type in ('title_alias', 'file_path') and _active_hits:
             # High-confidence shortcut (St Matthew rescue): if exactly ONE
             # client FULLY owns the title (raw spec >= 0.9) and no other client

@@ -187,12 +187,15 @@ def mavops_orgs(request):
 
         seat_count = getattr(org, 'seat_count', 0) or 0
         plan = getattr(org, 'plan', 'unknown') or 'unknown'
+        seat_grace_deadline = getattr(org, 'seat_grace_deadline', None)
         health = _org_health(
             plan=plan,
             seat_count=seat_count,
             member_count=member_count,
             active_devices=device_count,
             deactivated_devices=deactivated_devices,
+            seat_grace_deadline=seat_grace_deadline,
+            now=timezone.now(),
         )
         if getattr(org, 'mavops_archived', False):
             archived_count += 1
@@ -207,6 +210,7 @@ def mavops_orgs(request):
             'active_devices': device_count,
             'deactivated_devices': deactivated_devices,
             'mavops_archived': getattr(org, 'mavops_archived', False),
+            'seat_grace_deadline': seat_grace_deadline.isoformat() if seat_grace_deadline else None,
             'health': health,
             'last_activity': last_device.last_seen_at.isoformat() if last_device and last_device.last_seen_at else None,
             'trial_ends_at': org.trial_ends_at.isoformat() if getattr(org, 'trial_ends_at', None) else None,
@@ -221,26 +225,43 @@ def mavops_orgs(request):
     })
 
 
-def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_devices):
+def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_devices,
+                seat_grace_deadline=None, now=None):
     """
     Derive a health signal for the MavOps org row.
 
     status:
-      'critical' — users are almost certainly blocked right now
-                   (seats oversubscribed or plan gone, AND no active devices
-                    while members exist / devices sit deactivated).
-      'warn'     — a seat/device problem worth a look, but not fully blocking.
+      'critical' — users are actively blocked: plan gone with members dark, or
+                   seat overage whose 15-day grace has EXPIRED.
+      'warn'     — a seat/device problem worth a look, incl. an overage still
+                   inside its grace window (badge shows the countdown).
       'ok'       — nothing notable.
 
     reasons is a short list of human-readable strings for the badge tooltip.
+    grace_days_left is the whole days remaining on a seat-overage grace, or None.
     """
     reasons = []
     seats_over = seat_count > 0 and member_count > seat_count
     plan_none = plan == 'none'
     no_active_but_members = active_devices == 0 and member_count > 0
 
+    # Seat-overage grace state.
+    grace_days_left = None
+    grace_expired = False
+    if seats_over and seat_grace_deadline is not None and now is not None:
+        secs = (seat_grace_deadline - now).total_seconds()
+        if secs > 0:
+            grace_days_left = int(secs // 86400)
+        else:
+            grace_expired = True
+
     if seats_over:
-        reasons.append(f"{member_count}/{seat_count} seats — over limit")
+        if grace_days_left is not None:
+            reasons.append(f"{member_count}/{seat_count} seats — grace: {grace_days_left}d left")
+        elif grace_expired:
+            reasons.append(f"{member_count}/{seat_count} seats — grace expired, excess blocked")
+        else:
+            reasons.append(f"{member_count}/{seat_count} seats — over limit")
     if plan_none:
         reasons.append("plan is 'none' (billing inactive)")
     if deactivated_devices > 0:
@@ -250,7 +271,12 @@ def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_d
     if no_active_but_members:
         reasons.append("no active devices")
 
-    blocking = (seats_over or plan_none) and (no_active_but_members or deactivated_devices > 0)
+    # Critical = actively blocked. An overage is only critical once its grace
+    # has expired; while inside the grace window it stays a warning.
+    blocking = (
+        (seats_over and grace_expired)
+        or (plan_none and (no_active_but_members or deactivated_devices > 0))
+    )
     if blocking:
         status = 'critical'
     elif reasons:
@@ -258,7 +284,7 @@ def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_d
     else:
         status = 'ok'
 
-    return {'status': status, 'reasons': reasons}
+    return {'status': status, 'reasons': reasons, 'grace_days_left': grace_days_left}
 
 
 # ── All devices ───────────────────────────────────────────────────────────────

@@ -256,6 +256,59 @@ Password: Use your existing TimeTracker password
     )
 
 
+def send_seat_overage_notice(
+    to_email: str,
+    org_name: str,
+    member_count: int,
+    seat_count: int,
+    grace_days: int = 15,
+):
+    """
+    Warn an org owner/admin that they have more members than paid seats,
+    with a grace window before the extra users are paused.
+    """
+    billing_url = f"{getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')}/account/billing"
+    over_by = max(0, member_count - seat_count)
+
+    body = f'''
+        <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">
+            Your team on <strong>{org_name}</strong> has grown past your plan.
+        </p>
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;margin:16px 0;">
+            <p style="margin:0;color:#92400e;font-size:15px;">
+                <strong>{member_count} members</strong> on <strong>{seat_count} paid seat{'s' if seat_count != 1 else ''}</strong>
+                &mdash; {over_by} over your limit.
+            </p>
+            <p style="margin:8px 0 0;color:#92400e;font-size:13px;">
+                You have <strong>{grace_days} days</strong> to add seats. After that, the
+                {over_by} most recently added member{'s' if over_by != 1 else ''} will be paused until you do.
+            </p>
+        </div>
+        {_btn(billing_url, "#2B9D90 0%,#237F74 100%", "Add seats &rarr;")}
+        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">TimeTracker by MavOps</p>'''
+
+    html = _wrap_html("#F59E0B 0%,#D97706 100%", "⚠️", "You're over your seat count", body)
+
+    plain = f"""Your team on {org_name} has grown past your plan.
+
+{member_count} members on {seat_count} paid seats — {over_by} over your limit.
+
+You have {grace_days} days to add seats. After that, the {over_by} most recently
+added members will be paused until you do.
+
+Add seats: {billing_url}
+
+- TimeTracker by MavOps"""
+
+    return send_email(
+        to_email=to_email,
+        subject=f"Action needed: {org_name} is over its seat count",
+        html_content=html,
+        plain_content=plain,
+        categories=["billing", "seat_overage"],
+    )
+
+
 # ---------- 2. Onboarding invitation (rich) ----------
 
 def send_onboarding_invitation(

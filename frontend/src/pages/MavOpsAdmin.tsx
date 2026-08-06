@@ -10,11 +10,12 @@ const API = "https://timetracker-api-k375.onrender.com/api";
 const SEAT_PRICES: Record<string, number> = { professional: 34.99, executive: 49.99, trial: 0, none: 0 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-interface OrgHealth { status: "ok" | "warn" | "critical"; reasons: string[]; }
+interface OrgHealth { status: "ok" | "warn" | "critical"; reasons: string[]; grace_days_left?: number | null; }
 interface Org {
   id: number; name: string; plan: string; seat_count: number;
   member_count: number; active_devices: number;
   deactivated_devices?: number; mavops_archived?: boolean; health?: OrgHealth;
+  seat_grace_deadline?: string | null;
   last_activity: string | null; trial_ends_at: string | null; created_at: string | null;
 }
 interface Device {
@@ -2004,6 +2005,11 @@ export default function MavOpsAdmin() {
   const inactiveDevices = devices.filter(d => (Date.now() - new Date(d.last_seen).getTime()) > 7 * 86400000);
   const recentOrgs = [...orgs].filter(o => o.created_at).sort((a, b) => new Date(b.created_at!).getTime() - new Date(a.created_at!).getTime()).slice(0, 5);
   const filteredOrgs = orgs.filter(o => !search || o.name.toLowerCase().includes(search.toLowerCase()));
+  // ONE grid template shared by the header row AND every data row. Each row is
+  // its own grid, so all tracks must be fixed widths (no content-sized `auto`
+  // in the middle) or columns won't line up across rows. Col 1 flexes; the
+  // actions column is a fixed min so the button cluster aligns on the right.
+  const ORG_GRID = "minmax(180px, 1.4fr) 120px 90px 110px 104px 96px minmax(410px, auto)";
   const filteredDevices = devices.filter(d => {
     if (showInactiveOnly && (Date.now() - new Date(d.last_seen).getTime()) < 7 * 86400000) return false;
     if (!search) return true;
@@ -2164,10 +2170,10 @@ export default function MavOpsAdmin() {
             {filteredOrgs.length > 0 && (
               <div style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(220px, 1.5fr) 130px 100px 120px 110px 90px minmax(380px, auto)",
+                gridTemplateColumns: ORG_GRID,
                 alignItems: "center",
                 gap: 16,
-                padding: "8px 20px",
+                padding: "8px 21px",
                 color: T.textMuted,
                 fontSize: 10,
                 letterSpacing: 1.5,
@@ -2175,12 +2181,12 @@ export default function MavOpsAdmin() {
                 fontWeight: 600,
                 ...mono,
               }}>
-                <div>Org</div>
-                <div style={{ textAlign: "center" as const }}>Plan</div>
-                <div style={{ textAlign: "center" as const }}>MRR</div>
-                <div style={{ textAlign: "center" as const }}>Seats</div>
-                <div style={{ textAlign: "left" as const }}>Devices</div>
-                <div style={{ textAlign: "left" as const }}>Active</div>
+                <div style={{ textAlign: "left" as const }}>Org</div>
+                <div style={{ textAlign: "left" as const }}>Plan</div>
+                <div style={{ textAlign: "right" as const }}>MRR</div>
+                <div style={{ textAlign: "right" as const }}>Seats</div>
+                <div style={{ textAlign: "right" as const }}>Devices</div>
+                <div style={{ textAlign: "right" as const }}>Active</div>
                 <div></div>
               </div>
             )}
@@ -2218,7 +2224,7 @@ export default function MavOpsAdmin() {
                 >
                   <div style={{
                     display: "grid",
-                    gridTemplateColumns: "minmax(200px, 1.5fr) auto 90px 110px 100px 90px auto",
+                    gridTemplateColumns: ORG_GRID,
                     alignItems: "center",
                     gap: 16,
                   }}>
@@ -2250,6 +2256,18 @@ export default function MavOpsAdmin() {
                           }}
                         >
                           {org.health.status === "critical" ? "⚠ blocked" : "⚠ check"}
+                        </span>
+                      )}
+                      {org.health?.grace_days_left != null && (
+                        <span
+                          title="Seat overage — grace period before excess members are paused"
+                          style={{
+                            ...mono, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" as const,
+                            padding: "2px 8px", borderRadius: 3, cursor: "help",
+                            color: T.yellow, background: T.yellow + "18", border: `1px solid ${T.yellow}44`,
+                          }}
+                        >
+                          ⏳ grace {org.health.grace_days_left}d
                         </span>
                       )}
                       {org.mavops_archived && (

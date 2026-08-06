@@ -161,6 +161,13 @@ app.conf.beat_schedule = {
     'schedule': crontab(hour=6, minute=0),  # Daily at 6am
     'options': {'expires': 3600},
     },
+
+    # Seat overage: 15-day grace, then block the excess (separate from Stripe).
+    'check-seat-overage-grace': {
+    'task': 'tracker.check_seat_overage_grace',
+    'schedule': crontab(hour=6, minute=30),  # Daily at 6:30am
+    'options': {'expires': 3600},
+    },
     
     # =========================================================================
     # MAINTENANCE (Daily/Weekly)

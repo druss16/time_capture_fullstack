@@ -2006,10 +2006,12 @@ export default function MavOpsAdmin() {
   const recentOrgs = [...orgs].filter(o => o.created_at).sort((a, b) => new Date(b.created_at!).getTime() - new Date(a.created_at!).getTime()).slice(0, 5);
   const filteredOrgs = orgs.filter(o => !search || o.name.toLowerCase().includes(search.toLowerCase()));
   // ONE grid template shared by the header row AND every data row. Each row is
-  // its own grid, so all tracks must be fixed widths (no content-sized `auto`
-  // in the middle) or columns won't line up across rows. Col 1 flexes; the
-  // actions column is a fixed min so the button cluster aligns on the right.
-  const ORG_GRID = "minmax(180px, 1.4fr) 120px 90px 110px 104px 96px minmax(410px, auto)";
+  // its own grid, so all tracks are fixed widths (no content-sized `auto`) or
+  // columns won't line up across rows. Col 1 (name) flexes; STATUS holds the
+  // health/grace/archived badges so they never crowd the name; ACTIONS is a
+  // fixed width sized to the 6-button cluster, right-aligned.
+  // Columns: ORG | STATUS | PLAN | MRR | SEATS | DEVICES | ACTIVE | ACTIONS
+  const ORG_GRID = "minmax(200px, 1.3fr) 178px 116px 92px 104px 100px 92px 496px";
   const filteredDevices = devices.filter(d => {
     if (showInactiveOnly && (Date.now() - new Date(d.last_seen).getTime()) < 7 * 86400000) return false;
     if (!search) return true;
@@ -2110,7 +2112,7 @@ export default function MavOpsAdmin() {
           style={{ background: "none", border: `1px solid ${T.border}`, color: T.textSub, padding: "6px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>↻ refresh</button>
       </div>
 
-      <div style={{ padding: "24px 32px", maxWidth: 1280 }}>
+      <div style={{ padding: "24px 32px", maxWidth: 1680 }}>
         {loading && <div style={{ color: T.textMuted, ...mono, fontSize: 13, paddingBottom: 16 }}>loading…</div>}
 
         {/* ══ ORGS ══ */}
@@ -2172,7 +2174,7 @@ export default function MavOpsAdmin() {
                 display: "grid",
                 gridTemplateColumns: ORG_GRID,
                 alignItems: "center",
-                gap: 16,
+                gap: 14,
                 padding: "8px 21px",
                 color: T.textMuted,
                 fontSize: 10,
@@ -2182,6 +2184,7 @@ export default function MavOpsAdmin() {
                 ...mono,
               }}>
                 <div style={{ textAlign: "left" as const }}>Org</div>
+                <div style={{ textAlign: "left" as const }}>Status</div>
                 <div style={{ textAlign: "left" as const }}>Plan</div>
                 <div style={{ textAlign: "right" as const }}>MRR</div>
                 <div style={{ textAlign: "right" as const }}>Seats</div>
@@ -2226,24 +2229,23 @@ export default function MavOpsAdmin() {
                     display: "grid",
                     gridTemplateColumns: ORG_GRID,
                     alignItems: "center",
-                    gap: 16,
+                    gap: 14,
                   }}>
                     {/* COL 1 — name */}
                     <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                       <span style={{
-                        fontSize: 16, fontWeight: 700, color: T.text,
+                        fontSize: 16, fontWeight: 700, color: T.text, minWidth: 0,
                         whiteSpace: "nowrap" as const, overflow: "hidden" as const, textOverflow: "ellipsis" as const,
                       }}>
                         {org.name}
                       </span>
-                      {trialAlert && (
-                        <span style={{ ...mono, fontSize: 11, color: T.yellow, fontWeight: 600, whiteSpace: "nowrap" as const }}>
-                          ⚠ {trialDays}d
-                        </span>
-                      )}
                       {isViewing && (
                         <Badge label="viewing" color={T.purple} />
                       )}
+                    </div>
+
+                    {/* COL 2 — status badges */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" as const }}>
                       {org.health && org.health.status !== "ok" && (
                         <span
                           title={org.health.reasons.join(" · ")}
@@ -2270,38 +2272,43 @@ export default function MavOpsAdmin() {
                           ⏳ grace {org.health.grace_days_left}d
                         </span>
                       )}
+                      {trialAlert && (
+                        <span style={{ ...mono, fontSize: 11, color: T.yellow, fontWeight: 600, whiteSpace: "nowrap" as const }}>
+                          ⚠ {trialDays}d
+                        </span>
+                      )}
                       {org.mavops_archived && (
                         <Badge label="archived" color={T.textMuted} />
                       )}
                     </div>
 
-                    {/* COL 2 — plan badge */}
+                    {/* COL 3 — plan badge */}
                     <div>
                       <Badge label={org.plan} color={org.plan === "trial" ? T.yellow : org.plan === "executive" ? T.purple : T.teal} />
                     </div>
 
-                    {/* COL 3 — MRR */}
+                    {/* COL 4 — MRR */}
                     <div style={{ ...mono, fontSize: 12, fontWeight: 600, textAlign: "right" as const,
                          color: mrr_org > 0 ? T.green : T.textMuted }}>
                       {mrr_org > 0 ? `$${mrr_org.toFixed(0)}/mo` : "—"}
                     </div>
 
-                    {/* COL 4 — seats */}
+                    {/* COL 5 — seats */}
                     <div style={{ ...mono, fontSize: 12, fontWeight: 600, textAlign: "right" as const, color: seatColor }}>
                       {org.member_count}/{org.seat_count} seats
                     </div>
 
-                    {/* COL 5 — devices */}
+                    {/* COL 6 — devices */}
                     <div style={{ ...mono, fontSize: 12, fontWeight: 600, textAlign: "right" as const, color: deviceColor }}>
                       {org.active_devices} {org.active_devices === 1 ? "device" : "devices"}
                     </div>
 
-                    {/* COL 6 — activity */}
+                    {/* COL 7 — activity */}
                     <div style={{ ...mono, fontSize: 11, color: T.textMuted, textAlign: "right" as const }}>
                       {org.last_activity ? timeAgo(org.last_activity) : "—"}
                     </div>
 
-                    {/* COL 7 — actions */}
+                    {/* COL 8 — actions */}
                     <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
                       <div style={{ position: "relative" }} data-picker>
                         {isViewing ? (

@@ -1,4 +1,5 @@
-import { Suspense, lazy, useEffect, useState, useRef } from "react";
+import { Suspense, useEffect, useState, useRef } from "react";
+import { lazyWithRetry } from "@/lib/lazyWithRetry";
 import {
   BrowserRouter,
   Routes,
@@ -33,21 +34,23 @@ import ConnectionsPage from '@/pages/account/ConnectionsPage';
 import ExecutiveGate from '@/routes/ExecutiveGate';
 
 // --------- Lazy pages (code-splitting) ---------
-const DailyReview = lazy(() => import("./DailyReview"));
-const TimecardSummary = lazy(() => import("./TimecardSummary"));
-const OrgAdminSettings = lazy(() => import("./Settings"));
-const OrganizationSettings = lazy(() => import("./OrganizationSettings"));
-const Devices = lazy(() => import("./Devices"));
-const Login = lazy(() => import("./Login"));
-const NotFound = lazy(() => import("./NotFound"));
-const BillingPage = lazy(() => import("./BillingPage"));
-const WhiteGloveOnboarding = lazy(() => import("./settings/WhiteGloveOnboarding"));
-const Home = lazy(() => import("./Home"));
-const RequestAccess = lazy(() => import("./RequestAccess"));
-const MavOpsAdmin = lazy(() => import("./MavOpsAdmin"));
-const DashboardV2 = lazy(() => import("./DashboardV2"));
-const ReportsSummary = lazy(() => import("./ReportsSummary"));
-const AIBlindSpots = lazy(() => import("./AIBlindSpots"));
+// lazyWithRetry auto-reloads once on a stale-chunk 404 after a deploy so an
+// already-open tab recovers instead of showing a blank screen.
+const DailyReview = lazyWithRetry(() => import("./DailyReview"));
+const TimecardSummary = lazyWithRetry(() => import("./TimecardSummary"));
+const OrgAdminSettings = lazyWithRetry(() => import("./Settings"));
+const OrganizationSettings = lazyWithRetry(() => import("./OrganizationSettings"));
+const Devices = lazyWithRetry(() => import("./Devices"));
+const Login = lazyWithRetry(() => import("./Login"));
+const NotFound = lazyWithRetry(() => import("./NotFound"));
+const BillingPage = lazyWithRetry(() => import("./BillingPage"));
+const WhiteGloveOnboarding = lazyWithRetry(() => import("./settings/WhiteGloveOnboarding"));
+const Home = lazyWithRetry(() => import("./Home"));
+const RequestAccess = lazyWithRetry(() => import("./RequestAccess"));
+const MavOpsAdmin = lazyWithRetry(() => import("./MavOpsAdmin"));
+const DashboardV2 = lazyWithRetry(() => import("./DashboardV2"));
+const ReportsSummary = lazyWithRetry(() => import("./ReportsSummary"));
+const AIBlindSpots = lazyWithRetry(() => import("./AIBlindSpots"));
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
 

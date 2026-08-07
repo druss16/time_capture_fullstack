@@ -94,6 +94,30 @@ const isInternalClientName = (name: string) => {
 
 const clientKeyOf = (clientId: number | null) => (clientId != null ? `id:${clientId}` : "none");
 
+// Within one client, fold rows whose title is identical once the trailing
+// per-block "(Nm)" duration tag is stripped — the same file/activity should be
+// ONE line, not one per block (e.g. two "SMA P&L… (2m)"/"(6m)" become one 8m
+// line). Combines their block ids and sums minutes; keeps first-seen order.
+// Display-only: the client's total minutes / billable split are untouched.
+const stripDurTag = (t: string) => t.replace(/\s*\(\d+m\)\s*$/i, "").trim();
+function mergeRowsByTitle(rows: CertainRow[]): CertainRow[] {
+  const out: CertainRow[] = [];
+  const idx = new Map<string, number>();
+  for (const r of rows) {
+    const clean = stripDurTag(r.title);
+    const key = clean.toLowerCase(); // title-only: identical titles always pair
+    const at = idx.get(key);
+    if (at === undefined) {
+      idx.set(key, out.length);
+      out.push({ ids: [...r.ids], title: clean, category: r.category, minutes: r.minutes });
+    } else {
+      out[at].ids = [...out[at].ids, ...r.ids];
+      out[at].minutes += r.minutes;
+    }
+  }
+  return out;
+}
+
 /**
  * Derive the two lanes from the raw today-time slices.
  * @param ignored  mismatch block_ids the user dismissed as false positives.
@@ -149,6 +173,9 @@ export function deriveLanes(
 
     if (!rows.length) continue; // whole client was mismatches -> nothing left to browse
 
+    // Collapse identical-title rows (same file → one line, not one per block).
+    const mergedRows = mergeRowsByTitle(rows);
+
     const pulled = pulledMinByClient.get(key) || 0;
     const minutes = Math.max(0, Math.round(client.total_hours * 60 - pulled));
     // Per-client billable split. Prefer today-time's exact per-client figures;
@@ -182,11 +209,11 @@ export function deriveLanes(
       // A group is billable if it holds any billable time (a real client's work);
       // internal / no-client overhead has none and falls to the non-billable section.
       billable: billableMinutes > 0,
-      blockCount: rows.length,
+      blockCount: mergedRows.length,
       repCategory,
-      rows,
+      rows: mergedRows,
     });
-    certainBlockCount += rows.length;
+    certainBlockCount += mergedRows.length;
     certainMinutes += minutes;
     certainBillable += billableMinutes;
     certainNonBillable += nonBillableMinutes;

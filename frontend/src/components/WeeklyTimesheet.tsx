@@ -78,7 +78,7 @@ interface TaskTypeOption {
 const MoveContext = React.createContext<{
   taskTypes: TaskTypeOption[];
   movingId: number | null;
-  onMove: (blockId: number, taskTypeId: number) => void;
+  onMove: (blockIds: number[], taskTypeId: number) => void;
 } | null>(null);
 
 // Index blocks by client + category (and by day) so a category row can list its
@@ -92,6 +92,49 @@ const dKey = (date: string, clientName: string, taskName: string) => `${date}||$
 // A friendly one-line label for a captured block.
 const blockLabel = (b: DetailBlock): string =>
   (b.window_title || b.application || b.taxpayer_name || b.task_type_name || 'Captured activity').trim();
+
+// Identical captured blocks (same title) get merged into one display row with a
+// summed duration and a ×N count, so a long tail of repeated app windows reads
+// as a single line. Purely cosmetic — `ids` keeps every underlying block so a
+// move still acts on all of them. Rows stay in chronological order (earliest
+// occurrence first), which matches the un-merged timeline.
+interface AggBlock {
+  key: string;
+  label: string;
+  minutes: number;
+  count: number;
+  firstStart: string | null;
+  is_billable: boolean;
+  taskTypeName: string | null;
+  ids: number[];
+}
+const aggregateBlocks = (blocks: DetailBlock[]): AggBlock[] => {
+  const map = new Map<string, AggBlock>();
+  for (const b of blocks) {
+    const label = blockLabel(b);
+    const ex = map.get(label);
+    if (ex) {
+      ex.minutes += b.duration_minutes || 0;
+      ex.count += 1;
+      ex.ids.push(b.id);
+      if (b.started_at && (!ex.firstStart || b.started_at < ex.firstStart)) ex.firstStart = b.started_at;
+    } else {
+      map.set(label, {
+        key: label,
+        label,
+        minutes: b.duration_minutes || 0,
+        count: 1,
+        firstStart: b.started_at,
+        is_billable: b.is_billable,
+        taskTypeName: b.task_type_name,
+        ids: [b.id],
+      });
+    }
+  }
+  return [...map.values()].sort(
+    (a, b) => (a.firstStart || '').localeCompare(b.firstStart || '') || b.minutes - a.minutes
+  );
+};
 
 const formatClock = (iso: string | null): string => {
   if (!iso) return '';
@@ -309,6 +352,7 @@ const WeeklyTimesheet: React.FC = () => {
   const [view, setView]                     = useState<ViewMode>('summary');
   const [expanded, setExpanded]             = useState<Set<string>>(new Set());
   const [tailOpen, setTailOpen]             = useState(false);
+  const [laneOpen, setLaneOpen]             = useState(false); // "This week" starts collapsed
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -365,18 +409,23 @@ const WeeklyTimesheet: React.FC = () => {
       .catch(() => setTaskTypes([]));
   }, []);
 
-  // Move a mis-filed block to a different category, then reload so every view
-  // (this timesheet, its totals) reflects the change.
-  const moveBlock = useCallback(async (blockId: number, taskTypeId: number) => {
-    setMovingId(blockId);
+  // Move mis-filed block(s) to a different category, then reload so every view
+  // (this timesheet, its totals) reflects the change. Identical captured blocks
+  // are merged into one display row, so a move can span several block ids —
+  // POST each, then reload once.
+  const moveBlocks = useCallback(async (blockIds: number[], taskTypeId: number) => {
+    if (!blockIds.length) return;
+    setMovingId(blockIds[0]);
     setError(null);
     try {
-      await safeFetchJson(`${API_BASE}/blocks/${blockId}/move-task-type/`, {
-        method: 'POST', body: JSON.stringify({ task_type_id: taskTypeId }),
-      });
+      for (const id of blockIds) {
+        await safeFetchJson(`${API_BASE}/blocks/${id}/move-task-type/`, {
+          method: 'POST', body: JSON.stringify({ task_type_id: taskTypeId }),
+        });
+      }
       await fetchTimesheet();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not move that block');
+      setError(err instanceof Error ? err.message : 'Could not move those blocks');
     } finally {
       setMovingId(null);
     }
@@ -454,8 +503,8 @@ const WeeklyTimesheet: React.FC = () => {
   }, [tailClients]);
 
   const moveValue = useMemo(
-    () => (taskTypes.length ? { taskTypes, movingId, onMove: moveBlock } : null),
-    [taskTypes, movingId, moveBlock]
+    () => (taskTypes.length ? { taskTypes, movingId, onMove: moveBlocks } : null),
+    [taskTypes, movingId, moveBlocks]
   );
 
   const toggleExpand = (key: string) => {
@@ -527,6 +576,9 @@ const WeeklyTimesheet: React.FC = () => {
   const totalClients  = clients.length;
   const billablePctLabel = grandTotal > 0 ? Math.round(pct(billable, grandTotal)) : 0;
   const isEmpty       = totalClients === 0;
+  // The client list ("This week") starts collapsed; an active search always
+  // reveals it so results aren't hidden behind the collapse.
+  const bodyOpen      = laneOpen || search.trim().length > 0;
 
   if (loading) {
     return (
@@ -567,7 +619,7 @@ const WeeklyTimesheet: React.FC = () => {
   })();
 
   return (
-    <div className="mx-auto w-full max-w-[820px] bg-[#eef4f3] p-4 sm:p-6 rounded-2xl">
+    <div className="mx-auto w-full max-w-[1120px] bg-[#eef4f3] p-4 sm:p-6 rounded-2xl">
 
       {/* ── Hero: Inter voice, Daily Review "Lightning" look ───────────── */}
       <div style={INTER}>
@@ -646,13 +698,20 @@ const WeeklyTimesheet: React.FC = () => {
       {/* ── Lane card: the week's clients ─────────────────────────────── */}
       <div className={cn('mt-4', LANE_CARD)}>
 
-        {/* Lane header: title / search / view toggle */}
+        {/* Lane header: collapse toggle / search / view toggle */}
         <div className="flex items-center gap-3 px-4 h-12 border-b border-border/70">
-          <span className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />
-          <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
-          <span className="font-mono text-[11.5px] text-slate-400 hidden md:inline">
-            {totalClients} client{totalClients !== 1 ? 's' : ''} · {formatHours(grandTotal)}
-          </span>
+          <button
+            onClick={() => setLaneOpen(o => !o)}
+            className="flex items-center gap-2.5 min-w-0 -ml-1 pl-1 pr-2 py-1 rounded-md hover:bg-black/[0.02] transition-colors"
+            title={laneOpen ? 'Collapse' : 'Expand'}
+          >
+            <ChevronRight className={cn('w-4 h-4 text-slate-300 shrink-0 transition-transform', bodyOpen && 'rotate-90')} />
+            <span className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />
+            <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
+            <span className="font-mono text-[11.5px] text-slate-400 hidden md:inline">
+              {totalClients} client{totalClients !== 1 ? 's' : ''} · {formatHours(grandTotal)}
+            </span>
+          </button>
           <div className="relative w-44 ml-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
             <input
@@ -681,7 +740,7 @@ const WeeklyTimesheet: React.FC = () => {
             ] as { id: ViewMode; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
-                onClick={() => setView(id)}
+                onClick={() => { setView(id); setLaneOpen(true); }}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-md transition-all',
                   view === id ? 'bg-white text-primary shadow-sm' : 'text-slate-500 hover:text-slate-700'
@@ -696,7 +755,15 @@ const WeeklyTimesheet: React.FC = () => {
         {/* Body */}
         <MoveContext.Provider value={moveValue}>
         <div>
-          {isEmpty ? (
+          {!bodyOpen ? (
+            <button
+              onClick={() => setLaneOpen(true)}
+              className="w-full flex items-center justify-center gap-2 py-6 text-[13px] font-medium text-slate-400 hover:text-slate-600 hover:bg-black/[0.015] transition-colors"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+              Show {totalClients} client{totalClients !== 1 ? 's' : ''} · {formatHours(grandTotal)}
+            </button>
+          ) : isEmpty ? (
             <div className="text-center py-20 text-slate-400">
               {search ? (
                 <>
@@ -816,18 +883,18 @@ const WeeklyTimesheet: React.FC = () => {
 // ── Summary View ──────────────────────────────────────────────────────────────
 
 // Popover menu to move a block to a different category (task type).
-const BlockMoveMenu: React.FC<{ block: DetailBlock }> = ({ block }) => {
+const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
   const ctx = React.useContext(MoveContext);
   const [open, setOpen] = useState(false);
   if (!ctx) return null;
-  const busy = ctx.movingId === block.id;
-  const currentName = block.task_type_name || 'General';
+  const busy = ctx.movingId != null && agg.ids.includes(ctx.movingId);
+  const currentName = agg.taskTypeName || 'General';
   return (
     <span className="relative shrink-0">
       <button
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
         disabled={busy}
-        title="Move this block to another category"
+        title={agg.count > 1 ? `Move these ${agg.count} blocks to another category` : 'Move this block to another category'}
         className="flex items-center gap-1 rounded-md border border-primary/25 bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary/15 transition-colors disabled:opacity-50"
       >
         {busy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FolderInput className="w-3 h-3" />}
@@ -843,7 +910,7 @@ const BlockMoveMenu: React.FC<{ block: DetailBlock }> = ({ block }) => {
               return (
                 <button
                   key={tt.id}
-                  onClick={(e) => { e.stopPropagation(); setOpen(false); if (!isCurrent) ctx.onMove(block.id, tt.id); }}
+                  onClick={(e) => { e.stopPropagation(); setOpen(false); if (!isCurrent) ctx.onMove(agg.ids, tt.id); }}
                   className={cn('w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-slate-50',
                     isCurrent ? 'text-slate-400' : 'text-slate-700')}
                 >
@@ -861,15 +928,20 @@ const BlockMoveMenu: React.FC<{ block: DetailBlock }> = ({ block }) => {
   );
 };
 
-// One captured block, listed under its category. Read-only info + a move menu.
-// Captured title + time render in mono — the Daily Review signal for "text we
-// read off the screen", vs the product's Plus Jakarta Sans UI voice.
-const BlockRow: React.FC<{ block: DetailBlock; withDay: boolean }> = ({ block, withDay }) => (
+// One merged captured-activity row (all blocks sharing a title), listed under
+// its category. Read-only info + a move menu. Captured title + time render in
+// mono — the Daily Review signal for "text we read off the screen", vs the
+// product's Plus Jakarta Sans UI voice. `title` exposes the full (untruncated)
+// label on hover so long window titles stay readable.
+const AggBlockRow: React.FC<{ agg: AggBlock; withDay: boolean }> = ({ agg, withDay }) => (
   <div className="group flex items-center gap-2.5 pl-[52px] pr-3 py-1.5 min-w-0">
-    <span className="font-mono text-[11px] text-slate-400 tabular-nums shrink-0 w-[76px] whitespace-nowrap">{formatBlockWhen(block.started_at, withDay)}</span>
-    <span className="flex-1 font-mono text-[12px] text-slate-500 truncate">{blockLabel(block)}</span>
-    <span className="font-mono text-[11.5px] text-slate-400 tabular-nums shrink-0 w-[52px] text-right">{formatMinutes(block.duration_minutes)}</span>
-    <BlockMoveMenu block={block} />
+    <span className="font-mono text-[11px] text-slate-400 tabular-nums shrink-0 w-[76px] whitespace-nowrap">{formatBlockWhen(agg.firstStart, withDay)}</span>
+    <span className="flex-1 font-mono text-[12px] text-slate-500 truncate" title={agg.label}>{agg.label}</span>
+    {agg.count > 1 && (
+      <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400" title={`${agg.count} identical blocks merged`}>×{agg.count}</span>
+    )}
+    <span className="font-mono text-[11.5px] text-slate-400 tabular-nums shrink-0 w-[52px] text-right">{formatMinutes(agg.minutes)}</span>
+    <BlockMoveMenu agg={agg} />
   </div>
 );
 
@@ -900,7 +972,7 @@ const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; pctOf?: num
       </div>
       {hasBlocks && open && (
         <div className="border-t border-black/[0.04] bg-slate-50/50">
-          {blocks!.map(b => <BlockRow key={b.id} block={b} withDay={blocksWithDay} />)}
+          {aggregateBlocks(blocks!).map(ab => <AggBlockRow key={ab.key} agg={ab} withDay={blocksWithDay} />)}
         </div>
       )}
     </>

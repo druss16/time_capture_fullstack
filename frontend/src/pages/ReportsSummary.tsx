@@ -41,6 +41,11 @@ import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
 import ReportsMatrix from "./ReportsMatrix";
 import WorkSummariesSection from "@/components/WorkSummariesSection";
 
+// Shared "Lightning" look — matches Daily Review + Timesheet.
+// Inter for the crisp reporting voice; eyebrow + hero type tokens reused verbatim.
+const INTER = { fontFamily: '"Inter", sans-serif' } as const;
+const EYEBROW = "text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400";
+
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
   return (
@@ -491,13 +496,14 @@ export default function ReportsSummary({
     });
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-[1120px] mx-auto px-4 py-6 space-y-6" style={INTER}>
       {/* Header + period toggle */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">Time Summary</h1>
+          <div className={EYEBROW}>Reports</div>
+          <h1 className="mt-1.5 text-[22px] font-bold tracking-[-0.01em] text-slate-900">Time Summary</h1>
           {data && (
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-[12.5px] text-slate-500 mt-1 tabular-nums">
               {data.org_name} · {data.range.start} → {data.range.end} ·{" "}
               {data.scope === "self" ? "Your time" : "Team"}
             </p>
@@ -652,7 +658,7 @@ export default function ReportsSummary({
       {showWidget("clients") && !loading && !error && (
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-base font-bold text-slate-900">Where the billable hours went {windowPhrase}</h2>
+            <h2 className="text-[15px] font-bold tracking-[-0.01em] text-slate-900">Where the billable hours went {windowPhrase}</h2>
             <div className="flex items-center gap-2">
               {filteredClients.length > CLIENT_PAGE_SIZE && (
                 <button
@@ -681,8 +687,8 @@ export default function ReportsSummary({
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
-            <p className="text-[11px] font-medium text-slate-400 mb-4">Click a client for detail</p>
+          <div className="rounded-2xl bg-white p-5 sm:p-6 ring-1 ring-slate-200/70 shadow-[0_1px_3px_rgba(16,27,46,0.04)]">
+            <p className={EYEBROW + " mb-4"}>Click a client for detail</p>
 
             {clientSlice.length === 0 ? (
               <div className="py-10 text-center text-sm text-slate-400">
@@ -701,7 +707,7 @@ export default function ReportsSummary({
                       <span className="truncate text-sm font-semibold text-slate-800">{displayClient(c.label)}</span>
                       <span className="hidden sm:block h-[26px] rounded-full bg-slate-100 overflow-hidden">
                         <span
-                          className="flex h-full items-center rounded-full bg-gradient-to-r from-emerald-600 to-emerald-500 pl-2.5 text-[11px] font-bold text-white"
+                          className="flex h-full items-center rounded-full bg-gradient-to-r from-primary to-accent pl-2.5 text-[11px] font-bold text-white"
                           style={{ width: `${Math.max((c.billable_hours / maxClientBill) * 100, 6)}%` }}
                         >
                           {people != null ? `${people} ${people > 1 ? "people" : "person"}` : ""}
@@ -752,13 +758,13 @@ export default function ReportsSummary({
           it's performance/comp-adjacent data and a naked cross-employee ranking. */}
       {showWidget("employees") && data && !loading && !error && (
         <section className="space-y-3 pt-2">
-          <h2 className="text-base font-bold text-slate-900">Employees</h2>
+          <h2 className="text-[15px] font-bold tracking-[-0.01em] text-slate-900">Employees</h2>
           {employeeRows.length === 0 ? (
             <EmptyState label="No committed time in this period yet." />
           ) : (
-            <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <div className="rounded-2xl bg-white ring-1 ring-slate-200/70 shadow-[0_1px_3px_rgba(16,27,46,0.04)] overflow-hidden">
               {/* column header — hidden on narrow screens where columns stack */}
-              <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-[10.5px] font-bold uppercase tracking-wide text-slate-500">
+              <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50/70 border-b border-slate-100 text-[10.5px] font-bold uppercase tracking-[0.12em] text-slate-400">
                 <span />
                 <span>Employee</span>
                 <span>Mix</span>
@@ -906,7 +912,7 @@ function EmployeeRow({
       >
         {/* desktop: aligned columns */}
         <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-700 text-xs font-bold text-white">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-xs font-bold text-white">
             {initials(row.label)}
           </span>
           <div className="min-w-0">
@@ -918,8 +924,8 @@ function EmployeeRow({
           <div>
             <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-100">
               <div className="flex h-full overflow-hidden rounded-full" style={{ width: `${lengthPct}%` }}>
-                <span className="h-full bg-emerald-600" style={{ width: `${billPct}%` }} />
-                <span className="h-full bg-slate-400" style={{ width: `${nonPct}%` }} />
+                <span className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${billPct}%` }} />
+                <span className="h-full bg-slate-300" style={{ width: `${nonPct}%` }} />
                 <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
               </div>
             </div>
@@ -960,7 +966,7 @@ function EmployeeRow({
         <div className="md:hidden">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 min-w-0">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-700 text-xs font-bold text-white">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-xs font-bold text-white">
                 {initials(row.label)}
               </span>
               <div className="min-w-0">
@@ -974,9 +980,9 @@ function EmployeeRow({
               className={"h-4 w-4 shrink-0 text-slate-400 transition-transform " + (expanded ? "rotate-180" : "")}
             />
           </div>
-          <div className="mt-2 flex h-2.5 overflow-hidden rounded-full">
-            <span className="h-full bg-emerald-600" style={{ width: `${billPct}%` }} />
-            <span className="h-full bg-slate-400" style={{ width: `${nonPct}%` }} />
+          <div className="mt-2 flex h-2.5 overflow-hidden rounded-full bg-slate-100">
+            <span className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${billPct}%` }} />
+            <span className="h-full bg-slate-300" style={{ width: `${nonPct}%` }} />
             <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
           </div>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -1228,7 +1234,7 @@ function ClientDetailModal({
                     key={`${p.id}-${p.name}-${i}`}
                     className={"flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg " + (isScoped ? "bg-emerald-50" : "")}
                   >
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-700 text-xs font-bold text-white">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-xs font-bold text-white">
                       {initials(p.name)}
                     </span>
                     <div className="min-w-0 flex-1">

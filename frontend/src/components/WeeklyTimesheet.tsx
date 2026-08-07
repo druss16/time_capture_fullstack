@@ -271,7 +271,15 @@ const DOT_BILL    = 'w-2 h-2 rounded-full bg-primary shrink-0';
 const DOT_NON     = 'w-2 h-2 rounded-full bg-slate-300 shrink-0';
 const BADGE_BILL  = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-primary/10 text-primary';
 const BADGE_NON   = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-slate-100 text-slate-500';
-const HOURS_CELL  = 'text-right text-[13px] font-bold text-slate-800 tabular-nums shrink-0 w-[64px]';
+const HOURS_CELL  = 'text-right font-mono text-[12.5px] font-semibold text-slate-800 tabular-nums shrink-0 w-[64px]';
+
+// Daily Review "Lightning" primitives, reused so the timesheet reads the same.
+const LANE_CARD   = 'overflow-hidden rounded-[15px] border border-border/70 bg-white shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]';
+const MIN_CHIP    = 'inline-flex items-center justify-center shrink-0 min-w-[52px] rounded-md bg-muted px-1.5 py-1 font-mono text-[10.5px] font-bold tabular-nums text-slate-500';
+const UPPER_LABEL = 'text-[10px] font-semibold uppercase tracking-wider text-slate-400';
+// Font stacks: Inter for the hero voice, mono for captured titles/minutes.
+const INTER       = { fontFamily: '"Inter", sans-serif' } as const;
+const pctOfLabel  = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
 const Badge: React.FC<{ billable: boolean }> = ({ billable }) => (
   <span className={billable ? BADGE_BILL : BADGE_NON}>{billable ? 'Billable' : 'Non-billable'}</span>
@@ -559,72 +567,71 @@ const WeeklyTimesheet: React.FC = () => {
   })();
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px-48px-32px)] min-h-0 space-y-2.5 bg-[#eef4f3] p-2.5 rounded-2xl">
+    <div className="mx-auto w-full max-w-[820px] bg-[#eef4f3] p-4 sm:p-6 rounded-2xl">
 
-      {/* ── Toolbar: title / status / week nav ─────────────────────────── */}
-      <div className="bg-white rounded-xl border border-border/60 px-5 h-14 flex items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-3 shrink-0">
-          <h2 className="text-base font-bold text-slate-800">My Timesheet</h2>
-          {timesheetData && (
-            <StatusBadge status={timesheetData.status} autoSubmitted={timesheetData.auto_submitted ?? false} />
-          )}
-        </div>
-
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-0.5 bg-muted/60 border border-border/50 rounded-lg overflow-hidden">
-            <button onClick={() => goToWeek(-1)} className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all">
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setWeekStart(getMonday(new Date()).toISOString().split('T')[0])}
-              className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-muted transition-all"
-            >
-              This week
-            </button>
-            <button onClick={() => goToWeek(1)} className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all">
-              <ChevronRight className="w-4 h-4" />
-            </button>
+      {/* ── Hero: Inter voice, Daily Review "Lightning" look ───────────── */}
+      <div style={INTER}>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">My Timesheet</span>
+            {timesheetData && (
+              <StatusBadge status={timesheetData.status} autoSubmitted={timesheetData.auto_submitted ?? false} />
+            )}
           </div>
-          <span className="text-sm font-medium text-slate-600 whitespace-nowrap tabular-nums">
-            {timesheetData && formatWeekRange(timesheetData.week_start)}
-          </span>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex items-center gap-0.5 bg-white/70 border border-border/50 rounded-lg overflow-hidden">
+              <button onClick={() => goToWeek(-1)} className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all">
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setWeekStart(getMonday(new Date()).toISOString().split('T')[0])}
+                className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-muted transition-all"
+              >
+                This week
+              </button>
+              <button onClick={() => goToWeek(1)} className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all">
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+            <span className="text-[12.5px] font-medium text-slate-500 whitespace-nowrap tabular-nums">
+              {timesheetData && formatWeekRange(timesheetData.week_start)}
+            </span>
+          </div>
         </div>
-      </div>
 
-      {/* ── Hero: week total + billable split (Lightning look) ─────────── */}
-      <div className="bg-white rounded-xl border border-border/60 px-5 py-4 shrink-0">
-        <div className="flex items-baseline justify-between gap-4">
-          <div className="flex items-baseline gap-2.5 min-w-0">
-            <span className="text-[26px] font-extrabold tracking-tight text-slate-900 leading-none tabular-nums">
+        <div className="mt-3 flex items-baseline justify-between gap-4">
+          <div className="min-w-0">
+            <span className="text-[22px] font-bold tracking-[-0.01em] text-slate-900 tabular-nums">
               {formatHours(grandTotal)}
             </span>
-            <span className="text-[13px] font-semibold text-slate-500 truncate">
-              tracked this week · <b className="text-primary tabular-nums">{billablePctLabel}%</b> billable
+            <span className="ml-2 text-[13px] font-semibold text-slate-500">
+              tracked · <b className="text-primary tabular-nums">{billablePctLabel}%</b> billable
             </span>
           </div>
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 shrink-0">
+          <span className="shrink-0 font-mono text-[12px] tabular-nums text-slate-400">
             {totalClients} client{totalClients !== 1 ? 's' : ''}
           </span>
         </div>
-        <div className="mt-2.5 h-2.5 rounded-full bg-slate-100 overflow-hidden flex">
+
+        <div className="mt-3 h-2 rounded-full bg-slate-200 overflow-hidden flex shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
           <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${pct(billable, grandTotal)}%` }} />
           <div className="h-full bg-slate-300" style={{ width: `${pct(nonBillable, grandTotal)}%` }} />
         </div>
-        <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2">
-          <span className="flex items-center gap-2 text-xs text-slate-500">
-            <span className="w-2.5 h-2.5 rounded-sm bg-gradient-to-r from-primary to-accent inline-block" />
-            <b className="text-slate-700 font-bold tabular-nums">{formatHours(billable)}</b> billable
+        <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[12.5px] text-slate-500">
+          <span className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-[3px] bg-gradient-to-r from-primary to-accent inline-block" />
+            <b className="text-slate-700 tabular-nums">{formatHours(billable)}</b> billable
           </span>
-          <span className="flex items-center gap-2 text-xs text-slate-500">
-            <span className="w-2.5 h-2.5 rounded-sm bg-slate-300 inline-block" />
-            <b className="text-slate-700 font-bold tabular-nums">{formatHours(nonBillable)}</b> non-billable
+          <span className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-[3px] bg-slate-300 inline-block" />
+            <b className="text-slate-700 tabular-nums">{formatHours(nonBillable)}</b> non-billable
           </span>
         </div>
       </div>
 
       {/* ── Banners: errors + rejections only ─────────────────────────── */}
       {(error || timesheetData?.status === 'rejected') && (
-        <div className="space-y-2 shrink-0">
+        <div className="space-y-2 mt-4">
           {error && <Banner type="error" title="Error" message={error} />}
           {timesheetData?.status === 'rejected' && (
             <Banner
@@ -636,15 +643,17 @@ const WeeklyTimesheet: React.FC = () => {
         </div>
       )}
 
-      {/* ── Grid card ─────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-border/60 overflow-hidden flex flex-col flex-1 min-h-0">
+      {/* ── Lane card: the week's clients ─────────────────────────────── */}
+      <div className={cn('mt-4', LANE_CARD)}>
 
-        {/* Controls: count / search / view toggle */}
-        <div className="flex items-center gap-3 px-4 h-11 border-b border-border/40 bg-slate-50/40 shrink-0">
-          <span className="text-xs text-slate-500 shrink-0">
-            <b className="text-slate-700 font-semibold">{totalClients}</b> client{totalClients !== 1 ? 's' : ''} this week
+        {/* Lane header: title / search / view toggle */}
+        <div className="flex items-center gap-3 px-4 h-12 border-b border-border/70">
+          <span className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />
+          <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
+          <span className="font-mono text-[11.5px] text-slate-400 hidden md:inline">
+            {totalClients} client{totalClients !== 1 ? 's' : ''} · {formatHours(grandTotal)}
           </span>
-          <div className="relative w-52">
+          <div className="relative w-44 ml-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
             <input
               ref={searchRef}
@@ -664,7 +673,7 @@ const WeeklyTimesheet: React.FC = () => {
             )}
           </div>
 
-          <div className="ml-auto flex bg-slate-100 border border-border/50 rounded-lg p-0.5">
+          <div className="flex bg-muted border border-border/50 rounded-lg p-0.5">
             {([
               { id: 'summary', label: 'Summary', icon: Layers },
               { id: 'byday',   label: 'By day',  icon: CalendarDays },
@@ -686,7 +695,7 @@ const WeeklyTimesheet: React.FC = () => {
 
         {/* Body */}
         <MoveContext.Provider value={moveValue}>
-        <div className="overflow-auto flex-1">
+        <div>
           {isEmpty ? (
             <div className="text-center py-20 text-slate-400">
               {search ? (
@@ -722,20 +731,21 @@ const WeeklyTimesheet: React.FC = () => {
         </div>
         </MoveContext.Provider>
 
-        {/* Footer: week total + read-only note + submit */}
-        <div className="px-5 py-3 border-t border-border/50 flex items-center justify-between gap-4 bg-slate-50/40 shrink-0">
-          <div className="flex items-baseline gap-2.5">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Week total</span>
-            <span className="text-base font-extrabold text-slate-800 tabular-nums">{formatHours(grandTotal)}</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400">
-              <Lock className="w-3.5 h-3.5 text-slate-300" />
-              Auto-captured ·{' '}
-              <a href="/daily" className="text-primary font-medium hover:underline">Adjust in Daily Review →</a>
-            </span>
-            {submitButton}
-          </div>
+      </div>
+
+      {/* ── Sticky submit bar: stays reachable as the page scrolls ─────── */}
+      <div className="sticky bottom-2 z-10 mt-4 rounded-[15px] border border-border/70 bg-white/95 backdrop-blur shadow-[0_8px_22px_-14px_rgba(16,27,46,0.32)] px-5 py-3 flex items-center justify-between gap-4">
+        <div className="flex items-baseline gap-2.5">
+          <span className={UPPER_LABEL}>Week total</span>
+          <span className="font-mono text-base font-extrabold text-slate-800 tabular-nums">{formatHours(grandTotal)}</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400">
+            <Lock className="w-3.5 h-3.5 text-slate-300" />
+            Auto-captured ·{' '}
+            <a href="/daily" className="text-primary font-medium hover:underline">Adjust in Daily Review →</a>
+          </span>
+          {submitButton}
         </div>
       </div>
 
@@ -852,11 +862,13 @@ const BlockMoveMenu: React.FC<{ block: DetailBlock }> = ({ block }) => {
 };
 
 // One captured block, listed under its category. Read-only info + a move menu.
+// Captured title + time render in mono — the Daily Review signal for "text we
+// read off the screen", vs the product's Plus Jakarta Sans UI voice.
 const BlockRow: React.FC<{ block: DetailBlock; withDay: boolean }> = ({ block, withDay }) => (
-  <div className="group flex items-center gap-2.5 pl-[76px] pr-3 py-1.5 min-w-0">
-    <span className="text-[11px] text-slate-400 tabular-nums shrink-0 w-[72px] whitespace-nowrap">{formatBlockWhen(block.started_at, withDay)}</span>
-    <span className="flex-1 text-[12px] text-slate-500 truncate">{blockLabel(block)}</span>
-    <span className="text-[12px] text-slate-400 tabular-nums shrink-0 w-[52px] text-right">{formatMinutes(block.duration_minutes)}</span>
+  <div className="group flex items-center gap-2.5 pl-[52px] pr-3 py-1.5 min-w-0">
+    <span className="font-mono text-[11px] text-slate-400 tabular-nums shrink-0 w-[76px] whitespace-nowrap">{formatBlockWhen(block.started_at, withDay)}</span>
+    <span className="flex-1 font-mono text-[12px] text-slate-500 truncate">{blockLabel(block)}</span>
+    <span className="font-mono text-[11.5px] text-slate-400 tabular-nums shrink-0 w-[52px] text-right">{formatMinutes(block.duration_minutes)}</span>
     <BlockMoveMenu block={block} />
   </div>
 );
@@ -864,27 +876,30 @@ const BlockRow: React.FC<{ block: DetailBlock; withDay: boolean }> = ({ block, w
 // A single billable/non-billable category row inside a client (or a day→client).
 // `hours` lets callers pass a day-scoped subtotal; defaults to the week total.
 // `blocks` (when present) makes the row expand to its captured blocks.
-const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; blocks?: DetailBlock[] | undefined; blocksWithDay?: boolean }> = ({ entry, hours, blocks, blocksWithDay = false }) => {
+const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; pctOf?: number; blocks?: DetailBlock[] | undefined; blocksWithDay?: boolean }> = ({ entry, hours, pctOf, blocks, blocksWithDay = false }) => {
   const [open, setOpen] = useState(false);
   const hasBlocks = !!blocks && blocks.length > 0;
+  const mins = hours ?? entry.total;
   return (
     <>
       <div
         role={hasBlocks ? 'button' : undefined}
         onClick={hasBlocks ? () => setOpen(o => !o) : undefined}
-        className={cn('flex items-center gap-3 pl-[52px] pr-5 py-2 min-w-0', hasBlocks && 'cursor-pointer hover:bg-black/[0.02]')}
+        className={cn('flex items-center gap-2.5 px-3 py-2 min-w-0', hasBlocks && 'cursor-pointer hover:bg-black/[0.02]')}
       >
         {hasBlocks
-          ? <ChevronRight className={cn('w-3 h-3 text-slate-300 shrink-0 -ml-[18px] transition-transform', open && 'rotate-90')} />
-          : <span className="w-3 shrink-0 -ml-[18px]" />}
+          ? <ChevronRight className={cn('w-3 h-3 text-slate-300 shrink-0 transition-transform', open && 'rotate-90')} />
+          : <span className="w-3 shrink-0" />}
+        <span className={MIN_CHIP}>{formatHours(mins)}</span>
         <span className={entry.is_billable ? DOT_BILL : DOT_NON} />
-        <span className="flex-1 text-[13px] text-slate-600 truncate">{entry.task_type_name}</span>
-        {hasBlocks && <span className="text-[10px] text-slate-300 tabular-nums shrink-0 hidden sm:inline">{blocks!.length}</span>}
+        <span className="flex-1 font-sans text-[12.5px] text-slate-600 truncate">{entry.task_type_name}</span>
+        {pctOf != null && (
+          <span className="font-mono text-[10.5px] tabular-nums text-slate-400 shrink-0 hidden sm:inline">{pctOfLabel(mins, pctOf)}%</span>
+        )}
         <Badge billable={entry.is_billable} />
-        <span className={HOURS_CELL}>{formatHours(hours ?? entry.total)}</span>
       </div>
       {hasBlocks && open && (
-        <div className="border-t border-black/[0.04]">
+        <div className="border-t border-black/[0.04] bg-slate-50/50">
           {blocks!.map(b => <BlockRow key={b.id} block={b} withDay={blocksWithDay} />)}
         </div>
       )}
@@ -903,32 +918,36 @@ const ClientRow: React.FC<{
     <>
       <button
         onClick={() => onToggle(agg.key)}
-        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-black/[0.02] transition-colors"
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-black/[0.015] transition-colors"
       >
         <ChevronRight className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', isExpanded && 'rotate-90')} />
         <ClientDot agg={agg} />
-        <span className={cn('flex-1 text-sm font-bold truncate leading-tight',
-          noClient ? 'italic text-slate-400 font-semibold' : 'text-slate-800')}>
+        <span className={cn('flex-1 font-sans text-[14px] font-semibold truncate leading-tight',
+          noClient ? 'italic text-slate-400' : 'text-slate-800')}>
           {displayClientName(agg)}
         </span>
-        <span className="text-[11px] text-slate-400 tabular-nums shrink-0 hidden sm:inline">
-          {agg.taskCount} categor{agg.taskCount !== 1 ? 'ies' : 'y'}
+        <span className="font-mono text-[11px] text-slate-400 tabular-nums shrink-0 hidden sm:inline">
+          {agg.taskCount} cat{agg.taskCount !== 1 ? 's' : ''}
         </span>
-        <span className="text-right text-[15px] font-extrabold text-slate-800 tabular-nums shrink-0 w-[64px]">
+        <span className="text-right font-mono text-[12.5px] font-semibold text-slate-800 tabular-nums shrink-0 w-[64px]">
           {formatHours(agg.total)}
         </span>
       </button>
 
       {isExpanded && (
-        <div className="border-t border-border/20" style={{ background: GROUND }}>
-          {agg.entries.map(e => (
-            <CategoryRow
-              key={`${e.client_id}-${e.task_type_id}`}
-              entry={e}
-              blocks={weekBlocks.get(wKey(blockClientKey(e.client_name), blockCatKey(e.task_type_name)))}
-              blocksWithDay
-            />
-          ))}
+        <div className="px-4 pb-3 pt-1.5" style={{ background: GROUND }}>
+          <div className={cn(UPPER_LABEL, 'mb-1.5 pl-[26px]')}>Where the time went</div>
+          <div className="ml-[26px] rounded-lg border border-border/50 bg-white overflow-hidden divide-y divide-border/40">
+            {agg.entries.map(e => (
+              <CategoryRow
+                key={`${e.client_id}-${e.task_type_id}`}
+                entry={e}
+                pctOf={agg.total}
+                blocks={weekBlocks.get(wKey(blockClientKey(e.client_name), blockCatKey(e.task_type_name)))}
+                blocksWithDay
+              />
+            ))}
+          </div>
         </div>
       )}
     </>
@@ -1092,14 +1111,14 @@ const SummaryView: React.FC<{
       <>
         <button
           onClick={onToggleTail}
-          className="w-full flex items-center gap-3 px-5 py-2.5 text-left hover:bg-black/[0.02] transition-colors"
+          className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-black/[0.015] transition-colors"
         >
           <ChevronDown className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', tailOpen && 'rotate-180')} />
-          <span className="w-2 h-2 rounded-full bg-slate-200 shrink-0" />
-          <span className="flex-1 text-[13px] font-semibold text-slate-500 truncate">
+          <span className="w-2.5 h-2.5 rounded-full bg-slate-200 shrink-0" />
+          <span className="flex-1 font-sans text-[13px] font-semibold text-slate-500 truncate">
             {tailClients.length} more client{tailClients.length !== 1 ? 's' : ''} under 15 min
           </span>
-          <span className="text-right text-[13px] font-bold text-slate-500 tabular-nums shrink-0 w-[64px]">{formatHours(tailTotals.total)}</span>
+          <span className="text-right font-mono text-[12.5px] font-semibold text-slate-500 tabular-nums shrink-0 w-[64px]">{formatHours(tailTotals.total)}</span>
         </button>
 
         {tailOpen && tailClients.map(agg => (
@@ -1140,15 +1159,19 @@ const ByDayClientRow: React.FC<{
         <span className={HOURS_CELL}>{formatHours(dc.dayTotal)}</span>
       </button>
       {isOpen && (
-        <div style={{ background: GROUND }}>
-          {dc.entries.map(e => (
-            <CategoryRow
-              key={`${e.client_id}-${e.task_type_id}`}
-              entry={e}
-              hours={e.days[date] || 0}
-              blocks={dayBlocks.get(dKey(date, blockClientKey(e.client_name), blockCatKey(e.task_type_name)))}
-            />
-          ))}
+        <div className="px-4 pb-3 pt-1.5" style={{ background: GROUND }}>
+          <div className={cn(UPPER_LABEL, 'mb-1.5 pl-[26px]')}>Where the time went</div>
+          <div className="ml-[26px] rounded-lg border border-border/50 bg-white overflow-hidden divide-y divide-border/40">
+            {dc.entries.map(e => (
+              <CategoryRow
+                key={`${e.client_id}-${e.task_type_id}`}
+                entry={e}
+                hours={e.days[date] || 0}
+                pctOf={dc.dayTotal}
+                blocks={dayBlocks.get(dKey(date, blockClientKey(e.client_name), blockCatKey(e.task_type_name)))}
+              />
+            ))}
+          </div>
         </div>
       )}
     </>

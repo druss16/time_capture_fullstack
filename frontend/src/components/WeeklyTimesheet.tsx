@@ -522,12 +522,11 @@ const WeeklyTimesheet: React.FC = () => {
     [taskTypes, movingId, moveBlocks]
   );
 
+  // Accordion: one client open at a time. Opening a client collapses any other
+  // so the review stays a focused "verify one, move on" flow instead of a wall
+  // of expanded clients. Clicking the open client closes it.
   const toggleExpand = (key: string) => {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
-    });
+    setExpanded(prev => (prev.has(key) ? new Set() : new Set([key])));
   };
 
   const handleSubmit = async () => {

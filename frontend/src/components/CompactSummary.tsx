@@ -170,6 +170,23 @@ export default function CompactSummary({
     } catch { showToast("Failed to move", "error"); }
   }, [onRefresh, showToast]);
 
+  // "Switch all": one click applies the same title-based fix to every block in
+  // an identical-filename group (see groupMismatches). Purely fans out the
+  // per-block fix — no merging of blocks, so billing/totals are unaffected.
+  const fixMismatchGroup = useCallback(async (items: MismatchBlock[]) => {
+    const targets = items.filter((m) => m.looks_like_client_id != null);
+    if (!targets.length) return;
+    try {
+      await Promise.all(
+        targets.map((m) =>
+          recategorize(m.block_id, m.looks_like_client_id as number, m.category || "General Client Work"),
+        ),
+      );
+      showToast(`Moved ${targets.length} blocks to ${targets[0].looks_like_client_name}`, "success");
+      onRefresh();
+    } catch { showToast("Failed to move", "error"); }
+  }, [onRefresh, showToast]);
+
   // ── Per-row detail (/why/) + Split ──────────────────────────────────────────
   // Expanding a Certain block row loads its "where the time went" breakdown and
   // the reason it was booked. A genuinely-mixed block can then be carved so each
@@ -521,14 +538,25 @@ export default function CompactSummary({
                   onChange={(anchor) => openMove(anchor, [b.block_id], null, "Personal/Non-Billable", "Change client", null, true, suggestAliasFromTitle(b.window_title || ""))}
                 />
               ))}
-              {needsYou.mismatch.map((m) => (
-                <MismatchRow
-                  key={`m${m.block_id}`} m={m} busy={busy}
-                  onFix={() => fixMismatch(m)}
-                  onKeep={() => onIgnoreMismatch([m.block_id])}
-                  onPick={(anchor) => openMove(anchor, [m.block_id], m.booked_client_id, m.category || catList[0], "Move to…", m.looks_like_client_id, true, suggestAliasFromTitle(m.window_title || ""))}
-                />
-              ))}
+              {groupMismatches(needsYou.mismatch).map((group) =>
+                group.length === 1 ? (
+                  <MismatchRow
+                    key={`m${group[0].block_id}`} m={group[0]} busy={busy}
+                    onFix={() => fixMismatch(group[0])}
+                    onKeep={() => onIgnoreMismatch([group[0].block_id])}
+                    onPick={(anchor) => openMove(anchor, [group[0].block_id], group[0].booked_client_id, group[0].category || catList[0], "Move to…", group[0].looks_like_client_id, true, suggestAliasFromTitle(group[0].window_title || ""))}
+                  />
+                ) : (
+                  <MismatchGroupRow
+                    key={`mg${group[0].block_id}`} items={group} busy={busy}
+                    onFixAll={() => fixMismatchGroup(group)}
+                    onKeepAll={() => onIgnoreMismatch(group.map((m) => m.block_id))}
+                    onFixOne={(m) => fixMismatch(m)}
+                    onKeepOne={(m) => onIgnoreMismatch([m.block_id])}
+                    onPickOne={(m, anchor) => openMove(anchor, [m.block_id], m.booked_client_id, m.category || catList[0], "Move to…", m.looks_like_client_id, true, suggestAliasFromTitle(m.window_title || ""))}
+                  />
+                ),
+              )}
               {needsYou.split.map((sc) => (
                 <SplitCandidateRow
                   key={`s${sc.block_id}`} sc={sc} busy={busy || splitBusy}
@@ -683,6 +711,97 @@ const CHIP_AMBER = "mt-0.5 min-w-[40px] shrink-0 rounded-md bg-amber-500/[0.14] 
 const PILL_TEAL = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-primary/50 bg-primary/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-primary shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-primary/20 disabled:opacity-50";
 const PILL_AMBER = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-amber-700 shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-amber-500/20 disabled:opacity-50 dark:text-amber-400";
 const PILL_GHOST = "inline-flex w-[104px] items-center justify-center gap-0.5 rounded-full border border-border bg-card px-3 py-1.5 font-sans text-[11px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-muted disabled:opacity-50";
+
+/** Fold mismatch rows for the *identical* file into one group, so eight 1-minute
+ *  slivers of the same document don't list as eight rows. Grouped by exact title
+ *  AND same suggested target, so "Switch all to X" is unambiguous; reused
+ *  template names that point at different clients never collapse together.
+ *  Display-only: this never merges blocks — each block keeps its own identity
+ *  and the group action just fans the per-block fix out. First-seen order kept. */
+function groupMismatches(items: MismatchBlock[]): MismatchBlock[][] {
+  const groups: MismatchBlock[][] = [];
+  const idx: Record<string, number> = {};
+  for (const m of items) {
+    const key = `${(m.window_title || "").trim().toLowerCase()}|${m.looks_like_client_id ?? "none"}`;
+    if (idx[key] == null) { idx[key] = groups.length; groups.push([m]); }
+    else groups[idx[key]].push(m);
+  }
+  return groups;
+}
+
+/** Collapsed view of N identical-file mismatch rows: one amber row with the
+ *  combined time, an "N identical blocks" tag, and a single "Switch all"/"Keep
+ *  all". Expands to the individual rows, each still independently actionable. */
+function MismatchGroupRow({ items, busy, onFixAll, onKeepAll, onFixOne, onKeepOne, onPickOne }: {
+  items: MismatchBlock[];
+  busy: boolean;
+  onFixAll: () => void;
+  onKeepAll: () => void;
+  onFixOne: (m: MismatchBlock) => void;
+  onKeepOne: (m: MismatchBlock) => void;
+  onPickOne: (m: MismatchBlock, anchor: HTMLElement) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const total = items.reduce((s, m) => s + (m.minutes || 0), 0);
+  const target = items[0].looks_like_client_name;
+  const canFix = items.some((m) => m.looks_like_client_id != null);
+  // Distinct "filed under" client names, first-seen order.
+  const seen = new Set<string>();
+  const filed: string[] = [];
+  for (const m of items) {
+    const n = m.booked_client_name || "this client";
+    if (!seen.has(n)) { seen.add(n); filed.push(n); }
+  }
+  return (
+    <div>
+      <div className={ROW}>
+        <span className={CHIP_AMBER}>{fmtMin(total)}</span>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          title={open ? "Collapse" : "Show the individual blocks"}
+        >
+          <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-mono text-[12.5px] text-foreground">{items[0].window_title || "(untitled)"}</div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-sans text-[11.5px]">
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-semibold text-muted-foreground">
+                {items.length} identical blocks
+              </span>
+              <span className="text-muted-foreground">Filed</span>
+              <span className="rounded-md border border-border bg-muted/70 px-2 py-0.5 font-medium text-muted-foreground line-through decoration-muted-foreground/50">
+                {filed.length === 1 ? filed[0] : `${filed.length} clients`}
+              </span>
+              <span className="font-bold text-muted-foreground/70">→</span>
+              <span className="rounded-md border border-amber-500/40 bg-amber-500/[0.14] px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400">
+                {target}
+              </span>
+              <span className="text-muted-foreground">— the title says so</span>
+            </div>
+          </div>
+        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button onClick={onFixAll} disabled={busy || !canFix} className={PILL_AMBER}>
+            <span className="max-w-[190px] truncate">Switch all to {target}</span>
+          </button>
+          <button onClick={onKeepAll} disabled={busy} className={PILL_GHOST}>Keep all</button>
+        </div>
+      </div>
+      {open && (
+        <div className="ml-6 border-l border-border pl-1">
+          {items.map((m) => (
+            <MismatchRow
+              key={`m${m.block_id}`} m={m} busy={busy}
+              onFix={() => onFixOne(m)}
+              onKeep={() => onKeepOne(m)}
+              onPick={(anchor) => onPickOne(m, anchor)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Mismatch: this block is filed under one client but its title names another.
  *  Framed as a calm "switch" (amber, not alarm-red): filed under X → looks like Y. */

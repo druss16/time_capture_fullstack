@@ -226,16 +226,16 @@ function StatCard({ label, value, color }: { label: string; value: string | numb
 }
 
 // ─── Btn ──────────────────────────────────────────────────────────────────────
-function Btn({ label, onClick, color = T.teal, outline = false, disabled = false, small = false }: {
-  label: string; onClick: () => void; color?: string; outline?: boolean; disabled?: boolean; small?: boolean;
+function Btn({ label, onClick, color = T.teal, outline = false, disabled = false, small = false, tiny = false }: {
+  label: string; onClick: () => void; color?: string; outline?: boolean; disabled?: boolean; small?: boolean; tiny?: boolean;
 }) {
   return (
     <button onClick={onClick} disabled={disabled} style={{
       background: outline ? T.bg : disabled ? T.textMuted + "33" : color,
       border: `1px solid ${disabled ? T.textMuted + "44" : color}`,
       color: outline ? color : disabled ? T.textMuted : "#fff",
-      padding: small ? "5px 12px" : "7px 16px",
-      fontSize: small ? 12 : 13, cursor: disabled ? "default" : "pointer",
+      padding: tiny ? "4px 9px" : small ? "5px 12px" : "7px 16px",
+      fontSize: tiny ? 11 : small ? 12 : 13, cursor: disabled ? "default" : "pointer",
       borderRadius: 4, ...mono, opacity: disabled ? 0.6 : 1,
       whiteSpace: "nowrap" as const, fontWeight: 500,
     }}>
@@ -2011,7 +2011,7 @@ export default function MavOpsAdmin() {
   // health/grace/archived badges so they never crowd the name; ACTIONS is a
   // fixed width sized to the 6-button cluster, right-aligned.
   // Columns: ORG | STATUS | PLAN | MRR | SEATS | DEVICES | ACTIVE | ACTIONS
-  const ORG_GRID = "minmax(200px, 1.3fr) 178px 116px 92px 104px 100px 92px 496px";
+  const ORG_GRID = "minmax(150px, 1.2fr) 136px 98px 78px 90px 86px 72px 352px";
   const filteredDevices = devices.filter(d => {
     if (showInactiveOnly && (Date.now() - new Date(d.last_seen).getTime()) < 7 * 86400000) return false;
     if (!search) return true;
@@ -2112,7 +2112,7 @@ export default function MavOpsAdmin() {
           style={{ background: "none", border: `1px solid ${T.border}`, color: T.textSub, padding: "6px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>↻ refresh</button>
       </div>
 
-      <div style={{ padding: "24px 32px", maxWidth: 1680 }}>
+      <div style={{ padding: "24px 32px", maxWidth: 1480 }}>
         {loading && <div style={{ color: T.textMuted, ...mono, fontSize: 13, paddingBottom: 16 }}>loading…</div>}
 
         {/* ══ ORGS ══ */}
@@ -2174,7 +2174,7 @@ export default function MavOpsAdmin() {
                 display: "grid",
                 gridTemplateColumns: ORG_GRID,
                 alignItems: "center",
-                gap: 14,
+                gap: 12,
                 padding: "8px 21px",
                 color: T.textMuted,
                 fontSize: 10,
@@ -2229,7 +2229,7 @@ export default function MavOpsAdmin() {
                     display: "grid",
                     gridTemplateColumns: ORG_GRID,
                     alignItems: "center",
-                    gap: 14,
+                    gap: 12,
                   }}>
                     {/* COL 1 — name */}
                     <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
@@ -2309,10 +2309,10 @@ export default function MavOpsAdmin() {
                     </div>
 
                     {/* COL 8 — actions */}
-                    <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
+                    <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}>
                       <div style={{ position: "relative" }} data-picker>
                         {isViewing ? (
-                          <Btn label="✓ exit" onClick={clearImpersonation} color={T.green} outline small />
+                          <Btn label="✓ exit" onClick={clearImpersonation} color={T.green} outline tiny />
                         ) : (
                           <Btn
                             label={isPickerOpen ? "view ▴" : "view ▾"}
@@ -2322,7 +2322,7 @@ export default function MavOpsAdmin() {
                             }}
                             color={T.purple}
                             outline
-                            small
+                            tiny
                           />
                         )}
 
@@ -2378,7 +2378,7 @@ export default function MavOpsAdmin() {
                           onClick={() => { setFilterOrg(org.id); setTab(t); }}
                           outline
                           color={T.textSub}
-                          small
+                          tiny
                         />
                       ))}
                       <Btn
@@ -2386,7 +2386,7 @@ export default function MavOpsAdmin() {
                         onClick={() => archiveOrg(org, !org.mavops_archived)}
                         outline
                         color={org.mavops_archived ? T.teal : T.textMuted}
-                        small
+                        tiny
                       />
                     </div>
                   </div>

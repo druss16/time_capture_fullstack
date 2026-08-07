@@ -4,7 +4,7 @@
 from rest_framework import serializers
 from decimal import Decimal
 from django.contrib.auth import get_user_model
-from .models import BillingRate, Timesheet, Block, BlockAuditLog, Client, TaskType, EmployeeCostRate
+from .models import BillingRate, Timesheet, Block, BlockAuditLog, Client, TaskType, EmployeeCostRate, ClientBillingProfile
 
 User = get_user_model()
 
@@ -291,3 +291,28 @@ class EmployeeCostRateSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'membership'):
             validated_data['organization'] = request.membership.organization
         return super().create(validated_data)
+
+
+class ClientBillingProfileSerializer(serializers.ModelSerializer):
+    """Per-client billing arrangement. Read-only helpers surface the client name,
+    the QB customer fallback, and human labels so the settings modal can render
+    without extra round-trips."""
+    client_name = serializers.CharField(source='client.name', read_only=True)
+    fallback_customer_id = serializers.CharField(source='client.quickbooks_id', read_only=True, allow_null=True)
+    billing_type_display = serializers.CharField(source='get_billing_type_display', read_only=True)
+    billing_system_display = serializers.CharField(source='get_billing_system_display', read_only=True)
+
+    class Meta:
+        model = ClientBillingProfile
+        fields = [
+            'id', 'client', 'client_name',
+            'billing_type', 'billing_type_display',
+            'flat_amount', 'flat_period',
+            'billing_system', 'billing_system_display',
+            'external_customer_id', 'external_customer_name', 'default_item_name',
+            'fallback_customer_id', 'notes', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'client', 'client_name', 'fallback_customer_id',
+            'billing_type_display', 'billing_system_display', 'updated_at',
+        ]

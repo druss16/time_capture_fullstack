@@ -10,15 +10,17 @@ from django.shortcuts import get_object_or_404
 from datetime import timedelta, date
 from decimal import Decimal
 from .models import (
-    BillingRate, Timesheet, Block, BlockAuditLog, 
+    BillingRate, Timesheet, Block, BlockAuditLog,
     Client, TaskType, Organization, OrganizationMembership,
-    EmployeeCostRate, Invitation, Invoice, ClientBudget  # ← ADD THIS
+    EmployeeCostRate, Invitation, Invoice, ClientBudget,
+    ClientBillingProfile,
 )
 from .serializers_billing import (
     BillingRateSerializer, TimesheetSummarySerializer, TimesheetDetailSerializer,
     ApprovalQueueItemSerializer, ClientSummarySerializer, BlockAuditLogSerializer,
     InvoiceExportSerializer,
-    EmployeeCostRateSerializer,  # ← ADD THIS
+    EmployeeCostRateSerializer,
+    ClientBillingProfileSerializer,
 )
 from functools import wraps  # Add this import
 
@@ -129,6 +131,85 @@ def safe_date(d):
     if not d:
         return None
     return d.isoformat() if hasattr(d, 'isoformat') else d
+
+
+class ClientBillingProfileView(APIView):
+    """
+    Per-client billing profile — owner/admin only (managers approve; owners bill).
+
+    GET  billing/clients/<client_id>/billing-profile/
+      Returns the saved profile, or unsaved defaults if none exists yet, plus
+      two read-only aids: `effective_hourly_rate` (resolved from BillingRate:
+      client-level → org default) and the QB customer fallback so the modal can
+      prefill without extra round-trips.
+    PUT  billing/clients/<client_id>/billing-profile/
+      Upserts the profile (partial). Stamps updated_by.
+
+    Hourly RATES are intentionally not written here — they stay in BillingRate so
+    there's one source of truth; the modal shows the effective rate read-only and
+    points to the Billing Rates screen to change it.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _guard(self, request, client_id):
+        org = get_request_org_override_billing(request)
+        if not org:
+            return None, None, Response({'error': 'No organization'}, status=400)
+        is_staff = request.user.is_staff or request.user.is_superuser
+        if not is_staff:
+            m = OrganizationMembership.objects.filter(
+                user=request.user, organization=org
+            ).first()
+            if not m or m.role not in ['owner', 'admin']:
+                return None, None, Response(
+                    {'error': 'Only an owner or admin can manage billing profiles.'},
+                    status=403,
+                )
+        client = Client.objects.filter(id=client_id, org=org).first()
+        if not client:
+            return None, None, Response({'error': 'Client not found'}, status=404)
+        return org, client, None
+
+    def _effective_hourly_rate(self, org, client):
+        """Client-level BillingRate (no task_type/user) → org default. Task-level
+        overrides still apply per-line at export time; this is the headline rate."""
+        r = (BillingRate.objects
+             .filter(org=org, client=client, task_type__isnull=True, user__isnull=True)
+             .order_by('-effective_date')
+             .first())
+        if r:
+            return r.rate
+        return org.billing_rate_default
+
+    def _payload(self, org, client, profile):
+        if profile is not None:
+            data = ClientBillingProfileSerializer(profile).data
+        else:
+            data = ClientBillingProfileSerializer(
+                ClientBillingProfile(client=client, org=org)
+            ).data
+        rate = self._effective_hourly_rate(org, client)
+        data['effective_hourly_rate'] = str(rate) if rate is not None else None
+        return data
+
+    def get(self, request, client_id):
+        org, client, err = self._guard(request, client_id)
+        if err:
+            return err
+        profile = ClientBillingProfile.objects.filter(client=client).first()
+        return Response(self._payload(org, client, profile))
+
+    def put(self, request, client_id):
+        org, client, err = self._guard(request, client_id)
+        if err:
+            return err
+        profile, _created = ClientBillingProfile.objects.get_or_create(
+            client=client, defaults={'org': org}
+        )
+        serializer = ClientBillingProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(org=org, updated_by=request.user)
+        return Response(self._payload(org, client, profile))
 
 # ===============================
 # BILLING RATES VIEWSET (Professional Plan Only)

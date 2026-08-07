@@ -96,26 +96,52 @@ const clientKeyOf = (clientId: number | null) => (clientId != null ? `id:${clien
 
 // Within one client, fold rows whose title is identical once the trailing
 // per-block "(Nm)" duration tag is stripped — the same file/activity should be
-// ONE line, not one per block (e.g. two "SMA P&L… (2m)"/"(6m)" become one 8m
-// line). Combines their block ids and sums minutes; keeps first-seen order.
-// Display-only: the client's total minutes / billable split are untouched.
+// ONE line, not one per block. An UN-merged row keeps its original title (with
+// its "(Nm)" tag, exactly as before); a MERGED row shows the clean title with
+// the SUMMED "(Nm)" so the time still reads inline. Grouped by title alone so
+// identical titles always pair (rows are already per-client, never crosses
+// clients). Display-only: the client's total minutes / billable are untouched.
 const stripDurTag = (t: string) => t.replace(/\s*\(\d+m\)\s*$/i, "").trim();
+const parseDurTag = (t: string): number => {
+  const m = t.match(/\((\d+)m\)\s*$/i);
+  return m ? parseInt(m[1], 10) : 0;
+};
 function mergeRowsByTitle(rows: CertainRow[]): CertainRow[] {
-  const out: CertainRow[] = [];
+  type Acc = {
+    ids: number[]; base: string; origTitle: string; category: string;
+    minutes: number; inlineSum: number; hadTag: boolean; count: number;
+  };
+  const accs: Acc[] = [];
   const idx = new Map<string, number>();
   for (const r of rows) {
-    const clean = stripDurTag(r.title);
-    const key = clean.toLowerCase(); // title-only: identical titles always pair
+    const base = stripDurTag(r.title);
+    const key = base.toLowerCase();
+    const tag = parseDurTag(r.title);
+    const hasTag = /\(\d+m\)\s*$/i.test(r.title);
     const at = idx.get(key);
     if (at === undefined) {
-      idx.set(key, out.length);
-      out.push({ ids: [...r.ids], title: clean, category: r.category, minutes: r.minutes });
+      idx.set(key, accs.length);
+      accs.push({
+        ids: [...r.ids], base, origTitle: r.title, category: r.category,
+        minutes: r.minutes, inlineSum: tag, hadTag: hasTag, count: 1,
+      });
     } else {
-      out[at].ids = [...out[at].ids, ...r.ids];
-      out[at].minutes += r.minutes;
+      const a = accs[at];
+      a.ids = [...a.ids, ...r.ids];
+      a.minutes += r.minutes;
+      a.inlineSum += tag;
+      a.hadTag = a.hadTag || hasTag;
+      a.count += 1;
     }
   }
-  return out;
+  return accs.map((a) => ({
+    ids: a.ids,
+    category: a.category,
+    minutes: a.minutes,
+    title: a.count === 1
+      ? a.origTitle
+      : a.hadTag ? a.base + " (" + a.inlineSum + "m)" : a.base,
+  }));
 }
 
 /**

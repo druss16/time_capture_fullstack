@@ -4,7 +4,7 @@ import {
   Briefcase, Plus, Pencil, Trash2, Upload, Search, X, Tag,
   ChevronDown, Check, RefreshCw, CheckSquare, Square,
   MinusSquare, UserPlus, UserMinus, FileSpreadsheet,
-  Copy, AlertCircle, CheckCircle2, Loader2, Download,
+  Copy, AlertCircle, CheckCircle2, Loader2, Download, Receipt,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
@@ -12,6 +12,7 @@ import { getUserDisplayName } from './types';
 import type { Client, TeamMember, RoleType } from './types';
 import ClientImportWizard from '@/components/ClientImportWizard';
 import ClientTaskTypesPanel from '@/components/ClientTaskTypesPanel';
+import ClientBillingProfilePanel from '@/components/ClientBillingProfilePanel';
 
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -412,6 +413,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
   const [search,             setSearch]             = useState('');
   const [statusFilter,       setStatusFilter]       = useState<'all' | 'active' | 'inactive'>('active');
   const [taskTypeClientId, setTaskTypeClientId] = useState<number | null>(null);
+  const [billingClientId, setBillingClientId] = useState<number | null>(null);
 
   const canManage = ['owner', 'admin'].includes(currentUserRole);
 
@@ -684,6 +686,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
                     {canManage && (
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => setBillingClientId(client.id)} title="Billing profile" className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/8 rounded-lg transition-colors"><Receipt className="w-3.5 h-3.5" /></button>
                           <button onClick={() => setTaskTypeClientId(client.id)} title="Task Types" className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/8 rounded-lg transition-colors"><Tag className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleEdit(client)} className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/8 rounded-lg transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleDelete(client.id, client.name)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -735,6 +738,31 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
                 clientId={taskTypeClientId}
                 canManage={canManage}
                 onSuccess={onSuccess}
+                onError={onError}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+      {billingClientId !== null && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col" style={{ maxHeight: '90vh' }}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border/50 shrink-0">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Billing profile · {clients.find(c => c.id === billingClientId)?.name}
+                </h2>
+                <p className="text-xs text-slate-400">How this client is billed and where its time exports to</p>
+              </div>
+              <button onClick={() => setBillingClientId(null)} className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors">
+                <X className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-5">
+              <ClientBillingProfilePanel
+                clientId={billingClientId}
+                canManage={canManage}
+                onSuccess={(m) => { onSuccess(m); }}
                 onError={onError}
               />
             </div>

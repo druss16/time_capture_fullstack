@@ -820,6 +820,94 @@ class Client(models.Model):
         return f"{self.name}{source}"
 
 
+class ClientBillingProfile(models.Model):
+    """
+    Per-client billing arrangement — the coordination layer the timesheet→billing
+    export reads. It ties together HOW a client is billed (hourly / flat-fee /
+    non-billable), WHICH system the approved time lands in (drives the export
+    format), and the customer/item mapping.
+
+    Deliberately thin — it does NOT duplicate what already exists:
+      • Hourly RATES resolve through BillingRate.get_rate_for_block
+        (Client+TaskType → Client → TaskType → defaults). Not stored here.
+      • Customer mapping falls back to Client.quickbooks_id / QboCompanyMapping /
+        ExternalClientMapping when the override fields below are blank.
+    Only the genuinely missing concept lives here: the fee arrangement enum, the
+    flat-fee amount (owner chose self-contained over ClientBudget), and the
+    target-system selector.
+    """
+    BILLING_TYPE_CHOICES = [
+        ('hourly', 'Hourly'),
+        ('flat_fee', 'Flat fee / retainer'),
+        ('non_billable', 'Non-billable'),
+    ]
+    BILLING_SYSTEM_CHOICES = [
+        ('qb_desktop', 'QuickBooks Desktop'),
+        ('qbo', 'QuickBooks Online'),
+        ('xero', 'Xero'),
+        ('csv_other', 'CSV / other'),
+    ]
+    FLAT_PERIOD_CHOICES = [
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('annual', 'Annual'),
+        ('per_project', 'Per project'),
+    ]
+
+    client = models.OneToOneField(
+        Client, on_delete=models.CASCADE, related_name='billing_profile'
+    )
+    org = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name='client_billing_profiles'
+    )
+
+    billing_type = models.CharField(
+        max_length=20, choices=BILLING_TYPE_CHOICES, default='hourly',
+        help_text='How this client is billed. Drives whether the export carries hours×rate, a flat fee, or nothing.',
+    )
+
+    # Flat-fee / retainer (used when billing_type='flat_fee').
+    flat_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text='Fee amount when billing_type is flat_fee.',
+    )
+    flat_period = models.CharField(
+        max_length=20, choices=FLAT_PERIOD_CHOICES, blank=True, default='',
+        help_text='Billing cadence for the flat fee.',
+    )
+
+    # Target system → decides the export format for this client's approved time.
+    billing_system = models.CharField(
+        max_length=20, choices=BILLING_SYSTEM_CHOICES, default='csv_other',
+    )
+
+    # Customer + item mapping overrides. Blank → fall back to Client.quickbooks_id /
+    # QboCompanyMapping and per-TaskType item mapping at export time.
+    external_customer_id = models.CharField(
+        max_length=100, blank=True, default='',
+        help_text='Customer/Job ID in the billing system (e.g. QB "Customer:Job"). Falls back to Client.quickbooks_id.',
+    )
+    external_customer_name = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text='Customer/Job display name in the billing system, for export readability.',
+    )
+    default_item_name = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text='Default service/item on exported line items when a task type has no specific mapping.',
+    )
+
+    notes = models.TextField(blank=True, default='')
+
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+',
+    )
+
+    def __str__(self):
+        return f"{self.client.name} — {self.get_billing_type_display()}"
+
+
 # tracker/models.py - Update ClientAssignment
 
 class ClientAssignment(models.Model):

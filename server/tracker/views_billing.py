@@ -1704,24 +1704,11 @@ class TimesheetSubmitView(APIView):
             user=request.user
         )
         
-        # =====================================================
-        # OPTION A: Can only submit AFTER the week has ended
-        # =====================================================
-        today = timezone.now().date()
+        # Submission is allowed on any day of the week (the UI shows a confirm
+        # dialog with an "early submit" heads-up). Previously gated to after the
+        # week ended (OPTION A) — removed per product request.
         week_end = timesheet.week_start + timedelta(days=6)  # Sunday
-        
-        if today <= week_end:
-            days_remaining = (week_end - today).days + 1
-            return Response({
-                'error': f'Cannot submit timesheet until after the week ends.',
-                'detail': f'This timesheet covers {timesheet.week_start.isoformat()} to {week_end.isoformat()}. '
-                          f'You can submit starting {(week_end + timedelta(days=1)).isoformat()} (Monday).',
-                'week_start': timesheet.week_start.isoformat(),
-                'week_end': week_end.isoformat(),
-                'days_remaining': days_remaining,
-                'can_submit_on': (week_end + timedelta(days=1)).isoformat(),
-            }, status=400)
-        
+
         # Allow both draft AND rejected status
         if timesheet.status not in ['draft', 'rejected']:
             return Response({

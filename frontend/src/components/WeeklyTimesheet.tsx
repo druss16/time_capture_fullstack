@@ -194,6 +194,20 @@ const formatHours = (hours: number | string): string => {
   return `${h}h ${m}m`;
 };
 
+// Decimal hours (e.g. 2.93) for the H:M / decimal toggle — the billing-style view.
+const formatHoursDecimal = (hours: number | string): string => {
+  const num = parseFloat(String(hours)) || 0;
+  if (num === 0) return '—';
+  return num.toFixed(2);
+};
+
+type HourFmt = 'hm' | 'decimal';
+
+// Lets any nested row honor the user's H:M / decimal toggle without threading a
+// formatter through every component. Defaults to H:M.
+const HourFmtContext = React.createContext<(h: number | string) => string>(formatHours);
+const useFmtHours = () => React.useContext(HourFmtContext);
+
 const getMonday = (date: Date): Date => {
   const d = new Date(date);
   const day = d.getDay();
@@ -353,6 +367,7 @@ const WeeklyTimesheet: React.FC = () => {
   const [expanded, setExpanded]             = useState<Set<string>>(new Set());
   const [tailOpen, setTailOpen]             = useState(false);
   const [laneOpen, setLaneOpen]             = useState(false); // "This week" starts collapsed
+  const [hourFmt, setHourFmt]               = useState<HourFmt>('hm'); // H:M vs decimal
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -579,6 +594,7 @@ const WeeklyTimesheet: React.FC = () => {
   // The client list ("This week") starts collapsed; an active search always
   // reveals it so results aren't hidden behind the collapse.
   const bodyOpen      = laneOpen || search.trim().length > 0;
+  const fmtHours      = hourFmt === 'decimal' ? formatHoursDecimal : formatHours;
 
   if (loading) {
     return (
@@ -590,16 +606,14 @@ const WeeklyTimesheet: React.FC = () => {
 
   const submitButton = (() => {
     if (timesheetData?.status === 'draft') {
-      return weekHasEnded ? (
+      // Submission is available any day of the week; the confirm modal guards
+      // against accidental early submits.
+      return (
         <button
           onClick={() => setShowSubmitModal(true)}
           className="px-4 py-2 bg-primary text-white text-sm font-semibold rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
         >
           <CheckCircle2 className="w-4 h-4" /> Submit for Approval
-        </button>
-      ) : (
-        <button disabled className="px-4 py-2 bg-slate-100 text-slate-400 text-sm font-semibold rounded-lg cursor-not-allowed flex items-center gap-1.5">
-          <Clock className="w-4 h-4" /> Submit opens {getCanSubmitDate(timesheetData.week_start)}
         </button>
       );
     }
@@ -619,6 +633,7 @@ const WeeklyTimesheet: React.FC = () => {
   })();
 
   return (
+    <HourFmtContext.Provider value={fmtHours}>
     <div className="mx-auto w-full max-w-[1120px] bg-[#eef4f3] p-4 sm:p-6 rounded-2xl">
 
       {/* ── Hero: Inter voice, Daily Review "Lightning" look ───────────── */}
@@ -654,15 +669,31 @@ const WeeklyTimesheet: React.FC = () => {
         <div className="mt-3 flex items-baseline justify-between gap-4">
           <div className="min-w-0">
             <span className="text-[22px] font-bold tracking-[-0.01em] text-slate-900 tabular-nums">
-              {formatHours(grandTotal)}
+              {fmtHours(grandTotal)}
             </span>
             <span className="ml-2 text-[13px] font-semibold text-slate-500">
               tracked · <b className="text-primary tabular-nums">{billablePctLabel}%</b> billable
             </span>
           </div>
-          <span className="shrink-0 font-mono text-[12px] tabular-nums text-slate-400">
-            {totalClients} client{totalClients !== 1 ? 's' : ''}
-          </span>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex bg-white/70 border border-border/50 rounded-lg p-0.5" title="Toggle hours format">
+              {(['hm', 'decimal'] as HourFmt[]).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setHourFmt(m)}
+                  className={cn(
+                    'px-2 py-0.5 font-mono text-[11px] font-semibold rounded-md transition-all',
+                    hourFmt === m ? 'bg-white text-primary shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                  )}
+                >
+                  {m === 'hm' ? 'H:M' : 'Dec'}
+                </button>
+              ))}
+            </div>
+            <span className="font-mono text-[12px] tabular-nums text-slate-400">
+              {totalClients} client{totalClients !== 1 ? 's' : ''}
+            </span>
+          </div>
         </div>
 
         <div className="mt-3 h-2 rounded-full bg-slate-200 overflow-hidden flex shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
@@ -672,11 +703,11 @@ const WeeklyTimesheet: React.FC = () => {
         <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[12.5px] text-slate-500">
           <span className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-[3px] bg-gradient-to-r from-primary to-accent inline-block" />
-            <b className="text-slate-700 tabular-nums">{formatHours(billable)}</b> billable
+            <b className="text-slate-700 tabular-nums">{fmtHours(billable)}</b> billable
           </span>
           <span className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-[3px] bg-slate-300 inline-block" />
-            <b className="text-slate-700 tabular-nums">{formatHours(nonBillable)}</b> non-billable
+            <b className="text-slate-700 tabular-nums">{fmtHours(nonBillable)}</b> non-billable
           </span>
         </div>
       </div>
@@ -699,18 +730,23 @@ const WeeklyTimesheet: React.FC = () => {
       <div className={cn('mt-4', LANE_CARD)}>
 
         {/* Lane header: collapse toggle / search / view toggle */}
-        <div className="flex items-center gap-3 px-4 h-12 border-b border-border/70">
+        <div className={cn('flex items-center gap-3 px-4 h-12', bodyOpen && 'border-b border-border/70')}>
           <button
             onClick={() => setLaneOpen(o => !o)}
-            className="flex items-center gap-2.5 min-w-0 -ml-1 pl-1 pr-2 py-1 rounded-md hover:bg-black/[0.02] transition-colors"
-            title={laneOpen ? 'Collapse' : 'Expand'}
+            className="group flex items-center gap-2.5 min-w-0 -ml-1 pl-1 pr-2 py-1 rounded-md hover:bg-primary/[0.06] transition-colors"
+            title={laneOpen ? 'Collapse' : 'Expand to view clients'}
           >
-            <ChevronRight className={cn('w-4 h-4 text-slate-300 shrink-0 transition-transform', bodyOpen && 'rotate-90')} />
+            <ChevronRight className={cn('w-4 h-4 text-primary/60 shrink-0 transition-transform group-hover:text-primary', bodyOpen && 'rotate-90')} />
             <span className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />
-            <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
+            <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary decoration-primary/40 underline-offset-4 group-hover:underline">This week</span>
             <span className="font-mono text-[11.5px] text-slate-400 hidden md:inline">
-              {totalClients} client{totalClients !== 1 ? 's' : ''} · {formatHours(grandTotal)}
+              {totalClients} client{totalClients !== 1 ? 's' : ''} · {fmtHours(grandTotal)}
             </span>
+            {!bodyOpen && (
+              <span className="ml-1 inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 font-sans text-[10.5px] font-bold text-primary">
+                View detail
+              </span>
+            )}
           </button>
           <div className="relative w-44 ml-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
@@ -755,15 +791,7 @@ const WeeklyTimesheet: React.FC = () => {
         {/* Body */}
         <MoveContext.Provider value={moveValue}>
         <div>
-          {!bodyOpen ? (
-            <button
-              onClick={() => setLaneOpen(true)}
-              className="w-full flex items-center justify-center gap-2 py-6 text-[13px] font-medium text-slate-400 hover:text-slate-600 hover:bg-black/[0.015] transition-colors"
-            >
-              <ChevronRight className="w-3.5 h-3.5" />
-              Show {totalClients} client{totalClients !== 1 ? 's' : ''} · {formatHours(grandTotal)}
-            </button>
-          ) : isEmpty ? (
+          {!bodyOpen ? null : isEmpty ? (
             <div className="text-center py-20 text-slate-400">
               {search ? (
                 <>
@@ -804,7 +832,7 @@ const WeeklyTimesheet: React.FC = () => {
       <div className="sticky bottom-2 z-10 mt-4 rounded-[15px] border border-border/70 bg-white/95 backdrop-blur shadow-[0_8px_22px_-14px_rgba(16,27,46,0.32)] px-5 py-3 flex items-center justify-between gap-4">
         <div className="flex items-baseline gap-2.5">
           <span className={UPPER_LABEL}>Week total</span>
-          <span className="font-mono text-base font-extrabold text-slate-800 tabular-nums">{formatHours(grandTotal)}</span>
+          <span className="font-mono text-base font-extrabold text-slate-800 tabular-nums">{fmtHours(grandTotal)}</span>
         </div>
         <div className="flex items-center gap-4">
           <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400">
@@ -829,9 +857,9 @@ const WeeklyTimesheet: React.FC = () => {
             <div className="p-6 space-y-4">
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { label: 'Total',    value: formatHours(grandTotal), cls: 'text-slate-800' },
-                  { label: 'Billable', value: formatHours(billable),   cls: 'text-primary' },
-                  { label: 'Non-bill', value: formatHours(nonBillable), cls: 'text-slate-400' },
+                  { label: 'Total',    value: fmtHours(grandTotal), cls: 'text-slate-800' },
+                  { label: 'Billable', value: fmtHours(billable),   cls: 'text-primary' },
+                  { label: 'Non-bill', value: fmtHours(nonBillable), cls: 'text-slate-400' },
                 ].map(({ label, value, cls }) => (
                   <div key={label} className="text-center p-3 bg-slate-50 rounded-lg border border-border/50">
                     <p className={cn('text-lg font-bold tabular-nums', cls)}>{value}</p>
@@ -851,6 +879,12 @@ const WeeklyTimesheet: React.FC = () => {
                   rows={3}
                 />
               </div>
+              {!weekHasEnded && (
+                <p className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-500" />
+                  This week isn't over yet. You can submit early, but make sure your time is complete first.
+                </p>
+              )}
               <p className="text-xs text-slate-400">
                 Once submitted, you won't be able to edit until your manager reviews it.
               </p>
@@ -877,6 +911,7 @@ const WeeklyTimesheet: React.FC = () => {
         </div>
       )}
     </div>
+    </HourFmtContext.Provider>
   );
 };
 
@@ -950,6 +985,7 @@ const AggBlockRow: React.FC<{ agg: AggBlock; withDay: boolean }> = ({ agg, withD
 // `blocks` (when present) makes the row expand to its captured blocks.
 const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; pctOf?: number; blocks?: DetailBlock[] | undefined; blocksWithDay?: boolean }> = ({ entry, hours, pctOf, blocks, blocksWithDay = false }) => {
   const [open, setOpen] = useState(false);
+  const fmtHours = useFmtHours();
   const hasBlocks = !!blocks && blocks.length > 0;
   const mins = hours ?? entry.total;
   return (
@@ -962,7 +998,7 @@ const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; pctOf?: num
         {hasBlocks
           ? <ChevronRight className={cn('w-3 h-3 text-slate-300 shrink-0 transition-transform', open && 'rotate-90')} />
           : <span className="w-3 shrink-0" />}
-        <span className={MIN_CHIP}>{formatHours(mins)}</span>
+        <span className={MIN_CHIP}>{fmtHours(mins)}</span>
         <span className={entry.is_billable ? DOT_BILL : DOT_NON} />
         <span className="flex-1 font-sans text-[12.5px] text-slate-600 truncate">{entry.task_type_name}</span>
         {pctOf != null && (
@@ -986,6 +1022,7 @@ const ClientRow: React.FC<{
   weekBlocks: Map<string, DetailBlock[]>;
 }> = ({ agg, isExpanded, onToggle, weekBlocks }) => {
   const noClient = isNoClient(agg);
+  const fmtHours = useFmtHours();
   return (
     <>
       <button
@@ -998,11 +1035,8 @@ const ClientRow: React.FC<{
           noClient ? 'italic text-slate-400' : 'text-slate-800')}>
           {displayClientName(agg)}
         </span>
-        <span className="font-mono text-[11px] text-slate-400 tabular-nums shrink-0 hidden sm:inline">
-          {agg.taskCount} cat{agg.taskCount !== 1 ? 's' : ''}
-        </span>
         <span className="text-right font-mono text-[12.5px] font-semibold text-slate-800 tabular-nums shrink-0 w-[64px]">
-          {formatHours(agg.total)}
+          {fmtHours(agg.total)}
         </span>
       </button>
 
@@ -1044,6 +1078,7 @@ const WorkSummaryView: React.FC<{
 }> = ({ clients, weekEnd, weekLabel }) => {
   const [state, setState] = useState<Record<string, SummaryCell>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const fmtHours = useFmtHours();
 
   // Real, billable-to clients only — skip Unassigned (null) and internal buckets.
   const real = useMemo(
@@ -1129,7 +1164,7 @@ const WorkSummaryView: React.FC<{
             <div key={c.key} className="rounded-xl border border-border bg-white p-3">
               <div className="mb-1.5 flex items-center gap-2">
                 <span className="text-sm font-semibold text-slate-800">{c.clientName}</span>
-                <span className="text-xs tabular-nums text-slate-400">{formatHours(c.total)}</span>
+                <span className="text-xs tabular-nums text-slate-400">{fmtHours(c.total)}</span>
                 <span className="flex-1" />
                 {idle ? (
                   <button onClick={() => gen(c.key, id)}
@@ -1173,7 +1208,9 @@ const SummaryView: React.FC<{
   onToggle: (key: string) => void;
   onToggleTail: () => void;
   weekBlocks: Map<string, DetailBlock[]>;
-}> = ({ mainClients, tailClients, tailTotals, expanded, tailOpen, onToggle, onToggleTail, weekBlocks }) => (
+}> = ({ mainClients, tailClients, tailTotals, expanded, tailOpen, onToggle, onToggleTail, weekBlocks }) => {
+  const fmtHours = useFmtHours();
+  return (
   <div className="divide-y divide-border/30">
     {mainClients.map(agg => (
       <ClientRow key={agg.key} agg={agg} isExpanded={expanded.has(agg.key)} onToggle={onToggle} weekBlocks={weekBlocks} />
@@ -1190,7 +1227,7 @@ const SummaryView: React.FC<{
           <span className="flex-1 font-sans text-[13px] font-semibold text-slate-500 truncate">
             {tailClients.length} more client{tailClients.length !== 1 ? 's' : ''} under 15 min
           </span>
-          <span className="text-right font-mono text-[12.5px] font-semibold text-slate-500 tabular-nums shrink-0 w-[64px]">{formatHours(tailTotals.total)}</span>
+          <span className="text-right font-mono text-[12.5px] font-semibold text-slate-500 tabular-nums shrink-0 w-[64px]">{fmtHours(tailTotals.total)}</span>
         </button>
 
         {tailOpen && tailClients.map(agg => (
@@ -1199,7 +1236,8 @@ const SummaryView: React.FC<{
       </>
     )}
   </div>
-);
+  );
+};
 
 // ── By-day View (day → client → category drill, mirrors Summary) ────────────────
 
@@ -1215,6 +1253,7 @@ const ByDayClientRow: React.FC<{
 }> = ({ dc, date, isOpen, onToggle, dayBlocks }) => {
   const { agg } = dc;
   const noClient = isNoClient(agg);
+  const fmtHours = useFmtHours();
   const id = `${date}::${agg.key}`;
   return (
     <>
@@ -1228,7 +1267,7 @@ const ByDayClientRow: React.FC<{
           noClient ? 'italic text-slate-400 font-semibold' : 'text-slate-800')}>
           {displayClientName(agg)}
         </span>
-        <span className={HOURS_CELL}>{formatHours(dc.dayTotal)}</span>
+        <span className={HOURS_CELL}>{fmtHours(dc.dayTotal)}</span>
       </button>
       {isOpen && (
         <div className="px-4 pb-3 pt-1.5" style={{ background: GROUND }}>
@@ -1257,6 +1296,7 @@ const ByDayView: React.FC<{
   grandTotal: number;
   dayBlocks: Map<string, DetailBlock[]>;
 }> = ({ clients, days, dailyTotals, grandTotal, dayBlocks }) => {
+  const fmtHours = useFmtHours();
   // One group per day that had time; clients ranked by that day's minutes, No client last.
   const groups = useMemo<DayGroup[]>(() =>
     days.map(day => {
@@ -1318,7 +1358,7 @@ const ByDayView: React.FC<{
                 {dayClients.length} client{dayClients.length !== 1 ? 's' : ''}
               </span>
               <span className="text-right text-[15px] font-extrabold text-slate-800 tabular-nums shrink-0 w-[64px]">
-                {formatHours(total)}
+                {fmtHours(total)}
               </span>
             </button>
             {dayOpen && (
@@ -1342,7 +1382,7 @@ const ByDayView: React.FC<{
       <div className="flex items-center gap-3 px-5 py-3 bg-white border-t-2 border-border/50">
         <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Week total</span>
         <span className="flex-1" />
-        <span className="text-right text-[15px] font-extrabold text-primary tabular-nums w-[64px]">{formatHours(grandTotal)}</span>
+        <span className="text-right text-[15px] font-extrabold text-primary tabular-nums w-[64px]">{fmtHours(grandTotal)}</span>
       </div>
     </div>
   );

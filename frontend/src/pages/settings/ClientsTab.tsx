@@ -13,6 +13,7 @@ import type { Client, TeamMember, RoleType } from './types';
 import ClientImportWizard from '@/components/ClientImportWizard';
 import ClientTaskTypesPanel from '@/components/ClientTaskTypesPanel';
 import ClientBillingProfilePanel from '@/components/ClientBillingProfilePanel';
+import BulkBillingModal from '@/components/BulkBillingModal';
 
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -407,6 +408,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
   const [aliasInput,         setAliasInput]         = useState('');
   const [selectedClientIds,  setSelectedClientIds]  = useState<Set<number>>(new Set());
   const [showBulkAssignModal,setShowBulkAssignModal]= useState(false);
+  const [showBulkBillingModal,setShowBulkBillingModal]= useState(false);
   const [showCSVImportModal, setShowCSVImportModal] = useState(false);
   const [showCopyModal,      setShowCopyModal]      = useState(false);
   const [showImportDropdown, setShowImportDropdown] = useState(false);
@@ -709,6 +711,9 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
           <button onClick={() => setShowBulkAssignModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 rounded-lg font-semibold text-sm transition-colors">
             <UserPlus className="w-3.5 h-3.5" /> Assign Team
           </button>
+          <button onClick={() => setShowBulkBillingModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:opacity-90 rounded-lg font-semibold text-sm transition-colors">
+            <Receipt className="w-3.5 h-3.5" /> Set Billing
+          </button>
           <button onClick={handleBulkUnassign} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 rounded-lg font-semibold text-sm transition-colors">
             <UserMinus className="w-3.5 h-3.5" /> Remove Team
           </button>
@@ -719,6 +724,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
       {/* Modals */}
       {showImportWizard   && <ClientImportWizard onClose={() => setShowImportWizard(false)} onSuccess={() => { onRefresh(); onSuccess('Clients imported!'); }} users={users} />}
       {showBulkAssignModal && <BulkAssignModal isOpen={showBulkAssignModal} onClose={() => setShowBulkAssignModal(false)} selectedClients={selectedClients} users={users} onSuccess={() => { onRefresh(); clearSelection(); onSuccess('Team assigned!'); }} />}
+      {showBulkBillingModal && <BulkBillingModal isOpen={showBulkBillingModal} onClose={() => setShowBulkBillingModal(false)} clientIds={Array.from(selectedClientIds)} onSuccess={(m) => { setShowBulkBillingModal(false); clearSelection(); onSuccess(m); }} onError={onError} />}
         {taskTypeClientId !== null && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col" style={{ maxHeight: '90vh' }}>

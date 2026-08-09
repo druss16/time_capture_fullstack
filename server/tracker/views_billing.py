@@ -211,6 +211,88 @@ class ClientBillingProfileView(APIView):
         serializer.save(org=org, updated_by=request.user)
         return Response(self._payload(org, client, profile))
 
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bulk_set_billing_profile(request):
+    """
+    Apply billing-profile fields to many clients at once (owner/admin only).
+    Only the fields present in the payload are changed on each client's profile
+    (upserting a profile if none exists) — so you can e.g. set billing_system on
+    30 clients without touching their billing_type. Per-client details (exact
+    flat amount, customer mapping) are still tuned in the single-client modal.
+
+    POST billing/clients/bulk-billing-profile/
+      { "client_ids": [1,2,3],
+        "billing_type": "hourly",           # optional
+        "billing_system": "qb_desktop",     # optional
+        "flat_amount": "1200.00",           # optional
+        "flat_period": "monthly",           # optional
+        "default_item_name": "Bookkeeping"  # optional
+      }
+    """
+    org = get_request_org_override_billing(request)
+    if not org:
+        return Response({'error': 'No organization'}, status=400)
+    if not (request.user.is_staff or request.user.is_superuser):
+        m = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
+        if not m or m.role not in ['owner', 'admin']:
+            return Response({'error': 'Only an owner or admin can manage billing profiles.'}, status=403)
+
+    client_ids = request.data.get('client_ids') or []
+    if not isinstance(client_ids, list) or not client_ids:
+        return Response({'error': 'client_ids is required'}, status=400)
+
+    # Validate any provided choice fields against the model's choices.
+    valid_types = {c[0] for c in ClientBillingProfile.BILLING_TYPE_CHOICES}
+    valid_systems = {c[0] for c in ClientBillingProfile.BILLING_SYSTEM_CHOICES}
+    valid_periods = {c[0] for c in ClientBillingProfile.FLAT_PERIOD_CHOICES} | {''}
+
+    updates = {}
+    if 'billing_type' in request.data:
+        v = request.data['billing_type']
+        if v not in valid_types:
+            return Response({'error': f'Invalid billing_type: {v}'}, status=400)
+        updates['billing_type'] = v
+    if 'billing_system' in request.data:
+        v = request.data['billing_system']
+        if v not in valid_systems:
+            return Response({'error': f'Invalid billing_system: {v}'}, status=400)
+        updates['billing_system'] = v
+    if 'flat_period' in request.data:
+        v = request.data['flat_period'] or ''
+        if v not in valid_periods:
+            return Response({'error': f'Invalid flat_period: {v}'}, status=400)
+        updates['flat_period'] = v
+    if 'flat_amount' in request.data:
+        raw = request.data['flat_amount']
+        if raw in (None, ''):
+            updates['flat_amount'] = None
+        else:
+            try:
+                updates['flat_amount'] = Decimal(str(raw))
+            except (ValueError, TypeError, ArithmeticError):
+                return Response({'error': f'Invalid flat_amount: {raw}'}, status=400)
+    if 'default_item_name' in request.data:
+        updates['default_item_name'] = str(request.data['default_item_name'])[:255]
+
+    if not updates:
+        return Response({'error': 'No billing fields provided to apply'}, status=400)
+
+    clients = Client.objects.filter(org=org, id__in=client_ids)
+    count = 0
+    for client in clients:
+        profile, _ = ClientBillingProfile.objects.get_or_create(client=client, defaults={'org': org})
+        for k, v in updates.items():
+            setattr(profile, k, v)
+        profile.org = org
+        profile.updated_by = request.user
+        profile.save()
+        count += 1
+
+    return Response({'updated': count, 'fields': list(updates.keys())})
+
+
 # ===============================
 # BILLING RATES VIEWSET (Professional Plan Only)
 # ===============================

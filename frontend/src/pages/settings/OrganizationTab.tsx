@@ -1,8 +1,7 @@
 // src/pages/settings/OrganizationTab.tsx
 import { useEffect, useState } from 'react';
 import {
-  Building2, DollarSign, Sparkles, Pencil, Check,
-  RefreshCw, Brain, ChevronDown,
+  Building2, DollarSign, Sparkles, Pencil, Check, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
@@ -10,47 +9,6 @@ import type { OrgInfo, PlanType } from './types';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
-
-const SENSITIVITY_PRESETS = [
-  { value: 10,  label: 'Conservative',    color: '#6366f1' },
-  { value: 35,  label: 'Cautious',        color: '#3b82f6' },
-  { value: 50,  label: 'Balanced',        color: '#10b981' },
-  { value: 70,  label: 'Aggressive',      color: '#f59e0b' },
-  { value: 90,  label: 'Very Aggressive', color: '#ef4444' },
-];
-
-const SENSITIVITY_DESCRIPTIONS: Record<string, string> = {
-  Conservative:      'Only switches when the full client name appears in a window title. Zero false positives.',
-  Cautious:          'Requires a strong name match. Partial words are ignored.',
-  Balanced:          'Default setting. Full-name matches auto-switch; partial words show a suggestion toast.',
-  Aggressive:        'Partial words trigger auto-switch. Best for firms with unique client names.',
-  'Very Aggressive': 'Very short name fragments trigger switches. May produce occasional false positives.',
-};
-
-function getSensitivityLabel(v: number) {
-  if (v <= 20) return 'Conservative';
-  if (v <= 40) return 'Cautious';
-  if (v <= 60) return 'Balanced';
-  if (v <= 80) return 'Aggressive';
-  return 'Very Aggressive';
-}
-
-function getSensitivityColor(v: number) {
-  return SENSITIVITY_PRESETS.reduce((closest, p) =>
-    Math.abs(p.value - v) < Math.abs(closest.value - v) ? p : closest
-  ).color;
-}
-
-function computeThresholds(s: number) {
-  const pct = Math.max(0, Math.min(100, s)) / 100;
-  return {
-    local:   Math.round((0.90 - pct * 0.40) * 100),
-    ai:      Math.round((0.85 - pct * 0.40) * 100),
-    suggest: Math.round((0.70 - pct * 0.35) * 100),
-    partial: pct >= 0.40,
-    minWord: pct < 0.40 ? null : pct < 0.70 ? 6 : pct < 0.90 ? 4 : 3,
-  };
-}
 
 interface Props {
   orgInfo: OrgInfo | null;
@@ -110,44 +68,10 @@ export default function OrganizationTab({
   };
 
   const isAdmin = currentUserRole === 'admin' || currentUserRole === 'owner';
-  const [sensitivity,    setSensitivity]    = useState(50);
-  const [savedSens,      setSavedSens]      = useState(50);
-  const [sensLoading,    setSensLoading]    = useState(true);
-  const [sensSaving,     setSensSaving]     = useState(false);
-  const [showThresholds, setShowThresholds] = useState(false);
-
-  useEffect(() => {
-    const v = (orgInfo as any)?.ai_sensitivity ?? 50;
-    setSensitivity(v);
-    setSavedSens(v);
-    setSensLoading(false);
-  }, [orgInfo]);
-
-  const handleSensSave = async () => {
-    setSensSaving(true);
-    try {
-      await safeFetchJson(`${API_BASE}/settings/org/`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ai_sensitivity: sensitivity }),
-      });
-      setSavedSens(sensitivity);
-      onSuccess('Sensitivity saved. Agents will update at next sync.');
-    } catch {
-      onError('Failed to save sensitivity.');
-    } finally {
-      setSensSaving(false);
-    }
-  };
 
   if (!orgInfo) return <div className="text-slate-500 p-4">No organization data</div>;
 
   const planLabel  = orgPlan === 'executive' ? '💎 Executive' : orgPlan === 'professional' ? '⭐ Professional' : '🚫 No Plan';
-  const sensLabel  = getSensitivityLabel(sensitivity);
-  const sensColor  = getSensitivityColor(sensitivity);
-  const thresholds = computeThresholds(sensitivity);
-  const sensDesc   = SENSITIVITY_DESCRIPTIONS[sensLabel] ?? '';
-  const sensChanged = sensitivity !== savedSens;
 
   return (
     <div>
@@ -315,111 +239,6 @@ export default function OrganizationTab({
         </div>
       )}
 
-      {/* AI Sensitivity — admin/owner only */}
-      {isAdmin && (
-        <>
-          <div className="flex items-center gap-3 my-5">
-            <div className="flex-1 h-px bg-slate-200" />
-            <span className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-widest">
-              <Brain className="w-3.5 h-3.5" /> AI Settings
-            </span>
-            <div className="flex-1 h-px bg-slate-200" />
-          </div>
-
-          <div>
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Client Detection Sensitivity</h3>
-                <p className="text-xs text-slate-500 mt-0.5">How aggressively the desktop agent matches windows to clients.</p>
-              </div>
-              {!sensLoading && (
-                <span className="text-xs font-bold px-2.5 py-1 rounded-full text-white shrink-0 ml-4" style={{ backgroundColor: sensColor }}>
-                  {sensitivity} — {sensLabel}
-                </span>
-              )}
-            </div>
-
-            {sensLoading ? (
-              <div className="h-8 bg-slate-100 animate-pulse rounded-lg" />
-            ) : (
-              <>
-                <div className="mb-4">
-                  <input
-                    type="range" min={0} max={100} step={1} value={sensitivity}
-                    onChange={e => setSensitivity(Number(e.target.value))}
-                    className="w-full h-2 rounded-full appearance-none cursor-pointer"
-                    style={{
-                      background: `linear-gradient(to right, ${sensColor} ${sensitivity}%, #e2e8f0 ${sensitivity}%)`,
-                      accentColor: sensColor,
-                    }}
-                  />
-                  <div className="flex justify-between mt-1.5">
-                    {['Conservative', 'Cautious', 'Balanced', 'Aggressive', 'Max'].map(t => (
-                      <span key={t} className="text-[10px] text-slate-400">{t}</span>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="text-xs text-slate-600 bg-slate-50 rounded-lg px-3 py-2.5 mb-3 border-l-4" style={{ borderLeftColor: sensColor }}>
-                  {sensDesc}
-                </div>
-
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {SENSITIVITY_PRESETS.map(p => (
-                    <button
-                      key={p.value}
-                      onClick={() => setSensitivity(p.value)}
-                      className="px-2.5 py-1 rounded-full border text-xs font-semibold transition-all"
-                      style={sensitivity === p.value
-                        ? { backgroundColor: p.color, color: 'white', borderColor: p.color }
-                        : { borderColor: '#cbd5e1', color: '#475569' }
-                      }
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  onClick={() => setShowThresholds(v => !v)}
-                  className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 transition-colors mb-3"
-                >
-                  <ChevronDown className={cn('w-3 h-3 transition-transform', showThresholds && 'rotate-180')} />
-                  {showThresholds ? 'Hide' : 'Show'} confidence thresholds
-                </button>
-
-                {showThresholds && (
-                  <div className="grid grid-cols-2 gap-2 mb-4 text-xs">
-                    {[
-                      { label: 'Full-name auto-switch', value: `≥ ${thresholds.local}%` },
-                      { label: 'AI auto-switch',        value: `≥ ${thresholds.ai}%` },
-                      { label: 'Suggestion toast',      value: `≥ ${thresholds.suggest}%` },
-                      { label: 'Partial-word matching', value: thresholds.partial ? `On (min ${thresholds.minWord} chars)` : 'Off' },
-                    ].map(({ label, value }) => (
-                      <div key={label} className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-                        <div className="text-slate-500">{label}</div>
-                        <div className="font-bold mt-0.5" style={{ color: sensColor }}>{value}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="flex items-center gap-3 pt-3 border-t border-border/50">
-                  <button
-                    onClick={handleSensSave}
-                    disabled={sensSaving || !sensChanged}
-                    className="px-4 py-2 rounded-lg text-xs font-bold text-white transition-all disabled:opacity-40"
-                    style={{ backgroundColor: sensChanged ? sensColor : '#94a3b8' }}
-                  >
-                    {sensSaving ? 'Saving…' : 'Save Sensitivity'}
-                  </button>
-                  {sensChanged && !sensSaving && <span className="text-xs text-slate-400">Unsaved changes</span>}
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
     </div>
   );
 }

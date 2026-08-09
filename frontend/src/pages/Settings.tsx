@@ -315,7 +315,7 @@ export default function Settings() {
               {activeTab === 'organization' && (
                 <OrganizationTab
                   orgInfo={orgInfo} orgPlan={orgPlan}
-                  onUpdate={updated => { setOrgInfo(updated); setOrgPlan(updated.plan || 'professional'); }}
+                  onUpdate={updated => { setOrgInfo(prev => (prev ? { ...prev, ...updated } : updated)); setOrgPlan(updated.plan || 'professional'); }}
                   onSuccess={showSuccess} onError={showError}
                   currentUserRole={currentUserRole}
                 />

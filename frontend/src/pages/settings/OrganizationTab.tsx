@@ -68,6 +68,7 @@ export default function OrganizationTab({
   const [saving,  setSaving]  = useState(false);
   const [form, setForm] = useState({
     name: '', billing_email: '', billing_contact: '', billing_rate_default: '150.00',
+    cost_rate_default: '75.00', target_utilization: '75',
   });
 
   useEffect(() => {
@@ -77,6 +78,8 @@ export default function OrganizationTab({
         billing_email:        orgInfo.billing_email || '',
         billing_contact:      orgInfo.billing_contact || '',
         billing_rate_default: orgInfo.billing_rate_default || '150.00',
+        cost_rate_default:    orgInfo.cost_rate_default || '75.00',
+        target_utilization:   orgInfo.target_utilization || '75',
       });
     }
   }, [orgInfo]);
@@ -94,6 +97,8 @@ export default function OrganizationTab({
         name: updated.name || '', billing_email: updated.billing_email || '',
         billing_contact: updated.billing_contact || '',
         billing_rate_default: updated.billing_rate_default || '150.00',
+        cost_rate_default: updated.cost_rate_default || '75.00',
+        target_utilization: updated.target_utilization || '75',
       });
       setEditing(false);
       onSuccess('Organization updated');
@@ -182,16 +187,58 @@ export default function OrganizationTab({
                 />
               </div>
             ))}
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Default Hourly Rate</label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                <input
-                  type="number" step="0.01" min="0"
-                  value={form.billing_rate_default}
-                  onChange={e => setForm({ ...form, billing_rate_default: e.target.value })}
-                  className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white"
-                />
+            <div className="col-span-2 mt-2 pt-4 border-t border-slate-200">
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Firm Economics</p>
+              <p className="text-xs text-slate-400 mb-3">
+                Powers the Analytics dashboard — margin, effective rate, and utilization benchmarks.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Default bill rate */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Default Bill Rate</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                    <input
+                      type="number" step="0.01" min="0"
+                      value={form.billing_rate_default}
+                      onChange={e => setForm({ ...form, billing_rate_default: e.target.value })}
+                      className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">Fallback client rate when no specific rate is set. Drives realization.</p>
+                </div>
+
+                {/* Blended cost / hour — admin/owner only */}
+                {isAdmin && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Blended Cost / Hour</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                      <input
+                        type="number" step="0.01" min="0"
+                        value={form.cost_rate_default}
+                        onChange={e => setForm({ ...form, cost_rate_default: e.target.value })}
+                        className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">Loaded employee cost (salary + overhead ÷ hours). Drives margin.</p>
+                  </div>
+                )}
+
+                {/* Target billable utilization */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Target Billable %</label>
+                  <div className="relative">
+                    <input
+                      type="number" step="1" min="0" max="100"
+                      value={form.target_utilization}
+                      onChange={e => setForm({ ...form, target_utilization: e.target.value })}
+                      className="w-full pl-3 pr-7 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">%</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">Your utilization goal. Sets the benchmark band on the KPI.</p>
+                </div>
               </div>
             </div>
           </div>
@@ -249,6 +296,13 @@ export default function OrganizationTab({
               <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-full">Firm Default</span>
             </div>
           </div>
+          {isAdmin && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-slate-500">
+              <span>Blended cost: <b className="text-slate-700">${parseFloat(orgInfo.cost_rate_default || '75.00').toFixed(2)}/hr</b></span>
+              <span>Target utilization: <b className="text-slate-700">{parseFloat(orgInfo.target_utilization || '75').toFixed(0)}%</b></span>
+              <span className="text-slate-400">Used by the Analytics dashboard</span>
+            </div>
+          )}
         </div>
       )}
 

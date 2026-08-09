@@ -17,6 +17,9 @@ from tracker.models import EmployeeCostRate, Invoice
 
 from ..types import MetricState, MetricValue, to_float
 from .base import Metric, ThresholdRange, register_metric
+from .revenue_sources import (
+    flat_fee_client_ids, flat_fee_revenue_for, non_billable_client_ids,
+)
 
 
 def _cost_rates_map(org) -> dict[int, float]:
@@ -34,18 +37,26 @@ def _cost_rates_map(org) -> dict[int, float]:
 
 @register_metric("revenue")
 class RevenueMetric(Metric):
-    """Estimated revenue from time blocks (uses block.billing_amount)."""
+    """Estimated revenue across all billing models: hourly time value + pro-rated
+    flat-fee/retainer revenue. Flat-fee and non-billable clients are excluded from
+    the hourly estimate so the two revenue sources never double-count."""
     label = "Revenue"
     format = "currency_0dp"
-    tooltip = "Estimated revenue from time blocks (billing_amount). For invoiced revenue, see Invoiced."
+    tooltip = (
+        "Estimated revenue: hourly time value (billing_amount) plus pro-rated "
+        "flat-fee/retainer fees. For invoiced truth, see Invoiced Revenue."
+    )
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
-    
+
     def compute(self, org, scope, time):
-        qs = self._block_qs(org, scope, time, billable_only=True)
-        # Aggregate via SQL where possible, but billing_amount can be null —
-        # for null rows, recompute on the fly
         from django.db.models import Q
+        # Keep flat-fee + non-billable clients out of the hourly estimate; their
+        # revenue is added separately (flat fee) or is zero (non-billable).
+        exclude_ids = flat_fee_client_ids(org) | non_billable_client_ids(org)
+        qs = self._block_qs(org, scope, time, billable_only=True)
+        if exclude_ids:
+            qs = qs.exclude(client_id__in=exclude_ids)
         agg = qs.aggregate(
             amount=Coalesce(Sum("billing_amount"), Decimal("0")),
             mins_no_amount=Coalesce(
@@ -57,10 +68,29 @@ class RevenueMetric(Metric):
         amount = to_float(agg["amount"])
         # Approximate the un-rated portion with org default
         amount += (to_float(agg["mins_no_amount"]) / 60.0) * default_rate
-        
+        # Pro-rated flat-fee / retainer revenue for the window
+        amount += flat_fee_revenue_for(org, scope, time)
+
         if amount == 0:
             return MetricValue(state=MetricState.EMPTY)
         return MetricValue(value=round(amount, 2))
+
+
+def recognized_revenue(org, scope, time) -> tuple[float, str]:
+    """Best available revenue for a scope/window.
+
+    Prefers invoiced truth; falls back to the estimate (hourly time value +
+    pro-rated retainers) when the firm hasn't imported invoices. This is what
+    makes margin/leakage populate for firms that don't push invoices into the
+    tool. Returns (amount, basis) with basis in {"invoiced","estimated","none"}.
+    """
+    inv = InvoicedRevenueMetric().compute(org, scope, time)
+    if inv.state == MetricState.READY and inv.value:
+        return inv.value, "invoiced"
+    est = RevenueMetric().compute(org, scope, time)
+    if est.state == MetricState.READY and est.value:
+        return est.value, "estimated"
+    return 0.0, "none"
 
 
 @register_metric("invoiced_revenue")
@@ -115,27 +145,89 @@ class LaborCostMetric(Metric):
 
 @register_metric("gross_margin")
 class GrossMarginMetric(Metric):
-    """Margin % using invoiced revenue (truth) and labor cost."""
+    """Margin % using recognized revenue (invoiced truth, or the estimate when the
+    firm hasn't imported invoices) and labor cost."""
     label = "Gross Margin"
     format = "percent_1dp"
-    tooltip = "(Invoiced revenue − labor cost) ÷ invoiced revenue × 100."
+    tooltip = (
+        "(Recognized revenue − labor cost) ÷ recognized revenue × 100. "
+        "Uses invoiced revenue when available, otherwise estimated revenue "
+        "(hourly time value + pro-rated retainers)."
+    )
     threshold = ThresholdRange(low=20, high=40, direction="higher_is_better")
     valid_scopes = ("firm", "client", "composite")
     delta_good_when = "up"
-    
+
     def compute(self, org, scope, time):
-        rev_metric = InvoicedRevenueMetric()
-        cost_metric = LaborCostMetric()
-        rev = rev_metric.compute(org, scope, time)
-        cost = cost_metric.compute(org, scope, time)
-        
-        if rev.state != MetricState.READY or rev.value is None or rev.value == 0:
+        rev_v, basis = recognized_revenue(org, scope, time)
+        if rev_v <= 0:
             return MetricValue(state=MetricState.EMPTY)
-        
+
+        cost = LaborCostMetric().compute(org, scope, time)
         cost_v = cost.value if cost.value is not None else 0.0
-        margin = ((rev.value - cost_v) / rev.value) * 100
-        return MetricValue(value=round(margin, 1), secondary_value=round(rev.value - cost_v, 2),
-                          secondary_label="Margin $")
+        margin = ((rev_v - cost_v) / rev_v) * 100
+        return MetricValue(
+            value=round(margin, 1),
+            secondary_value=round(rev_v - cost_v, 2),
+            secondary_label="Margin $" + ("" if basis == "invoiced" else " (est.)"),
+        )
+
+
+@register_metric("revenue_leakage")
+class RevenueLeakageMetric(Metric):
+    """Standard-rate value of billable HOURLY time that hasn't been billed or
+    committed yet — money on the table.
+
+    This is our wedge: because the agent auto-captures true time, we can see the
+    gap between what was worked and what will actually be billed. Flat-fee and
+    non-billable clients are excluded (their retainer economics show as "retainer
+    health" in the by-client table, not as leakage). Suppressed blocks are ignored.
+
+    leakage = worked_value_at_standard_rate − billed_value
+      billed_value = invoiced revenue if imported, else value of COMMITTED blocks
+    """
+    label = "Revenue Leakage"
+    format = "currency_0dp"
+    tooltip = (
+        "Standard-rate value of billable time not yet billed or committed. "
+        "The gap between time worked and time that will actually be billed."
+    )
+    valid_scopes = ("firm", "client", "composite")
+    delta_good_when = "down"
+
+    def compute(self, org, scope, time):
+        exclude_ids = flat_fee_client_ids(org) | non_billable_client_ids(org)
+        qs = (self._block_qs(org, scope, time, billable_only=True)
+              .filter(client__isnull=False)
+              .exclude(classification_state="suppressed"))
+        if exclude_ids:
+            qs = qs.exclude(client_id__in=exclude_ids)
+
+        default_rate = to_float(getattr(org, "billing_rate_default", 0))
+        worked_value = 0.0
+        committed_value = 0.0
+        for b in qs.only("minutes", "billing_amount", "billing_rate", "classification_state"):
+            hours = to_float(b.minutes) / 60.0
+            amount = to_float(b.billing_amount)
+            if not amount:
+                rate = to_float(b.billing_rate) or default_rate
+                amount = hours * rate
+            worked_value += amount
+            if b.classification_state == "committed":
+                committed_value += amount
+
+        if worked_value == 0:
+            return MetricValue(state=MetricState.EMPTY)
+
+        inv = InvoicedRevenueMetric().compute(org, scope, time)
+        billed = inv.value if (inv.state == MetricState.READY and inv.value) else committed_value
+        leakage = max(worked_value - billed, 0.0)
+        pct = (leakage / worked_value * 100) if worked_value else 0.0
+        return MetricValue(
+            value=round(leakage, 2),
+            secondary_value=round(pct, 1),
+            secondary_label="of worked value",
+        )
 
 
 @register_metric("effective_rate")

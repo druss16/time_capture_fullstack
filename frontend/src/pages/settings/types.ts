@@ -27,6 +27,7 @@ export type OrgInfo = {
   billing_contact: string;
   billing_rate_default: string;
   cost_rate_default?: string;
+  target_utilization?: string;
   created_at: string;
 };
 

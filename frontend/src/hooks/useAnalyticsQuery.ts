@@ -18,6 +18,7 @@ import type {
   AnalyticsResponse,
   PermissionsResponse,
 } from "@/lib/analytics_v2/types";
+import type { Client, TeamMember } from "@/pages/settings/types";
 
 /**
  * Hit POST /api/analytics/query/ with a request body.
@@ -82,6 +83,35 @@ export function useAnalyticsPermissions() {
   return useQuery<PermissionsResponse, Error>({
     queryKey: ["analytics_v2_permissions"],
     queryFn: () => safeFetchJson<PermissionsResponse>(`${API_BASE}/analytics/permissions/`),
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+  });
+}
+
+/**
+ * Client list for the "By client" scope picker. Reuses the Settings clients
+ * endpoint. Only fetched when the user is allowed to pick clients (pass the
+ * capability flag as `enabled`) so we don't hit the API for members who can't.
+ */
+export function useAnalyticsClients(enabled: boolean) {
+  return useQuery<Client[], Error>({
+    queryKey: ["analytics_v2_clients"],
+    queryFn: () => safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`),
+    enabled,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+  });
+}
+
+/**
+ * Team/staff list for the "By staff" scope picker. Reuses the Settings team
+ * endpoint. Gated on the can_pick_any_staff capability via `enabled`.
+ */
+export function useAnalyticsStaff(enabled: boolean) {
+  return useQuery<TeamMember[], Error>({
+    queryKey: ["analytics_v2_staff"],
+    queryFn: () => safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`),
+    enabled,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
   });

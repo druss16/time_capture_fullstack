@@ -269,40 +269,49 @@ export default function OrganizationTab({
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className={cn(
-              'rounded-xl border px-4 py-3 flex items-center justify-between',
-              orgPlan === 'executive' ? 'bg-primary/5 border-primary/20' : 'bg-amber-50 border-amber-200'
-            )}>
-              <div>
-                <p className={cn('text-[10px] font-bold uppercase tracking-widest mb-1', orgPlan === 'executive' ? 'text-primary/60' : 'text-amber-600')}>Current Plan</p>
-                <p className={cn('text-base font-extrabold', orgPlan === 'executive' ? 'text-primary' : 'text-amber-700')}>{planLabel}</p>
-              </div>
-              {orgPlan !== 'executive' && (
-                <a href="/account/billing" className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-white text-xs font-semibold rounded-lg hover:opacity-90 transition-all">
-                  <Sparkles className="w-3 h-3" /> Upgrade
-                </a>
-              )}
+          <div className={cn(
+            'rounded-xl border px-4 py-3 flex items-center justify-between mb-4',
+            orgPlan === 'executive' ? 'bg-primary/5 border-primary/20' : 'bg-amber-50 border-amber-200'
+          )}>
+            <div>
+              <p className={cn('text-[10px] font-bold uppercase tracking-widest mb-1', orgPlan === 'executive' ? 'text-primary/60' : 'text-amber-600')}>Current Plan</p>
+              <p className={cn('text-base font-extrabold', orgPlan === 'executive' ? 'text-primary' : 'text-amber-700')}>{planLabel}</p>
             </div>
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center justify-between">
-              <div>
-                <p className="text-[10px] font-bold text-emerald-600/70 uppercase tracking-widest mb-1 flex items-center gap-1">
-                  <DollarSign className="w-3 h-3" /> Default Rate
-                </p>
+            {orgPlan !== 'executive' && (
+              <a href="/account/billing" className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-white text-xs font-semibold rounded-lg hover:opacity-90 transition-all">
+                <Sparkles className="w-3 h-3" /> Upgrade
+              </a>
+            )}
+          </div>
+
+          {/* Firm Economics — persists in view mode; powers the Analytics dashboard */}
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+              <DollarSign className="w-3 h-3" /> Firm Economics · used by the Analytics dashboard
+            </p>
+            <div className={cn('grid gap-3', isAdmin ? 'grid-cols-3' : 'grid-cols-2')}>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <p className="text-[10px] font-bold text-emerald-600/70 uppercase tracking-widest mb-1">Default Bill Rate</p>
                 <p className="text-base font-extrabold text-emerald-700">
                   ${parseFloat(orgInfo.billing_rate_default || '150.00').toFixed(2)}<span className="text-xs font-semibold text-emerald-600/70">/hr</span>
                 </p>
               </div>
-              <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-full">Firm Default</span>
+              {isAdmin && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Blended Cost</p>
+                  <p className="text-base font-extrabold text-slate-900">
+                    ${parseFloat(orgInfo.cost_rate_default || '75.00').toFixed(2)}<span className="text-xs font-semibold text-slate-400">/hr</span>
+                  </p>
+                </div>
+              )}
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Target Billable</p>
+                <p className="text-base font-extrabold text-slate-900">
+                  {parseFloat(orgInfo.target_utilization || '75').toFixed(0)}<span className="text-xs font-semibold text-slate-400">%</span>
+                </p>
+              </div>
             </div>
           </div>
-          {isAdmin && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-slate-500">
-              <span>Blended cost: <b className="text-slate-700">${parseFloat(orgInfo.cost_rate_default || '75.00').toFixed(2)}/hr</b></span>
-              <span>Target utilization: <b className="text-slate-700">{parseFloat(orgInfo.target_utilization || '75').toFixed(0)}%</b></span>
-              <span className="text-slate-400">Used by the Analytics dashboard</span>
-            </div>
-          )}
         </div>
       )}
 

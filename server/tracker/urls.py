@@ -229,6 +229,7 @@ urlpatterns = [
 
     path('billing/clients/update-billed/', views_billing.update_client_billed, name='update-client-billed'),
     path('billing/clients/<int:client_id>/billing-profile/', views_billing.ClientBillingProfileView.as_view(), name='client-billing-profile'),
+    path('billing/clients/bulk-billing-profile/', views_billing.bulk_set_billing_profile, name='bulk-billing-profile'),
     path('billing/export/worked-hours/', views_billing.export_worked_hours_csv, name='export-worked-hours'),
     path('billing/realization/', views_billing.realization_with_editable, name='realization-editable'),
     path('billing/export-csv/', views_billing.export_billing_csv, name='billing-export-csv'),

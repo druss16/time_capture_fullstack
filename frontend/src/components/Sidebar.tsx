@@ -7,16 +7,20 @@
  * State flows: user clicks → onChange fires with new query body →
  * parent updates URL → URL re-parses → sidebar re-renders.
  *
- * Client/staff pickers are stubs for v2.0 — they show a "Coming soon" label.
- * Full multi-select pickers ship in v2.1 with the saved views feature.
+ * Scope: "Whole firm" plus single-select "By client" / "By staff" pickers,
+ * gated on the can_pick_any_client / can_pick_any_staff capabilities. Client
+ * and staff lists reuse the Settings endpoints. (Multi-select is a later add.)
  */
 import { Building2, Briefcase, User, Layers, FilePieChart, BarChart3, Clock4, TrendingUp, Sparkles } from "lucide-react";
 import { cn } from "@/lib/design-system";
-import { useAnalyticsPermissions } from "@/hooks/useAnalyticsQuery";
+import {
+  useAnalyticsPermissions, useAnalyticsClients, useAnalyticsStaff,
+} from "@/hooks/useAnalyticsQuery";
 import {
   LENS_OPTIONS, TIME_OPTIONS, COMPARE_OPTIONS,
 } from "@/lib/analytics_v2/urlState";
 import type { AnalyticsQueryBody, LensKey, ScopeType } from "@/lib/analytics_v2/types";
+import { getUserDisplayName } from "@/pages/settings/types";
 
 interface Props {
   body: AnalyticsQueryBody;
@@ -45,6 +49,27 @@ export default function Sidebar({ body, onChange }: Props) {
   const { data: perms } = useAnalyticsPermissions();
   const availableLenses = new Set(perms?.capabilities?.available_lenses ?? ["pulse", "profitability", "realization", "utilization", "wip"]);
   const canFirm = perms?.capabilities?.can_firm ?? false;
+  const canPickClient = perms?.capabilities?.can_pick_any_client ?? false;
+  const canPickStaff = perms?.capabilities?.can_pick_any_staff ?? false;
+
+  // Picker option lists — only fetched when the capability allows it.
+  const { data: clientsRaw } = useAnalyticsClients(canPickClient);
+  const { data: staffRaw } = useAnalyticsStaff(canPickStaff);
+  const clients = (clientsRaw ?? [])
+    .filter(c => c.is_active)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const staff = (staffRaw ?? [])
+    .filter(u => u.is_active)
+    .sort((a, b) => getUserDisplayName(a).localeCompare(getUserDisplayName(b)));
+
+  const selectClient = (id: number) => {
+    const c = clients.find(x => x.id === id);
+    onChange({ scope: { type: "client", ids: id ? [id] : [], label: c?.name ?? "" } });
+  };
+  const selectStaff = (id: number) => {
+    const u = staff.find(x => x.id === id);
+    onChange({ scope: { type: "staff", ids: id ? [id] : [], label: u ? getUserDisplayName(u) : "" } });
+  };
 
   return (
     <aside className="w-64 shrink-0 border-r border-slate-200/80 bg-slate-50/30 px-4 py-6 space-y-6 overflow-y-auto">
@@ -59,23 +84,36 @@ export default function Sidebar({ body, onChange }: Props) {
             disabled={!canFirm}
             onClick={() => onChange({ scope: { type: "firm", ids: [] } })}
           />
-          {/* Client / staff pickers will land in v2.1 */}
           <ScopeOption
             label="By client"
             icon={SCOPE_ICONS.client}
             active={body.scope.type === "client"}
-            disabled
-            comingSoon
-            onClick={() => {}}
+            disabled={!canPickClient || clients.length === 0}
+            onClick={() => { if (clients[0]) selectClient(clients[0].id); }}
           />
+          {body.scope.type === "client" && clients.length > 0 && (
+            <ScopePickerSelect
+              value={body.scope.ids[0]}
+              onChange={(id) => selectClient(id)}
+              placeholder="Select a client…"
+              options={clients.map(c => ({ id: c.id, label: c.name }))}
+            />
+          )}
           <ScopeOption
             label="By staff"
             icon={SCOPE_ICONS.staff}
             active={body.scope.type === "staff"}
-            disabled
-            comingSoon
-            onClick={() => {}}
+            disabled={!canPickStaff || staff.length === 0}
+            onClick={() => { if (staff[0]) selectStaff(staff[0].id); }}
           />
+          {body.scope.type === "staff" && staff.length > 0 && (
+            <ScopePickerSelect
+              value={body.scope.ids[0]}
+              onChange={(id) => selectStaff(id)}
+              placeholder="Select a person…"
+              options={staff.map(u => ({ id: u.id, label: getUserDisplayName(u) }))}
+            />
+          )}
         </div>
       </section>
 
@@ -178,6 +216,34 @@ function ScopeOption({
         <span className="text-[10px] text-slate-400 uppercase tracking-wider">Soon</span>
       )}
     </button>
+  );
+}
+
+function ScopePickerSelect({
+  value, onChange, options, placeholder,
+}: {
+  value: number | undefined;
+  onChange: (id: number) => void;
+  options: { id: number; label: string }[];
+  placeholder: string;
+}) {
+  const known = value != null && options.some(o => o.id === value);
+  return (
+    <div className="pl-8 pr-1 pb-1">
+      <select
+        value={known ? String(value) : ""}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (v) onChange(v);
+        }}
+        className="w-full text-sm rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500/50"
+      >
+        <option value="" disabled>{placeholder}</option>
+        {options.map(o => (
+          <option key={o.id} value={o.id}>{o.label}</option>
+        ))}
+      </select>
+    </div>
   );
 }
 

@@ -66,12 +66,21 @@ class Organization(models.Model):
         help_text="Default hourly billing rate charged to clients"
     )
     cost_rate_default = models.DecimalField(
-        max_digits=10, 
-        decimal_places=2, 
+        max_digits=10,
+        decimal_places=2,
         default=Decimal('75.00'),
         help_text="Default hourly employee cost (for margin calculations)"
     )
-    
+    target_utilization = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('75.00'),
+        help_text=(
+            "Target billable utilization %, the benchmark for the Utilization KPI. "
+            "Firm-wide default; drives the good/watch/bad band on the analytics dashboard."
+        ),
+    )
+
     # Onboarding tracking (optional - add if you want to track progress)
     onboarding_completed = models.BooleanField(default=False)
     onboarding_step = models.IntegerField(default=1)

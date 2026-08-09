@@ -13,45 +13,62 @@ from django.db.models import Sum
 from django.db.models.functions import Coalesce
 from decimal import Decimal
 
-from tracker.models import Block, EmployeeCostRate, Invoice
+from tracker.models import Block, ClientBillingProfile, EmployeeCostRate, Invoice
 
 from ..types import (
     ChartCardPayload, DataTablePayload, MetricState, Scope, Section, TimeRange,
     to_float,
 )
+from ..metrics.revenue_sources import flat_fee_by_client
 from .base import Lens, register_lens
-from .helpers import column, headline_row, kpi_tile
+from .helpers import column, kpi_tile
+
+# The hero KPI row — the numbers a managing partner runs the business on.
+# Revenue now spans all billing models; Leakage is our differentiator.
+_HERO_METRICS = [
+    "revenue",              # recognized revenue (hourly + retainers)
+    "gross_margin",         # profit after the labor that did the work
+    "effective_rate",       # true $/hour earned
+    "billable_utilization", # billable share of tracked time
+    "revenue_leakage",      # worked-but-unbilled value (our wedge)
+]
+
+_BILLING_TYPE_LABEL = {
+    "hourly": "Hourly",
+    "flat_fee": "Retainer",
+    "non_billable": "Non-billable",
+}
 
 
 @register_lens("profitability")
 class ProfitabilityLens(Lens):
     label = "Profitability"
-    
+
     def assemble(self, org, scope, time, compare=None):
         sections: list[Section] = []
-        
-        # Headline: revenue, margin, labor cost
-        sections.append(headline_row(
-            ["invoiced_revenue", "gross_margin", "labor_cost"],
-            org, scope, time, compare,
-            section_id="headline",
-        ))
-        
+
+        # Hero KPI row (medium tiles so the 5 fit without wrapping awkwardly)
+        tiles = [
+            kpi_tile(mid, org, scope, time, compare, size="medium")
+            for mid in _HERO_METRICS
+        ]
+        sections.append(Section(id="headline", type="kpi_row", children=tiles))
+
         if scope.is_firm():
             sections.append(self._by_client_section(org, scope, time))
         elif scope.type == "client":
             sections.append(self._client_detail_section(org, scope, time))
         elif scope.type == "staff":
             sections.append(self._by_staff_section(org, scope, time))
-        
+
         return sections
-    
+
     # ------------------------------------------------------------------------
     # By-client table (firm scope)
     # ------------------------------------------------------------------------
-    
+
     def _by_client_section(self, org, scope, time) -> Section:
-        table = self._build_client_profit_table(org, time)
+        table = self._build_client_profit_table(org, scope, time)
         return Section(
             id="by_client",
             type="section",
@@ -59,8 +76,8 @@ class ProfitabilityLens(Lens):
             collapsible=True,
             children=[table],
         )
-    
-    def _build_client_profit_table(self, org, time) -> DataTablePayload:
+
+    def _build_client_profit_table(self, org, scope, time) -> DataTablePayload:
         # Rate maps
         cost_rates: dict[int, float] = {}
         for cr in (EmployeeCostRate.objects
@@ -69,21 +86,36 @@ class ProfitabilityLens(Lens):
             if cr.user_id not in cost_rates:
                 cost_rates[cr.user_id] = to_float(cr.cost_rate)
         default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
-        
-        # Worked cost + hours per client
-        worked: dict[int, dict] = defaultdict(lambda: {"name": "", "cost": 0.0, "hours": 0.0})
+        default_rate = to_float(getattr(org, "billing_rate_default", 0))
+
+        # Per-client billing type (hourly / flat_fee / non_billable)
+        type_map: dict[int, str] = dict(
+            ClientBillingProfile.objects
+            .filter(org=org)
+            .values_list("client_id", "billing_type")
+        )
+
+        # Worked cost + hours + hourly time value per client
+        worked: dict[int, dict] = defaultdict(
+            lambda: {"name": "", "cost": 0.0, "hours": 0.0, "est": 0.0}
+        )
         block_qs = (Block.objects
                     .filter(org=org, day__gte=time.start, day__lte=time.end,
                             is_billable=True, client__isnull=False)
                     .select_related("client"))
-        for b in block_qs.only("client_id", "client__name", "minutes", "user_id"):
+        for b in block_qs.only("client_id", "client__name", "minutes", "user_id",
+                               "billing_amount", "billing_rate"):
             hours = to_float(b.minutes) / 60.0
             cost = hours * cost_rates.get(b.user_id, default_cost)
+            amount = to_float(b.billing_amount)
+            if not amount:
+                amount = hours * (to_float(b.billing_rate) or default_rate)
             worked[b.client_id]["name"] = b.client.name if b.client else f"Client {b.client_id}"
             worked[b.client_id]["hours"] += hours
             worked[b.client_id]["cost"] += cost
-        
-        # Invoiced revenue per client
+            worked[b.client_id]["est"] += amount
+
+        # Invoiced revenue per client (truth source when present)
         inv_qs = (Invoice.objects
                   .filter(org=org, invoice_date__gte=time.start,
                           invoice_date__lte=time.end, client__isnull=False)
@@ -95,15 +127,30 @@ class ProfitabilityLens(Lens):
                 "amount": to_float(r["amount"]),
             } for r in inv_qs
         }
-        
-        # Merge
+
+        # Pro-rated flat-fee / retainer revenue per client
+        flat = flat_fee_by_client(org, scope, time)
+
+        # Merge — recognize revenue per client according to its billing model
         rows = []
-        all_ids = set(invoiced) | set(worked)
+        all_ids = set(invoiced) | set(worked) | set(flat)
         for cid in all_ids:
+            btype = type_map.get(cid, "hourly")
             name = (invoiced.get(cid, {}).get("name")
                     or worked.get(cid, {}).get("name")
+                    or flat.get(cid, {}).get("name")
                     or f"Client {cid}")
-            rev = invoiced.get(cid, {}).get("amount", 0.0)
+            inv_amt = invoiced.get(cid, {}).get("amount", 0.0)
+
+            if btype == "non_billable":
+                rev = 0.0
+            elif inv_amt > 0:
+                rev = inv_amt                      # invoiced truth wins
+            elif btype == "flat_fee":
+                rev = flat.get(cid, {}).get("revenue", 0.0)
+            else:
+                rev = worked.get(cid, {}).get("est", 0.0)   # hourly estimate
+
             hours = worked.get(cid, {}).get("hours", 0.0)
             cost = worked.get(cid, {}).get("cost", 0.0)
             margin = rev - cost
@@ -111,22 +158,24 @@ class ProfitabilityLens(Lens):
             rows.append({
                 "client_id": cid,
                 "client_name": name,
+                "billing_type": _BILLING_TYPE_LABEL.get(btype, "Hourly"),
                 "revenue": round(rev, 2),
                 "hours": round(hours, 2),
                 "cost": round(cost, 2),
                 "margin": round(margin, 2),
                 "margin_pct": round(margin_pct, 1) if margin_pct is not None else None,
             })
-        
+
         rows.sort(key=lambda r: -(r["revenue"] or 0))
-        
+
         return DataTablePayload(
             id="clients_profit",
             title="Client profitability",
             subtitle=time.label,
             columns=[
                 column("client_name", "Client", "text"),
-                column("revenue", "Invoiced", "currency_0dp"),
+                column("billing_type", "Type", "text"),
+                column("revenue", "Revenue", "currency_0dp"),
                 column("hours", "Hours", "hours_1dp"),
                 column("cost", "Cost", "currency_0dp"),
                 column("margin", "Margin $", "currency_0dp"),

@@ -6820,7 +6820,7 @@ from rest_framework.response import Response
 @permission_classes([IsAuthenticated])
 def settings_org(request):
     """GET/PATCH organization settings including industry_type."""
-    from decimal import Decimal
+    from decimal import Decimal, InvalidOperation
     from tracker.industry_categories import INDUSTRY_CHOICES
     membership = OrganizationMembership.objects.filter(
         user=request.user
@@ -6857,6 +6857,7 @@ def settings_org(request):
             "billing_contact": profile.billing_contact or "",
             "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
             "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if is_admin_or_owner else "0.00",
+            "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
             "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
             "can_edit_org": is_admin_or_owner,
             "role": membership.role,
@@ -6878,6 +6879,12 @@ def settings_org(request):
         org.billing_rate_default = Decimal(str(request.data["billing_rate_default"]))
     if "cost_rate_default" in request.data:
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
+    if "target_utilization" in request.data:
+        try:
+            v = Decimal(str(request.data["target_utilization"]))
+            org.target_utilization = max(Decimal("0"), min(Decimal("100"), v))
+        except (TypeError, ValueError, InvalidOperation):
+            pass
     if "auto_submit_timesheets" in request.data:
         org.auto_submit_timesheets = bool(request.data["auto_submit_timesheets"])
     if "ai_sensitivity" in request.data:
@@ -6900,6 +6907,11 @@ def settings_org(request):
         "industry_name": dict(INDUSTRY_CHOICES).get(getattr(org, 'industry_type', 'general'), 'General'),
         "plan": org.plan,
         "auto_submit_timesheets": getattr(org, "auto_submit_timesheets", False),
+        "billing_email": profile.billing_email or "",
+        "billing_contact": profile.billing_contact or "",
+        "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
+        "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if is_admin_or_owner else "0.00",
+        "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
         "message": "Settings updated"
     })
 

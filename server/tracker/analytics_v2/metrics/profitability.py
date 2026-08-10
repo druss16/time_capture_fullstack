@@ -23,16 +23,9 @@ from .revenue_sources import (
 
 
 def _cost_rates_map(org) -> dict[int, float]:
-    """Most recent cost rate per user. Mirrors v1 _calc_profitability."""
-    rates: dict[int, float] = {}
-    for cr in (
-        EmployeeCostRate.objects
-        .filter(organization=org)
-        .order_by("user_id", "-effective_date")
-    ):
-        if cr.user_id not in rates:
-            rates[cr.user_id] = to_float(cr.cost_rate)
-    return rates
+    """Resolved cost rate per user (per-person override > cost tier > default)."""
+    from ..cost_rates import cost_rate_map
+    return cost_rate_map(org)
 
 
 @register_metric("revenue")

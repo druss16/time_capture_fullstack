@@ -448,16 +448,9 @@ def _calc_profitability(org, start_date: date, end_date: date) -> dict:
     Profit = Revenue (billing_amount) - Cost (hours × EmployeeCostRate.cost_rate)
     EmployeeCostRate FK is `organization` (not `org`); field is `cost_rate`.
     """
-    # Most recent cost rate per user (FK: organization)
-    cost_rates: dict[int, float] = {}
-    for rate in (
-        EmployeeCostRate.objects
-        .filter(organization=org)
-        .select_related("user")
-        .order_by("user_id", "-effective_date")
-    ):
-        if rate.user_id not in cost_rates:
-            cost_rates[rate.user_id] = _safe_float(rate.cost_rate)
+    # Resolved cost rate per user (per-person override > cost tier > org default)
+    from tracker.analytics_v2.cost_rates import cost_rate_map
+    cost_rates = cost_rate_map(org)
 
     default_cost = _safe_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
     default_bill = _safe_float(getattr(org, "billing_rate_default", 0))
@@ -679,16 +672,9 @@ def _calc_invoice_profitability(org, start_date: date, end_date: date) -> dict:
     Also computes per-client breakdown by task_type (service line) using
     BillingRate to show rate mix.
     """
-    # --- Cost rates per user ---
-    cost_rates: dict[int, float] = {}
-    for cr in (
-        EmployeeCostRate.objects
-        .filter(organization=org)
-        .select_related("user")
-        .order_by("user_id", "-effective_date")
-    ):
-        if cr.user_id not in cost_rates:
-            cost_rates[cr.user_id] = _safe_float(cr.cost_rate)
+    # --- Cost rates per user (per-person override > cost tier > org default) ---
+    from tracker.analytics_v2.cost_rates import cost_rate_map
+    cost_rates = cost_rate_map(org)
 
     default_cost = _safe_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
 

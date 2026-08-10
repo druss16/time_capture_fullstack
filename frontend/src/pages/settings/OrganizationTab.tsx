@@ -6,6 +6,7 @@ import {
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, PlanType } from './types';
+import CostTiers from './CostTiers';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -237,6 +238,10 @@ export default function OrganizationTab({
             </div>
           </div>
         </div>
+      )}
+
+      {isAdmin && (
+        <CostTiers onSuccess={onSuccess} onError={onError} />
       )}
 
     </div>

@@ -52,3 +52,24 @@ def cost_rate_map(org, as_of=None) -> dict[int, float]:
         rates[er.user_id] = _to_float(er.cost_rate)
 
     return rates
+
+
+def bill_rate_map(org) -> dict[int, float]:
+    """Return {user_id: tier_bill_rate} for members whose cost tier has a bill_rate.
+
+    This is the REVENUE fallback by seniority: a block's own rate and the client
+    rate win first; this fills the gap (instead of the flat org default) for a
+    member whose tier has a bill_rate set. Members with no tier — or a tier with
+    a null bill_rate — are omitted so callers' ``.get(uid, org_default)`` applies
+    the org billing_rate_default.
+    """
+    from tracker.models import OrganizationMembership
+
+    rates: dict[int, float] = {}
+    for m in (OrganizationMembership.objects
+              .filter(organization=org, cost_tier__isnull=False)
+              .select_related("cost_tier")):
+        br = m.cost_tier.bill_rate
+        if br is not None:
+            rates[m.user_id] = _to_float(br)
+    return rates

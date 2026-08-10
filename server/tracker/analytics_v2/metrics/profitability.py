@@ -43,24 +43,23 @@ class RevenueMetric(Metric):
     delta_good_when = "up"
 
     def compute(self, org, scope, time):
-        from django.db.models import Q
+        from ..cost_rates import bill_rate_map
         # Keep flat-fee + non-billable clients out of the hourly estimate; their
         # revenue is added separately (flat fee) or is zero (non-billable).
         exclude_ids = flat_fee_client_ids(org) | non_billable_client_ids(org)
         qs = self._block_qs(org, scope, time, billable_only=True)
         if exclude_ids:
             qs = qs.exclude(client_id__in=exclude_ids)
-        agg = qs.aggregate(
-            amount=Coalesce(Sum("billing_amount"), Decimal("0")),
-            mins_no_amount=Coalesce(
-                Sum("minutes", filter=Q(billing_amount__isnull=True)),
-                0,
-            ),
-        )
+        amount = to_float(qs.aggregate(a=Coalesce(Sum("billing_amount"), Decimal("0")))["a"])
+        # Un-rated blocks (no billing_amount): value each member's time at their
+        # tier bill rate when set, else the org default.
         default_rate = to_float(getattr(org, "billing_rate_default", 0))
-        amount = to_float(agg["amount"])
-        # Approximate the un-rated portion with org default
-        amount += (to_float(agg["mins_no_amount"]) / 60.0) * default_rate
+        bill_rates = bill_rate_map(org)
+        unrated = (qs.filter(billing_amount__isnull=True)
+                     .values("user_id")
+                     .annotate(m=Coalesce(Sum("minutes"), 0)))
+        for row in unrated:
+            amount += (to_float(row["m"]) / 60.0) * bill_rates.get(row["user_id"], default_rate)
         # Pro-rated flat-fee / retainer revenue for the window
         amount += flat_fee_revenue_for(org, scope, time)
 
@@ -197,13 +196,15 @@ class RevenueLeakageMetric(Metric):
             qs = qs.exclude(client_id__in=exclude_ids)
 
         default_rate = to_float(getattr(org, "billing_rate_default", 0))
+        from ..cost_rates import bill_rate_map
+        bill_rates = bill_rate_map(org)
         worked_value = 0.0
         committed_value = 0.0
-        for b in qs.only("minutes", "billing_amount", "billing_rate", "classification_state"):
+        for b in qs.only("minutes", "billing_amount", "billing_rate", "classification_state", "user_id"):
             hours = to_float(b.minutes) / 60.0
             amount = to_float(b.billing_amount)
             if not amount:
-                rate = to_float(b.billing_rate) or default_rate
+                rate = to_float(b.billing_rate) or bill_rates.get(b.user_id, default_rate)
                 amount = hours * rate
             worked_value += amount
             if b.classification_state == "committed":

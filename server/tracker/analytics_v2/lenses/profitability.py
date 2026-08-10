@@ -79,8 +79,9 @@ class ProfitabilityLens(Lens):
 
     def _build_client_profit_table(self, org, scope, time) -> DataTablePayload:
         # Rate maps (per-person override > cost tier > org default)
-        from ..cost_rates import cost_rate_map
+        from ..cost_rates import cost_rate_map, bill_rate_map
         cost_rates = cost_rate_map(org)
+        bill_rates = bill_rate_map(org)
         default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
         default_rate = to_float(getattr(org, "billing_rate_default", 0))
 
@@ -105,7 +106,7 @@ class ProfitabilityLens(Lens):
             cost = hours * cost_rates.get(b.user_id, default_cost)
             amount = to_float(b.billing_amount)
             if not amount:
-                amount = hours * (to_float(b.billing_rate) or default_rate)
+                amount = hours * (to_float(b.billing_rate) or bill_rates.get(b.user_id, default_rate))
             worked[b.client_id]["name"] = b.client.name if b.client else f"Client {b.client_id}"
             worked[b.client_id]["hours"] += hours
             worked[b.client_id]["cost"] += cost
@@ -229,14 +230,12 @@ class ProfitabilityLens(Lens):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         
-        cost_rates: dict[int, float] = {}
-        for cr in (EmployeeCostRate.objects
-                   .filter(organization=org)
-                   .order_by("user_id", "-effective_date")):
-            if cr.user_id not in cost_rates:
-                cost_rates[cr.user_id] = to_float(cr.cost_rate)
+        from ..cost_rates import cost_rate_map, bill_rate_map
+        cost_rates = cost_rate_map(org)
+        bill_rates = bill_rate_map(org)
         default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
-        
+        default_rate = to_float(getattr(org, "billing_rate_default", 0))
+
         qs = (Block.objects
               .filter(org=org, day__gte=time.start, day__lte=time.end,
                       user_id__in=scope.ids, is_billable=True))
@@ -246,7 +245,7 @@ class ProfitabilityLens(Lens):
             hours = to_float(b.minutes) / 60.0
             amount = to_float(b.billing_amount)
             if not amount:
-                rate = to_float(b.billing_rate) or to_float(getattr(org, "billing_rate_default", 0))
+                rate = to_float(b.billing_rate) or bill_rates.get(b.user_id, default_rate)
                 amount = hours * rate
             per_user[b.user_id]["hours"] += hours
             per_user[b.user_id]["revenue"] += amount

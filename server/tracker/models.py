@@ -3220,6 +3220,14 @@ class CostTier(models.Model):
         max_digits=10, decimal_places=2,
         help_text="Loaded hourly cost for everyone in this tier",
     )
+    bill_rate = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text=(
+            "Standard hourly BILL rate for this tier (what the client is charged). "
+            "Used as a revenue fallback when a block/client has no explicit rate, "
+            "before the org default. Null → use org billing_rate_default."
+        ),
+    )
     sort_order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

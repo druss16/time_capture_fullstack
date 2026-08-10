@@ -80,6 +80,16 @@ class Organization(models.Model):
             "Firm-wide default; drives the good/watch/bad band on the analytics dashboard."
         ),
     )
+    capacity_hours_per_week = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('40.00'),
+        help_text=(
+            "Available working hours per week per employee (firm-wide default). "
+            "Denominator for capacity-based utilization = billable ÷ available. "
+            "Overridden per tier by CostTier.hours_per_week."
+        ),
+    )
 
     # Onboarding tracking (optional - add if you want to track progress)
     onboarding_completed = models.BooleanField(default=False)
@@ -3241,6 +3251,13 @@ class CostTier(models.Model):
             "Standard hourly BILL rate for this tier (what the client is charged). "
             "Used as a revenue fallback when a block/client has no explicit rate, "
             "before the org default. Null → use org billing_rate_default."
+        ),
+    )
+    hours_per_week = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text=(
+            "Available working hours per week for this tier (capacity). Drives "
+            "capacity-based utilization. Null → use org capacity_hours_per_week."
         ),
     )
     sort_order = models.PositiveIntegerField(default=0)

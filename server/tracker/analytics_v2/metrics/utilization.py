@@ -16,7 +16,7 @@ from .base import Metric, ThresholdRange, register_metric
 class BillableUtilizationMetric(Metric):
     label = "Billable Utilization"
     format = "percent_1dp"
-    tooltip = "Billable hours ÷ total tracked hours × 100. Benchmarked against your firm's target utilization (Settings → Organization)."
+    tooltip = "Billable hours ÷ available capacity × 100. Capacity = each person's weekly hours (Settings → Economics) across the period. Benchmarked against your firm's target."
     # in_band: too low = under-utilized, too high = burnout/can't sustain.
     # The band is resolved per-org from Organization.target_utilization in compute().
     threshold = ThresholdRange(low=75, high=85, direction="in_band")
@@ -38,17 +38,40 @@ class BillableUtilizationMetric(Metric):
         self.threshold = self._org_threshold(org)
 
         qs = self._block_qs(org, scope, time)
-        total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         billable_min = to_float(qs.filter(is_billable=True).aggregate(s=Sum("minutes"))["s"])
+        billable_hours = billable_min / 60.0
 
-        if total_min == 0:
+        # Denominator: available capacity for firm/staff scopes (billable ÷ available);
+        # for a client/service/engagement scope, capacity is meaningless, so fall back
+        # to tracked time (billable ÷ tracked).
+        if scope.type in ("firm", "staff"):
+            denom_hours = self._capacity_hours(org, scope, time)
+        else:
+            denom_hours = to_float(qs.aggregate(s=Sum("minutes"))["s"]) / 60.0
+
+        if denom_hours <= 0:
             return MetricValue(state=MetricState.EMPTY)
 
-        util = (billable_min / total_min) * 100
+        util = (billable_hours / denom_hours) * 100
         calib = self._check_calibration(org, scope, util)
         if calib:
             return calib
         return MetricValue(value=round(util, 1))
+
+    def _capacity_hours(self, org, scope, time) -> float:
+        """Available working hours over the window for the people active in scope:
+        Σ (each person's weekly capacity × weeks in the window)."""
+        from ..cost_rates import capacity_map
+        caps = capacity_map(org)
+        default_cap = to_float(getattr(org, "capacity_hours_per_week", 40)) or 40.0
+        days = (time.end - time.start).days + 1
+        weeks = (days / 7.0) if days > 0 else 0.0
+        active = (self._block_qs(org, scope, time)
+                  .values_list("user_id", flat=True).distinct())
+        total = 0.0
+        for uid in active:
+            total += caps.get(uid, default_cap) * weeks
+        return total
 
 
 @register_metric("billable_hours")

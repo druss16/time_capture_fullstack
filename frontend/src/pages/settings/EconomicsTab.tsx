@@ -42,6 +42,7 @@ export default function EconomicsTab({
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     billing_rate_default: '150.00', cost_rate_default: '75.00', target_utilization: '75',
+    capacity_hours_per_week: '40',
   });
 
   useEffect(() => {
@@ -50,6 +51,7 @@ export default function EconomicsTab({
         billing_rate_default: orgInfo.billing_rate_default || '150.00',
         cost_rate_default: orgInfo.cost_rate_default || '75.00',
         target_utilization: orgInfo.target_utilization || '75',
+        capacity_hours_per_week: orgInfo.capacity_hours_per_week || '40',
       });
     }
   }, [orgInfo]);
@@ -90,7 +92,7 @@ export default function EconomicsTab({
           title="Firm defaults"
           sub="Fallback rates and your utilization target — used when nothing more specific is set."
         />
-        <div className={`grid gap-4 ${isAdmin ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+        <div className={`grid gap-4 ${isAdmin ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Default Bill Rate</label>
             <div className="relative">
@@ -119,6 +121,13 @@ export default function EconomicsTab({
                 className="w-full pl-3 pr-7 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white" />
               <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">%</span>
             </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Capacity (hrs/wk)</label>
+            <input type="number" step="0.5" min="0" max="168" value={form.capacity_hours_per_week}
+              onChange={e => setForm({ ...form, capacity_hours_per_week: e.target.value })}
+              className="w-full px-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white" />
+            <p className="text-[11px] text-slate-400 mt-1">Available hours/week per person. Denominator for utilization.</p>
           </div>
         </div>
         <button onClick={saveDefaults} disabled={saving}

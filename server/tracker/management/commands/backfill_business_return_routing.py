@@ -53,7 +53,12 @@ class Command(BaseCommand):
 
             svc = None
             checked = changed = 0
-            for b in qs.iterator():
+            # Materialize the (small, per-org) candidate set. Do NOT use
+            # .iterator() here: it opens a server-side cursor that Neon/PgBouncer
+            # invalidates the moment a b.save() runs mid-loop ("cursor ... does
+            # not exist"). The candidate count (business returns sitting on
+            # Internal-Tax) is tiny, so a list is fine.
+            for b in list(qs):
                 ctx = extract_tax_context(b.window_title or '')
                 if not ctx or not ctx.is_business_return:
                     continue

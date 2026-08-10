@@ -244,10 +244,14 @@ def extract_tax_context(title: str) -> Optional[TaxSoftwareContext]:
         raw_id   = m.group(1).strip()          # SSN or EIN — hashed immediately
         raw_name = m.group(2).strip()
         name = _clean_suffix(_normalize_name(raw_name))
-        # Detect return type from the part before the bracket
-        rt_match = re.search(
+        # Return type is the first token of the matched span (the pattern begins
+        # with the return-type alternation). Read it from m.group(0) — NOT from
+        # title[:m.start()], which is the text BEFORE the return type and never
+        # contains it, so it silently defaulted every return to "1040" and
+        # misrouted business returns (1120/1120S/1065/990) to the individual bucket.
+        rt_match = re.match(
             r'(1040|1120-?S?|1065|990(?:EZ|PF)?|1041|706|709)',
-            title[:m.start()], re.IGNORECASE
+            m.group(0), re.IGNORECASE
         )
         return_type = rt_match.group(1).upper().replace('-', '') if rt_match else "1040"
 

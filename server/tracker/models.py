@@ -166,6 +166,21 @@ class Organization(models.Model):
         ),
     )
 
+    arbitrate_disagreements = models.BooleanField(
+        default=False,
+        help_text=(
+            "When True, and the backend classifier disagrees with the agent's "
+            "attribution, resolve by evidence in the block's own window title "
+            "instead of always keeping the agent's pick: if exactly one side's "
+            "client name literally appears in the title, that side wins; if "
+            "neither is evidenced by the title, the block is left 'proposed' "
+            "(not auto-committed) so it goes to Daily Review rather than billing "
+            "a no-evidence guess. Same-family (church/cemetery) ties still keep "
+            "the agent's pick + disagreement flag. Default off; enable per-org "
+            "after validating against ai_disagrees_with_agent history."
+        ),
+    )
+
     disable_mail_integration = models.BooleanField(
         default=False,
         help_text='Master switch — disables mail OAuth/sync/classifier for the whole org.',

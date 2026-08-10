@@ -17,8 +17,7 @@ import { safeFetchJson } from '@/lib/api';
 import OrganizationTab      from '@/pages/settings/OrganizationTab';
 import TeamTab              from '@/pages/settings/TeamTab';
 import ClientsTab           from '@/pages/settings/ClientsTab';
-import BillingRatesTab      from '@/pages/settings/BillingRatesTab';
-import EmployeeCostRatesTab from '@/pages/settings/EmployeeCostRatesTab';
+import EconomicsTab         from '@/pages/settings/EconomicsTab';
 import DevicesTab           from '@/pages/settings/DevicesTab';
 import TokenTab             from '@/pages/settings/TokenTab';
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
@@ -74,7 +73,7 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','billing','costs','devices','token','deployment','task-types','task-type-sets'];
+    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','economics','devices','token','deployment','task-types','task-type-sets'];
     return valid.includes(tab as Tab) ? (tab as Tab) : 'organization';
   });
 
@@ -155,25 +154,19 @@ export default function Settings() {
           setClients(cl || []); setTeamMembers(tm || []);
           break;
         }
-        case 'billing': {
-          if (EXECUTIVE_PLANS.includes(orgPlan)) {
-            const rates = await safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`);
-            setBillingRates(rates || []);
-            const [cl, tm] = await Promise.all([
-              safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
-              safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
-            ]);
-            setClients(cl || []); setTeamMembers(tm || []);
-          }
-          break;
-        }
-        case 'costs': {
-          if (EXECUTIVE_PLANS.includes(orgPlan)) {
-            const cr = await safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []);
-            setEmployeeCostRates(cr || []);
-            const tm = await safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []);
-            setTeamMembers(tm || []);
-          }
+        case 'economics': {
+          const [org, rates, cr, cl, tm] = await Promise.all([
+            safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`).catch(() => null),
+            safeFetchJson<BillingRate[]>(`${API_BASE}/billing/rates/`).catch(() => []),
+            safeFetchJson<EmployeeCostRate[]>(`${API_BASE}/billing/cost-rates/`).catch(() => []),
+            safeFetchJson<Client[]>(`${API_BASE}/settings/clients/`).catch(() => []),
+            safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`).catch(() => []),
+          ]);
+          if (org) { setOrgInfo(org); setOrgPlan(org.plan || 'professional'); }
+          setBillingRates(rates || []);
+          setEmployeeCostRates(cr || []);
+          setClients(cl || []);
+          setTeamMembers(tm || []);
           break;
         }
         case 'devices': {
@@ -206,8 +199,7 @@ export default function Settings() {
     { id: 'task-types',     label: 'Task Types',     icon: <Tag className="w-4 h-4" />,    requiredRole: ['owner','admin'] },
     { id: 'task-type-sets', label: 'Task Type Sets', icon: <Layers className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'integrations', label: 'Integrations',  icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner','admin'] },
-    { id: 'billing',      label: 'Billing Rates', icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
-    { id: 'costs',        label: 'Employee Costs',icon: <Users className="w-4 h-4" />,     requiredPlan: EXECUTIVE_PLANS },
+    { id: 'economics',    label: 'Economics',     icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
     { id: 'devices',      label: 'Devices',       icon: <Monitor className="w-4 h-4" /> },
     { id: 'deployment',   label: 'MDM Deploy',    icon: <Monitor className="w-4 h-4" />, requiredRole: ['owner','admin'] },
   ];
@@ -219,9 +211,8 @@ export default function Settings() {
 
   const getLockedFeatureName = (tabId: Tab) => {
     switch (tabId) {
-      case 'billing': return 'Billing Rates';
-      case 'costs':   return 'Employee Cost Rates';
-      default:        return 'This Feature';
+      case 'economics': return 'Economics';
+      default:          return 'This Feature';
     }
   };
 
@@ -351,18 +342,15 @@ export default function Settings() {
               {activeTab === 'integrations' && (
                 <IntegrationsTab onSuccess={showSuccess} onError={showError} />
               )}
-              {activeTab === 'billing' && (
-                <BillingRatesTab
-                  rates={billingRates} users={teamMembers} clients={clients}
-                  orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
-                  onRefresh={() => loadTabData('billing')}
-                  onSuccess={showSuccess} onError={showError}
-                />
-              )}
-              {activeTab === 'costs' && (
-                <EmployeeCostRatesTab
-                  rates={employeeCostRates} users={teamMembers}
-                  onRefresh={() => loadTabData('costs')}
+              {activeTab === 'economics' && (
+                <EconomicsTab
+                  orgInfo={orgInfo}
+                  billingRates={billingRates}
+                  employeeCostRates={employeeCostRates}
+                  users={teamMembers} clients={clients}
+                  currentUserRole={currentUserRole}
+                  onUpdateOrg={updated => { setOrgInfo(prev => (prev ? { ...prev, ...updated } : updated)); setOrgPlan(updated.plan || 'professional'); }}
+                  onRefresh={() => loadTabData('economics')}
                   onSuccess={showSuccess} onError={showError}
                 />
               )}

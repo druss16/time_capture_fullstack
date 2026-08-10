@@ -8,7 +8,7 @@ import { safeFetchJson } from '@/lib/api';
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
 
-interface Tier { id?: number; label: string; cost_rate: string; member_count?: number; }
+interface Tier { id?: number; label: string; cost_rate: string; bill_rate: string; member_count?: number; }
 interface Member { id: number; name: string; role: string; cost_tier_id: number | null; override_rate: string | null; }
 interface Props { onSuccess: (m: string) => void; onError: (m: string) => void; }
 
@@ -17,6 +17,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   const [deletedIds, setDeletedIds] = useState<number[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [defaultCost, setDefaultCost] = useState('75.00');
+  const [defaultBill, setDefaultBill] = useState('150.00');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkTier, setBulkTier] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -25,12 +26,13 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   const load = async () => {
     setLoading(true);
     try {
-      const data = await safeFetchJson<{ default_cost: string; tiers: Tier[]; members: Member[] }>(
+      const data = await safeFetchJson<{ default_cost: string; default_bill: string; tiers: Tier[]; members: Member[] }>(
         `${API_BASE}/settings/cost-rates/`,
       );
       setTiers(data.tiers || []);
       setMembers(data.members || []);
       setDefaultCost(data.default_cost || '75.00');
+      setDefaultBill(data.default_bill || '150.00');
       setDeletedIds([]);
       setSelected(new Set());
     } catch (e: any) {
@@ -46,10 +48,10 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   const tierLabel = (id: number | null) =>
     id == null ? '—' : (tiers.find(t => t.id === id)?.label || 'Unknown');
 
-  const editTier = (i: number, field: 'label' | 'cost_rate', v: string) =>
+  const editTier = (i: number, field: 'label' | 'cost_rate' | 'bill_rate', v: string) =>
     setTiers(ts => ts.map((t, idx) => (idx === i ? { ...t, [field]: v } : t)));
   const addTier = () =>
-    setTiers(ts => [...ts, { label: '', cost_rate: defaultCost }]);
+    setTiers(ts => [...ts, { label: '', cost_rate: defaultCost, bill_rate: '' }]);
   const removeTier = (i: number) => {
     const t = tiers[i];
     if (t.id != null) setDeletedIds(d => [...d, t.id!]);
@@ -75,7 +77,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
       const tierPayload = [
         ...tiers
           .filter(t => t.label.trim() && t.cost_rate !== '' && t.cost_rate != null)
-          .map((t, idx) => ({ id: t.id, label: t.label.trim(), cost_rate: t.cost_rate, sort_order: idx })),
+          .map((t, idx) => ({ id: t.id, label: t.label.trim(), cost_rate: t.cost_rate, bill_rate: t.bill_rate, sort_order: idx })),
         ...deletedIds.map(id => ({ id, _delete: true })),
       ];
       const assignments = members.map(m => ({ user_id: m.id, cost_tier_id: m.cost_tier_id }));
@@ -101,9 +103,19 @@ export default function CostTiers({ onSuccess, onError }: Props) {
         <Layers className="w-3 h-3" /> Labor Cost Tiers · powers Gross Margin
       </p>
       <p className="text-xs text-slate-400 mb-4">
-        Set a loaded hourly cost per tier, then assign people. Unassigned members fall back to the
-        {' '}${defaultCost}/hr blended default. Tip: (annual salary × 1.25) ÷ 2,000 ≈ loaded hourly cost.
+        Set a loaded <b>cost</b> (what you pay) and standard <b>bill</b> rate (what you charge) per tier,
+        then assign people. Blank cost falls back to ${defaultCost}/hr; blank bill falls back to
+        {' '}${defaultBill}/hr (and any client/engagement rate always wins). Tip: (annual salary × 1.25) ÷ 2,000 ≈ loaded cost.
       </p>
+
+      {/* Column headers */}
+      <div className="flex items-center gap-2 px-1 mb-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+        <span className="flex-1">Tier</span>
+        <span className="w-28 text-center">Cost $/hr</span>
+        <span className="w-28 text-center">Bill $/hr</span>
+        <span className="w-14" />
+        <span className="w-8" />
+      </div>
 
       {/* Tier rates */}
       <div className="space-y-2 mb-3">
@@ -115,7 +127,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
               onChange={e => editTier(i, 'label', e.target.value)}
               className="flex-1 border border-border/60 rounded-lg px-3 py-2 text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white"
             />
-            <div className="relative w-32">
+            <div className="relative w-28">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
               <input
                 type="number" step="0.01" min="0" placeholder={defaultCost}
@@ -124,7 +136,16 @@ export default function CostTiers({ onSuccess, onError }: Props) {
                 className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white"
               />
             </div>
-            <span className="text-[11px] text-slate-400 w-16 text-right">
+            <div className="relative w-28">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+              <input
+                type="number" step="0.01" min="0" placeholder={defaultBill}
+                value={t.bill_rate}
+                onChange={e => editTier(i, 'bill_rate', e.target.value)}
+                className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white"
+              />
+            </div>
+            <span className="text-[11px] text-slate-400 w-14 text-right">
               {t.member_count ? `${t.member_count} ppl` : ''}
             </span>
             <button onClick={() => removeTier(i)} title="Remove tier"

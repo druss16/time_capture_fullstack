@@ -59,8 +59,9 @@ def _rollup_client_daily_for_org_date(org: Organization, target_date: date) -> i
     """Recompute ClientDailyRollup rows for one org × one day. Returns rows written."""
 
     # Cost rates per user (per-person override > cost tier > org default)
-    from ..cost_rates import cost_rate_map
+    from ..cost_rates import cost_rate_map, bill_rate_map
     cost_rates = cost_rate_map(org, as_of=target_date)
+    bill_rates = bill_rate_map(org)
     default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
     default_rate = to_float(getattr(org, "billing_rate_default", 0))
     
@@ -83,7 +84,7 @@ def _rollup_client_daily_for_org_date(org: Organization, target_date: date) -> i
         amount = to_float(b.billing_amount)
         used_default = False
         if not amount:
-            rate = to_float(b.billing_rate) or default_rate
+            rate = to_float(b.billing_rate) or bill_rates.get(b.user_id, default_rate)
             amount = hours * rate
             used_default = b.billing_rate is None
         else:
@@ -166,8 +167,9 @@ def rollup_staff_daily_for_date(target_date_iso: str):
 
 
 def _rollup_staff_daily_for_org_date(org: Organization, target_date: date) -> int:
-    from ..cost_rates import cost_rate_map
+    from ..cost_rates import cost_rate_map, bill_rate_map
     cost_rates = cost_rate_map(org, as_of=target_date)
+    bill_rates = bill_rate_map(org)
     default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
     default_rate = to_float(getattr(org, "billing_rate_default", 0))
     
@@ -186,7 +188,7 @@ def _rollup_staff_daily_for_org_date(org: Organization, target_date: date) -> in
         hours = mins / 60.0
         amount = to_float(b.billing_amount)
         if not amount:
-            rate = to_float(b.billing_rate) or default_rate
+            rate = to_float(b.billing_rate) or bill_rates.get(uid, default_rate)
             amount = hours * rate
         cost = hours * cost_rates.get(uid, default_cost)
         

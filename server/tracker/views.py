@@ -7054,6 +7054,7 @@ def settings_cost_rates(request):
             "id": t.id,
             "label": t.label,
             "cost_rate": str(t.cost_rate),
+            "bill_rate": str(t.bill_rate) if t.bill_rate is not None else "",
             "sort_order": t.sort_order,
             "member_count": counts.get(t.id, 0),
         } for t in CostTier.objects.filter(organization=org)]
@@ -7068,6 +7069,7 @@ def settings_cost_rates(request):
 
         return Response({
             "default_cost": str(getattr(org, "cost_rate_default", None) or "75.00"),
+            "default_bill": str(getattr(org, "billing_rate_default", None) or "150.00"),
             "tiers": tiers,
             "members": members,
         })
@@ -7095,14 +7097,16 @@ def settings_cost_rates(request):
         rate = _dec(row.get("cost_rate"))
         if not label or rate is None:
             continue
+        # bill_rate is optional: blank/invalid -> None (falls back to org default)
+        bill = _dec(row.get("bill_rate")) if row.get("bill_rate") not in (None, "") else None
         if tid:
             CostTier.objects.filter(organization=org, id=tid).update(
-                label=label, cost_rate=rate, sort_order=row.get("sort_order", 0),
+                label=label, cost_rate=rate, bill_rate=bill, sort_order=row.get("sort_order", 0),
             )
         else:
             CostTier.objects.get_or_create(
                 organization=org, label=label,
-                defaults={"cost_rate": rate, "sort_order": row.get("sort_order", 0)},
+                defaults={"cost_rate": rate, "bill_rate": bill, "sort_order": row.get("sort_order", 0)},
             )
 
     valid_tier_ids = set(

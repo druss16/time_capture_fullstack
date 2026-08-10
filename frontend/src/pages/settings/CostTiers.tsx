@@ -8,7 +8,7 @@ import { safeFetchJson } from '@/lib/api';
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
 
-interface Tier { id?: number; label: string; cost_rate: string; bill_rate: string; member_count?: number; }
+interface Tier { id?: number; label: string; cost_rate: string; bill_rate: string; hours_per_week: string; member_count?: number; }
 interface Member { id: number; name: string; role: string; cost_tier_id: number | null; override_rate: string | null; }
 interface Props { onSuccess: (m: string) => void; onError: (m: string) => void; }
 
@@ -18,6 +18,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   const [members, setMembers] = useState<Member[]>([]);
   const [defaultCost, setDefaultCost] = useState('75.00');
   const [defaultBill, setDefaultBill] = useState('150.00');
+  const [defaultCapacity, setDefaultCapacity] = useState('40');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkTier, setBulkTier] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -26,13 +27,14 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   const load = async () => {
     setLoading(true);
     try {
-      const data = await safeFetchJson<{ default_cost: string; default_bill: string; tiers: Tier[]; members: Member[] }>(
+      const data = await safeFetchJson<{ default_cost: string; default_bill: string; default_capacity: string; tiers: Tier[]; members: Member[] }>(
         `${API_BASE}/settings/cost-rates/`,
       );
       setTiers(data.tiers || []);
       setMembers(data.members || []);
       setDefaultCost(data.default_cost || '75.00');
       setDefaultBill(data.default_bill || '150.00');
+      setDefaultCapacity(data.default_capacity || '40');
       setDeletedIds([]);
       setSelected(new Set());
     } catch (e: any) {
@@ -48,10 +50,10 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   const tierLabel = (id: number | null) =>
     id == null ? '—' : (tiers.find(t => t.id === id)?.label || 'Unknown');
 
-  const editTier = (i: number, field: 'label' | 'cost_rate' | 'bill_rate', v: string) =>
+  const editTier = (i: number, field: 'label' | 'cost_rate' | 'bill_rate' | 'hours_per_week', v: string) =>
     setTiers(ts => ts.map((t, idx) => (idx === i ? { ...t, [field]: v } : t)));
   const addTier = () =>
-    setTiers(ts => [...ts, { label: '', cost_rate: defaultCost, bill_rate: '' }]);
+    setTiers(ts => [...ts, { label: '', cost_rate: defaultCost, bill_rate: '', hours_per_week: '' }]);
   const removeTier = (i: number) => {
     const t = tiers[i];
     if (t.id != null) setDeletedIds(d => [...d, t.id!]);
@@ -77,7 +79,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
       const tierPayload = [
         ...tiers
           .filter(t => t.label.trim() && t.cost_rate !== '' && t.cost_rate != null)
-          .map((t, idx) => ({ id: t.id, label: t.label.trim(), cost_rate: t.cost_rate, bill_rate: t.bill_rate, sort_order: idx })),
+          .map((t, idx) => ({ id: t.id, label: t.label.trim(), cost_rate: t.cost_rate, bill_rate: t.bill_rate, hours_per_week: t.hours_per_week, sort_order: idx })),
         ...deletedIds.map(id => ({ id, _delete: true })),
       ];
       const assignments = members.map(m => ({ user_id: m.id, cost_tier_id: m.cost_tier_id }));
@@ -103,9 +105,10 @@ export default function CostTiers({ onSuccess, onError }: Props) {
         <Layers className="w-3 h-3" /> Labor Cost Tiers · powers Gross Margin
       </p>
       <p className="text-xs text-slate-400 mb-4">
-        Set a loaded <b>cost</b> (what you pay) and standard <b>bill</b> rate (what you charge) per tier,
-        then assign people. Blank cost falls back to ${defaultCost}/hr; blank bill falls back to
-        {' '}${defaultBill}/hr (and any client/engagement rate always wins). Tip: (annual salary × 1.25) ÷ 2,000 ≈ loaded cost.
+        Set a loaded <b>cost</b> (what you pay), standard <b>bill</b> rate (what you charge), and weekly
+        <b> hours</b> (capacity) per tier, then assign people. Blank cost → ${defaultCost}/hr; blank bill →
+        {' '}${defaultBill}/hr (a client rate always wins); blank hours → {defaultCapacity}/wk. Hrs/wk is the
+        denominator for utilization (billable ÷ available). Tip: (annual salary × 1.25) ÷ 2,000 ≈ loaded cost.
       </p>
 
       {/* Column headers */}
@@ -113,6 +116,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
         <span className="flex-1">Tier</span>
         <span className="w-28 text-center">Cost $/hr</span>
         <span className="w-28 text-center">Bill $/hr</span>
+        <span className="w-24 text-center">Hrs/wk</span>
         <span className="w-14" />
         <span className="w-8" />
       </div>
@@ -143,6 +147,14 @@ export default function CostTiers({ onSuccess, onError }: Props) {
                 value={t.bill_rate}
                 onChange={e => editTier(i, 'bill_rate', e.target.value)}
                 className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white"
+              />
+            </div>
+            <div className="w-24">
+              <input
+                type="number" step="0.5" min="0" max="168" placeholder={defaultCapacity}
+                value={t.hours_per_week}
+                onChange={e => editTier(i, 'hours_per_week', e.target.value)}
+                className="w-full px-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white text-center"
               />
             </div>
             <span className="text-[11px] text-slate-400 w-14 text-right">

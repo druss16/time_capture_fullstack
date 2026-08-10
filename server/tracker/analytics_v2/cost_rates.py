@@ -73,3 +73,23 @@ def bill_rate_map(org) -> dict[int, float]:
         if br is not None:
             rates[m.user_id] = _to_float(br)
     return rates
+
+
+def capacity_map(org) -> dict[int, float]:
+    """Return {user_id: weekly_capacity_hours} for members whose tier sets it.
+
+    Available working hours/week per person, used as the denominator for
+    capacity-based utilization (billable ÷ available). Members with no tier — or
+    a tier with null hours_per_week — are omitted so callers apply the org
+    default (Organization.capacity_hours_per_week).
+    """
+    from tracker.models import OrganizationMembership
+
+    caps: dict[int, float] = {}
+    for m in (OrganizationMembership.objects
+              .filter(organization=org, cost_tier__isnull=False)
+              .select_related("cost_tier")):
+        hpw = m.cost_tier.hours_per_week
+        if hpw is not None:
+            caps[m.user_id] = _to_float(hpw)
+    return caps

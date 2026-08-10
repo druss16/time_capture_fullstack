@@ -6858,6 +6858,7 @@ def settings_org(request):
             "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
             "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if is_admin_or_owner else "0.00",
             "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
+            "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
             "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
             "can_edit_org": is_admin_or_owner,
             "role": membership.role,
@@ -6883,6 +6884,12 @@ def settings_org(request):
         try:
             v = Decimal(str(request.data["target_utilization"]))
             org.target_utilization = max(Decimal("0"), min(Decimal("100"), v))
+        except (TypeError, ValueError, InvalidOperation):
+            pass
+    if "capacity_hours_per_week" in request.data:
+        try:
+            v = Decimal(str(request.data["capacity_hours_per_week"]))
+            org.capacity_hours_per_week = max(Decimal("0"), min(Decimal("168"), v))
         except (TypeError, ValueError, InvalidOperation):
             pass
     if "auto_submit_timesheets" in request.data:
@@ -6912,6 +6919,7 @@ def settings_org(request):
         "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
         "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if is_admin_or_owner else "0.00",
         "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
+        "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
         "message": "Settings updated"
     })
 
@@ -7055,6 +7063,7 @@ def settings_cost_rates(request):
             "label": t.label,
             "cost_rate": str(t.cost_rate),
             "bill_rate": str(t.bill_rate) if t.bill_rate is not None else "",
+            "hours_per_week": str(t.hours_per_week) if t.hours_per_week is not None else "",
             "sort_order": t.sort_order,
             "member_count": counts.get(t.id, 0),
         } for t in CostTier.objects.filter(organization=org)]
@@ -7070,6 +7079,7 @@ def settings_cost_rates(request):
         return Response({
             "default_cost": str(getattr(org, "cost_rate_default", None) or "75.00"),
             "default_bill": str(getattr(org, "billing_rate_default", None) or "150.00"),
+            "default_capacity": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
             "tiers": tiers,
             "members": members,
         })
@@ -7097,16 +7107,19 @@ def settings_cost_rates(request):
         rate = _dec(row.get("cost_rate"))
         if not label or rate is None:
             continue
-        # bill_rate is optional: blank/invalid -> None (falls back to org default)
+        # bill_rate / hours_per_week optional: blank/invalid -> None (org default)
         bill = _dec(row.get("bill_rate")) if row.get("bill_rate") not in (None, "") else None
+        hours = _dec(row.get("hours_per_week")) if row.get("hours_per_week") not in (None, "") else None
         if tid:
             CostTier.objects.filter(organization=org, id=tid).update(
-                label=label, cost_rate=rate, bill_rate=bill, sort_order=row.get("sort_order", 0),
+                label=label, cost_rate=rate, bill_rate=bill, hours_per_week=hours,
+                sort_order=row.get("sort_order", 0),
             )
         else:
             CostTier.objects.get_or_create(
                 organization=org, label=label,
-                defaults={"cost_rate": rate, "bill_rate": bill, "sort_order": row.get("sort_order", 0)},
+                defaults={"cost_rate": rate, "bill_rate": bill, "hours_per_week": hours,
+                          "sort_order": row.get("sort_order", 0)},
             )
 
     valid_tier_ids = set(

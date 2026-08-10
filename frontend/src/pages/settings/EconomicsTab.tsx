@@ -27,9 +27,11 @@ interface Props {
 
 function SectionHeader({ icon, title, sub }: { icon: ReactNode; title: string; sub: string }) {
   return (
-    <div className="mb-3">
-      <p className="text-sm font-extrabold text-slate-900 flex items-center gap-2">{icon}{title}</p>
-      <p className="text-xs text-slate-400 mt-0.5">{sub}</p>
+    <div className="mb-4">
+      <p className="text-[13px] font-bold tracking-[-0.01em] text-slate-900 flex items-center gap-1.5">
+        <span className="text-slate-300">{icon}</span>{title}
+      </p>
+      <p className="text-[12px] text-slate-400 mt-0.5 leading-snug">{sub}</p>
     </div>
   );
 }
@@ -74,19 +76,15 @@ export default function EconomicsTab({
   };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <DollarSign className="w-5 h-5 text-primary" /> Economics
-        </h2>
-      </div>
-      <p className="text-xs text-slate-400 mb-6 -mt-4">
-        Everything the Analytics dashboard uses for revenue, cost, and margin. Rates resolve most-specific
-        first: a block or client rate wins, then the tier rate, then these firm defaults.
+    <div style={{ fontFamily: '"Inter", sans-serif' }}>
+      <h2 className="text-[20px] font-bold tracking-[-0.01em] text-slate-900">Economics</h2>
+      <p className="text-[12.5px] text-slate-500 mt-1 mb-5 leading-snug">
+        Everything Analytics uses for revenue, cost, and margin. Rates resolve most-specific first —
+        block or client rate, then tier, then these defaults.
       </p>
 
       {/* 1 — Firm defaults */}
-      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-5 mb-6">
+      <div className="rounded-2xl border border-slate-200/70 bg-[#f7faf9] p-4 sm:p-5 mb-4">
         <SectionHeader
           icon={<DollarSign className="w-4 h-4 text-primary" />}
           title="Firm defaults"
@@ -138,7 +136,7 @@ export default function EconomicsTab({
       </div>
 
       {/* 2 — Cost & bill tiers (self-contained; loads its own data) */}
-      <div className="rounded-xl border border-slate-200 p-5 mb-6">
+      <div className="rounded-2xl border border-slate-200/70 p-4 sm:p-5 mb-4">
         <SectionHeader
           icon={<Layers className="w-4 h-4 text-primary" />}
           title="Cost & bill tiers"
@@ -150,7 +148,7 @@ export default function EconomicsTab({
       </div>
 
       {/* 3 — Client-specific rates (advanced) */}
-      <div className="rounded-xl border border-slate-200 p-5 mb-6">
+      <div className="rounded-2xl border border-slate-200/70 p-4 sm:p-5 mb-4">
         <SectionHeader
           icon={<Briefcase className="w-4 h-4 text-primary" />}
           title="Client-specific rates"
@@ -165,7 +163,7 @@ export default function EconomicsTab({
 
       {/* 4 — Per-person cost overrides (advanced) */}
       {isAdmin && (
-        <div className="rounded-xl border border-slate-200 p-5">
+        <div className="rounded-2xl border border-slate-200/70 p-4 sm:p-5">
           <SectionHeader
             icon={<User className="w-4 h-4 text-primary" />}
             title="Per-person cost overrides"

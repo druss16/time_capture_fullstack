@@ -57,14 +57,10 @@ def rollup_client_daily_for_date(target_date_iso: str):
 
 def _rollup_client_daily_for_org_date(org: Organization, target_date: date) -> int:
     """Recompute ClientDailyRollup rows for one org × one day. Returns rows written."""
-    
-    # Cost rates per user
-    cost_rates: dict[int, float] = {}
-    for cr in (EmployeeCostRate.objects
-               .filter(organization=org, effective_date__lte=target_date)
-               .order_by("user_id", "-effective_date")):
-        if cr.user_id not in cost_rates:
-            cost_rates[cr.user_id] = to_float(cr.cost_rate)
+
+    # Cost rates per user (per-person override > cost tier > org default)
+    from ..cost_rates import cost_rate_map
+    cost_rates = cost_rate_map(org, as_of=target_date)
     default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
     default_rate = to_float(getattr(org, "billing_rate_default", 0))
     
@@ -170,12 +166,8 @@ def rollup_staff_daily_for_date(target_date_iso: str):
 
 
 def _rollup_staff_daily_for_org_date(org: Organization, target_date: date) -> int:
-    cost_rates: dict[int, float] = {}
-    for cr in (EmployeeCostRate.objects
-               .filter(organization=org, effective_date__lte=target_date)
-               .order_by("user_id", "-effective_date")):
-        if cr.user_id not in cost_rates:
-            cost_rates[cr.user_id] = to_float(cr.cost_rate)
+    from ..cost_rates import cost_rate_map
+    cost_rates = cost_rate_map(org, as_of=target_date)
     default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
     default_rate = to_float(getattr(org, "billing_rate_default", 0))
     

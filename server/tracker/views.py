@@ -7014,6 +7014,144 @@ def settings_team_list(request):
     return Response(result)
 
 
+# ============================================================================
+# Labor Cost Tiers (firm-defined cost bands + member assignment)
+# ============================================================================
+# The analytics engine resolves each user's cost as: per-person EmployeeCostRate
+# override > their CostTier rate > org.cost_rate_default (see
+# tracker/analytics_v2/cost_rates.py). This endpoint manages the tiers and the
+# member->tier assignment (plus optional per-person overrides). Scales to large
+# firms: set a handful of tier rates instead of a rate per employee.
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def settings_cost_rates(request):
+    """Cost tiers + member assignment. Admin/owner only."""
+    from tracker.models import CostTier, EmployeeCostRate
+
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+
+    if request.method == "GET":
+        memberships = list(
+            OrganizationMembership.objects.filter(organization=org).select_related("user")
+        )
+        # Per-person overrides (latest per user).
+        override = {}
+        for cr in (EmployeeCostRate.objects
+                   .filter(organization=org)
+                   .order_by("user_id", "-effective_date")):
+            if cr.user_id not in override:
+                override[cr.user_id] = cr.cost_rate
+
+        counts = {}
+        for m in memberships:
+            if m.cost_tier_id:
+                counts[m.cost_tier_id] = counts.get(m.cost_tier_id, 0) + 1
+
+        tiers = [{
+            "id": t.id,
+            "label": t.label,
+            "cost_rate": str(t.cost_rate),
+            "sort_order": t.sort_order,
+            "member_count": counts.get(t.id, 0),
+        } for t in CostTier.objects.filter(organization=org)]
+
+        members = [{
+            "id": m.user_id,
+            "name": (f"{m.user.first_name} {m.user.last_name}".strip() or m.user.username),
+            "role": m.role,
+            "cost_tier_id": m.cost_tier_id,
+            "override_rate": str(override[m.user_id]) if m.user_id in override else None,
+        } for m in memberships]
+
+        return Response({
+            "default_cost": str(getattr(org, "cost_rate_default", None) or "75.00"),
+            "tiers": tiers,
+            "members": members,
+        })
+
+    # POST — any combination of: tier upserts/deletes, assignments, overrides.
+    tiers_in = request.data.get("tiers") or []
+    assignments = request.data.get("assignments") or []
+    overrides = request.data.get("overrides") or []
+    today = timezone.now().date()
+
+    def _dec(v):
+        try:
+            d = Decimal(str(v))
+            return d if d > 0 else None
+        except (TypeError, ValueError, InvalidOperation):
+            return None
+
+    # 1) Tier upserts / deletes.
+    for row in tiers_in:
+        tid = row.get("id")
+        if row.get("_delete") and tid:
+            CostTier.objects.filter(organization=org, id=tid).delete()
+            continue
+        label = (row.get("label") or "").strip()
+        rate = _dec(row.get("cost_rate"))
+        if not label or rate is None:
+            continue
+        if tid:
+            CostTier.objects.filter(organization=org, id=tid).update(
+                label=label, cost_rate=rate, sort_order=row.get("sort_order", 0),
+            )
+        else:
+            CostTier.objects.get_or_create(
+                organization=org, label=label,
+                defaults={"cost_rate": rate, "sort_order": row.get("sort_order", 0)},
+            )
+
+    valid_tier_ids = set(
+        CostTier.objects.filter(organization=org).values_list("id", flat=True)
+    )
+    member_ids = set(
+        OrganizationMembership.objects.filter(organization=org).values_list("user_id", flat=True)
+    )
+
+    # 2) Member -> tier assignment (null clears).
+    assigned = 0
+    for row in assignments:
+        uid = row.get("user_id")
+        if uid not in member_ids:
+            continue
+        tid = row.get("cost_tier_id")
+        if tid is not None and tid not in valid_tier_ids:
+            continue
+        OrganizationMembership.objects.filter(
+            organization=org, user_id=uid
+        ).update(cost_tier_id=tid)
+        assigned += 1
+
+    # 3) Per-person overrides (null/blank clears all overrides for that user).
+    for row in overrides:
+        uid = row.get("user_id")
+        if uid not in member_ids:
+            continue
+        raw = row.get("cost_rate")
+        if raw in (None, ""):
+            EmployeeCostRate.objects.filter(organization=org, user_id=uid).delete()
+            continue
+        rate = _dec(raw)
+        if rate is None:
+            continue
+        existing = (EmployeeCostRate.objects
+                    .filter(organization=org, user_id=uid)
+                    .order_by("-effective_date").first())
+        if existing:
+            existing.cost_rate = rate
+            existing.save(update_fields=["cost_rate", "updated_at"])
+        else:
+            EmployeeCostRate.objects.create(
+                organization=org, user_id=uid, cost_rate=rate, effective_date=today,
+            )
+
+    return Response({"success": True, "assigned": assigned, "message": "Cost tiers updated"})
+
+
 # Update settings_team_invite in tracker/views.py
 # This uses your existing OrganizationMembership model
 

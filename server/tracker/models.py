@@ -287,7 +287,14 @@ class OrganizationMembership(models.Model):
         max_length=50, blank=True, null=True,
         help_text='QuickBooks Employee ID for time entry push'
     )
-    
+
+    # Labor cost tier — drives profitability margin. Independent of `role`
+    # (a permission concept). Nullable → falls back to org.cost_rate_default.
+    cost_tier = models.ForeignKey(
+        'CostTier', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='members',
+    )
+
     class Meta:
         unique_together = ['user', 'organization']
     
@@ -3197,11 +3204,39 @@ class AgentLog(models.Model):
     def __str__(self):
         return f"{self.hostname} ({self.platform}) - {self.created_at}"
 
+class CostTier(models.Model):
+    """A firm-defined labor cost band (e.g., Partner, Manager, Senior, Staff).
+
+    Members are assigned a tier (OrganizationMembership.cost_tier); the tier's
+    cost_rate drives margin/profitability unless a per-person EmployeeCostRate
+    override exists. This is the scale lever: a firm sets a handful of tier rates
+    instead of a rate for every employee. Separate from the *permission* role.
+    """
+    organization = models.ForeignKey(
+        'Organization', on_delete=models.CASCADE, related_name='cost_tiers'
+    )
+    label = models.CharField(max_length=64)
+    cost_rate = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        help_text="Loaded hourly cost for everyone in this tier",
+    )
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['sort_order', 'id']
+        unique_together = ['organization', 'label']
+
+    def __str__(self):
+        return f"{self.label} (${self.cost_rate}/hr)"
+
+
 class EmployeeCostRate(models.Model):
     """
     What you PAY employees per hour (loaded labor cost).
     Used to calculate profit margins.
-    
+
     Margin = Billing Rate - Cost Rate
     """
     organization = models.ForeignKey(

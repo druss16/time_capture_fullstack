@@ -78,13 +78,9 @@ class ProfitabilityLens(Lens):
         )
 
     def _build_client_profit_table(self, org, scope, time) -> DataTablePayload:
-        # Rate maps
-        cost_rates: dict[int, float] = {}
-        for cr in (EmployeeCostRate.objects
-                   .filter(organization=org)
-                   .order_by("user_id", "-effective_date")):
-            if cr.user_id not in cost_rates:
-                cost_rates[cr.user_id] = to_float(cr.cost_rate)
+        # Rate maps (per-person override > cost tier > org default)
+        from ..cost_rates import cost_rate_map
+        cost_rates = cost_rate_map(org)
         default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
         default_rate = to_float(getattr(org, "billing_rate_default", 0))
 

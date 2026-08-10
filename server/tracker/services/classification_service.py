@@ -537,17 +537,38 @@ class ClassificationService:
                 # handles this for AI signals; mirror that for deterministic
                 # stages by recording disagreement and leaving block.client_id.
                 if old_client_id and old_client_id != decision.client_id:
-                    # Agent already attributed. Don't overwrite — surface as disagreement.
+                    # Classifier disagrees with the agent's attribution. Always
+                    # record the disagreement (audit trail + Daily Review signal).
                     block.ai_disagrees_with_agent = True
                     block.ai_proposed_client_id = decision.client_id
                     block.ai_proposed_confidence = decision.confidence or 0.0
                     block.ai_disagreement_reasoning = (decision.reasoning or '')[:500]
-                    logger.info(
-                        f"[CLASSIFY-DISAGREE] Block {block.pk}: agent={old_client_id} "
-                        f"vs classifier={decision.client_id} at {decision.confidence:.2f} — "
-                        f"keeping agent's pick"
-                    )
-                    # Don't write block.client_id — keep agent's choice
+
+                    if getattr(self.org, 'arbitrate_disagreements', False):
+                        # Evidence-based tie-break (org-gated). See _arbitrate_disagreement.
+                        winner_id, force_review = self._arbitrate_disagreement(
+                            block, old_client_id, decision.client_id
+                        )
+                        block.client_id = winner_id
+                        if force_review and new_state == 'committed':
+                            # Neither side is evidenced by the title — don't auto-bill
+                            # a guess. Reassign new_state so the is_categorized
+                            # invariant below (line ~643) stays consistent.
+                            new_state = 'proposed'
+                            block.classification_state = 'proposed'
+                        logger.info(
+                            f"[ARBITRATE] Block {block.pk}: agent={old_client_id} "
+                            f"classifier={decision.client_id} → winner={winner_id} "
+                            f"review={force_review}"
+                        )
+                    else:
+                        # v1.3.41 default: keep the agent's pick, just flag it.
+                        logger.info(
+                            f"[CLASSIFY-DISAGREE] Block {block.pk}: agent={old_client_id} "
+                            f"vs classifier={decision.client_id} at "
+                            f"{(decision.confidence or 0):.2f} — keeping agent's pick"
+                        )
+                        # Don't write block.client_id — keep agent's choice
                 else:
                     block.client_id = decision.client_id
             else:
@@ -1727,6 +1748,60 @@ class ClassificationService:
         )
         self._internal_tax_client_id = internal_tax.id if internal_tax else None
         return self._internal_tax_client_id
+
+    def _arbitrate_disagreement(self, block, agent_client_id, classifier_client_id):
+        """
+        Evidence-based tie-break when the backend classifier disagrees with the
+        agent's attribution. Gated on org.arbitrate_disagreements.
+
+        Conservative first pass — decide only on HARD evidence in the block's own
+        window title:
+          * exactly one side's client name is literally present in the title →
+            that side wins;
+          * neither side is evidenced by the title → keep the agent's pick but
+            force review (don't auto-commit a no-evidence guess);
+          * both present (or same-family partial matches) → keep the agent's pick.
+
+        Same-family specificity ("St. Patrick's Church" vs "…-Taberg") is
+        intentionally deferred here — it needs the Stage-3 domination logic and
+        shadow validation — so those keep today's behavior (agent pick + flag).
+
+        Returns (winner_client_id, force_review: bool).
+        """
+        from tracker.models import Client
+
+        title = (getattr(block, 'window_title', '') or getattr(block, 'title', '') or '').lower()
+        if not title:
+            return agent_client_id, False
+
+        clients = {
+            c.id: c for c in Client.objects.filter(
+                id__in=[cid for cid in (agent_client_id, classifier_client_id) if cid]
+            )
+        }
+
+        def named_in_title(cid):
+            c = clients.get(cid)
+            if not c:
+                return False
+            for nm in [c.name] + list(c.aliases or []):
+                nm = (nm or '').strip().lower()
+                # Require a reasonably specific name so short/generic aliases
+                # (e.g. "st", "tax", "office") can't match by accident.
+                if len(nm) >= 6 and nm in title:
+                    return True
+            return False
+
+        agent_named = named_in_title(agent_client_id)
+        classifier_named = named_in_title(classifier_client_id)
+
+        if classifier_named and not agent_named:
+            return classifier_client_id, False      # classifier evidenced, agent not
+        if agent_named and not classifier_named:
+            return agent_client_id, False           # agent evidenced, classifier not
+        if not agent_named and not classifier_named:
+            return agent_client_id, True            # no evidence → route to review
+        return agent_client_id, False               # both named (ambiguous) → keep agent
 
     # -------------------------------------------------------------------------
     # STAGE 3 — Deterministic title / domain / path match

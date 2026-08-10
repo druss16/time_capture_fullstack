@@ -2,7 +2,7 @@
 // Firm-defined labor cost tiers + member assignment. The analytics engine
 // resolves each user's cost as: per-person override > tier rate > org default.
 import { useEffect, useMemo, useState } from 'react';
-import { Layers, Check, RefreshCw, Plus, Trash2 } from 'lucide-react';
+import { Check, RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -100,11 +100,8 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   if (loading) return <div className="text-slate-400 text-sm p-4">Loading cost tiers…</div>;
 
   return (
-    <div className="mt-6 pt-6 border-t border-slate-200">
-      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
-        <Layers className="w-3 h-3" /> Labor Cost Tiers · powers Gross Margin
-      </p>
-      <p className="text-xs text-slate-400 mb-4">
+    <div>
+      <p className="text-[12px] text-slate-400 mb-4 leading-snug">
         Set a loaded <b>cost</b> (what you pay), standard <b>bill</b> rate (what you charge), and weekly
         <b> hours</b> (capacity) per tier, then assign people. Blank cost → ${defaultCost}/hr; blank bill →
         {' '}${defaultBill}/hr (a client rate always wins); blank hours → {defaultCapacity}/wk. Hrs/wk is the

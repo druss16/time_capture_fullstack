@@ -490,3 +490,162 @@ def approve_client_request(request, request_id):
         'client_id': client.id,
         'client_name': client.name,
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def import_economics_csv(request):
+    """
+    Import a team roster CSV to populate cost tiers + member assignments.
+
+    Body: { csv_content: str, dry_run: bool (default True) }.
+    Columns (case-insensitive, flexible aliases): email, tier, cost_rate,
+    bill_rate, hours_per_week. Owner/admin only. When dry_run is true (the
+    default) nothing is written — the endpoint returns a preview of the tiers
+    to create/update, the people that will be assigned, and any unmatched rows.
+    """
+    from decimal import Decimal, InvalidOperation
+    from django.db import transaction
+    from .models import CostTier
+
+    org = get_request_org_override_settings(request)
+    if not org:
+        return Response({'error': 'No organization found'}, status=404)
+
+    membership = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
+    if not membership or membership.role not in ('owner', 'admin'):
+        return Response({'error': 'Permission denied'}, status=403)
+
+    csv_content = (request.data.get('csv_content') or '').strip()
+    dry_run = bool(request.data.get('dry_run', True))
+    if not csv_content:
+        return Response({'error': 'No CSV content provided'}, status=400)
+
+    def _dec(v):
+        if v is None:
+            return None
+        s = str(v).strip().replace('$', '').replace(',', '')
+        if s == '':
+            return None
+        try:
+            d = Decimal(s)
+            return d if d >= 0 else None
+        except (InvalidOperation, ValueError):
+            return None
+
+    def get_value(row, keys):
+        for actual in row:
+            if actual and actual.strip().lower() in keys:
+                val = row[actual]
+                return val.strip() if isinstance(val, str) else val
+        return ''
+
+    try:
+        rows = list(csv.DictReader(StringIO(csv_content)))
+    except Exception as e:  # noqa: BLE001
+        return Response({'error': f'Could not parse CSV: {e}'}, status=400)
+    if not rows:
+        return Response({'error': 'CSV has no data rows'}, status=400)
+
+    users_by_email = {
+        m.user.email.lower(): m.user
+        for m in OrganizationMembership.objects.filter(organization=org).select_related('user')
+        if m.user.email
+    }
+    existing_tiers = {t.label.strip().lower(): t for t in CostTier.objects.filter(organization=org)}
+
+    tier_defs = {}      # label_lower -> {label, cost_rate, bill_rate, hours_per_week}
+    assignments = []    # {email, name, tier}
+    unmatched = []      # {email, tier, reason}
+    warnings = []
+
+    for i, row in enumerate(rows, start=2):  # header is row 1
+        email = (get_value(row, {'email', 'user_email', 'user', 'employee', 'employee_email'}) or '').strip().lower()
+        tier_label = (get_value(row, {'tier', 'cost_tier', 'tier_name', 'level'}) or '').strip()
+        cost = _dec(get_value(row, {'cost_rate', 'cost', 'cost $/hr', 'cost_$/hr', 'loaded_cost'}))
+        bill = _dec(get_value(row, {'bill_rate', 'bill', 'bill $/hr', 'bill_$/hr', 'billing_rate'}))
+        hours = _dec(get_value(row, {'hours_per_week', 'hrs/wk', 'hours', 'capacity'}))
+
+        if not tier_label:
+            warnings.append(f'Row {i}: no tier — skipped.')
+            continue
+
+        key = tier_label.lower()
+        if key not in tier_defs:
+            tier_defs[key] = {'label': tier_label, 'cost_rate': cost, 'bill_rate': bill, 'hours_per_week': hours}
+        else:
+            td = tier_defs[key]
+            for field, value in (('cost_rate', cost), ('bill_rate', bill), ('hours_per_week', hours)):
+                if value is not None:
+                    if td[field] is None:
+                        td[field] = value
+                    elif td[field] != value:
+                        warnings.append(f"Row {i}: {tier_label} {field} {value} differs from earlier {td[field]}; kept {td[field]}.")
+
+        if email:
+            user = users_by_email.get(email)
+            if user:
+                name = f"{user.first_name} {user.last_name}".strip() or user.username
+                assignments.append({'email': email, 'name': name, 'tier': tier_label})
+            else:
+                unmatched.append({'email': email, 'tier': tier_label, 'reason': 'No team member with this email'})
+
+    tiers_preview = []
+    for key, td in tier_defs.items():
+        if td['cost_rate'] is None and key not in existing_tiers:
+            warnings.append(f"Tier '{td['label']}': no cost rate — will use firm default.")
+        tiers_preview.append({
+            'label': td['label'],
+            'cost_rate': str(td['cost_rate']) if td['cost_rate'] is not None else None,
+            'bill_rate': str(td['bill_rate']) if td['bill_rate'] is not None else None,
+            'hours_per_week': str(td['hours_per_week']) if td['hours_per_week'] is not None else None,
+            'action': 'update' if key in existing_tiers else 'create',
+        })
+
+    result = {
+        'dry_run': dry_run,
+        'tiers': tiers_preview,
+        'assignments': assignments,
+        'unmatched': unmatched,
+        'warnings': warnings,
+        'summary': {'tiers': len(tiers_preview), 'people': len(assignments), 'unmatched': len(unmatched)},
+    }
+
+    if dry_run:
+        return Response(result)
+
+    try:
+        with transaction.atomic():
+            org_default_cost = org.cost_rate_default or Decimal('75.00')
+            label_to_tier = {}
+            for key, td in tier_defs.items():
+                existing = existing_tiers.get(key)
+                cost_val = td['cost_rate']
+                if cost_val is None:
+                    cost_val = existing.cost_rate if existing else org_default_cost
+                if existing:
+                    existing.cost_rate = cost_val
+                    if td['bill_rate'] is not None:
+                        existing.bill_rate = td['bill_rate']
+                    if td['hours_per_week'] is not None:
+                        existing.hours_per_week = td['hours_per_week']
+                    existing.save()
+                    label_to_tier[key] = existing
+                else:
+                    label_to_tier[key] = CostTier.objects.create(
+                        organization=org, label=td['label'], cost_rate=cost_val,
+                        bill_rate=td['bill_rate'], hours_per_week=td['hours_per_week'],
+                    )
+
+            assigned = 0
+            for a in assignments:
+                user = users_by_email.get(a['email'])
+                tier = label_to_tier.get(a['tier'].lower())
+                if user and tier:
+                    OrganizationMembership.objects.filter(organization=org, user=user).update(cost_tier=tier)
+                    assigned += 1
+    except Exception as e:  # noqa: BLE001
+        return Response({'error': f'Import failed: {e}'}, status=400)
+
+    result['applied'] = {'tiers': len(tier_defs), 'assigned': assigned}
+    return Response(result)

@@ -168,6 +168,7 @@ urlpatterns = [
     path('settings/client-assignments/<int:assignment_id>/', views_settings.client_assignment_delete, name='client-assignment-delete'),
     path('settings/client-assignments/bulk/', views_settings.bulk_assign_clients, name='bulk-assign-clients'),
     path('settings/client-assignments/import/', views_settings.import_client_assignments_csv, name='import-client-assignments'),
+    path('settings/economics/import/', views_settings.import_economics_csv, name='import-economics'),
 
     path('settings/client-requests/', views_settings.client_requests),
     path('settings/client-requests/<int:request_id>/approve/', views_settings.approve_client_request),

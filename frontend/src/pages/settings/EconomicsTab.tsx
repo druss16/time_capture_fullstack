@@ -58,11 +58,7 @@ function Rung({
       <p className="text-[13px] font-bold text-slate-900 mt-0.5">{name}</p>
       <p className="text-[11.5px] text-slate-400 mt-1 leading-snug">{desc}</p>
       {usual && (
-        <span className={`inline-block mt-2 text-[10px] font-bold uppercase tracking-wide border rounded-full px-2 py-0.5 ${
-          tone === 'win-pay'
-            ? 'text-blue-600 bg-blue-50 border-blue-200'
-            : 'text-primary bg-primary/8 border-primary/20'
-        }`}>
+        <span className="inline-block mt-2 text-[10px] font-bold uppercase tracking-wide text-primary bg-primary/8 border border-primary/20 rounded-full px-2 py-0.5">
           Most firms live here
         </span>
       )}
@@ -112,11 +108,11 @@ function RateLadder({ billDefault, costDefault }: { billDefault: string; costDef
             desc="Used only when neither above is set." />
         </Track>
 
-        <Track dot="bg-blue-500" label="What you pay" unit="· cost $/hr → margin">
-          <Rung tone="win-pay" rank="1 · Most specific" name="Per-person cost"
+        <Track dot="bg-primary" label="What you pay" unit="· cost $/hr → margin">
+          <Rung tone="win-charge" rank="1 · Most specific" name="Per-person cost"
             desc="An exact loaded cost set for one employee." />
           <Arrow />
-          <Rung tone="win-pay" usual rank="2 · If none above" name="Tier cost"
+          <Rung tone="win-charge" usual rank="2 · If none above" name="Tier cost"
             desc="The cost rate on the person's seniority tier." />
           <Arrow />
           <Rung tone="fall" rank="3 · Fallback" name={`Firm default · $${costDefault}`}

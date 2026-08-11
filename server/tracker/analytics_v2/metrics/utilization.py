@@ -66,8 +66,11 @@ class BillableUtilizationMetric(Metric):
         default_cap = to_float(getattr(org, "capacity_hours_per_week", 40)) or 40.0
         days = (time.end - time.start).days + 1
         weeks = (days / 7.0) if days > 0 else 0.0
+        # .order_by() clears any inherited ordering so DISTINCT dedupes on
+        # user_id alone (otherwise the order column joins the SELECT DISTINCT and
+        # every block counts as its own "user", inflating capacity ~1000x).
         active = (self._block_qs(org, scope, time)
-                  .values_list("user_id", flat=True).distinct())
+                  .order_by().values_list("user_id", flat=True).distinct())
         total = 0.0
         for uid in active:
             total += caps.get(uid, default_cap) * weeks

@@ -2,12 +2,14 @@
 // One place for everything Analytics uses for revenue, cost, and margin:
 // tiers (main setup), per-client rate overrides, and firm-wide defaults.
 import { useEffect, useState } from 'react';
-import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload } from 'lucide-react';
+import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload, Receipt, Tag } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, BillingRate, EmployeeCostRate, TeamMember, Client } from './types';
 import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass } from './ui';
 import CostTiers from './CostTiers';
 import BillingRatesTab from './BillingRatesTab';
+import ClientFlatFeeTab from './ClientFlatFeeTab';
+import TaskTypeRatesTab from './TaskTypeRatesTab';
 import EconomicsImportModal from './EconomicsImportModal';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -107,6 +109,24 @@ export default function EconomicsTab({
             orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
             onRefresh={onRefresh} onSuccess={onSuccess} onError={onError}
           />
+        </SettingsSection>
+
+        {/* Flat-fee & retainer — per-client billing arrangement */}
+        <SettingsSection
+          icon={<Receipt className="w-4 h-4 text-primary" />}
+          title="Flat-fee & retainer clients"
+          sub="Bill a client a fixed fee instead of hourly. Feeds flat-fee revenue in Analytics."
+        >
+          <ClientFlatFeeTab onSuccess={onSuccess} onError={onError} />
+        </SettingsSection>
+
+        {/* Task types — billable flag + default rate */}
+        <SettingsSection
+          icon={<Tag className="w-4 h-4 text-primary" />}
+          title="Task types"
+          sub="Mark which task types count as billable and set an optional default rate."
+        >
+          <TaskTypeRatesTab onSuccess={onSuccess} onError={onError} />
         </SettingsSection>
 
         {/* Firm defaults — the fallback */}

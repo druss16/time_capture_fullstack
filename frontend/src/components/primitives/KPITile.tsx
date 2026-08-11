@@ -128,7 +128,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
       {/* Secondary value (e.g. "$8,400 vs $400 standard" for effective rate) */}
       {m.secondary_value !== null && m.secondary_value !== undefined && m.secondary_label && (
         <p className="mt-1 text-xs text-slate-500">
-          {m.secondary_label}: {formatValue(m.secondary_value, tile.format)}
+          {m.secondary_label}: {formatValue(m.secondary_value, m.secondary_format ?? tile.format)}
         </p>
       )}
 

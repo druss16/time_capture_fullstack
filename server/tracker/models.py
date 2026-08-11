@@ -191,6 +191,19 @@ class Organization(models.Model):
         ),
     )
 
+    show_client_widget = models.BooleanField(
+        default=False,
+        help_text=(
+            "Vendor-controlled (MavOps staff only). When False (default), the "
+            "desktop agent hides the floating client ticker AND disables all "
+            "manual client-switching (widget click + tray Search/Switch Client), "
+            "so the client experience is fully hands-off — attribution runs "
+            "silently server-side. Flip on per-org (e.g. a demo org) to show the "
+            "file-open→client ticker for sales demos. Client owners/admins cannot "
+            "change this; it is not exposed in the client Settings UI."
+        ),
+    )
+
     disable_mail_integration = models.BooleanField(
         default=False,
         help_text='Master switch — disables mail OAuth/sync/classifier for the whole org.',

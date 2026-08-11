@@ -994,6 +994,10 @@ class TimeTrackerSystemTray:
         
         self.icon = None
         self.floating_widget = None
+        # Vendor gate (from org_settings sync). Default False = hands-off:
+        # ticker hidden and manual client-switching disabled for this org's
+        # users. set_client_widget_enabled() flips it when sync arrives.
+        self.client_widget_enabled = False
         self.user_name = None  # NEW: Store user's display name
         
         self._last_picker_time = 0
@@ -1073,6 +1077,9 @@ class TimeTrackerSystemTray:
             threading.Timer(0.05, self._on_today_time).start()
 
         def on_show_widget(icon, item):
+            if not getattr(self, 'client_widget_enabled', False):
+                print("[GUI] Show Client Widget ignored (hands-off mode)")
+                return
             if self.floating_widget and self.floating_widget.root:
                 # Widget exists but is hidden — just deiconify it
                 self.floating_widget.is_visible = True
@@ -1230,9 +1237,25 @@ class TimeTrackerSystemTray:
         print("[GUI] Repair dialog closed")
 
 
+    def set_client_widget_enabled(self, enabled):
+        """Vendor gate from org_settings sync. When False (default), the client
+        ticker stays hidden and manual client-switching is disabled — the desktop
+        is fully hands-off. MavOps flips this on per-org for sales demos."""
+        self.client_widget_enabled = bool(enabled)
+        try:
+            if self.floating_widget:
+                self.floating_widget.set_enabled(self.client_widget_enabled)
+        except Exception as e:
+            print(f"[GUI] set_client_widget_enabled failed: {e}")
+
     def _show_client_picker(self):
         """Show searchable client picker - with double-open guard"""
-        
+
+        # Hands-off: no manual client selection unless the ticker is enabled.
+        if not getattr(self, 'client_widget_enabled', False):
+            print("[GUI] client picker suppressed (hands-off mode)")
+            return
+
         with self._picker_lock:
             if self._picker_open:
                 print("[GUI] Client picker already open - ignoring")
@@ -1302,6 +1325,17 @@ class TimeTrackerSystemTray:
     
     def _switch_client(self, client_id: int, client_name: str):
         """Handle client switch.
+
+        Hands-off gate: when the ticker is disabled for this org, manual
+        client-switching is off — auto-attribution runs server-side only.
+        """
+        if not getattr(self, 'client_widget_enabled', False):
+            print(f"[GUI] manual switch ignored (hands-off): {client_name}")
+            return
+        return self._switch_client_impl(client_id, client_name)
+
+    def _switch_client_impl(self, client_id: int, client_name: str):
+        """Actual client-switch handler.
 
         A manual pick of the SAME client is treated as a re-confirmation —
         the user is telling us "yes I'm still working on this" while the

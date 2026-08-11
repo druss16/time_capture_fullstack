@@ -14,7 +14,7 @@ interface OrgHealth { status: "ok" | "warn" | "critical"; reasons: string[]; gra
 interface Org {
   id: number; name: string; plan: string; seat_count: number;
   member_count: number; active_devices: number;
-  deactivated_devices?: number; mavops_archived?: boolean; health?: OrgHealth;
+  deactivated_devices?: number; mavops_archived?: boolean; show_client_widget?: boolean; health?: OrgHealth;
   seat_grace_deadline?: string | null;
   last_activity: string | null; trial_ends_at: string | null; created_at: string | null;
 }
@@ -1684,6 +1684,7 @@ export default function MavOpsAdmin() {
 
   const [showArchived, setShowArchived] = useState(false);
   const [archivingOrg, setArchivingOrg] = useState<number | null>(null);
+  const [widgetOrg, setWidgetOrg] = useState<number | null>(null);
 
   const [impersonatingOrg, setImpersonatingOrg] = useState<{ id: number; name: string } | null>(null);
   const [viewAsPickerOrg, setViewAsPickerOrg] = useState<number | null>(null);
@@ -1738,6 +1739,21 @@ export default function MavOpsAdmin() {
       await loadOrgs();
     } catch { flash("Failed to update archive state.", "err"); }
     finally { setArchivingOrg(null); }
+  }, [apiFetch, loadOrgs]);
+
+  const setShowWidget = useCallback(async (org: Org, show: boolean) => {
+    setWidgetOrg(org.id);
+    try {
+      await apiFetch(`/mavops/orgs/${org.id}/show-client-widget/`, {
+        method: "POST",
+        body: JSON.stringify({ show_client_widget: show }),
+      });
+      flash(show
+        ? `Ticker ON for "${org.name}" — agents show it after next sync (demo mode).`
+        : `Ticker OFF for "${org.name}" — hands-off after next sync.`);
+      await loadOrgs();
+    } catch { flash("Failed to update ticker visibility.", "err"); }
+    finally { setWidgetOrg(null); }
   }, [apiFetch, loadOrgs]);
 
   const loadDevices = useCallback(async () => {
@@ -2218,6 +2234,13 @@ export default function MavOpsAdmin() {
                           tiny
                         />
                       ))}
+                      <Btn
+                        label={widgetOrg === org.id ? "…" : org.show_client_widget ? "ticker on" : "ticker off"}
+                        onClick={() => setShowWidget(org, !org.show_client_widget)}
+                        outline
+                        color={org.show_client_widget ? T.teal : T.textMuted}
+                        tiny
+                      />
                       <Btn
                         label={archivingOrg === org.id ? "…" : org.mavops_archived ? "restore" : "archive"}
                         onClick={() => archiveOrg(org, !org.mavops_archived)}

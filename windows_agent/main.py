@@ -562,6 +562,13 @@ def _get_cached_client():
     return (None, None)
 
 
+# Vendor gate (from org_settings sync). Default False = hands-off: the desktop
+# ticker stays hidden and MANUAL client switches are ignored. Auto-switching
+# (ai_switcher / meeting_detector) and attribution still run. MavOps flips this
+# on per-org for sales demos. Set in the sync-update callback.
+_show_client_widget = False
+
+
 def _apply_client_switch(client_id: int, client_name: str, source: str = "unknown"):
     """
     Single source of truth for all client switches.
@@ -573,6 +580,12 @@ def _apply_client_switch(client_id: int, client_name: str, source: str = "unknow
       - AI switcher auto-switch
       - Nudge/guess confirm
     """
+    # Hands-off gate: ignore MANUAL switches (tray/picker/hotkey/toast) when the
+    # ticker is disabled for this org. Auto sources still flow through.
+    if source in ("gui_prompt", "notification") and not _show_client_widget:
+        log(f"[CLIENT-SWITCH] ignored manual switch → {client_name} (hands-off mode)")
+        return
+
     log(f"[CLIENT-SWITCH] → {client_name} (id={client_id}) via {source}")
 
     # 1. Backend
@@ -2902,6 +2915,14 @@ def run_agent():
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
+                    # Vendor ticker gate → hands-off unless enabled for this org.
+                    global _show_client_widget
+                    _show_client_widget = bool(sync.org_settings.get("show_client_widget", False))
+                    try:
+                        if gui_menu_bar is not None:
+                            gui_menu_bar.set_client_widget_enabled(_show_client_widget)
+                    except Exception as _e:
+                        log(f"[TICKER] set_client_widget_enabled failed: {_e}")
             sync.on_update = _on_sync_with_switcher
             # Push any rules that already arrived before switcher was created
             if hasattr(sync, 'routing_rules') and sync.routing_rules:

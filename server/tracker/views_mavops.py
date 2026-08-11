@@ -210,6 +210,7 @@ def mavops_orgs(request):
             'active_devices': device_count,
             'deactivated_devices': deactivated_devices,
             'mavops_archived': getattr(org, 'mavops_archived', False),
+            'show_client_widget': getattr(org, 'show_client_widget', False),
             'seat_grace_deadline': seat_grace_deadline.isoformat() if seat_grace_deadline else None,
             'health': health,
             'last_activity': last_device.last_seen_at.isoformat() if last_device and last_device.last_seen_at else None,
@@ -553,6 +554,34 @@ def mavops_set_org_archived(request, org_id):
     org.save(update_fields=['mavops_archived', 'updated_at'])
 
     return Response({'ok': True, 'id': org.id, 'mavops_archived': org.mavops_archived})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_set_org_show_client_widget(request, org_id):
+    """
+    Vendor toggle for the desktop client ticker (MavOps staff only).
+    POST /api/mavops/orgs/<org_id>/show-client-widget/  body: {"show_client_widget": true|false}
+
+    When False (default), the desktop agent hides the floating ticker and
+    disables all manual client-switching for that org's users — fully hands-off.
+    Flip on for a demo org to show the file-open→client ticker in sales demos.
+    Not exposed in the client Settings UI, so client owners/admins cannot change it.
+    """
+    try:
+        org = Organization.all_objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    show = request.data.get('show_client_widget', False)
+    if isinstance(show, str):
+        show = show.lower() in ('1', 'true', 'yes')
+
+    org.show_client_widget = bool(show)
+    org.save(update_fields=['show_client_widget', 'updated_at'])
+
+    return Response({'ok': True, 'id': org.id, 'show_client_widget': org.show_client_widget})
 
 
 @api_view(['POST'])

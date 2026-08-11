@@ -1076,6 +1076,18 @@ class TimeTrackerSystemTray:
         def on_today(icon, item):
             threading.Timer(0.05, self._on_today_time).start()
 
+        def on_daily_review(icon, item):
+            # Open the web Daily Review — the one surface a hands-off user should
+            # use (confirm/correct their day). Always available, regardless of the
+            # ticker flag.
+            def _open():
+                try:
+                    import webbrowser
+                    webbrowser.open("https://timetracker.mavops.ai/daily")
+                except Exception as e:
+                    print(f"[GUI] open Daily Review failed: {e}")
+            threading.Timer(0.05, _open).start()
+
         def on_show_widget(icon, item):
             if not getattr(self, 'client_widget_enabled', False):
                 print("[GUI] Show Client Widget ignored (hands-off mode)")
@@ -1115,6 +1127,7 @@ class TimeTrackerSystemTray:
         # set_client_widget_enabled() when the flag flips.
         _ticker_on = lambda item: getattr(self, 'client_widget_enabled', False)
         menu_items.extend([
+            Item("📋 Daily Review", on_daily_review),
             Item("Search Clients...    Alt+Ctrl+T", on_search, visible=_ticker_on),
             Item("Switch Client", pystray.Menu(*client_items), visible=_ticker_on),
             Item("Today's Time...", on_today),

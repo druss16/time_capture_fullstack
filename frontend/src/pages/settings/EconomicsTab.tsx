@@ -89,6 +89,7 @@ export default function EconomicsTab({
       <div className="space-y-4">
         {/* Tiers — the main setup */}
         <SettingsSection
+          collapsible
           icon={<Layers className="w-4 h-4 text-primary" />}
           title="Tiers & assignments"
           sub="Set cost and bill per tier, then assign people."
@@ -100,6 +101,7 @@ export default function EconomicsTab({
 
         {/* Client rates — per-client hourly override */}
         <SettingsSection
+          collapsible
           icon={<Briefcase className="w-4 h-4 text-primary" />}
           title="Client rates"
           sub="Bill a specific client at a set hourly rate."
@@ -113,6 +115,7 @@ export default function EconomicsTab({
 
         {/* Flat-fee & retainer — per-client billing arrangement */}
         <SettingsSection
+          collapsible
           icon={<Receipt className="w-4 h-4 text-primary" />}
           title="Flat-fee & retainer clients"
           sub="Bill a client a fixed fee instead of hourly. Feeds flat-fee revenue in Analytics."
@@ -122,6 +125,7 @@ export default function EconomicsTab({
 
         {/* Task types — billable flag + default rate */}
         <SettingsSection
+          collapsible
           icon={<Tag className="w-4 h-4 text-primary" />}
           title="Task types"
           sub="Mark which task types count as billable and set an optional default rate."
@@ -131,6 +135,7 @@ export default function EconomicsTab({
 
         {/* Firm defaults — the fallback */}
         <SettingsSection
+          collapsible
           icon={<DollarSign className="w-4 h-4 text-primary" />}
           title="Firm defaults"
           sub="Used when no tier or client rate applies."

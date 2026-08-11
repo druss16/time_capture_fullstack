@@ -14,6 +14,7 @@ import ClientImportWizard from '@/components/ClientImportWizard';
 import ClientTaskTypesPanel from '@/components/ClientTaskTypesPanel';
 import ClientBillingProfilePanel from '@/components/ClientBillingProfilePanel';
 import BulkBillingModal from '@/components/BulkBillingModal';
+import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass } from './ui';
 
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -488,47 +489,39 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
   };
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <Briefcase className="w-5 h-5 text-primary" />
-          Clients
-          <span className="text-sm font-semibold text-slate-400">({clients.length})</span>
-        </h2>
-        {canManage && (
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <button onClick={() => setShowImportDropdown(!showImportDropdown)}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm border border-border/60 rounded-lg font-semibold text-slate-600 hover:bg-slate-50 transition-all"
-              >
-                <Upload className="w-3.5 h-3.5" /> Import <ChevronDown className="w-3 h-3" />
-              </button>
-              {showImportDropdown && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setShowImportDropdown(false)} />
-                  <div className="absolute right-0 top-full mt-1 bg-white border border-border/60 rounded-xl shadow-lg z-20 min-w-[200px] overflow-hidden py-1">
-                    {[
-                      { icon: <Upload className="w-3.5 h-3.5 text-emerald-500" />, label: 'Import Clients', sub: 'From QuickBooks or Xero', action: () => { setShowImportWizard(true); setShowImportDropdown(false); } },
-                      { icon: <FileSpreadsheet className="w-3.5 h-3.5 text-blue-500" />, label: 'Import Assignments', sub: 'CSV file upload', action: () => { setShowCSVImportModal(true); setShowImportDropdown(false); } },
-                      { icon: <Copy className="w-3.5 h-3.5 text-purple-500" />, label: 'Copy Team', sub: 'From another client', action: () => { setShowCopyModal(true); setShowImportDropdown(false); } },
-                    ].map(item => (
-                      <button key={item.label} onClick={item.action} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 text-left transition-colors border-b border-border/20 last:border-b-0">
-                        {item.icon}
-                        <div><p className="font-semibold text-slate-800 text-sm">{item.label}</p><p className="text-xs text-slate-400">{item.sub}</p></div>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-            <button onClick={() => { resetForm(); setShowAdd(true); }} className="flex items-center gap-1.5 px-3 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90 transition-all">
-              <Plus className="w-3.5 h-3.5" /> Add Client
+    <SettingsPage
+      title="Clients"
+      subtitle="Manage your client list, aliases, visibility, and team assignments."
+      actions={canManage && (
+        <>
+          <div className="relative">
+            <button onClick={() => setShowImportDropdown(!showImportDropdown)} className={secondaryBtnClass}>
+              <Upload className="w-3.5 h-3.5" /> Import <ChevronDown className="w-3 h-3" />
             </button>
+            {showImportDropdown && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowImportDropdown(false)} />
+                <div className="absolute right-0 top-full mt-1 bg-white border border-border/60 rounded-xl shadow-lg z-20 min-w-[200px] overflow-hidden py-1">
+                  {[
+                    { icon: <Upload className="w-3.5 h-3.5 text-emerald-500" />, label: 'Import Clients', sub: 'From QuickBooks or Xero', action: () => { setShowImportWizard(true); setShowImportDropdown(false); } },
+                    { icon: <FileSpreadsheet className="w-3.5 h-3.5 text-blue-500" />, label: 'Import Assignments', sub: 'CSV file upload', action: () => { setShowCSVImportModal(true); setShowImportDropdown(false); } },
+                    { icon: <Copy className="w-3.5 h-3.5 text-purple-500" />, label: 'Copy Team', sub: 'From another client', action: () => { setShowCopyModal(true); setShowImportDropdown(false); } },
+                  ].map(item => (
+                    <button key={item.label} onClick={item.action} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 text-left transition-colors border-b border-border/20 last:border-b-0">
+                      {item.icon}
+                      <div><p className="font-semibold text-slate-800 text-sm">{item.label}</p><p className="text-xs text-slate-400">{item.sub}</p></div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
-        )}
-      </div>
-
+          <button onClick={() => { resetForm(); setShowAdd(true); }} className={primaryBtnClass}>
+            <Plus className="w-3.5 h-3.5" /> Add Client
+          </button>
+        </>
+      )}
+    >
       {/* Search + filter */}
       <div className="flex items-center gap-3 mb-4">
         <div className="relative flex-1 max-w-sm">
@@ -557,25 +550,24 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
 
       {/* Add/edit form */}
       {showAdd && canManage && (
-        <div className="mb-5 p-5 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
-          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">{editingId ? 'Edit Client' : 'New Client'}</p>
+        <SettingsSection title={editingId ? 'Edit client' : 'New client'} className="mb-5">
           <div className="grid grid-cols-3 gap-4 mb-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Name *</label>
+              <label className={labelClass}>Name *</label>
               <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Acme Corporation"
-                className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                className={inputClass}
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Code</label>
+              <label className={labelClass}>Code</label>
               <input type="text" value={form.code} onChange={e => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="ACME" maxLength={10}
-                className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm font-mono bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all uppercase"
+                className={`${inputClass} font-mono uppercase`}
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Visibility</label>
+              <label className={labelClass}>Visibility</label>
               <select value={form.visibility} onChange={e => setForm({ ...form, visibility: e.target.value })}
-                className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                className={inputClass}
               >
                 <option value="all">All Team Members</option>
                 <option value="assigned">Assigned Only</option>
@@ -584,7 +576,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
             </div>
           </div>
           <div className="mb-4">
-            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">
+            <label className={labelClass}>
               AI Aliases <span className="text-[10px] font-normal text-slate-400 normal-case">Alternative names the AI uses for matching</span>
             </label>
             <div className="flex flex-wrap gap-1.5 mb-2">
@@ -599,29 +591,27 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
               <input type="text" value={aliasInput} onChange={e => setAliasInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addAlias(); } }}
                 placeholder="Type alias and press Enter..."
-                className="flex-1 border border-border/60 rounded-lg px-3 py-2 text-sm bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                className={`${inputClass} flex-1`}
               />
               <button onClick={addAlias} disabled={!aliasInput.trim()} className="px-3 py-2 text-sm font-semibold bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 disabled:opacity-40 transition-all">Add</button>
             </div>
           </div>
-          <div className="flex gap-2 pt-4 border-t border-border/50">
-            <button onClick={handleSave} disabled={saving || !form.name.trim()}
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50 transition-all"
-            >
+          <div className="flex gap-2 pt-4 border-t border-slate-200/70">
+            <button onClick={handleSave} disabled={saving || !form.name.trim()} className={primaryBtnClass}>
               {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
               {editingId ? 'Update Client' : 'Add Client'}
             </button>
-            <button onClick={resetForm} className="px-4 py-2 border border-border/60 rounded-lg font-semibold text-sm text-slate-600 hover:bg-slate-100 transition-all">Cancel</button>
+            <button onClick={resetForm} className={secondaryBtnClass}>Cancel</button>
           </div>
-        </div>
+        </SettingsSection>
       )}
 
       {/* Table with internal scroll */}
-      <div className="border border-border/60 rounded-xl overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+      <div className="rounded-2xl border border-slate-200/70 overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 280px)' }}>
         <div className="overflow-auto flex-1">
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10">
-              <tr className="border-b border-border/60 bg-white">
+              <tr className="border-b border-border/60 bg-slate-50/80">
                 {canManage && (
                   <th className="w-10 px-4 py-3">
                     <button onClick={toggleSelectAll} className="p-0.5 hover:bg-slate-200 rounded transition-colors">
@@ -777,6 +767,6 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
       )}
       {showCSVImportModal  && <CSVImportModal isOpen={showCSVImportModal} onClose={() => setShowCSVImportModal(false)} onSuccess={() => { onRefresh(); onSuccess('Assignments imported!'); }} />}
       {showCopyModal       && <CopyAssignmentsModal isOpen={showCopyModal} onClose={() => setShowCopyModal(false)} clients={clients} onSuccess={() => { onRefresh(); onSuccess('Team copied!'); }} />}
-    </div>
+    </SettingsPage>
   );
 }

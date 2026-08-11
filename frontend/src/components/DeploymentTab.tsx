@@ -1,5 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { safeFetchJson } from '@/lib/api';
+import {
+  SettingsPage,
+  SettingsSection,
+  inputClass,
+  labelClass,
+  primaryBtnClass,
+  secondaryBtnClass,
+} from '@/pages/settings/ui';
 
 // ─── Types ───
 interface DeploymentToken {
@@ -281,29 +289,21 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
   const inactiveTokens = tokens.filter((t) => !t.is_active);
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-gray-900">MDM Deployment</h3>
-          <p className="mt-1 text-sm text-gray-500">
-            Deploy TimeTracker to workstations via Intune or other MDM solutions.
-            Generate a token, bake it into the installer, and devices auto-register with your organization.
-          </p>
-        </div>
-        {activeTokens.length > 0 && !showCreate && (
-          <button
-            onClick={() => setShowCreate(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-          >
+    <SettingsPage
+      title="MDM Deployment"
+      subtitle="Deploy TimeTracker to workstations via Intune or other MDM solutions. Generate a token, bake it into the installer, and devices auto-register with your organization."
+      actions={
+        activeTokens.length > 0 && !showCreate ? (
+          <button onClick={() => setShowCreate(true)} className={secondaryBtnClass}>
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
             New Token
           </button>
-        )}
-      </div>
-
+        ) : undefined
+      }
+    >
+      <div className="space-y-6">
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 p-3 text-sm bg-red-50 border border-red-100 text-red-700 rounded-lg">
@@ -317,28 +317,27 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
 
       {/* Create form */}
       {showCreate && (
-        <div className="border border-teal-200 bg-teal-50/50 rounded-lg p-5">
-          <h4 className="text-sm font-semibold text-gray-800 mb-4">New Deployment Token</h4>
+        <SettingsSection tint title="New Deployment Token">
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Notes (optional)</label>
+              <label className={labelClass}>Notes (optional)</label>
               <input
                 type="text"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="e.g., Anderson & Associates rollout"
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                className={inputClass}
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Max devices (optional)</label>
+              <label className={labelClass}>Max devices (optional)</label>
               <input
                 type="number"
                 value={maxDevices}
                 onChange={(e) => setMaxDevices(e.target.value)}
                 placeholder="Unlimited"
                 min="1"
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                className={inputClass}
               />
             </div>
           </div>
@@ -346,8 +345,7 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
             <button
               onClick={handleCreate}
               disabled={creating}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md text-white transition-colors disabled:opacity-50"
-              style={{ backgroundColor: '#0d9488' }}
+              className={primaryBtnClass}
             >
               {creating ? (
                 <>
@@ -372,7 +370,7 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
               Cancel
             </button>
           </div>
-        </div>
+        </SettingsSection>
       )}
 
       {/* Empty state */}
@@ -437,8 +435,7 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
 
       {/* How it works */}
       {tokens.length > 0 && (
-        <div className="border border-teal-100 rounded-lg bg-teal-50/40 p-5">
-          <h4 className="text-sm font-semibold text-gray-700 mb-3">How MDM Deployment Works</h4>
+        <SettingsSection tint title="How MDM Deployment Works">
           <div className="grid grid-cols-3 gap-4">
             <div className="flex gap-3">
               <div className="flex-shrink-0 w-7 h-7 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-xs font-bold">1</div>
@@ -462,9 +459,10 @@ const DeploymentTab: React.FC<DeploymentTabProps> = ({ apiBase = '/api' }) => {
               </div>
             </div>
           </div>
-        </div>
+        </SettingsSection>
       )}
-    </div>
+      </div>
+    </SettingsPage>
   );
 };
 

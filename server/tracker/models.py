@@ -3273,6 +3273,15 @@ class CostTier(models.Model):
             "capacity-based utilization. Null → use org capacity_hours_per_week."
         ),
     )
+    counts_toward_utilization = models.BooleanField(
+        default=True,
+        help_text=(
+            "Whether members in this tier are chargeable staff who count toward "
+            "firm utilization. Turn OFF for non-billing roles (admin, ops, "
+            "non-charging partners) so their capacity doesn't drag the firm number "
+            "down. Excluded members are still shown, just separated out."
+        ),
+    )
     sort_order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

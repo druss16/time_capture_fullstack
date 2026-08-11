@@ -1600,14 +1600,80 @@ def sync_single_qb_invoice(self, realm_id, invoice_id, operation):
     logger.info(f"QB webhook: synced invoice {doc_number} for {client.name}")
 
 
+def _sync_qb_invoices(integration, start, end):
+    """Pull QBO invoices with TxnDate in [start, end] and upsert into Invoice.
+
+    Pages through results with STARTPOSITION so a wide backfill window isn't
+    silently capped at the 1000-row page limit. ``start``/``end`` are ISO date
+    strings. Returns the number of invoices seen (matched or not)."""
+    from tracker.models import Invoice as InvoiceModel, Client
+    from tracker.views_integrations import qb_api_call
+    from decimal import Decimal
+
+    qb_map = {c.quickbooks_id: c for c in Client.objects.filter(
+        org=integration.organization, quickbooks_id__isnull=False
+    )}
+
+    PAGE = 1000
+    start_pos = 1
+    seen = 0
+    while True:
+        query = (
+            f"SELECT * FROM Invoice WHERE TxnDate >= '{start}' "
+            f"AND TxnDate <= '{end}' ORDERBY TxnDate "
+            f"STARTPOSITION {start_pos} MAXRESULTS {PAGE}"
+        )
+        data, err = qb_api_call(integration, 'GET', '/query', params={'query': query})
+        if err:
+            break
+        invoices = data.get('QueryResponse', {}).get('Invoice', [])
+        if not invoices:
+            break
+
+        for inv in invoices:
+            seen += 1
+            qb_customer_id = inv.get('CustomerRef', {}).get('value')
+            client = qb_map.get(qb_customer_id)
+            if not client:
+                continue
+
+            total = Decimal(str(inv.get('TotalAmt', 0)))
+            balance = Decimal(str(inv.get('Balance', 0)))
+            email_status = inv.get('EmailStatus', 'NotSet')
+            status = 'paid' if balance == 0 else ('sent' if email_status == 'EmailSent' else 'draft')
+            doc_number = inv.get('DocNumber') or f"QBO-{inv.get('Id')}"
+
+            InvoiceModel.objects.update_or_create(
+                org=integration.organization,
+                external_id=str(inv.get('Id')),
+                defaults={
+                    'invoice_number': doc_number,
+                    'client': client,
+                    'client_name': client.name,
+                    'invoice_date': inv.get('TxnDate', end),
+                    'amount': total,
+                    'status': status,
+                    'source': 'quickbooks',
+                    'hours_billed': None,
+                }
+            )
+
+        if len(invoices) < PAGE:
+            break
+        start_pos += PAGE
+
+    integration.last_synced_at = timezone.now()
+    integration.save(update_fields=['last_synced_at'])
+    return seen
+
+
 @shared_task
 def reconcile_qb_invoices():
     """
     Fallback reconciliation — catches any invoices missed by webhook.
     Runs every 4 hours. Much cheaper than the old poll-only approach.
     """
-    from tracker.models import Integration, Organization
-    from tracker.views_integrations import quickbooks_pull_invoices
+    from tracker.models import Integration
     from datetime import date, timedelta
 
     integrations = Integration.objects.filter(
@@ -1617,62 +1683,38 @@ def reconcile_qb_invoices():
 
     for integration in integrations:
         try:
-            # Pull last 7 days as a rolling window
+            # Rolling 7-day window keeps recent invoices fresh.
             end = date.today().isoformat()
             start = (date.today() - timedelta(days=7)).isoformat()
-
-            from tracker.views_integrations import qb_api_call
-            query = (
-                f"SELECT * FROM Invoice WHERE TxnDate >= '{start}' "
-                f"AND TxnDate <= '{end}' ORDERBY TxnDate MAXRESULTS 1000"
-            )
-            data, err = qb_api_call(integration, 'GET', '/query', params={'query': query})
-            if err:
-                continue
-
-            invoices = data.get('QueryResponse', {}).get('Invoice', [])
-            logger.info(f"QB reconcile: {len(invoices)} invoices for org {integration.organization_id}")
-
-            # Reuse your existing upsert logic
-            from tracker.models import Invoice as InvoiceModel, Client
-            from decimal import Decimal
-
-            qb_map = {c.quickbooks_id: c for c in Client.objects.filter(
-                org=integration.organization, quickbooks_id__isnull=False
-            )}
-
-            for inv in invoices:
-                qb_customer_id = inv.get('CustomerRef', {}).get('value')
-                client = qb_map.get(qb_customer_id)
-                if not client:
-                    continue
-
-                total = Decimal(str(inv.get('TotalAmt', 0)))
-                balance = Decimal(str(inv.get('Balance', 0)))
-                email_status = inv.get('EmailStatus', 'NotSet')
-                status = 'paid' if balance == 0 else ('sent' if email_status == 'EmailSent' else 'draft')
-                doc_number = inv.get('DocNumber') or f"QBO-{inv.get('Id')}"
-
-                InvoiceModel.objects.update_or_create(
-                    org=integration.organization,
-                    external_id=str(inv.get('Id')),
-                    defaults={
-                        'invoice_number': doc_number,
-                        'client': client,
-                        'client_name': client.name,
-                        'invoice_date': inv.get('TxnDate', end),
-                        'amount': total,
-                        'status': status,
-                        'source': 'quickbooks',
-                        'hours_billed': None,
-                    }
-                )
-
-            integration.last_synced_at = timezone.now()
-            integration.save(update_fields=['last_synced_at'])
-
+            n = _sync_qb_invoices(integration, start, end)
+            logger.info(f"QB reconcile: {n} invoices for org {integration.organization_id}")
         except Exception as e:
             logger.error(f"QB reconcile failed for org {integration.organization_id}: {e}")
+
+
+@shared_task
+def backfill_qb_invoices(org_id, days=365):
+    """One-shot historical backfill, kicked off right after a firm connects
+    QuickBooks so realization/leakage/gross-margin have history immediately
+    instead of waiting for the rolling reconcile to slowly fill in.
+    """
+    from tracker.models import Integration
+    from datetime import date, timedelta
+
+    integration = Integration.objects.filter(
+        provider='quickbooks', is_connected=True, organization_id=org_id,
+    ).select_related('organization').first()
+    if not integration:
+        logger.warning(f"QB backfill: no connected integration for org {org_id}")
+        return
+
+    try:
+        end = date.today().isoformat()
+        start = (date.today() - timedelta(days=days)).isoformat()
+        n = _sync_qb_invoices(integration, start, end)
+        logger.info(f"QB backfill: {n} invoices ({days}d) for org {org_id}")
+    except Exception as e:
+        logger.error(f"QB backfill failed for org {org_id}: {e}")
 
 
 # ============================================================================

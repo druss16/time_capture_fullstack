@@ -93,3 +93,23 @@ def capacity_map(org) -> dict[int, float]:
         if hpw is not None:
             caps[m.user_id] = _to_float(hpw)
     return caps
+
+
+def non_utilization_user_ids(org) -> set[int]:
+    """Return {user_id} for members whose tier is flagged as NOT chargeable
+    (counts_toward_utilization=False) — e.g. admin/ops/non-charging partners.
+
+    These users are excluded from BOTH the numerator and denominator of firm-
+    level utilization so their idle capacity doesn't drag the firm number down.
+    Members with no tier, or a tier that counts, are absent from this set (they
+    count normally). This is the "chargeable / fee-earner" population filter.
+    """
+    from tracker.models import OrganizationMembership
+
+    return set(
+        OrganizationMembership.objects
+        .filter(organization=org,
+                cost_tier__isnull=False,
+                cost_tier__counts_toward_utilization=False)
+        .values_list("user_id", flat=True)
+    )

@@ -66,39 +66,68 @@ class UtilizationLens(Lens):
         names = {u.id: (f"{u.first_name} {u.last_name}".strip() or u.username)
                  for u in User.objects.filter(id__in=per_user.keys())
                  .only("id", "first_name", "last_name", "username")}
-        
-        rows = []
-        for uid, d in per_user.items():
+
+        # Chargeable vs non-chargeable population: non-counting staff (admin/ops)
+        # are broken out into their own table so they don't sit in the middle of
+        # the utilization ranking looking like poor performers, and so the main
+        # list reads as the firm's fee-earners — matching the firm headline,
+        # which already excludes them.
+        from ..cost_rates import non_utilization_user_ids
+        excluded_ids = non_utilization_user_ids(org)
+
+        def _row(uid, d):
             bh = d["billable"] / 60.0
             th = d["total"] / 60.0
             util = (bh / th * 100) if th > 0 else 0.0
-            rows.append({
+            return {
                 "user_id": uid,
                 "name": names.get(uid, f"User {uid}"),
                 "billable_hours": round(bh, 2),
                 "total_hours": round(th, 2),
                 "utilization": round(util, 1),
-            })
-        rows.sort(key=lambda r: -r["utilization"])
-        
-        table = DataTablePayload(
+            }
+
+        cols = [
+            column("name", "Name", "text"),
+            column("billable_hours", "Billable", "hours_1dp"),
+            column("total_hours", "Total", "hours_1dp"),
+            column("utilization", "Utilization", "percent_1dp"),
+        ]
+
+        main_rows = sorted(
+            (_row(uid, d) for uid, d in per_user.items() if uid not in excluded_ids),
+            key=lambda r: -r["utilization"],
+        )
+        excluded_rows = sorted(
+            (_row(uid, d) for uid, d in per_user.items() if uid in excluded_ids),
+            key=lambda r: -r["total_hours"],
+        )
+
+        children = [DataTablePayload(
             id="staff_utilization",
             title="Utilization by staff",
             subtitle=time.label,
-            columns=[
-                column("name", "Name", "text"),
-                column("billable_hours", "Billable", "hours_1dp"),
-                column("total_hours", "Total", "hours_1dp"),
-                column("utilization", "Utilization", "percent_1dp"),
-            ],
-            rows=rows,
+            columns=cols,
+            rows=main_rows,
             default_sort={"key": "utilization", "direction": "desc"},
-            state=MetricState.READY if rows else MetricState.EMPTY,
-        )
+            state=MetricState.READY if main_rows else MetricState.EMPTY,
+        )]
+
+        if excluded_rows:
+            children.append(DataTablePayload(
+                id="staff_utilization_excluded",
+                title="Non-billable staff",
+                subtitle="Excluded from firm utilization",
+                columns=cols,
+                rows=excluded_rows,
+                default_sort={"key": "total_hours", "direction": "desc"},
+                state=MetricState.READY,
+            ))
+
         return Section(
             id="by_staff",
             type="section",
             title="By Staff",
             collapsible=True,
-            children=[table],
+            children=children,
         )

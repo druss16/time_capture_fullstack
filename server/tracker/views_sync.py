@@ -359,6 +359,11 @@ def sync_full(request):
     org_settings = {
         'ai_sensitivity': getattr(org, 'ai_sensitivity', 50) or 50,
         'mouse_idle_pause_seconds': getattr(org, 'mouse_idle_pause_seconds', 90) or 90,  # ← ADD
+        # Vendor-controlled: when False (default), the desktop agent hides the
+        # floating client ticker AND disables all manual client-switching, so the
+        # client experience is fully hands-off. MavOps staff flip it on per-org
+        # (e.g. a demo org) to show the file-open→client ticker for sales demos.
+        'show_client_widget': bool(getattr(org, 'show_client_widget', False)),
     }
 
     return Response({

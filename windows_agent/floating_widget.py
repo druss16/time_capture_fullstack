@@ -100,6 +100,11 @@ class FloatingClientWidget:
         # Visibility state (persisted across restarts)
         self.is_visible = True
 
+        # Vendor gate (from org_settings sync). Default False = hands-off: the
+        # widget stays withdrawn and never reveals until MavOps enables the
+        # ticker for this org (demo mode). set_enabled() flips it at runtime.
+        self.enabled = False
+
         # Drag state
         self._press_x = 0
         self._press_y = 0
@@ -193,6 +198,15 @@ class FloatingClientWidget:
         self._build_dot_ui()
         self._apply_idle_opacity()
         self._start_update_loop()
+
+        # Start hidden unless the org has the ticker enabled (set via sync).
+        # Keeps the mainloop/threading intact but shows nothing until enabled.
+        if not getattr(self, 'enabled', False):
+            self.is_visible = False
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
 
         return self.root
 
@@ -658,8 +672,28 @@ class FloatingClientWidget:
         if self.root:
             self.root.withdraw()
 
+    def set_enabled(self, enabled: bool):
+        """Vendor gate from org_settings sync. When disabled, the widget stays
+        withdrawn and never reveals; when enabled, it renders normally. Default
+        is disabled (hands-off) until MavOps turns the ticker on for the org."""
+        enabled = bool(enabled)
+        if enabled == getattr(self, 'enabled', False):
+            return
+        self.enabled = enabled
+        if not self._root_alive():
+            return
+        try:
+            if enabled:
+                self.root.after(0, self._refresh_current_view)
+            else:
+                self.root.after(0, self.root.withdraw)
+        except Exception:
+            pass
+
     def show(self):
         """Show the widget if hidden."""
+        if not getattr(self, 'enabled', False):
+            return
         self.is_visible = True
         self._save_state()
         if self.root:
@@ -792,6 +826,16 @@ class FloatingClientWidget:
         cycle and a green pill would never actually close.
         """
         if not self._root_alive():
+            return
+
+        # Hands-off gate: when the ticker isn't enabled for this org, never
+        # render or reveal — stay withdrawn. This single guard neutralizes every
+        # reveal path below (startup dot, proposed force-show, switch flash).
+        if not getattr(self, 'enabled', False):
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
             return
 
         prev_state = self._rendered_state

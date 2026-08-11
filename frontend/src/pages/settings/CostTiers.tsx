@@ -82,6 +82,9 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   const assign = (userId: number, tierId: number | null) =>
     setMembers(ms => ms.map(m => (m.id === userId ? { ...m, cost_tier_id: tierId } : m)));
 
+  const setOverride = (userId: number, val: string) =>
+    setMembers(ms => ms.map(m => (m.id === userId ? { ...m, override_rate: val === '' ? null : val } : m)));
+
   const toggleSel = (userId: number) =>
     setSelected(s => { const n = new Set(s); n.has(userId) ? n.delete(userId) : n.add(userId); return n; });
   const toggleAll = () =>
@@ -102,10 +105,12 @@ export default function CostTiers({ onSuccess, onError }: Props) {
         ...deletedIds.map(id => ({ id, _delete: true })),
       ];
       const assignments = members.map(m => ({ user_id: m.id, cost_tier_id: m.cost_tier_id }));
+      // Per-person cost overrides: blank cost_rate → backend deletes the override.
+      const overrides = members.map(m => ({ user_id: m.id, cost_rate: m.override_rate ?? '' }));
       await safeFetchJson(`${API_BASE}/settings/cost-rates/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tiers: tierPayload, assignments }),
+        body: JSON.stringify({ tiers: tierPayload, assignments, overrides }),
       });
       onSuccess('Cost tiers saved');
       await load();
@@ -218,29 +223,26 @@ export default function CostTiers({ onSuccess, onError }: Props) {
                   <th className="text-left px-4 py-2 font-bold">Member</th>
                   <th className="text-left px-4 py-2 font-bold">Permission</th>
                   <th className="text-left px-4 py-2 font-bold">Cost tier</th>
+                  <th className="text-left px-4 py-2 font-bold">Custom cost <span className="text-slate-300 normal-case">(optional)</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {memberGroups.map(g => (
                   <Fragment key={String(g.id)}>
                     <tr className="bg-slate-100/70">
-                      <td colSpan={4} className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      <td colSpan={5} className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">
                         {g.label} <span className="text-slate-400">· {g.people.length}</span>
                       </td>
                     </tr>
-                    {g.people.map(m => (
+                    {g.people.map(m => {
+                      const tier = m.cost_tier_id == null ? null : tiers.find(t => t.id === m.cost_tier_id);
+                      const effCost = (tier?.cost_rate && tier.cost_rate !== '') ? tier.cost_rate : defaultCost;
+                      return (
                       <tr key={m.id} className={selected.has(m.id) ? 'bg-primary/5' : ''}>
                         <td className="px-3 py-2 text-center">
                           <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSel(m.id)} />
                         </td>
-                        <td className="px-4 py-2 font-medium text-slate-800">
-                          {m.name}
-                          {m.override_rate && (
-                            <span className="ml-2 text-[10px] text-amber-600" title="Per-person override">
-                              override ${parseFloat(m.override_rate).toFixed(0)}
-                            </span>
-                          )}
-                        </td>
+                        <td className="px-4 py-2 font-medium text-slate-800">{m.name}</td>
                         <td className="px-4 py-2 text-slate-400">{m.role}</td>
                         <td className="px-4 py-2">
                           <select
@@ -257,8 +259,22 @@ export default function CostTiers({ onSuccess, onError }: Props) {
                             <span className="ml-1 text-[10px] text-slate-400">({tierLabel(m.cost_tier_id)})</span>
                           )}
                         </td>
+                        <td className="px-4 py-2">
+                          <div className="relative w-28">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                            <input
+                              type="number" step="0.01" min="0"
+                              value={m.override_rate ?? ''}
+                              onChange={e => setOverride(m.id, e.target.value)}
+                              placeholder={effCost}
+                              title="Exact loaded cost for this person — overrides their tier cost"
+                              className="w-full pl-6 pr-2 py-1 border border-border/60 rounded-lg text-sm text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white"
+                            />
+                          </div>
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </Fragment>
                 ))}
               </tbody>

@@ -63,5 +63,9 @@ def headline_row(
 # Standard format helpers
 # ---------------------------------------------------------------------------
 
-def column(key: str, label: str, fmt: str = "decimal_1dp", sortable: bool = True) -> dict:
-    return {"key": key, "label": label, "format": fmt, "sortable": sortable}
+def column(key: str, label: str, fmt: str = "decimal_1dp", sortable: bool = True,
+           tooltip: str | None = None) -> dict:
+    col = {"key": key, "label": label, "format": fmt, "sortable": sortable}
+    if tooltip:
+        col["tooltip"] = tooltip
+    return col

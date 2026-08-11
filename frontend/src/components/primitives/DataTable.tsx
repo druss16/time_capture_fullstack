@@ -5,10 +5,10 @@
  * Click a column header to sort. Default sort comes from the backend payload.
  */
 import { useMemo, useState } from "react";
-import { ArrowUpDown, ArrowUp, ArrowDown, Inbox } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Inbox, Info } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { formatValue } from "@/lib/analytics_v2/format";
-import type { DataTablePayload } from "@/lib/analytics_v2/types";
+import type { DataTablePayload, DataTableColumn } from "@/lib/analytics_v2/types";
 
 interface Props {
   table: DataTablePayload;
@@ -66,23 +66,13 @@ export default function DataTable({ table, onRowClick }: Props) {
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50/50">
                 {table.columns.map(col => (
-                  <th
+                  <HeaderCell
                     key={col.key}
-                    onClick={col.sortable ? () => handleSort(col.key) : undefined}
-                    className={cn(
-                      "text-left text-xs font-medium uppercase tracking-wider text-slate-600 px-4 py-3",
-                      col.format !== "text" && "text-right",
-                      col.sortable && "cursor-pointer hover:bg-slate-100/60 select-none",
-                    )}
-                  >
-                    <div className={cn(
-                      "flex items-center gap-1.5",
-                      col.format !== "text" && "justify-end",
-                    )}>
-                      <span>{col.label}</span>
-                      {col.sortable && <SortIcon active={sortKey === col.key} dir={sortDir} />}
-                    </div>
-                  </th>
+                    col={col}
+                    active={sortKey === col.key}
+                    dir={sortDir}
+                    onSort={col.sortable ? () => handleSort(col.key) : undefined}
+                  />
                 ))}
               </tr>
             </thead>
@@ -116,6 +106,51 @@ export default function DataTable({ table, onRowClick }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+function HeaderCell({
+  col, active, dir, onSort,
+}: {
+  col: DataTableColumn;
+  active: boolean;
+  dir: "asc" | "desc";
+  onSort: (() => void) | undefined;
+}) {
+  const [showTip, setShowTip] = useState(false);
+  const numeric = col.format !== "text";
+  return (
+    <th
+      onClick={onSort}
+      className={cn(
+        "text-left text-xs font-medium uppercase tracking-wider text-slate-600 px-4 py-3",
+        numeric && "text-right",
+        onSort && "cursor-pointer hover:bg-slate-100/60 select-none",
+      )}
+    >
+      <div className={cn("flex items-center gap-1.5", numeric && "justify-end")}>
+        <span>{col.label}</span>
+        {col.tooltip && (
+          <span
+            className="relative inline-flex"
+            onMouseEnter={() => setShowTip(true)}
+            onMouseLeave={() => setShowTip(false)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Info className="h-3 w-3 text-slate-400 hover:text-slate-600 cursor-help" />
+            {showTip && (
+              <span className={cn(
+                "absolute top-5 z-20 w-60 rounded-lg bg-slate-900 text-white text-[11px] normal-case tracking-normal font-normal p-2.5 shadow-lg leading-snug",
+                numeric ? "right-0" : "left-0",
+              )}>
+                {col.tooltip}
+              </span>
+            )}
+          </span>
+        )}
+        {col.sortable && <SortIcon active={active} dir={dir} />}
+      </div>
+    </th>
   );
 }
 

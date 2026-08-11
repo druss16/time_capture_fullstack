@@ -111,8 +111,9 @@ class UtilizationLens(Lens):
 
         def _row(uid, d):
             bh, cap, th = d["billable_h"], d["cap_h"], d["total_h"]
-            util = (bh / cap * 100) if cap > 0 else 0.0     # capacity-based (headline def)
-            mix = (bh / th * 100) if th > 0 else 0.0        # billable share of tracked
+            util = (bh / cap * 100) if cap > 0 else 0.0     # billable ÷ capacity (headline def)
+            mix = (bh / th * 100) if th > 0 else 0.0        # billable ÷ tracked (billing focus)
+            coverage = (th / cap * 100) if cap > 0 else 0.0  # tracked ÷ capacity (capture health)
             return {
                 "user_id": uid,
                 "name": d["name"],
@@ -120,14 +121,24 @@ class UtilizationLens(Lens):
                 "capacity_hours": round(cap, 2),
                 "utilization": round(util, 1),
                 "mix": round(mix, 1),
+                "coverage": round(coverage, 1),
             }
 
+        # Utilization = Mix × Coverage — the two columns decompose the headline so
+        # you can see whether a low number is a billing problem (Mix) or a capture
+        # problem (Coverage).
         cols = [
             column("name", "Name", "text"),
-            column("billable_hours", "Billable", "hours_1dp"),
-            column("capacity_hours", "Capacity", "hours_1dp"),
-            column("utilization", "Utilization", "percent_1dp"),
-            column("mix", "Mix", "percent_1dp"),
+            column("billable_hours", "Billable", "hours_1dp",
+                   tooltip="Hours marked billable in this period."),
+            column("capacity_hours", "Capacity", "hours_1dp",
+                   tooltip="Available working hours = weekly capacity (cost-tier Hrs/wk, or the firm default) × weeks in the period."),
+            column("utilization", "Utilization", "percent_1dp",
+                   tooltip="Billable ÷ Capacity. The headline efficiency number — of the time you pay for, how much became billable work. Utilization = Mix × Coverage."),
+            column("mix", "Mix", "percent_1dp",
+                   tooltip="Billable ÷ Tracked. Of the time actually logged, how much was billable — a billing-focus signal (not affected by capture gaps)."),
+            column("coverage", "Coverage", "percent_1dp",
+                   tooltip="Tracked ÷ Capacity. How much of available time is being captured — a data/capture-health signal. Low coverage means time isn't being logged."),
         ]
 
         main_rows = sorted(
@@ -183,12 +194,13 @@ class UtilizationLens(Lens):
 
         # Aggregate active users into their tier (skip non-chargeable tiers —
         # they're the overhead population, not measured against a target).
-        buckets: dict[int, dict] = defaultdict(lambda: {"billable": 0.0, "cap": 0.0, "n": 0})
+        buckets: dict[int, dict] = defaultdict(lambda: {"billable": 0.0, "tracked": 0.0, "cap": 0.0, "n": 0})
         for uid, d in per_user.items():
             if uid in excluded_ids:
                 continue
             tid = tier_of.get(uid)
             buckets[tid]["billable"] += d["billable_h"]
+            buckets[tid]["tracked"] += d["total_h"]
             buckets[tid]["cap"] += d["cap_h"]
             buckets[tid]["n"] += 1
 
@@ -201,11 +213,13 @@ class UtilizationLens(Lens):
             target = (to_float(tier.target_utilization)
                       if tier and tier.target_utilization is not None else org_target)
             util = b["billable"] / b["cap"] * 100
+            coverage = b["tracked"] / b["cap"] * 100 if b["cap"] > 0 else 0.0
             rows.append({
                 "tier": label,
                 "members": b["n"],
                 "billable_hours": round(b["billable"], 2),
                 "utilization": round(util, 1),
+                "coverage": round(coverage, 1),
                 "target": round(target, 1),
                 "vs_target": round(util - target, 1),
             })
@@ -219,11 +233,18 @@ class UtilizationLens(Lens):
             subtitle=f"{time.label} · variance to each tier's cohort target",
             columns=[
                 column("tier", "Tier", "text"),
-                column("members", "People", "integer"),
-                column("billable_hours", "Billable", "hours_1dp"),
-                column("utilization", "Utilization", "percent_1dp"),
-                column("target", "Target", "percent_1dp"),
-                column("vs_target", "vs Target", "percent_1dp"),
+                column("members", "People", "integer",
+                       tooltip="Active chargeable people in this tier during the period."),
+                column("billable_hours", "Billable", "hours_1dp",
+                       tooltip="Billable hours across the tier."),
+                column("utilization", "Utilization", "percent_1dp",
+                       tooltip="Billable ÷ Capacity for this tier. Utilization = Mix × Coverage."),
+                column("coverage", "Coverage", "percent_1dp",
+                       tooltip="Tracked ÷ Capacity for this tier — how much of available time is being captured."),
+                column("target", "Target", "percent_1dp",
+                       tooltip="This tier's expected utilization target (Settings → Cost Tiers), or the firm target if unset."),
+                column("vs_target", "vs Target", "percent_1dp",
+                       tooltip="Utilization minus target, in points. Positive = above target."),
             ],
             rows=rows,
             default_sort={"key": "vs_target", "direction": "desc"},

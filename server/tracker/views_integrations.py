@@ -397,6 +397,15 @@ def quickbooks_callback(request):
     integration.token_expires_at = timezone.now() + timedelta(seconds=tokens.get('expires_in', 3600))
     integration.save()
     logger.info(f"QuickBooks connected for org {integration.organization_id}")
+
+    # Kick off a one-shot historical backfill so realization/leakage/margin have
+    # data immediately instead of waiting for the 4-hourly rolling reconcile.
+    try:
+        from tracker.tasks import backfill_qb_invoices
+        backfill_qb_invoices.delay(integration.organization_id, 365)
+    except Exception as e:
+        logger.warning(f"QB backfill enqueue failed for org {integration.organization_id}: {e}")
+
     return _oauth_success_response('quickbooks')
 
 

@@ -38,6 +38,19 @@ class BillableUtilizationMetric(Metric):
         self.threshold = self._org_threshold(org)
 
         qs = self._block_qs(org, scope, time)
+
+        # Chargeable-population filter: at the firm/composite level, drop members
+        # whose tier is flagged non-chargeable (admin/ops/non-charging partners)
+        # from BOTH numerator and denominator, so their idle capacity doesn't
+        # poison the firm number. When the user explicitly scopes to a person
+        # ("staff"), we DON'T exclude — you asked to see that individual.
+        exclude_ids: set[int] = set()
+        if scope.type in ("firm", "composite"):
+            from ..cost_rates import non_utilization_user_ids
+            exclude_ids = non_utilization_user_ids(org)
+            if exclude_ids:
+                qs = qs.exclude(user_id__in=exclude_ids)
+
         billable_min = to_float(qs.filter(is_billable=True).aggregate(s=Sum("minutes"))["s"])
         billable_hours = billable_min / 60.0
 
@@ -45,7 +58,7 @@ class BillableUtilizationMetric(Metric):
         # for a client/service/engagement scope, capacity is meaningless, so fall back
         # to tracked time (billable ÷ tracked).
         if scope.type in ("firm", "staff"):
-            denom_hours = self._capacity_hours(org, scope, time)
+            denom_hours = self._capacity_hours(org, scope, time, exclude_ids)
         else:
             denom_hours = to_float(qs.aggregate(s=Sum("minutes"))["s"]) / 60.0
 
@@ -58,9 +71,12 @@ class BillableUtilizationMetric(Metric):
             return calib
         return MetricValue(value=round(util, 1))
 
-    def _capacity_hours(self, org, scope, time) -> float:
+    def _capacity_hours(self, org, scope, time, exclude_ids: set[int] | None = None) -> float:
         """Available working hours over the window for the people active in scope:
-        Σ (each person's weekly capacity × weeks in the window)."""
+        Σ (each person's weekly capacity × weeks in the window).
+
+        ``exclude_ids`` drops non-chargeable members so their capacity never
+        enters the firm denominator (keeps it symmetric with the numerator)."""
         from ..cost_rates import capacity_map
         caps = capacity_map(org)
         default_cap = to_float(getattr(org, "capacity_hours_per_week", 40)) or 40.0
@@ -71,8 +87,11 @@ class BillableUtilizationMetric(Metric):
         # every block counts as its own "user", inflating capacity ~1000x).
         active = (self._block_qs(org, scope, time)
                   .order_by().values_list("user_id", flat=True).distinct())
+        exclude_ids = exclude_ids or set()
         total = 0.0
         for uid in active:
+            if uid in exclude_ids:
+                continue
             total += caps.get(uid, default_cap) * weeks
         return total
 

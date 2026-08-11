@@ -7064,6 +7064,7 @@ def settings_cost_rates(request):
             "cost_rate": str(t.cost_rate),
             "bill_rate": str(t.bill_rate) if t.bill_rate is not None else "",
             "hours_per_week": str(t.hours_per_week) if t.hours_per_week is not None else "",
+            "counts_toward_utilization": t.counts_toward_utilization,
             "sort_order": t.sort_order,
             "member_count": counts.get(t.id, 0),
         } for t in CostTier.objects.filter(organization=org)]
@@ -7110,15 +7111,20 @@ def settings_cost_rates(request):
         # bill_rate / hours_per_week optional: blank/invalid -> None (org default)
         bill = _dec(row.get("bill_rate")) if row.get("bill_rate") not in (None, "") else None
         hours = _dec(row.get("hours_per_week")) if row.get("hours_per_week") not in (None, "") else None
+        # Chargeable flag: default True; only False when explicitly sent false.
+        counts_util = row.get("counts_toward_utilization")
+        counts_util = True if counts_util is None else bool(counts_util)
         if tid:
             CostTier.objects.filter(organization=org, id=tid).update(
                 label=label, cost_rate=rate, bill_rate=bill, hours_per_week=hours,
+                counts_toward_utilization=counts_util,
                 sort_order=row.get("sort_order", 0),
             )
         else:
             CostTier.objects.get_or_create(
                 organization=org, label=label,
                 defaults={"cost_rate": rate, "bill_rate": bill, "hours_per_week": hours,
+                          "counts_toward_utilization": counts_util,
                           "sort_order": row.get("sort_order", 0)},
             )
 

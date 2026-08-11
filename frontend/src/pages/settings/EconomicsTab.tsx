@@ -2,12 +2,13 @@
 // One place for everything Analytics uses for revenue, cost, and margin:
 // tiers (main setup), per-client rate overrides, and firm-wide defaults.
 import { useEffect, useState } from 'react';
-import { DollarSign, Check, RefreshCw, Layers, Briefcase } from 'lucide-react';
+import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, BillingRate, EmployeeCostRate, TeamMember, Client } from './types';
-import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass } from './ui';
+import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass } from './ui';
 import CostTiers from './CostTiers';
 import BillingRatesTab from './BillingRatesTab';
+import EconomicsImportModal from './EconomicsImportModal';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -31,6 +32,8 @@ export default function EconomicsTab({
 }: Props) {
   const isAdmin = currentUserRole === 'admin' || currentUserRole === 'owner';
   const [saving, setSaving] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [form, setForm] = useState({
     billing_rate_default: '150.00', cost_rate_default: '75.00', target_utilization: '75',
     capacity_hours_per_week: '40',
@@ -68,7 +71,19 @@ export default function EconomicsTab({
     <SettingsPage
       title="Economics"
       subtitle="What Analytics uses for revenue, cost, and margin."
+      actions={isAdmin ? (
+        <button onClick={() => setShowImport(true)} className={secondaryBtnClass}>
+          <Upload className="w-3.5 h-3.5" /> Import CSV
+        </button>
+      ) : undefined}
     >
+      {showImport && (
+        <EconomicsImportModal
+          onClose={() => setShowImport(false)}
+          onImported={() => { setReloadKey(k => k + 1); onRefresh(); onSuccess('Roster imported'); }}
+        />
+      )}
+
       <div className="space-y-4">
         {/* Tiers — the main setup */}
         <SettingsSection
@@ -77,7 +92,7 @@ export default function EconomicsTab({
           sub="Set cost and bill per tier, then assign people."
         >
           <div className="-mt-2">
-            <CostTiers onSuccess={onSuccess} onError={onError} />
+            <CostTiers key={reloadKey} onSuccess={onSuccess} onError={onError} />
           </div>
         </SettingsSection>
 

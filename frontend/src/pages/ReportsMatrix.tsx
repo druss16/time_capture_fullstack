@@ -105,6 +105,7 @@ export default function ReportsMatrix({
   appliedStart,
   appliedEnd,
   timeframeLabel,
+  hideHeading,
 }: {
   orgIdOverride?: number | null;
   // Timeframe is owned by the parent (ReportsSummary) so the whole page spans
@@ -114,6 +115,9 @@ export default function ReportsMatrix({
   appliedStart: string;
   appliedEnd: string;
   timeframeLabel?: string;   // for the export filename only
+  // The parent may host this in a collapsible card that already renders the
+  // "Client grid" title; hide our own so it isn't shown twice.
+  hideHeading?: boolean;
 }) {
   const [rowsAxis, setRowsAxis] = useState<RowAxis>("employee");
   const [metric, setMetric] = useState<Metric>("billable");
@@ -238,16 +242,18 @@ export default function ReportsMatrix({
   return (
     <section className="space-y-3">
       {/* Header + controls */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Table2 className="h-4 w-4 text-emerald-700" />
-          <h2 className="text-base font-bold text-slate-900">Client grid</h2>
-          {data && (
-            <span className="text-xs text-slate-400">
-              {data.range.start} → {data.range.end}
-            </span>
-          )}
-        </div>
+      <div className={"flex flex-wrap items-center gap-3 " + (hideHeading ? "justify-end" : "justify-between")}>
+        {!hideHeading && (
+          <div className="flex items-center gap-2">
+            <Table2 className="h-4 w-4 text-primary" />
+            <h2 className="text-[15px] font-bold tracking-[-0.01em] text-slate-900">Client grid</h2>
+            {data && (
+              <span className="text-xs text-slate-400">
+                {data.range.start} → {data.range.end}
+              </span>
+            )}
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           {/* Row axis */}

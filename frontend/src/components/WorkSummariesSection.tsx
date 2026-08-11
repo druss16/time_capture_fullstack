@@ -26,7 +26,7 @@ const fmtHours = (h: number): string => {
   return `${hrs}h ${m}m`;
 };
 
-const WorkSummariesSection: React.FC = () => {
+const WorkSummariesSection: React.FC<{ hideHeading?: boolean }> = ({ hideHeading }) => {
   const [anchor, setAnchor] = useState<Date>(() => new Date());
   const [clients, setClients] = useState<FirmClient[]>([]);
   const [period, setPeriod] = useState('');
@@ -94,11 +94,13 @@ const WorkSummariesSection: React.FC = () => {
   };
 
   return (
-    <section className="space-y-3 pt-2">
+    <section className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="flex items-center gap-1.5 text-base font-bold text-slate-900">
-          <Sparkles className="w-4 h-4 text-primary" /> Work summaries
-        </h2>
+        {!hideHeading && (
+          <h2 className="flex items-center gap-1.5 text-[15px] font-bold tracking-[-0.01em] text-slate-900">
+            <Sparkles className="w-4 h-4 text-primary" /> Work summaries
+          </h2>
+        )}
         <span className="rounded bg-primary/10 px-2 py-0.5 text-[10.5px] font-medium text-primary">
           AI draft — review before sending
         </span>

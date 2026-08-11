@@ -28,8 +28,9 @@ from .helpers import column, kpi_tile
 _HERO_METRICS = [
     "revenue",              # recognized revenue (hourly + retainers)
     "gross_margin",         # profit after the labor that did the work
+    "operating_margin",     # after overhead too (diverges once admin tier flagged)
     "effective_rate",       # true $/hour earned
-    "billable_utilization", # billable share of tracked time
+    "billable_utilization", # billable share of capacity
     "revenue_leakage",      # worked-but-unbilled value (our wedge)
 ]
 

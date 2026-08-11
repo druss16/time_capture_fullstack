@@ -8,7 +8,7 @@ import { safeFetchJson } from '@/lib/api';
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
 
-interface Tier { id?: number; label: string; cost_rate: string; bill_rate: string; hours_per_week: string; counts_toward_utilization?: boolean; member_count?: number; }
+interface Tier { id?: number; label: string; cost_rate: string; bill_rate: string; hours_per_week: string; target_utilization?: string; counts_toward_utilization?: boolean; member_count?: number; }
 interface Member { id: number; name: string; role: string; cost_tier_id: number | null; override_rate: string | null; }
 interface Props { onSuccess: (m: string) => void; onError: (m: string) => void; }
 
@@ -69,12 +69,12 @@ export default function CostTiers({ onSuccess, onError }: Props) {
       .filter(g => g.people.length > 0);
   }, [members, savedTiers]);
 
-  const editTier = (i: number, field: 'label' | 'cost_rate' | 'bill_rate' | 'hours_per_week', v: string) =>
+  const editTier = (i: number, field: 'label' | 'cost_rate' | 'bill_rate' | 'hours_per_week' | 'target_utilization', v: string) =>
     setTiers(ts => ts.map((t, idx) => (idx === i ? { ...t, [field]: v } : t)));
   const toggleTierUtil = (i: number) =>
     setTiers(ts => ts.map((t, idx) => (idx === i ? { ...t, counts_toward_utilization: t.counts_toward_utilization === false } : t)));
   const addTier = () =>
-    setTiers(ts => [...ts, { label: '', cost_rate: defaultCost, bill_rate: '', hours_per_week: '', counts_toward_utilization: true }]);
+    setTiers(ts => [...ts, { label: '', cost_rate: defaultCost, bill_rate: '', hours_per_week: '', target_utilization: '', counts_toward_utilization: true }]);
   const removeTier = (i: number) => {
     const t = tiers[i];
     if (t.id != null) setDeletedIds(d => [...d, t.id!]);
@@ -103,7 +103,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
       const tierPayload = [
         ...tiers
           .filter(t => t.label.trim() && t.cost_rate !== '' && t.cost_rate != null)
-          .map((t, idx) => ({ id: t.id, label: t.label.trim(), cost_rate: t.cost_rate, bill_rate: t.bill_rate, hours_per_week: t.hours_per_week, counts_toward_utilization: t.counts_toward_utilization !== false, sort_order: idx })),
+          .map((t, idx) => ({ id: t.id, label: t.label.trim(), cost_rate: t.cost_rate, bill_rate: t.bill_rate, hours_per_week: t.hours_per_week, target_utilization: t.target_utilization ?? '', counts_toward_utilization: t.counts_toward_utilization !== false, sort_order: idx })),
         ...deletedIds.map(id => ({ id, _delete: true })),
       ];
       const assignments = members.map(m => ({ user_id: m.id, cost_tier_id: m.cost_tier_id }));
@@ -137,6 +137,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
         <span className="w-28 text-center">Cost $/hr</span>
         <span className="w-28 text-center">Bill $/hr</span>
         <span className="w-24 text-center">Hrs/wk</span>
+        <span className="w-24 text-center" title="Expected billable utilization % for this tier (cohort target). Blank = firm target.">Target %</span>
         <span className="w-20 text-center" title="Chargeable staff who count toward firm utilization. Turn off for admin / ops / non-charging partners.">Billable?</span>
         <span className="w-14" />
         <span className="w-8" />
@@ -177,6 +178,16 @@ export default function CostTiers({ onSuccess, onError }: Props) {
                 onChange={e => editTier(i, 'hours_per_week', e.target.value)}
                 className="w-full px-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white text-center"
               />
+            </div>
+            <div className="w-24 relative">
+              <input
+                type="number" step="1" min="0" max="100" placeholder="—"
+                value={t.target_utilization ?? ''}
+                onChange={e => editTier(i, 'target_utilization', e.target.value)}
+                title="Expected billable utilization % for this tier (cohort target). Blank = firm target."
+                className="w-full pr-6 pl-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white text-center"
+              />
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">%</span>
             </div>
             <div className="w-20 flex justify-center">
               <input

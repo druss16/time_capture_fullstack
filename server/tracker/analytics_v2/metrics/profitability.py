@@ -166,6 +166,92 @@ class GrossMarginMetric(Metric):
         )
 
 
+@register_metric("overhead_cost")
+class OverheadCostMetric(Metric):
+    """Labor cost of NON-chargeable staff — the firm's overhead / SG&A.
+
+    Everyone in a cost tier flagged counts_toward_utilization=False (admin, ops,
+    non-charging partners). Unlike direct delivery cost (LaborCostMetric, which
+    is billable-only), overhead counts ALL of these people's tracked time —
+    they aren't expected to bill, so their whole cost is overhead. Zero (EMPTY)
+    until a firm flags an overhead tier in Settings → Cost Tiers."""
+    label = "Overhead Cost"
+    format = "currency_0dp"
+    tooltip = (
+        "Labor cost of non-chargeable staff (tiers marked not billable). "
+        "The firm's overhead, separate from the direct cost of billable delivery."
+    )
+    valid_scopes = ("firm", "composite")
+    delta_good_when = "down"
+
+    def compute(self, org, scope, time):
+        from ..cost_rates import non_utilization_user_ids
+        overhead_ids = non_utilization_user_ids(org)
+        if not overhead_ids:
+            return MetricValue(state=MetricState.EMPTY)
+        # ALL tracked time of overhead staff (not billable_only) × cost rate.
+        qs = self._block_qs(org, scope, time).filter(user_id__in=overhead_ids)
+        rates = _cost_rates_map(org)
+        default = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+        total = 0.0
+        for b in qs.only("minutes", "user_id"):
+            total += (to_float(b.minutes) / 60.0) * rates.get(b.user_id, default)
+        if total == 0:
+            return MetricValue(state=MetricState.EMPTY)
+        return MetricValue(value=round(total, 2))
+
+
+@register_metric("operating_margin")
+class OperatingMarginMetric(Metric):
+    """Operating margin = (revenue − direct labor − overhead) ÷ revenue × 100.
+
+    Where gross margin (contribution margin) ignores overhead, operating margin
+    charges it: direct labor = chargeable staff's billable cost; overhead =
+    non-chargeable staff's full cost. With no overhead tier flagged, overhead is
+    0 and this equals gross margin — it diverges once a firm marks its admin/ops
+    tier not-billable in Settings → Cost Tiers."""
+    label = "Operating Margin"
+    format = "percent_1dp"
+    tooltip = (
+        "(Recognized revenue − direct billable labor − overhead labor) ÷ revenue. "
+        "The bottom line after the cost of running the firm, not just delivery. "
+        "Flag your admin/ops tier as non-billable for this to reflect overhead."
+    )
+    threshold = ThresholdRange(low=10, high=25, direction="higher_is_better")
+    valid_scopes = ("firm", "composite")
+    delta_good_when = "up"
+
+    def compute(self, org, scope, time):
+        rev_v, basis = recognized_revenue(org, scope, time)
+        if rev_v <= 0:
+            return MetricValue(state=MetricState.EMPTY)
+
+        from ..cost_rates import non_utilization_user_ids
+        overhead_ids = non_utilization_user_ids(org)
+        rates = _cost_rates_map(org)
+        default = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+
+        # Direct labor = billable cost of CHARGEABLE staff (exclude overhead
+        # staff so their time isn't double-counted — it's in overhead below).
+        direct_qs = self._block_qs(org, scope, time, billable_only=True)
+        if overhead_ids:
+            direct_qs = direct_qs.exclude(user_id__in=overhead_ids)
+        direct = 0.0
+        for b in direct_qs.only("minutes", "user_id"):
+            direct += (to_float(b.minutes) / 60.0) * rates.get(b.user_id, default)
+
+        overhead = OverheadCostMetric().compute(org, scope, time)
+        overhead_v = overhead.value if overhead.value is not None else 0.0
+
+        margin = ((rev_v - direct - overhead_v) / rev_v) * 100
+        return MetricValue(
+            value=round(margin, 1),
+            secondary_value=round(overhead_v, 2),
+            secondary_label="Overhead" + ("" if basis == "invoiced" else " (est. rev)"),
+            secondary_format="currency_0dp",
+        )
+
+
 @register_metric("revenue_leakage")
 class RevenueLeakageMetric(Metric):
     """Standard-rate value of billable HOURLY time that hasn't been billed or

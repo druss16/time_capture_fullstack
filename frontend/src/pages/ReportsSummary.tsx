@@ -28,10 +28,10 @@
  * Role-gating stays server-side. scope==="self" hides team-only affordances.
  * Auth: same localStorage token chain as the rest of the app.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Loader2, Download, Clock, AlertTriangle,
-  ChevronDown, Search, X, Maximize2, Minimize2, SlidersHorizontal, Check,
+  ChevronDown, ChevronRight, Search, X, Maximize2, Minimize2, SlidersHorizontal, Check,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import {
@@ -41,10 +41,57 @@ import UncategorizedPanel, { UncatPanelParams } from "./UncategorizedPanel";
 import ReportsMatrix from "./ReportsMatrix";
 import WorkSummariesSection from "@/components/WorkSummariesSection";
 
-// Shared "Lightning" look — matches Daily Review + Timesheet.
-// Inter for the crisp reporting voice; eyebrow + hero type tokens reused verbatim.
+// Shared "Lightning" look — matches Daily Review + Timesheet + Settings.
+// Inter for the crisp reporting voice; the teal canvas, white lane-cards, eyebrow
+// + hero type tokens are lifted verbatim from WeeklyTimesheet so the pages read
+// as one system.
 const INTER = { fontFamily: '"Inter", sans-serif' } as const;
+const GROUND = "#eef4f3"; // faint teal canvas the white cards float on
+const LANE_CARD =
+  "overflow-hidden rounded-[15px] border border-border/70 bg-white shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]";
 const EYEBROW = "text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400";
+// Pill-style control (timeframe select, export, customize) — matches the
+// week-nav / hour-format toggles on the Timesheet hero.
+const CONTROL =
+  "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border/60 bg-white/70 text-slate-600 hover:bg-white hover:text-slate-800 transition-colors";
+
+// ── Collapsible lane-card ───────────────────────────────────────────────────
+// The page's decluttering primitive: each report section lives in one of these.
+// The chevron+title+summary strip is the toggle; `right` holds controls that
+// only make sense while open (search, expand-all) and is NOT part of the toggle
+// so clicking a control never collapses the card. Mirrors the WeeklyTimesheet
+// lane header so the pages share one interaction idiom.
+function CollapsibleSection({
+  title, summary, open, onToggle, right, children, flush,
+}: {
+  title: string;
+  summary?: ReactNode;   // shown greyed next to the title (esp. when collapsed)
+  open: boolean;
+  onToggle: () => void;
+  right?: ReactNode;     // controls rendered only when open
+  children: ReactNode;
+  flush?: boolean;             // body has its own edge-to-edge chrome (tables); skip padding
+}) {
+  return (
+    <div className={LANE_CARD}>
+      <div className={"flex items-center gap-3 px-3 sm:px-4 min-h-[52px]" + (open ? " border-b border-border/70" : "")}>
+        <button
+          onClick={onToggle}
+          className="group flex items-center gap-2.5 min-w-0 flex-1 -ml-1 pl-1 pr-2 py-1.5 rounded-md hover:bg-primary/[0.05] transition-colors text-left"
+          title={open ? "Collapse" : "Expand"}
+        >
+          <ChevronRight className={"h-4 w-4 shrink-0 text-primary/60 transition-transform group-hover:text-primary" + (open ? " rotate-90" : "")} />
+          <span className="shrink-0 text-[15px] font-bold tracking-[-0.01em] text-slate-900">{title}</span>
+          {summary != null && (
+            <span className="truncate text-[12.5px] text-slate-400 tabular-nums">{summary}</span>
+          )}
+        </button>
+        {open && right && <div className="flex items-center gap-2 shrink-0">{right}</div>}
+      </div>
+      {open && <div className={flush ? "" : "p-4 sm:p-5"}>{children}</div>}
+    </div>
+  );
+}
 
 // ── Auth token chain (matches ExecutiveDashboard convention) ──────────────
 function getAuthToken(): string | null {
@@ -173,6 +220,10 @@ const REPORT_WIDGETS: { key: string; label: string }[] = [
   { key: "work_summaries", label: "Work summaries (AI)" },
 ];
 const HIDDEN_WIDGETS_LS_KEY = "reports_hidden_widgets";
+// Which sections start expanded. Default: only the headline is open, so the page
+// opens calm; everything else collapses to a one-line summary. Persists per browser.
+const OPEN_SECTIONS_LS_KEY = "reports_open_sections";
+const DEFAULT_OPEN_SECTIONS = ["clients"];
 
 export default function ReportsSummary({
   orgIdOverride,
@@ -212,6 +263,29 @@ export default function ReportsSummary({
     }
   });
   const [customizeOpen, setCustomizeOpen] = useState(false);
+
+  // Which sections are expanded (persisted). Toggling writes through immediately.
+  const [openSections, setOpenSections] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(OPEN_SECTIONS_LS_KEY);
+      return new Set<string>(raw ? JSON.parse(raw) : DEFAULT_OPEN_SECTIONS);
+    } catch {
+      return new Set<string>(DEFAULT_OPEN_SECTIONS);
+    }
+  });
+  const isOpen = (k: string) => openSections.has(k);
+  const toggleSection = (k: string) =>
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      next.has(k) ? next.delete(k) : next.add(k);
+      try {
+        localStorage.setItem(OPEN_SECTIONS_LS_KEY, JSON.stringify([...next]));
+      } catch {
+        /* private mode / quota — open state just won't persist */
+      }
+      return next;
+    });
+
   const [detail, setDetail] = useState<SummaryRow | null>(null); // client drill-down
   // When a client is opened from inside an employee's breakdown, this carries
   // the employee context so the modal can lead with "this person on this client".
@@ -496,7 +570,10 @@ export default function ReportsSummary({
     });
 
   return (
-    <div className="max-w-[1120px] mx-auto px-4 py-6 space-y-6" style={INTER}>
+    <div
+      className="mx-auto w-full max-w-[1120px] my-6 rounded-2xl p-4 sm:p-6 space-y-5"
+      style={{ ...INTER, backgroundColor: GROUND }}
+    >
       {/* Header + period toggle */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
@@ -516,7 +593,7 @@ export default function ReportsSummary({
             <select
               value={timeframe}
               onChange={(e) => applyTimeframe(e.target.value as TimeframeKey)}
-              className="appearance-none pl-3 pr-8 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 cursor-pointer"
+              className="appearance-none pl-3 pr-8 py-1.5 text-xs font-semibold rounded-lg border border-border/60 bg-white/70 text-slate-600 hover:bg-white hover:text-slate-800 focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer transition-colors"
               aria-label="Timeframe"
             >
               <optgroup label="Current">
@@ -545,7 +622,7 @@ export default function ReportsSummary({
                 value={customStart}
                 max={customEnd || undefined}
                 onChange={(e) => setCustomStart(e.target.value)}
-                className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700"
+                className="px-2 py-1.5 text-xs rounded-lg border border-border/60 bg-white/70 text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
               <span className="text-xs text-slate-400">to</span>
               <input
@@ -553,7 +630,7 @@ export default function ReportsSummary({
                 value={customEnd}
                 min={customStart || undefined}
                 onChange={(e) => setCustomEnd(e.target.value)}
-                className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700"
+                className="px-2 py-1.5 text-xs rounded-lg border border-border/60 bg-white/70 text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
               <button
                 onClick={() => {
@@ -566,7 +643,7 @@ export default function ReportsSummary({
                   !customStart || !customEnd || customStart > customEnd ||
                   (customStart === appliedStart && customEnd === appliedEnd)
                 }
-                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-default"
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-primary text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-default transition-opacity"
               >
                 Apply
               </button>
@@ -575,7 +652,7 @@ export default function ReportsSummary({
           <button
             onClick={handleExport}
             disabled={!data}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className={CONTROL + " disabled:opacity-50"}
           >
             <Download className="h-3.5 w-3.5" />
             Export CSV
@@ -585,12 +662,7 @@ export default function ReportsSummary({
           <div className="relative">
             <button
               onClick={() => setCustomizeOpen((v) => !v)}
-              className={
-                "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors " +
-                (customizeOpen
-                  ? "border-slate-300 bg-slate-50 text-slate-800"
-                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")
-              }
+              className={CONTROL + (customizeOpen ? " bg-white text-slate-800" : "")}
               title="Show or hide sections"
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -618,7 +690,7 @@ export default function ReportsSummary({
                         className={
                           "flex h-4 w-4 shrink-0 items-center justify-center rounded border " +
                           (showWidget(w.key)
-                            ? "bg-emerald-600 border-emerald-600 text-white"
+                            ? "bg-primary border-primary text-white"
                             : "border-slate-300 text-transparent")
                         }
                       >
@@ -634,7 +706,7 @@ export default function ReportsSummary({
       </div>
 
       {customMode && !customApplied && (
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
+        <div className="rounded-[15px] border border-border/70 bg-white px-4 py-2.5 text-xs text-slate-500">
           Pick a start and end date, then choose <span className="font-semibold text-slate-700">Apply</span> to load that range.
         </div>
       )}
@@ -656,38 +728,41 @@ export default function ReportsSummary({
 
       {/* ══ CLIENTS SECTION (bar graph) ══════════════════════════════════ */}
       {showWidget("clients") && !loading && !error && (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-[15px] font-bold tracking-[-0.01em] text-slate-900">Where the billable hours went {windowPhrase}</h2>
-            <div className="flex items-center gap-2">
+        <CollapsibleSection
+          title={`Where the billable hours went ${windowPhrase}`}
+          open={isOpen("clients")}
+          onToggle={() => toggleSection("clients")}
+          summary={
+            isOpen("clients")
+              ? undefined
+              : `${filteredClients.length} client${filteredClients.length === 1 ? "" : "s"} · ${fmtHours(
+                  clientRowsSorted.reduce((s, c) => s + c.billable_hours, 0)
+                )} billable`
+          }
+          right={
+            <>
               {filteredClients.length > CLIENT_PAGE_SIZE && (
                 <button
                   onClick={() => setClientExpandAll((v) => !v)}
-                  className={
-                    "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors " +
-                    (clientExpandAll
-                      ? "border-emerald-700 bg-emerald-50 text-emerald-800"
-                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")
-                  }
+                  className={CONTROL + (clientExpandAll ? " bg-primary/10 border-primary/30 text-primary hover:bg-primary/10 hover:text-primary" : "")}
                   title={clientExpandAll ? "Showing all clients" : "Show every client at once"}
                 >
                   {clientExpandAll ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
                   {clientExpandAll ? "Expanded" : "Expand all"}
                 </button>
               )}
-              <div className="relative">
+              <div className="relative hidden sm:block">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                 <input
                   value={clientSearch}
                   onChange={(e) => { setClientSearch(e.target.value); setClientPage(0); }}
                   placeholder="Search clients…"
-                  className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  className="w-44 lg:w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg border border-border/60 bg-white/70 text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
                 />
               </div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl bg-white p-5 sm:p-6 ring-1 ring-slate-200/70 shadow-[0_1px_3px_rgba(16,27,46,0.04)]">
+            </>
+          }
+        >
             <p className={EYEBROW + " mb-4"}>Click a client for detail</p>
 
             {clientSlice.length === 0 ? (
@@ -748,8 +823,7 @@ export default function ReportsSummary({
                 </div>
               )}
             </div>
-          </div>
-        </section>
+        </CollapsibleSection>
       )}
 
       {/* ══ EMPLOYEES SECTION ════════════════════════════════════════════ */}
@@ -757,14 +831,29 @@ export default function ReportsSummary({
           managers). Staff scoped to "self" never see the comparative team table;
           it's performance/comp-adjacent data and a naked cross-employee ranking. */}
       {showWidget("employees") && data && !loading && !error && (
-        <section className="space-y-3 pt-2">
-          <h2 className="text-[15px] font-bold tracking-[-0.01em] text-slate-900">Employees</h2>
+        <CollapsibleSection
+          title="Employees"
+          open={isOpen("employees")}
+          onToggle={() => toggleSection("employees")}
+          flush
+          summary={
+            isOpen("employees")
+              ? undefined
+              : `${employeeRows.length} ${employeeRows.length === 1 ? "person" : "people"}${
+                  data.totals?.utilization_pct != null
+                    ? ` · ${Math.round(data.totals.utilization_pct)}% util`
+                    : ""
+                }`
+          }
+        >
           {employeeRows.length === 0 ? (
-            <EmptyState label="No committed time in this period yet." />
+            <div className="p-4 sm:p-5">
+              <EmptyState label="No committed time in this period yet." />
+            </div>
           ) : (
-            <div className="rounded-2xl bg-white ring-1 ring-slate-200/70 shadow-[0_1px_3px_rgba(16,27,46,0.04)] overflow-hidden">
+            <>
               {/* column header — hidden on narrow screens where columns stack */}
-              <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50/70 border-b border-slate-100 text-[10.5px] font-bold uppercase tracking-[0.12em] text-slate-400">
+              <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50/70 border-b border-border/70 text-[10.5px] font-bold uppercase tracking-[0.12em] text-slate-400">
                 <span />
                 <span>Employee</span>
                 <span>Mix</span>
@@ -794,9 +883,9 @@ export default function ReportsSummary({
                   />
                 ))}
               </div>
-            </div>
+            </>
           )}
-        </section>
+        </CollapsibleSection>
       )}
 
       {/* Client drill-down modal */}
@@ -817,19 +906,31 @@ export default function ReportsSummary({
         params={panelParams || { period, group_by: "employee" }}
       />
 
-      {/* Client grid (matrix pivot) — its own section below the summary bars.
-          Self-contained: loads its own preset/data and honors the same
-          orgIdOverride/impersonation wiring the summary above uses. */}
+      {/* Client grid (matrix pivot) — collapsed by default so the page opens calm.
+          Self-contained: it loads its own preset/data only once expanded, and
+          honors the same orgIdOverride/impersonation wiring the summary uses. */}
       {showWidget("matrix") && (
-        <div className="pt-4 border-t border-slate-200">
+        <CollapsibleSection
+          title="Client grid"
+          open={isOpen("matrix")}
+          onToggle={() => toggleSection("matrix")}
+          summary={
+            isOpen("matrix")
+              ? undefined
+              : `${clientRowsSorted.length} client${clientRowsSorted.length === 1 ? "" : "s"}${
+                  windowPhrase ? ` · ${windowPhrase}` : ""
+                }`
+          }
+        >
           <ReportsMatrix
             orgIdOverride={orgIdOverride ?? null}
             period={period}
             appliedStart={appliedStart}
             appliedEnd={appliedEnd}
             timeframeLabel={timeframe}
+            hideHeading
           />
-        </div>
+        </CollapsibleSection>
       )}
 
       {/* ══ WORK SUMMARIES (AI) ══════════════════════════════════════════════ */}
@@ -838,9 +939,14 @@ export default function ReportsSummary({
           receive), same signal as the Employees section. The endpoint enforces
           the same role gate server-side. */}
       {showWidget("work_summaries") && data && !loading && !error && (
-        <div className="pt-4 border-t border-slate-200">
-          <WorkSummariesSection />
-        </div>
+        <CollapsibleSection
+          title="Work summaries"
+          open={isOpen("work_summaries")}
+          onToggle={() => toggleSection("work_summaries")}
+          summary={isOpen("work_summaries") ? undefined : "AI invoice narratives"}
+        >
+          <WorkSummariesSection hideHeading />
+        </CollapsibleSection>
       )}
     </div>
   );
@@ -932,7 +1038,7 @@ function EmployeeRow({
             <div className="mt-1 text-[10px] tabular-nums text-slate-400">{fmtHours(total)} total</div>
           </div>
           <div className="text-right">
-            <div className="text-sm font-bold tabular-nums text-emerald-700">{fmtHours(row.billable_hours)}</div>
+            <div className="text-sm font-bold tabular-nums text-primary">{fmtHours(row.billable_hours)}</div>
           </div>
           <div className="text-right">
             <div className="text-sm font-bold tabular-nums text-slate-500">{fmtHours(row.non_billable_hours)}</div>
@@ -986,7 +1092,7 @@ function EmployeeRow({
             <span className="h-full bg-amber-500" style={{ width: `${revPct}%` }} />
           </div>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-            <span className="tabular-nums"><b className="text-emerald-700 font-bold">{fmtHours(row.billable_hours)}</b> <span className="text-slate-400">bill</span></span>
+            <span className="tabular-nums"><b className="text-primary font-bold">{fmtHours(row.billable_hours)}</b> <span className="text-slate-400">bill</span></span>
             <span className="tabular-nums"><b className="text-slate-600 font-bold">{fmtHours(row.non_billable_hours)}</b> <span className="text-slate-400">non-bill</span></span>
             {review > 0 && (
               <span className="tabular-nums text-amber-600"><b className="font-bold">{fmtHours(review)}</b> review</span>
@@ -1011,7 +1117,7 @@ function EmployeeRow({
                   className={
                     "inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-md border transition-colors " +
                     (bdExpandAll
-                      ? "border-emerald-700 bg-emerald-50 text-emerald-800"
+                      ? "border-primary/40 bg-primary/10 text-primary"
                       : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")
                   }
                   title={bdExpandAll ? "Showing all clients" : "Show every client at once"}
@@ -1050,7 +1156,7 @@ function EmployeeRow({
                           <span className="shrink-0 text-sm font-bold tabular-nums text-slate-800">
                             {fmtHours(b.total_hours)}
                             {b.billable_hours > 0 && (
-                              <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-emerald-700">
+                              <span className="ml-1.5 rounded bg-primary/10 px-1.5 py-0.5 align-middle text-[10px] font-bold text-primary">
                                 {fmtHours(b.billable_hours)} bill
                               </span>
                             )}
@@ -1063,7 +1169,7 @@ function EmployeeRow({
                         </div>
                         <div className="mt-1 h-1.5 rounded bg-slate-100 overflow-hidden">
                           <span
-                            className="block h-full bg-emerald-500"
+                            className="block h-full bg-primary/100"
                             style={{ width: `${(b.total_hours / maxItem) * 100}%` }}
                           />
                         </div>
@@ -1137,7 +1243,7 @@ function ClientDetailModal({
           <div>
             {scope ? (
               <>
-                <div className="text-[11px] font-bold uppercase tracking-wide text-emerald-700">{scope.employeeLabel}</div>
+                <div className="text-[11px] font-bold uppercase tracking-wide text-primary">{scope.employeeLabel}</div>
                 <h3 className="text-xl font-bold text-slate-900">{displayClient(row.label)}</h3>
                 <p className="mt-1 text-xs text-slate-500">
                   {scope.employeeLabel}&rsquo;s time on this client {windowPhrase}
@@ -1203,7 +1309,7 @@ function ClientDetailModal({
                       </div>
                       <div className="shrink-0 flex items-center gap-2">
                         {a.billable && (
-                          <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">billable</span>
+                          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">billable</span>
                         )}
                         {a.needs_review && (
                           <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-600">review</span>
@@ -1232,7 +1338,7 @@ function ClientDetailModal({
                   return (
                   <div
                     key={`${p.id}-${p.name}-${i}`}
-                    className={"flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg " + (isScoped ? "bg-emerald-50" : "")}
+                    className={"flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg " + (isScoped ? "bg-primary/10" : "")}
                   >
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-xs font-bold text-white">
                       {initials(p.name)}
@@ -1240,7 +1346,7 @@ function ClientDetailModal({
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium text-slate-800 truncate">
                         {p.name}
-                        {isScoped && <span className="ml-1.5 text-[10px] font-bold text-emerald-700">• selected</span>}
+                        {isScoped && <span className="ml-1.5 text-[10px] font-bold text-primary">• selected</span>}
                       </div>
                       {(p.uncategorized_hours || 0) > 0 && (
                         <div className="text-xs font-medium text-amber-600 mt-0.5">
@@ -1279,7 +1385,7 @@ function StatBox({
   big?: boolean;
 }) {
   const toneMap: Record<string, string> = {
-    emerald: "text-emerald-700",
+    emerald: "text-primary",
     amber: "text-amber-600",
   };
   return (
@@ -1294,7 +1400,7 @@ function StatBox({
 
 function EmptyState({ label }: { label: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-400">
+    <div className="rounded-[15px] border border-border/70 bg-white px-4 py-10 text-center text-sm text-slate-400">
       {label}
     </div>
   );

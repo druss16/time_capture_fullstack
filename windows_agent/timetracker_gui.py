@@ -1121,7 +1121,7 @@ class TimeTrackerSystemTray:
             pystray.Menu.SEPARATOR,
             Item("Show Client Widget", on_show_widget, visible=_ticker_on),
             pystray.Menu.SEPARATOR,
-            Item("🔧 Repair Device...", on_repair),
+            Item("🔧 Repair Device...", on_repair, visible=_ticker_on),
             Item(f"v{APP_VERSION}", None, enabled=False),
             Item("Quit", on_quit),
         ])

@@ -88,7 +88,7 @@ function Track({ dot, label, unit, children }: { dot: string; label: string; uni
 // ── The centerpiece: how a rate is chosen ────────────────────────────────────
 function RateLadder({ billDefault, costDefault }: { billDefault: string; costDefault: string }) {
   return (
-    <div className="rounded-2xl border border-slate-200/70 p-4 sm:p-5">
+    <div className="rounded-2xl border border-slate-200/70 bg-[#f7faf9] p-4 sm:p-5">
       <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Start here</p>
       <p className="text-[15px] font-extrabold tracking-[-0.01em] text-slate-900 mt-0.5">How a rate is chosen</p>
       <p className="text-[12px] text-slate-500 mt-1 mb-4 leading-snug">
@@ -182,6 +182,7 @@ export default function EconomicsTab({
       <div className="space-y-4 mt-4">
         {/* 1 — Tiers (the main setup; self-contained, loads its own data) */}
         <SettingsSection
+          tint
           icon={<Layers className="w-4 h-4 text-primary" />}
           title="Tiers & assignments"
           sub="Set cost (what you pay) and bill (what you charge) per seniority tier, then assign people. This covers most of your team in one place."
@@ -194,7 +195,6 @@ export default function EconomicsTab({
 
         {/* 2 — Firm defaults (the fallback) */}
         <SettingsSection
-          tint
           icon={<DollarSign className="w-4 h-4 text-primary" />}
           title="Firm defaults"
           sub="The safety net — used only when a block has no client rate, no tier, and no per-person override."

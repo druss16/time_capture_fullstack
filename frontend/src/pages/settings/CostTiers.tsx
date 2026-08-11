@@ -121,10 +121,7 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   return (
     <div>
       <p className="text-[12px] text-slate-400 mb-4 leading-snug">
-        Set a loaded <b>cost</b> (what you pay), standard <b>bill</b> rate (what you charge), and weekly
-        <b> hours</b> (capacity) per tier, then assign people. Blank cost → ${defaultCost}/hr; blank bill →
-        {' '}${defaultBill}/hr (a client rate always wins); blank hours → {defaultCapacity}/wk. Hrs/wk is the
-        denominator for utilization (billable ÷ available). Tip: (annual salary × 1.25) ÷ 2,000 ≈ loaded cost.
+        Leave a field blank to use the firm default (cost ${defaultCost} · bill ${defaultBill} · {defaultCapacity} hrs/wk).
       </p>
 
       {/* Column headers */}

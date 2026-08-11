@@ -212,6 +212,36 @@ class ClientBillingProfileView(APIView):
         return Response(self._payload(org, client, profile))
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_billing_profiles(request):
+    """
+    All active clients + their billing profile in ONE call (for the Economics
+    flat-fee section). Avoids the N+1 of fetching each client's profile
+    separately. Read-only; org-scoped.
+
+    GET billing/clients/billing-profiles/
+      → [ { client_id, name, billing_type, flat_amount, flat_period }, ... ]
+    """
+    org = get_request_org_override_billing(request)
+    if not org:
+        return Response({'error': 'No organization'}, status=400)
+
+    clients = Client.objects.filter(org=org, is_active=True).order_by('name')
+    profiles = {p.client_id: p for p in ClientBillingProfile.objects.filter(client__org=org)}
+    out = []
+    for c in clients:
+        p = profiles.get(c.id)
+        out.append({
+            'client_id': c.id,
+            'name': c.name,
+            'billing_type': p.billing_type if p else 'hourly',
+            'flat_amount': str(p.flat_amount) if (p and p.flat_amount is not None) else None,
+            'flat_period': (p.flat_period if p else '') or '',
+        })
+    return Response(out)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def bulk_set_billing_profile(request):

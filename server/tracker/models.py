@@ -3282,6 +3282,15 @@ class CostTier(models.Model):
             "down. Excluded members are still shown, just separated out."
         ),
     )
+    target_utilization = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text=(
+            "Expected billable utilization % for this tier (cohort target). "
+            "Staff carry a higher target than managers/partners; the by-tier "
+            "view measures variance-to-target so a partner at 30% reads as "
+            "on-target, not underperforming. Null → org target_utilization."
+        ),
+    )
     sort_order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

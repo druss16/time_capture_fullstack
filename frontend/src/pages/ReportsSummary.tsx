@@ -622,6 +622,19 @@ export default function ReportsSummary({
               {data.scope === "self" ? "Your time" : "Team"}
             </p>
           )}
+          {/* Hidden-section hint — so a section toggled off in Customize never
+              just silently disappears. Click jumps straight to the menu. */}
+          {hiddenWidgets.size > 0 && (
+            <button
+              onClick={() => setCustomizeOpen(true)}
+              className="mt-1 inline-flex items-center gap-1 text-[12px] text-slate-400 hover:text-slate-600 transition-colors"
+              title="Some sections are hidden — open Customize to show them"
+            >
+              <SlidersHorizontal className="h-3 w-3" />
+              {REPORT_WIDGETS.length - hiddenWidgets.size} of {REPORT_WIDGETS.length} sections shown ·{" "}
+              <span className="font-semibold underline-offset-2 hover:underline">Customize</span>
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

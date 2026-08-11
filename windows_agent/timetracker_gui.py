@@ -1109,12 +1109,17 @@ class TimeTrackerSystemTray:
 
         
         # Main actions
+        # Manual client-switch / widget items are hidden in hands-off mode
+        # (ticker off). They reappear when MavOps enables the ticker for a demo
+        # org; the menu is refreshed via icon.update_menu() in
+        # set_client_widget_enabled() when the flag flips.
+        _ticker_on = lambda item: getattr(self, 'client_widget_enabled', False)
         menu_items.extend([
-            Item("Search Clients...    Alt+Ctrl+T", on_search),
-            Item("Switch Client", pystray.Menu(*client_items)),
+            Item("Search Clients...    Alt+Ctrl+T", on_search, visible=_ticker_on),
+            Item("Switch Client", pystray.Menu(*client_items), visible=_ticker_on),
             Item("Today's Time...", on_today),
             pystray.Menu.SEPARATOR,
-            Item("Show Client Widget", on_show_widget),
+            Item("Show Client Widget", on_show_widget, visible=_ticker_on),
             pystray.Menu.SEPARATOR,
             Item("🔧 Repair Device...", on_repair),
             Item(f"v{APP_VERSION}", None, enabled=False),
@@ -1247,6 +1252,13 @@ class TimeTrackerSystemTray:
                 self.floating_widget.set_enabled(self.client_widget_enabled)
         except Exception as e:
             print(f"[GUI] set_client_widget_enabled failed: {e}")
+        # Refresh the tray menu so the Search/Switch/Show-Widget items appear or
+        # disappear to match the flag.
+        try:
+            if self.icon is not None:
+                self.icon.update_menu()
+        except Exception as e:
+            print(f"[GUI] update_menu failed: {e}")
 
     def _show_client_picker(self):
         """Show searchable client picker - with double-open guard"""
